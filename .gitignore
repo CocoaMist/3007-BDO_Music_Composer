@@ -1,0 +1,18 @@
+# Local Python runtime and bytecode
+.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Per-user editor state and recovery copies
+.pyside_bdo_gui.json
+.idea/
+auto_save/
+temp/
+
+# Generated exports, probes, screenshots, logs, and audit reports
+out/
+
+# Downloaded/extracted third-party tooling
+_tools/
+tools/.midi-to-bdo-git-backup/
