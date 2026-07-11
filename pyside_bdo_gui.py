@@ -135,7 +135,7 @@ from bdo_sample_renderer import (  # noqa: E402
     sample_map_supports_note,
 )
 from bdo_realtime_audio import AudioEngineError, BdoRealtimeAudioEngine, bank_for_instrument  # noqa: E402
-from i18n import LANGUAGES, install_localizer, localizer  # noqa: E402
+from i18n import LANGUAGE_CHOICES, install_localizer, localizer, tr, trf  # noqa: E402
 
 
 TRACK_COLORS = [
@@ -2465,8 +2465,12 @@ class MidiNoteEditorDialog(QDialog):
     def _update_status(self, ms: float = 0.0, pitch: int | None = None) -> None:
         invalid = sum(1 for n in self.canvas.notes if self.note_invalid(n.pitch))
         pos = f" · {ms:.0f} ms · {note_name(pitch)}" if pitch is not None else ""
-        warning = f" · 越界 {invalid}" if invalid else ""
-        self.status.setText(f"已选 {len(self.canvas.selected)} · 共 {len(self.canvas.notes)} 音符{pos}{warning}")
+        warning = trf(" · 越界 {count}", count=invalid) if invalid else ""
+        self.status.setText(trf(
+            "已选 {selected} · 共 {total} 音符{position}{warning}",
+            selected=len(self.canvas.selected), total=len(self.canvas.notes),
+            position=pos, warning=warning,
+        ))
 
     def _notes_changed(self) -> None:
         if self.draft_playback_state != "stopped":
@@ -2873,13 +2877,13 @@ class ConversionCheckDialog(QDialog):
             status = "需人工确认"
         else:
             status = "可转换"
-        self.status_card.setText(f"状态\n{status}")
-        self.issue_card.setText(f"问题\n{issue_count}")
-        self.warning_card.setText(f"人工确认\n{warning_count}")
+        self.status_card.setText(trf("状态\n{status}", status=tr(status)))
+        self.issue_card.setText(trf("问题\n{count}", count=issue_count))
+        self.warning_card.setText(trf("人工确认\n{count}", count=warning_count))
         transpose = analysis.get("suggested_transpose")
-        fix_text = f"可自动修复\n{fixable_count} 项"
+        fix_text = trf("可自动修复\n{count} 项", count=fixable_count)
         if transpose is not None:
-            fix_text += f" · 移调 {transpose:+d}"
+            fix_text += trf(" · 移调 {transpose:+d}", transpose=transpose)
         self.fix_card.setText(fix_text)
         self.fix_btn.setEnabled(fixable_count > 0)
 
@@ -2937,8 +2941,8 @@ class SettingsDialog(QDialog):
 
         self.language = QComboBox()
         self.language.setProperty("i18nSkipItems", True)
-        for code, label in LANGUAGES:
-            self.language.addItem(label, code)
+        for code, label in LANGUAGE_CHOICES:
+            self.language.addItem(tr(label), code)
         language_index = self.language.findData(parent.language)
         self.language.setCurrentIndex(language_index if language_index >= 0 else 0)
         form.addRow("界面语言", self.language)
@@ -3167,7 +3171,7 @@ class SettingsDialog(QDialog):
             self.owner_status.setText(error)
             self.owner_status.setProperty("ownerError", True)
         elif self.owner_id:
-            self.owner_status.setText(f"已读取 Owner ID：0x{self.owner_id:08x}")
+            self.owner_status.setText(trf("已读取 Owner ID：0x{owner_id:08x}", owner_id=self.owner_id))
             self.owner_status.setProperty("ownerError", False)
         else:
             self.owner_status.setText("未读取 Owner ID；导出的曲谱无法在游戏内编辑。")
@@ -3289,8 +3293,8 @@ class MidiToBdoWindow(QMainWindow):
         self._apply_style()
         latest_project = latest_autosave_project()
         if latest_project:
-            self.status_label.setText("发现自动保存工程")
-            self.inspector_text.setText(f"发现自动保存工程：{latest_project} · 可点打开工程恢复")
+            self.status_label.setText(tr("发现自动保存工程"))
+            self.inspector_text.setText(trf("发现自动保存工程：{project} · 可点打开工程恢复", project=latest_project))
         self._sync_preview_state()
 
     def _build_ui(self) -> None:
@@ -3511,6 +3515,7 @@ class MidiToBdoWindow(QMainWindow):
         self.setStyleSheet(
             """
             QWidget#Root { background: #151515; color: #f3f1ea; }
+            QDialog QLabel { color: #ddd7cf; }
             QDialog#SettingsDialog {
                 background: #181818;
                 color: #f3f1ea;
@@ -3523,6 +3528,7 @@ class MidiToBdoWindow(QMainWindow):
             QWidget#SettingsBody { background: #181818; }
             QScrollArea#SettingsScroll { border: 0; background: #181818; }
             QScrollArea#SettingsScroll > QWidget > QWidget { background: #181818; }
+            QDialog#SettingsDialog QLabel { color: #ddd7cf; }
             QLabel#SettingsTitle {
                 color: #f5a524;
                 font-size: 21px;
@@ -3827,8 +3833,8 @@ class MidiToBdoWindow(QMainWindow):
             self._load_midi_info(path)
             self._autosave_project("import midi", immediate=True)
             self._mark_conversion_check_dirty()
-            self.status_label.setText("建议转换检查")
-            self.inspector_text.setText("MIDI 已载入。建议先点“转换检查”，确认音域、FX 和打击乐映射后再导出。")
+            self.status_label.setText(tr("建议转换检查"))
+            self.inspector_text.setText(tr("MIDI 已载入。建议先点“转换检查”，确认音域、FX 和打击乐映射后再导出。"))
 
     def _open_project(self) -> None:
         start_dir = str(AUTO_SAVE_DIR if AUTO_SAVE_DIR.is_dir() else ROOT)
@@ -3915,8 +3921,8 @@ class MidiToBdoWindow(QMainWindow):
             self._refresh_tracks()
             self.timeline.set_tracks(self.tracks)
             self._reset_timeline_position()
-            self.status_label.setText("工程已恢复")
-            self.inspector_text.setText(f"已恢复自动保存工程：{project_path}")
+            self.status_label.setText(tr("工程已恢复"))
+            self.inspector_text.setText(trf("已恢复自动保存工程：{project}", project=project_path))
             self._sync_preview_state()
         finally:
             self.loading_project = False
@@ -4041,7 +4047,7 @@ class MidiToBdoWindow(QMainWindow):
                 file.write(f"[{saved_at}] {reason}\n")
         except Exception as exc:
             append_crash_log("Autosave failed", traceback.format_exc())
-            self.status_label.setText(f"自动保存失败：{exc}")
+            self.status_label.setText(trf("自动保存失败：{error}", error=exc))
 
     def _mark_conversion_check_dirty(self) -> None:
         self.conversion_check_dirty = True
@@ -4107,8 +4113,8 @@ class MidiToBdoWindow(QMainWindow):
             self._on_track_changed()
             self._mark_conversion_check_dirty()
             self._autosave_project("note edit", immediate=True)
-            self.status_label.setText(f"已更新 {track.display_name} · {len(track.notes)} 音符")
-            self.inspector_text.setText("音符编辑已写回；转换前建议运行一次转换检查。")
+            self.status_label.setText(trf("已更新 {track} · {count} 音符", track=track.display_name, count=len(track.notes)))
+            self.inspector_text.setText(tr("音符编辑已写回；转换前建议运行一次转换检查。"))
 
         dialog.notes_applied.connect(apply_notes)
         dialog.exec()
@@ -4132,9 +4138,12 @@ class MidiToBdoWindow(QMainWindow):
         self._mark_conversion_check_dirty()
         self._autosave_project("midi optimize", immediate=True)
         scope = f"Track {target_track_id}" if target_track_id is not None else "全局 MIDI"
-        self.status_label.setText(f"{scope} 已优化")
+        self.status_label.setText(trf("{scope} 已优化", scope=tr(scope)))
         effect_text = "，并应用游戏声音效果建议" if optimized_effects is not None else ""
-        self.inspector_text.setText(f"已应用 {scope} 优化{effect_text}：建议再运行一次转换检查后导出。")
+        self.inspector_text.setText(trf(
+            "已应用 {scope} 优化{effects}：建议再运行一次转换检查后导出。",
+            scope=tr(scope), effects=tr(effect_text) if effect_text else "",
+        ))
 
     def _suggest_global_transpose(self) -> int | None:
         active = selected_tracks(self.tracks)
@@ -4215,7 +4224,7 @@ class MidiToBdoWindow(QMainWindow):
             if self.selected_track:
                 self._select_track(self.selected_track)
             self._autosave_project("conversion check fix", immediate=True)
-            self.status_label.setText("转换检查已修复")
+            self.status_label.setText(tr("转换检查已修复"))
             return "已修复：" + "；".join(fixed)
         return "没有可自动修复的项目。未知打击乐、样本音域和需要拆轨的情况仍需人工处理。"
 
@@ -4411,26 +4420,26 @@ class MidiToBdoWindow(QMainWindow):
         thanks_text.setObjectName("ThanksText")
         thanks_text.setReadOnly(True)
         thanks_text.setHtml(
-            """
+            f"""
             <style>
-                body { color: #d8d3cc; font-family: "Microsoft YaHei UI"; font-size: 11px; }
-                h2 { color: #b8d8b0; font-size: 17px; margin-top: 12px; margin-bottom: 5px; }
-                p { margin: 5px 0; line-height: 145%; }
-                b { color: #d9ead3; }
+                body {{ color: #d8d3cc; font-family: "Microsoft YaHei UI"; font-size: 11px; }}
+                h2 {{ color: #b8d8b0; font-size: 17px; margin-top: 12px; margin-bottom: 5px; }}
+                p {{ margin: 5px 0; line-height: 145%; }}
+                b {{ color: #d9ead3; }}
             </style>
-            <h2>01 · MIDI 与游戏采样试听</h2>
-            <p><b>mido</b>：把 MIDI 音符一颗颗读出来、写回去。</p>
-            <p><b>BDO 原始采样映射</b>：试听只使用从游戏提取并验证过的键位映射。</p>
+            <h2>{tr("01 · MIDI 与游戏采样试听")}</h2>
+            <p><b>mido</b>：{tr("把 MIDI 音符一颗颗读出来、写回去。")}</p>
+            <p><b>{tr("BDO 原始采样映射")}</b>：{tr("试听只使用从游戏提取并验证过的键位映射。")}</p>
 
-            <h2>02 · GitHub 开源项目</h2>
-            <p><b>Bishop-R / midi-to-bdo</b>：感谢 midi-to-bdo 作者，提供 MIDI 转黑色沙漠曲谱格式的核心基础。</p>
-            <p><b>Skyro468 / BDO-Music-Composer-Stuff</b>：感谢黑色沙漠音乐文件研究与解码相关资料作者，帮助理解外部曲谱制作方向。</p>
+            <h2>{tr("02 · GitHub 开源项目")}</h2>
+            <p><b>Bishop-R / midi-to-bdo</b>：{tr("感谢 midi-to-bdo 作者，提供 MIDI 转黑色沙漠曲谱格式的核心基础。")}</p>
+            <p><b>Skyro468 / BDO-Music-Composer-Stuff</b>：{tr("感谢黑色沙漠音乐文件研究与解码相关资料作者，帮助理解外部曲谱制作方向。")}</p>
 
-            <h2>03 · 开发协作</h2>
-            <p><b>ChatGPT / OpenAI</b>：在旁边递思路、改文案、一起收拾代码。</p>
+            <h2>{tr("03 · 开发协作")}</h2>
+            <p><b>ChatGPT / OpenAI</b>：{tr("在旁边递思路、改文案、一起收拾代码。")}</p>
 
-            <h2>04 · 还有大家</h2>
-            <p>谢谢开源维护者、文档作者、issue 讨论者、测试者，以及每一个愿意分享经验的人。</p>
+            <h2>{tr("04 · 还有大家")}</h2>
+            <p>{tr("谢谢开源维护者、文档作者、issue 讨论者、测试者，以及每一个愿意分享经验的人。")}</p>
             """
         )
         text_layout.addWidget(thanks_text, stretch=1)
@@ -4467,8 +4476,8 @@ class MidiToBdoWindow(QMainWindow):
             self.tracks = []
             self.timeline.set_tracks([])
             self._refresh_tracks()
-            self.status_label.setText("载入失败")
-            self.inspector_text.setText(f"MIDI 载入失败：{exc}")
+            self.status_label.setText(tr("载入失败"))
+            self.inspector_text.setText(trf("MIDI 载入失败：{error}", error=exc))
             return
 
         self.bpm = bpm
@@ -4498,7 +4507,7 @@ class MidiToBdoWindow(QMainWindow):
         self.timeline.set_tracks(self.tracks)
         self._reset_timeline_position()
         self._on_track_changed()
-        self.status_label.setText("MIDI 已载入")
+        self.status_label.setText(tr("MIDI 已载入"))
         self._show_project_summary()
         self._sync_preview_state()
 
@@ -4527,9 +4536,9 @@ class MidiToBdoWindow(QMainWindow):
         total_blocks = sum(1 for track in self.tracks if track.note_count > 0)
         active_blocks = sum(1 for track in active if track.note_count > 0)
         if hasattr(self, "timeline_meta"):
-            rail = chr(0x8F68)
-            current = chr(0x5F53) + chr(0x524D)
-            blocks_label = chr(0x5757)
+            rail = tr(chr(0x8F68))
+            current = tr(chr(0x5F53) + chr(0x524D))
+            blocks_label = tr(chr(0x5757))
             dot = chr(0x00B7)
             self.timeline_meta.setText(
                 f"{len(self.tracks)} {rail} {dot} {current} {len(active)} {rail} {dot} "
@@ -4604,8 +4613,8 @@ class MidiToBdoWindow(QMainWindow):
         self._on_track_changed()
         self._mark_conversion_check_dirty()
         self._autosave_project("create track", immediate=True)
-        self.status_label.setText(f"已新建 Track {track_id} · {instrument_name}")
-        self.inspector_text.setText("空轨道已创建；双击轨道可进入音符编辑器添加音符。")
+        self.status_label.setText(trf("已新建 Track {track_id} · {instrument}", track_id=track_id, instrument=instrument_name))
+        self.inspector_text.setText(tr("空轨道已创建；双击轨道可进入音符编辑器添加音符。"))
 
     def _delete_selected_track(self) -> None:
         track = self.selected_track
@@ -4628,17 +4637,18 @@ class MidiToBdoWindow(QMainWindow):
         self._on_track_changed()
         self._mark_conversion_check_dirty()
         self._autosave_project("delete track", immediate=True)
-        self.status_label.setText(f"已删除 {track.display_name}")
-        self.inspector_text.setText("轨道已删除。请选择其他轨道，或新建一条空轨道。")
+        self.status_label.setText(trf("已删除 {track}", track=track.display_name))
+        self.inspector_text.setText(tr("轨道已删除。请选择其他轨道，或新建一条空轨道。"))
 
     def _select_track(self, track: TrackState) -> None:
         self.selected_track = track
         self.timeline.set_selected_track(track)
-        self.inspector_text.setText(
-            f"{track.display_name} · {track.note_count} 音符 · {track.pitch_range} · "
-            f"BDO: {BDO_INSTRUMENT_NAMES.get(track.bdo_instrument_id, track.bdo_instrument_id)} · "
-            f"FX: {articulation_label(track.bdo_instrument_id, track.articulation_type)} · 右键轨道更换乐器"
-        )
+        self.inspector_text.setText(trf(
+            "{track} · {count} 音符 · {pitch_range} · BDO: {instrument} · FX: {articulation} · 右键轨道更换乐器",
+            track=track.display_name, count=track.note_count, pitch_range=track.pitch_range,
+            instrument=BDO_INSTRUMENT_NAMES.get(track.bdo_instrument_id, track.bdo_instrument_id),
+            articulation=tr(articulation_label(track.bdo_instrument_id, track.articulation_type)),
+        ))
         self.selected_volume.blockSignals(True)
         self.selected_volume.setEnabled(True)
         self.selected_volume.setValue(round(track.volume_scale * 100))
@@ -4660,10 +4670,11 @@ class MidiToBdoWindow(QMainWindow):
         pitch = "-"
         if notes:
             pitch = f"{note_name(min(n.pitch for n in notes))} - {note_name(max(n.pitch for n in notes))}"
-        self.inspector_text.setText(
-            f"{Path(getattr(self, 'midi_path', '')).name} · {len(self.tracks)} 轨 · "
-            f"{len(notes)} 音符 · {minutes}m {seconds:02d}s · {pitch}"
-        )
+        self.inspector_text.setText(trf(
+            "{file} · {tracks} 轨 · {notes} 音符 · {minutes}m {seconds:02d}s · {pitch}",
+            file=Path(getattr(self, "midi_path", "")).name, tracks=len(self.tracks),
+            notes=len(notes), minutes=minutes, seconds=seconds, pitch=pitch,
+        ))
 
     def _show_effects_placeholder(self, track: TrackState) -> None:
         self.selected_track = track
@@ -4723,19 +4734,19 @@ class MidiToBdoWindow(QMainWindow):
         running = self.realtime_preview_active
         paused = running and self.realtime_audio.status.state != "playing"
         self.play_button.setEnabled(has_bdo_samples and bool(self.tracks) and (not running or paused))
-        self.play_button.setText("播放" if has_bdo_samples else "无法原声试听")
+        self.play_button.setText(tr("播放" if has_bdo_samples else "无法原声试听"))
         if hasattr(self, "preview_source_badge"):
             if preview_blockers:
-                self.preview_source_badge.setText("无法原声还原")
+                self.preview_source_badge.setText(tr("无法原声还原"))
             elif not self.realtime_audio.available():
-                self.preview_source_badge.setText("无可用音频设备")
+                self.preview_source_badge.setText(tr("无可用音频设备"))
             elif self.realtime_audio.status.cache_misses:
-                self.preview_source_badge.setText("等待预取")
+                self.preview_source_badge.setText(tr("等待预取"))
             elif self.realtime_validation_state == "verified":
-                self.preview_source_badge.setText("原声已验证")
+                self.preview_source_badge.setText(tr("原声已验证"))
             else:
                 # Wwise samples are exact; DSP remains explicitly unverified until A/B calibration.
-                self.preview_source_badge.setText("原声近似" if self.realtime_audio.status.unverified else "原声近似（待 A/B 验证）")
+                self.preview_source_badge.setText(tr("原声近似" if self.realtime_audio.status.unverified else "原声近似（待 A/B 验证）"))
         self.pause_button.setEnabled(running and not paused)
         self.stop_button.setEnabled(running)
 
@@ -4833,7 +4844,7 @@ class MidiToBdoWindow(QMainWindow):
 
     def _play_preview(self) -> None:
         if self.realtime_preview_loading:
-            self.status_label.setText("正在准备游戏音源…")
+            self.status_label.setText(tr("正在准备游戏音源…"))
             return
         if self.realtime_preview_active:
             try:
@@ -4841,7 +4852,7 @@ class MidiToBdoWindow(QMainWindow):
             except AudioEngineError as exc:
                 self._on_preview_failed(str(exc))
                 return
-            self.status_label.setText("试听播放")
+            self.status_label.setText(tr("试听播放"))
             self._sync_preview_state()
             return
         self._start_preview_from(self.timeline.playhead_ms)
@@ -4880,7 +4891,7 @@ class MidiToBdoWindow(QMainWindow):
         self.realtime_preview_tracks = tracks
         self.timeline.set_buffer_progress(0.0, True)
         self.realtime_status_timer.start()
-        self.status_label.setText("正在准备游戏音源…")
+        self.status_label.setText(tr("正在准备游戏音源…"))
         self._sync_preview_state()
 
     def _pause_preview(self) -> None:
@@ -4890,7 +4901,7 @@ class MidiToBdoWindow(QMainWindow):
             except AudioEngineError as exc:
                 self._on_preview_failed(str(exc))
                 return
-            self.status_label.setText("试听暂停")
+            self.status_label.setText(tr("试听暂停"))
             self._sync_preview_state()
 
     def _stop_preview(self, reset_playhead: bool = False) -> None:
@@ -4905,7 +4916,7 @@ class MidiToBdoWindow(QMainWindow):
         if reset_playhead and hasattr(self, "timeline"):
             self._reset_timeline_position()
         if hasattr(self, "status_label"):
-            self.status_label.setText("就绪")
+            self.status_label.setText(tr("就绪"))
         if hasattr(self, "play_button"):
             self._sync_preview_state()
 
@@ -4932,27 +4943,31 @@ class MidiToBdoWindow(QMainWindow):
                 details = result.get("unverified", [])
                 self.realtime_validation_state = self._validation_state(self.realtime_preview_tracks, details)
                 self.realtime_audio.play()
-                self.status_label.setText("BDO 实时原声试听" if not details else f"BDO 实时试听（{len(details)} 项待验证）")
+                self.status_label.setText(
+                    tr("BDO 实时原声试听") if not details
+                    else trf("BDO 实时试听（{count} 项待验证）", count=len(details))
+                )
             status = self.realtime_audio.get_status()
         except AudioEngineError as exc:
             self.realtime_status_timer.stop()
             self.realtime_preview_active = False
             self.timeline.set_buffer_progress(0.0, False)
-            self.status_label.setText("实时音频引擎已停止")
+            self.status_label.setText(tr("实时音频引擎已停止"))
             self.realtime_audio.last_error = str(exc)
             self._sync_preview_state()
             return
         self.timeline.set_playhead(status.position_ms, follow=True)
         if status.underruns:
-            self.status_label.setText(
-                f"BDO 实时试听缓冲不足 {status.underruns} 次 · 混音 P95 {status.render_p95_ms:.1f} ms"
-            )
+            self.status_label.setText(trf(
+                "BDO 实时试听缓冲不足 {count} 次 · 混音 P95 {p95:.1f} ms",
+                count=status.underruns, p95=status.render_p95_ms,
+            ))
         if status.state == "stopped" or (status.position_ms >= status.duration_ms and status.duration_ms > 0):
             self.realtime_preview_active = False
             self.timeline.set_buffer_progress(0.0, False)
             self.realtime_status_timer.stop()
             if self.realtime_audio.last_error:
-                self.status_label.setText(f"音频输出停止：{self.realtime_audio.last_error}")
+                self.status_label.setText(trf("音频输出停止：{error}", error=self.realtime_audio.last_error))
         self._sync_preview_state()
 
     def _seek_preview(self, ms: float) -> None:
@@ -5111,7 +5126,7 @@ class MidiToBdoWindow(QMainWindow):
             return
         self._stop_preview()
         self.convert_button.setEnabled(False)
-        self.status_label.setText("正在转换...")
+        self.status_label.setText(tr("正在转换..."))
         self.worker = ConvertWorker(params)
         self.worker.conversion_finished.connect(self._on_convert_finished)
         self.worker.failed.connect(self._on_convert_failed)
@@ -5121,19 +5136,20 @@ class MidiToBdoWindow(QMainWindow):
         self.convert_button.setEnabled(True)
         self.last_output_dir = Path(out_path).parent
         self.open_output_button.setEnabled(True)
-        self.status_label.setText("转换完成")
+        self.status_label.setText(tr("转换完成"))
         summary = dict(summary)
-        extra = f" · 已复制到游戏目录" if installed else ""
-        self.inspector_text.setText(
-            f"已保存 {Path(out_path).name} · {byte_count} bytes · "
-            f"{summary['instruments']} 乐器 · {summary['tracks']} 轨 · {summary['total_notes']} 音符{extra}"
-        )
+        extra = tr(" · 已复制到游戏目录") if installed else ""
+        self.inspector_text.setText(trf(
+            "已保存 {file} · {bytes} bytes · {instruments} 乐器 · {tracks} 轨 · {notes} 音符{extra}",
+            file=Path(out_path).name, bytes=byte_count, instruments=summary["instruments"],
+            tracks=summary["tracks"], notes=summary["total_notes"], extra=extra,
+        ))
         self._autosave_project("convert finished", immediate=True)
         self.worker = None
 
     def _on_convert_failed(self, message: str) -> None:
         self.convert_button.setEnabled(True)
-        self.status_label.setText("转换失败")
+        self.status_label.setText(tr("转换失败"))
         append_crash_log("Convert failed", message)
         log_path = DEFAULT_OUTDIR / "last_convert_error.log"
         try:
