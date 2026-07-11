@@ -13,11 +13,14 @@ from bdo_realtime_audio import (
     BdoRealtimeAudioEngine,
     _Event,
     _Sample,
+    articulation_preview_envelope,
     bank_for_instrument,
+    normalise_sample_loudness,
     resolve_bdo_pitch,
     select_wwise_zone,
+    soft_limit_in_place,
 )
-from pyside_bdo_gui import BDO_EDITOR_PITCH_RANGES
+from pyside_bdo_gui import BDO_ARTICULATIONS, BDO_EDITOR_PITCH_RANGES
 
 
 APP = QCoreApplication.instance() or QCoreApplication([])
@@ -25,7 +28,7 @@ APP = QCoreApplication.instance() or QCoreApplication([])
 
 class RealtimeAudioTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.engine = BdoRealtimeAudioEngine(None, {"paz_root": r"F:\缓存\Paz", "audio_root": r"F:\缓存\BDO音源"})
+        self.engine = BdoRealtimeAudioEngine(None, {"paz_root": "", "audio_root": ""})
         self.engine._sample_rate = 48_000
 
     def test_event_is_mixed_at_its_exact_frame(self) -> None:
@@ -115,6 +118,63 @@ class RealtimeAudioTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             self.assertEqual(len(cache), 1)
             self.assertEqual(len(events), 2)
+
+    def test_preload_progress_is_reported(self) -> None:
+        self.engine._preload_total = 8
+        self.engine._preload_loaded = 3
+        status = self.engine.get_status()
+        self.assertEqual(status.preload_loaded, 3)
+        self.assertEqual(status.preload_total, 8)
+        self.assertAlmostEqual(status.preload_progress, 0.375)
+
+    def test_sample_loudness_matching_reduces_source_level_difference(self) -> None:
+        quiet = np.full((4096, 2), 0.02, dtype=np.float32)
+        loud = np.full((4096, 2), 0.80, dtype=np.float32)
+        quiet_matched, quiet_gain = normalise_sample_loudness(quiet)
+        loud_matched, loud_gain = normalise_sample_loudness(loud)
+        self.assertGreater(quiet_gain, 1.0)
+        self.assertLess(loud_gain, 1.0)
+        self.assertLess(float(np.max(np.abs(loud_matched))), 0.63)
+        self.assertLess(
+            abs(float(np.sqrt(np.mean(quiet_matched ** 2))) - float(np.sqrt(np.mean(loud_matched ** 2)))),
+            0.04,
+        )
+
+    def test_soft_limiter_preserves_normal_audio_and_catches_hot_mix(self) -> None:
+        audio = np.array([[-0.5, 0.5], [-2.0, 2.0]], dtype=np.float32)
+        soft_limit_in_place(audio)
+        self.assertTrue(np.allclose(audio[0], [-0.5, 0.5]))
+        self.assertLessEqual(float(np.max(np.abs(audio))), 1.0)
+        self.assertGreater(float(audio[1, 1]), 0.82)
+
+    def test_nonbasic_articulations_have_audible_preview_envelopes(self) -> None:
+        ages = np.arange(48_000, dtype=np.float32)
+        basic = articulation_preview_envelope(0x0A, 0, ages, 48_000, 48_000)
+        for ntype in (1, 2, 3, 4, 12, 13, 15, 16, 20, 21, 22, 24, 25, 26, 27):
+            processed = articulation_preview_envelope(0x0A, ntype, ages, 48_000, 48_000)
+            self.assertFalse(np.allclose(processed, basic), f"ntype {ntype} fell back to basic")
+
+    def test_harp_chord_articulation_starts_three_voices(self) -> None:
+        sample = _Sample(np.ones((48_000, 2), dtype=np.float32), 48_000, 48_000)
+        self.engine._start_event(_Event(0, sample, 1.0, 0.5, 24_000, 0x10, 9))
+        self.assertEqual(len(self.engine._voices), 3)
+        self.assertEqual(len({round(voice.ratio, 5) for voice in self.engine._voices}), 3)
+
+    def test_every_declared_nonbasic_articulation_has_a_preview_route(self) -> None:
+        ages = np.arange(4096, dtype=np.float32)
+        basic_aliases = {(0x1C, 1), (0x20, 1)}
+        event_routes = {9, 10, 14}
+        for instrument_id, definitions in BDO_ARTICULATIONS.items():
+            for ntype, _label in definitions:
+                if ntype == 0 or (instrument_id, ntype) in basic_aliases or ntype in event_routes:
+                    continue
+                envelope = articulation_preview_envelope(
+                    instrument_id, ntype, ages, 4096, 48_000
+                )
+                self.assertFalse(
+                    np.allclose(envelope, 1.0),
+                    f"0x{instrument_id:02x}/type {ntype} has no preview processing",
+                )
 
 
 if __name__ == "__main__":

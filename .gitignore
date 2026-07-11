@@ -12,6 +12,14 @@ temp/
 
 # Generated exports, probes, screenshots, logs, and audit reports
 out/
+build/
+dist/
+*.spec.bak
+*.zip
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
 
 # Downloaded/extracted third-party tooling
 _tools/

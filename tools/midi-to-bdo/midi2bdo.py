@@ -499,7 +499,8 @@ def _iter_merged_events_no_copy(tracks):
         yield abs_tick, msg
 
 
-def _parse_midi_fast(midi_path, apply_sustain=True, flatten_tempo=False):
+def _parse_midi_fast(midi_path, apply_sustain=True, flatten_tempo=False, include_controls=False,
+                     include_lyrics=False):
     """Parse MIDI notes using incremental time conversion over the merged event stream."""
     mid = mido.MidiFile(midi_path)
 
@@ -552,6 +553,8 @@ def _parse_midi_fast(midi_path, apply_sustain=True, flatten_tempo=False):
         grouped_notes[group_key].append(Note(pitch, vel, start_ms, dur_ms, 0))
 
     channel_notes = defaultdict(list)
+    channel_controls = defaultdict(list)
+    lyric_events = []
     current_program = defaultdict(int)
     active = {}
     sustain = {}
@@ -566,12 +569,33 @@ def _parse_midi_fast(midi_path, apply_sustain=True, flatten_tempo=False):
         if msg.type == 'set_tempo':
             current_tempo = msg.tempo
             continue
+        if msg.type in {'lyrics', 'text', 'marker', 'cue_marker'}:
+            lyric_events.append({
+                "time": round(abs_ms, 3), "kind": str(msg.type),
+                "text": str(getattr(msg, 'text', '')),
+            })
         if not hasattr(msg, 'channel'):
             continue
 
         ch = msg.channel
         if msg.type == 'program_change':
             current_program[ch] = msg.program
+        elif msg.type == 'control_change':
+            group_key = (ch, 0 if ch == 9 else current_program[ch], ch == 9)
+            channel_controls[group_key].append({
+                "time": round(abs_ms, 3), "kind": "control_change", "control": int(msg.control),
+                "value": int(msg.value), "channel": int(ch),
+            })
+            if msg.control != 64 or not apply_sustain:
+                continue
+            if msg.value >= 64:
+                sustain[ch] = True
+            else:
+                sustain[ch] = False
+                to_release = [(k, v) for k, v in sustained.items() if k[0] == ch]
+                for key, (vel, start_ms, program) in to_release:
+                    append_note(channel_notes, key[0], program, key[1], vel, start_ms, abs_ms)
+                    del sustained[key]
         elif msg.type == 'note_on' and msg.velocity > 0:
             key = (ch, msg.note)
             if key in sustained:
@@ -589,15 +613,24 @@ def _parse_midi_fast(midi_path, apply_sustain=True, flatten_tempo=False):
                 else:
                     vel, start_ms, program = active.pop(key)
                     append_note(channel_notes, ch, program, msg.note, vel, start_ms, abs_ms)
-        elif msg.type == 'control_change' and msg.control == 64 and apply_sustain:
-            if msg.value >= 64:
-                sustain[ch] = True
-            else:
-                sustain[ch] = False
-                to_release = [(k, v) for k, v in sustained.items() if k[0] == ch]
-                for key, (vel, start_ms, program) in to_release:
-                    append_note(channel_notes, key[0], program, key[1], vel, start_ms, abs_ms)
-                    del sustained[key]
+        elif msg.type == 'pitchwheel':
+            group_key = (ch, 0 if ch == 9 else current_program[ch], ch == 9)
+            channel_controls[group_key].append({
+                "time": round(abs_ms, 3), "kind": "pitchwheel",
+                "pitch": int(msg.pitch), "channel": int(ch),
+            })
+        elif msg.type == 'aftertouch':
+            group_key = (ch, 0 if ch == 9 else current_program[ch], ch == 9)
+            channel_controls[group_key].append({
+                "time": round(abs_ms, 3), "kind": "aftertouch",
+                "value": int(msg.value), "channel": int(ch),
+            })
+        elif msg.type == 'polytouch':
+            group_key = (ch, 0 if ch == 9 else current_program[ch], ch == 9)
+            channel_controls[group_key].append({
+                "time": round(abs_ms, 3), "kind": "polytouch", "note": int(msg.note),
+                "value": int(msg.value), "channel": int(ch),
+            })
 
     for store in (active, sustained):
         for (ch, pitch), (vel, start_ms, program) in store.items():
@@ -605,13 +638,21 @@ def _parse_midi_fast(midi_path, apply_sustain=True, flatten_tempo=False):
             channel_notes[group_key].append(Note(pitch, vel, start_ms, 100.0, 0))
 
     channel_groups = []
+    performance_controls = []
     for ch, program, is_perc in sorted(channel_notes):
-        notes = channel_notes[(ch, program, is_perc)]
+        group_key = (ch, program, is_perc)
+        notes = channel_notes[group_key]
         if notes:
             notes.sort(key=lambda n: n.start)
             channel_groups.append((notes, program, is_perc))
+            performance_controls.append(channel_controls.get(group_key, []))
 
-    return bpm, time_sig_num, channel_groups, len(tempo_map)
+    result = (bpm, time_sig_num, channel_groups, len(tempo_map))
+    if include_controls:
+        result += (performance_controls,)
+    if include_lyrics:
+        result += (lyric_events,)
+    return result
 
 
 parse_midi = _parse_midi_fast

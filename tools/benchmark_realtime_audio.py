@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 import time
@@ -29,11 +30,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seconds", type=float, default=30.0, help="use 1800 for the 30-minute acceptance run")
     parser.add_argument("--voices", type=int, default=256)
+    parser.add_argument(
+        "--audio-root",
+        default=os.environ.get("BDO_AUDIO_ROOT", ""),
+        help="root containing the user-extracted 乐器_WAV directory (or set BDO_AUDIO_ROOT)",
+    )
     args = parser.parse_args()
     app = QCoreApplication.instance() or QCoreApplication([])
     notes = [Note(48 + (index % 36), 96, (index // 16) * 120, 1000, 0) for index in range(max(1, min(256, args.voices)))]
     track = Track(1, 0x0A, False, 0.7, 1.0, None, notes)
-    engine = BdoRealtimeAudioEngine(None, {"paz_root": r"F:\缓存\Paz", "audio_root": r"F:\缓存\BDO音源"})
+    if not args.audio_root:
+        parser.error("--audio-root or BDO_AUDIO_ROOT is required")
+    engine = BdoRealtimeAudioEngine(None, {"paz_root": "", "audio_root": args.audio_root})
     seeks = []
     try:
         started = time.perf_counter()

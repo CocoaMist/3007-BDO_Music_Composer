@@ -1,119 +1,127 @@
 # BDO Music Composer
 
-用于《黑色沙漠》音乐的 MIDI 检查、编辑、原声音源试听、乐器/奏法调整和 BDO 格式导出。
+<p align="center">
+  <img src="assets/icons/app_icon.png" width="160" alt="BDO Music Composer icon">
+</p>
 
-## 当前结论
+An unofficial desktop MIDI editor, optimizer, game-sample previewer, and Black Desert Online music-score exporter.
 
-**当前 26 种 GUI 乐器均已接入程序。** 可信的游戏 `list*` 对照文件已覆盖全部 26 种乐器、程序登记的全部奏法 ntype 和各自最小/最大音域；所有测试音符都能命中解包 Wwise 的键位/力度区，未发现缺失项。
+中文简介：这是一个面向《黑色沙漠》作曲系统的 MIDI 编排工具，支持钢琴卷帘编辑、单轨/全局优化、奏法、游戏音源近似试听和 BDO v9 曲谱导出。
 
-需要区分两个层级：
+> [!IMPORTANT]
+> This is an independent community project. It is not affiliated with, endorsed by, or supported by Pearl Abyss. No game assets are distributed in this repository. Users must supply their own legally obtained game files and audio extracts.
 
-- **映射与兼容已完成**：乐器 ID、BDO 音域、ntype 序列化、BNK/WAV 选样、Wwise 键位与力度层、架子鼓 17 音，以及 4 种玛勒尼斯乐器的 4×4 模式路由均已接入。
-- **听感不能全部标为 1:1**：普通延音和基础采样可以试听；部分特殊奏法依赖 Wwise DSP、滤波、混响、延迟或合唱，仍须用游戏内录音逐项 A/B 后才能标为“原声已验证”。
+## Highlights
 
-最新自动审计结果：
+- Import standard MIDI and inspect tracks on a scalable timeline.
+- Edit notes in a piano roll: create, delete, move, resize, multi-select, copy/paste, velocity, and articulation.
+- Run conservative single-track or whole-song optimization with music-theory context.
+- Map tracks to supported BDO instruments and serialize note-level `ntype` articulations.
+- Preview with user-provided extracted Wwise samples.
+- Export encrypted BDO v9 music scores with Owner ID support.
+- Interface languages: Simplified Chinese, English, Japanese, and Korean.
+- Build a portable Windows one-file executable with PyInstaller.
 
-| 检查项 | 结果 |
-|---|---:|
-| GUI 乐器 | **26 / 26** |
-| 直接命名 BNK 乐器 | **22 / 22** |
-| 玛勒尼斯 synth 路由乐器 | **4 / 4** |
-| 玛勒尼斯模式 BNK/WAV | **16 / 16** |
-| 缺失乐器 / 奏法 | **0 / 0** |
-| 未知乐器 ID / ntype | **0 / 0** |
-| 游戏音域不一致 | **0** |
-| Wwise 键位或力度 zone 缺失 | **0** |
+## Current status and limitations
 
-## 26 种乐器映射总表
+- The editor and BDO v9 serialization path are functional and covered by automated tests.
+- In-game edit permission requires an Owner ID copied from a score saved by your own account.
+- BDO v9 stores a `/4` meter representation; non-`/4` MIDI files are rejected instead of silently converted incorrectly.
+- Wwise preview requires local extracted WAV files. Preview routing and some DSP-heavy articulations are approximate until verified by in-game A/B testing.
+- Marnian source modes use the reserved contiguous instrument IDs documented in the code and tests.
+- This repository currently has **no root `LICENSE` file**. Do not describe a public copy as open source until the maintainer selects a license and verifies the licensing status of vendored code under `tools/midi-to-bdo/`.
 
-图例：✅ 已接入并通过静态/基准检查；🟡 映射已接入，但特殊效果的最终听感仍需游戏录音 A/B。
+## Quick start from source
 
-| 类型 | ID | GUI 乐器 | 游戏音域（MIDI） | 已登记奏法 | 键位/力度 | 实时音源 | 结论 |
-|---|---:|---|---:|---|---|---|---|
-| 弦乐器 | `0x00` | 新手专用：吉他 | 12–119 | 基础 | ✅ | 直接 BNK/WAV | ✅ |
-| 管乐器 | `0x01` | 新手专用：长笛 | 12–107 | 基础 | ✅ | 直接 BNK/WAV | ✅ |
-| 管乐器 | `0x02` | 新手专用：笛子 | 36–83 | 基础 | ✅ | 直接 BNK/WAV | ✅ |
-| 打击乐器 | `0x04` | 新手专用：手鼓 | 固定打击映射 | 基础 | ✅ | 直接 BNK/WAV | ✅ |
-| 打击乐器 | `0x05` | 新手专用：钹 | 固定打击映射 | 基础 | ✅ | 直接 BNK/WAV | ✅ |
-| 弦乐器 | `0x06` | 新手专用：竖琴 | 36–95 | 基础 | ✅ | 直接 BNK/WAV | ✅ |
-| 键盘乐器 | `0x07` | 新手专用：钢琴 | 12–107 | 基础 | ✅ | 直接 BNK/WAV | ✅ |
-| 弦乐器 | `0x08` | 新手专用：小提琴 | 36–83 | 基础 | ✅ | 直接 BNK/WAV | ✅ |
-| 弦乐器 | `0x0A` | 弗罗凯特拉：原声吉他 | 36–88 | 延音、上滑、下滑、弱音、泛音、三连音 | ✅ | 直接 BNK/WAV | 🟡 DSP 待 A/B |
-| 管乐器 | `0x0B` | 弗罗凯特拉：长笛 | 48–88 | 延音、标签、剪切、上滑、颤音小调、三连音 | ✅ | 直接 BNK/WAV | 🟡 DSP 待 A/B |
-| 打击乐器 | `0x0D` | 弗罗凯特拉：架子鼓套装 | 48–64（17 音） | 鼓组 ntype 99 | ✅ | 直接 BNK/WAV | ✅ |
-| 弦乐器 | `0x0E` | 玛勒尼斯：贝斯 | 28–64 | 延音、上/下滑、弱音、泛音、滑音、拍弦、X 音符 | ✅ | 直接 BNK/WAV | 🟡 DSP 待 A/B |
-| 弦乐器 | `0x0F` | 弗罗凯特拉：肯特拉贝斯 | 28–64 | 延音、上/下滑、弱音、泛音、滑音上升 | ✅ | 直接 BNK/WAV | 🟡 DSP 待 A/B |
-| 弦乐器 | `0x10` | 弗罗凯特拉：竖琴 | 12–90 | 延音、大/小调和弦、滑音 | ✅ | 直接 BNK/WAV | 🟡 DSP 待 A/B |
-| 键盘乐器 | `0x11` | 弗罗凯特拉：钢琴 | 12–107 | 延音、延音踏板 | ✅ | 直接 BNK/WAV | 🟡 DSP 待 A/B |
-| 弦乐器 | `0x12` | 弗罗凯特拉：小提琴 | 43–88 | 延音、标签、剪切、上滑、多种颤音 | ✅ | 直接 BNK/WAV | 🟡 DSP 待 A/B |
-| 打击乐器 | `0x13` | 弗罗凯特拉：手碟 | 45–88 | 基础 | ✅ | 直接 BNK/WAV | ✅ |
-| 键盘乐器 | `0x14` | 玛勒尼斯：玛勒尼恩－波纹行星 | 12–100 | 延音、标签、剪切、上滑、多种颤音、滤波 | ✅ | synth 4 模式 | 🟡 路由/DSP 待 A/B |
-| 键盘乐器 | `0x18` | 玛勒尼斯：玛勒尼恩－幻象树 | 12–100 | 延音、标签、剪切、上滑、多种颤音 | ✅ | synth 4 模式 | 🟡 路由/DSP 待 A/B |
-| 键盘乐器 | `0x1C` | 玛勒尼斯：玛勒尼恩－秘密笔记 | 12–100 | 延音、基本 | ✅ | synth 4 模式 | 🟡 路由待 A/B |
-| 键盘乐器 | `0x20` | 玛勒尼斯：玛勒尼恩－三明治 | 12–100 | 延音、基本 | ✅ | synth 4 模式 | 🟡 路由待 A/B |
-| 弦乐器 | `0x24` | 玛勒尼斯：电吉他－银色水波 | 24–95 | 延音、颤音、弱音、泛音、FX | ✅ | 直接 BNK/WAV | 🟡 DSP 待 A/B |
-| 弦乐器 | `0x25` | 玛勒尼斯：电吉他－高速路 | 24–95 | 延音、颤音、弱音、泛音、FX | ✅ | 直接 BNK/WAV | 🟡 DSP 待 A/B |
-| 弦乐器 | `0x26` | 玛勒尼斯：电吉他－赫赛德兰 | 24–95 | 延音、颤音、弱音、泛音、FX | ✅ | 直接 BNK/WAV | 🟡 DSP 待 A/B |
-| 管乐器 | `0x27` | 弗罗凯特拉：竖笛 | 24–95 | 延音、多种颤音、三连音、三档持续力度 | ✅ | 直接 BNK/WAV | 🟡 DSP 待 A/B |
-| 管乐器 | `0x28` | 弗罗凯特拉：圆号 | 24–95 | 延音、上/下滑、颤音、三档持续力度 | ✅ | 直接 BNK/WAV | 🟡 DSP 待 A/B |
-
-> `midi_instrument_03_snaredrum` 和 `midi_instrument_09_pandrum` 存在于解包数据，但不在当前游戏 `list*` 的 26 种独立 GUI 乐器中，因此保留为内部/旧资源，不擅自增加为 GUI 乐器。
-
-## 玛勒尼斯 4×4 模式
-
-四种特殊键盘乐器默认使用 **单声道（Basic）**。工程保存、恢复、实时试听和音源检查均保留所选模式。
-
-| 乐器 | 单声道 `basic` | 双声道 `stereo` | 增强 `super` | 超级增强 `superoct` |
-|---|---|---|---|---|
-| 波纹行星（暂定 Saw） | ✅ | ✅ | ✅ | ✅ |
-| 幻象树（暂定 Sine） | ✅ | ✅ | ✅ | ✅ |
-| 秘密笔记（暂定 Square） | ✅ | ✅ | ✅ | ✅ |
-| 三明治（暂定 Triangle） | ✅ | ✅ | ✅ | ✅ |
-
-这里的 16 个 ✅ 表示对应 synth BNK 和 WAV 均存在、程序路由可用。四个 UI 乐器与四个波形族的最终对应关系，以及各模式的游戏内听感，仍标记为暂定，等待实机 A/B 录音确认。
-
-## 工作流程
-
-```text
-导入 MIDI → GUI 检查/编辑 → 更换乐器与奏法 → 原声实时试听 → midi2bdo 导出 BDO
-```
-
-这条主流程必须保持完整。实时试听只是导出前的检查能力，不替代 `midi2bdo`，也不改变 BDO 文件的生成职责。
-
-## 运行
+Requirements: Windows, Python 3.12 recommended, and a working audio device for preview.
 
 ```powershell
-cd D:\AIGC\3007-BDO_Music_Composer
+git clone <your-repository-url>
+cd BDO_Music_Composer
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-pyside.txt
 .\.venv\Scripts\python.exe main.py
 ```
 
-依赖需要重建时：
+The GUI can import and edit MIDI without game audio. Configure extracted audio paths in the application before using real-time preview.
+
+## Tests
 
 ```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-pyside.txt
+.\.venv\Scripts\python.exe -m unittest discover -s tests -q
+.\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
 ```
 
-外部数据目录不会复制进项目：
+The test suite covers optimizer safety, real-time audio behavior, export round trips, BDO v9 structure, Marnian mode IDs, and localization catalogs.
 
-- `F:\缓存\Paz`：原始 PAZ，仅用于重建和审计。
-- `F:\缓存\BDO音源`：解包 BNK/WEM/WAV，实时试听音源。
-
-## 复查命令
+## Build the Windows executable
 
 ```powershell
-.\.venv\Scripts\python.exe tools\audit_python_realtime_match.py
-.\.venv\Scripts\python.exe tools\audit_bdo_sample_mapping.py
-.\.venv\Scripts\python.exe -m unittest tests.test_bdo_realtime_audio
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ```
 
-可信游戏基准只读取用户在游戏内手工制作的四个 `list*` 文件。其他历史 BDO 文件是由工具转换得到，不能反过来作为游戏映射证据。
+Output: `dist\BDO-Music-Composer.exe`.
 
-详细资料：
+The executable embeds the application icon, UI background, and the runtime MIDI/Wwise zone map. It does **not** embed extracted game audio, personal settings, Owner IDs, autosaves, or exported scores.
 
-- [采样映射状态](docs/BDO_SAMPLE_MAPPING_STATUS.md)
-- [奏法规则](docs/BDO_ARTICULATION_RULES.md)
-- [乐器奏法指南](docs/INSTRUMENT_ARTICULATION_GUIDE.md)
-- [游戏 UI 截图索引](docs/reference/game-ui/README.md)
-- [最新实时映射审计](out/bdo/python_realtime_game_match.md)
+## Architecture at a glance
 
+```mermaid
+flowchart LR
+    MIDI["MIDI file"] --> Parse["mido parser"]
+    Parse --> Model["TrackState + Note model"]
+    Model --> UI["PySide6 timeline / piano roll"]
+    Model --> Optimize["Safe optimizer + theory context"]
+    Optimize --> Model
+    Model --> Preview["Real-time Wwise sample preview"]
+    Model --> Export["BDO v9 serializer + ICE encryption"]
+    Export --> Score["Game music score"]
+```
+
+Primary entry points:
+
+- `main.py` — unified application entry point.
+- `pyside_bdo_gui.py` — desktop UI, editor state, export orchestration, and autosave.
+- `optimization/` — extensible optimization package, built-in pipeline, and algorithm registry.
+- `bdo_midi_optimizer.py` — backward-compatible facade for older integrations.
+- `bdo_realtime_audio.py` — low-latency sample preview engine.
+- `tools/midi-to-bdo/midi2bdo.py` — vendored BDO v9 serializer and MIDI parser.
+- `i18n.py` — runtime localization catalogs.
+
+See [Architecture](docs/ARCHITECTURE.md), [AI Context](docs/AI_CONTEXT.md), and [Project Structure](docs/PROJECT_STRUCTURE.md) for deeper documentation.
+
+## Repository hygiene and privacy
+
+The following must never be committed:
+
+- `.pyside_bdo_gui.json`, `auto_save/`, `out/`, `build/`, and `dist/`;
+- game scores containing a real Owner ID or character name;
+- extracted PAZ, BNK, WEM, or WAV assets;
+- local absolute paths, API keys, crash logs, and generated release archives.
+
+Run this before publishing:
+
+```powershell
+git status --short
+git ls-files out auto_save dist build
+git grep -n -I -E "(C:\\Users\\|OPENAI_API_KEY|api[_-]?key|password)"
+.\.venv\Scripts\python.exe -m unittest discover -s tests -q
+```
+
+## Attribution
+
+- [mido](https://mido.readthedocs.io/) for Standard MIDI parsing and writing.
+- Bishop-R's `midi-to-bdo` work for the original BDO conversion foundation vendored under `tools/midi-to-bdo/`.
+- Community research around Black Desert music-score files, instrument IDs, and game UI behavior.
+- PySide6 / Qt and NumPy for the desktop and audio runtime.
+
+Before public release, add exact upstream commit references and license texts for all vendored components.
+
+## Contributing
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md). AI coding agents must read [AGENTS.md](AGENTS.md) before changing code.
+
+## License
+
+License selection is pending. Add a root `LICENSE` file before publishing this repository as open source.

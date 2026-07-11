@@ -1,0 +1,13 @@
+* text=auto
+
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.tsv text eol=lf
+*.txt text eol=lf
+*.bat text eol=crlf
+
+*.png binary
+*.ico binary
+*.exe binary
+*.zip binary
