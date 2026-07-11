@@ -11,16 +11,55 @@ An unofficial desktop MIDI editor, optimizer, game-sample previewer, and Black D
 > [!IMPORTANT]
 > This is an independent community project. It is not affiliated with, endorsed by, or supported by Pearl Abyss. No game assets are distributed in this repository. Users must supply their own legally obtained game files and audio extracts.
 
-## Highlights
+## 功能实现
 
-- Import standard MIDI and inspect tracks on a scalable timeline.
-- Edit notes in a piano roll: create, delete, move, resize, multi-select, copy/paste, velocity, and articulation.
-- Run conservative single-track or whole-song optimization with music-theory context.
-- Map tracks to supported BDO instruments and serialize note-level `ntype` articulations.
-- Preview with user-provided extracted Wwise samples.
-- Export encrypted BDO v9 music scores with Owner ID support.
-- Interface languages: Simplified Chinese, English, Japanese, and Korean.
-- Build a portable Windows one-file executable with PyInstaller.
+### MIDI 导入与工程管理
+
+- 读取标准 MIDI 文件，解析轨道、速度、BPM、拍号、tempo 变化、踏板控制和歌词事件。
+- 在可缩放时间轴中查看全部轨道，并支持静音、独奏、音量、乐器分配和播放位置控制。
+- 自动保存当前工程，保留轨道映射、编辑后的音符、奏法、力度策略和导出设置。
+
+### 音符编辑
+
+- 提供钢琴卷帘编辑器，可新建、删除、移动和缩放音符。
+- 支持多选、框选、复制、剪切、粘贴、撤销、重做和量化吸附。
+- 可修改音高、起始时间、时值、力度及 BDO `ntype` 奏法。
+- 手工编辑直接写回当前工程模型，导出时不会重新读取原始 MIDI 覆盖修改。
+
+### MIDI 优化
+
+- 支持单轨优化和全局优化，并读取完整歌曲的和声、节奏、配器及歌词上下文。
+- 游戏安全模式保持音符数量、音高集合、轨道和乐器映射，不擅自新增或删除音符。
+- 可处理力度平衡、轻微时序、软量化、音块修复和保守奏法建议。
+- 优化结果可预览、查看报告并选择是否应用。
+
+### BDO 乐器与奏法
+
+- 将 MIDI 轨道映射到支持的《黑色沙漠》乐器。
+- 支持轨道级和音符级奏法，并在导出时保存 `ntype`。
+- 支持玛勒尼斯乐器的 Basic、Stereo、Super 和 Super Octave 音源模式。
+- 转换检查会提示音域越界、未知打击乐映射、无效 FX、轨道合并和容量问题。
+
+### 游戏音源试听
+
+- 使用用户自行提取的 Wwise WAV 样本进行低延迟实时试听。
+- 样本在播放前预载和解码，实时音频回调不读取磁盘文件。
+- 支持精确事件帧调度、播放定位、有界声部池和输出限幅。
+- 未经游戏内 A/B 验证的 DSP 和奏法会明确标记为近似效果。
+
+### BDO v9 曲谱导出
+
+- 从当前编辑器模型生成 BDO v9 曲谱，保留新增、删除、移动、缩放和奏法修改。
+- 支持 Owner ID、角色名、BPM、移调、力度策略和游戏效果参数。
+- 按每轨 730 个音符自动拆分，并生成每种乐器要求的空结尾轨道。
+- 输出采用 BDO v9 二进制结构和 ICE 加密；非 `/4` 拍号会明确拒绝，不会静默错误导出。
+
+### 界面与发布
+
+- 界面支持简体中文、英语、日语和韩语。
+- 可选择根据系统时区自动切换语言，也可以手动固定语言。
+- 支持使用 PyInstaller 构建便携式 Windows 单文件程序。
+- 软件不包含联网、遥测、账号登录或文件上传功能；MIDI、Owner ID、音源和导出文件均在本地处理。
 
 ## Current status and limitations
 
@@ -29,7 +68,8 @@ An unofficial desktop MIDI editor, optimizer, game-sample previewer, and Black D
 - BDO v9 stores a `/4` meter representation; non-`/4` MIDI files are rejected instead of silently converted incorrectly.
 - Wwise preview requires local extracted WAV files. Preview routing and some DSP-heavy articulations are approximate until verified by in-game A/B testing.
 - Marnian source modes use the reserved contiguous instrument IDs documented in the code and tests.
-- This repository currently has **no root `LICENSE` file**. Do not describe a public copy as open source until the maintainer selects a license and verifies the licensing status of vendored code under `tools/midi-to-bdo/`.
+- Original project code is available under the PolyForm Noncommercial License 1.0.0. Commercial use is not permitted by that license, so this project should be described as noncommercial source-available rather than OSI open source.
+- Vendored and third-party components, including code under `tools/midi-to-bdo/`, remain subject to their own upstream license terms and are not relicensed by the root license.
 
 ## Quick start from source
 
@@ -124,4 +164,8 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md). AI coding agents must read [AGENTS.md](
 
 ## License
 
-License selection is pending. Add a root `LICENSE` file before publishing this repository as open source.
+Original project code is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE), with the required notice `Copyright CocoaMist`.
+
+The license permits personal, research, educational, charitable, and other noncommercial uses under its terms. It does not permit commercial use. Because commercial-use restrictions are incompatible with the Open Source Definition, describe this project as **noncommercial source-available**, not OSI open source.
+
+Third-party and vendored components retain their own license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the root license does not claim ownership of or relicense upstream work.
