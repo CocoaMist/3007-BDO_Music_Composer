@@ -23,7 +23,7 @@ ROOT = (
     if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parent
 )
-from project_paths import ASSETS_DIR, WWISE_MIDI_MAP_PATH
+from project_paths import ASSETS_DIR, SAMPLE_PACK_CACHE_DIR, WWISE_MIDI_MAP_PATH
 TOOL_DIR = ROOT / "tools" / "midi-to-bdo"
 DEFAULT_OUTDIR = ROOT / "out" / "bdo"
 DEFAULT_MIDI_DIR = ROOT / "samples"
@@ -37,6 +37,7 @@ TIMELINE_BACKGROUND_OPACITY = 0.24
 DEFAULT_AUDIO_SOURCES = {
     "paz_root": os.environ.get("BDO_PAZ_ROOT", ""),
     "audio_root": os.environ.get("BDO_AUDIO_ROOT", ""),
+    "sample_pack": "",
 }
 
 sys.path.insert(0, str(TOOL_DIR))
@@ -135,6 +136,7 @@ from bdo_sample_renderer import (  # noqa: E402
     sample_map_supports_note,
 )
 from bdo_realtime_audio import AudioEngineError, BdoRealtimeAudioEngine, bank_for_instrument  # noqa: E402
+from bdo_sample_pack import PACK_SUFFIX, SamplePackError, extract_sample_pack  # noqa: E402
 from i18n import LANGUAGE_CHOICES, install_localizer, localizer, tr, trf  # noqa: E402
 
 
@@ -2962,6 +2964,26 @@ class SettingsDialog(QDialog):
         self.transpose.setValue(parent.transpose)
         form.addRow("移调", self.transpose)
 
+        self.audio_root = QLineEdit(parent.audio_sources.get("audio_root", ""))
+        audio_root_row = QWidget()
+        audio_root_layout = QHBoxLayout(audio_root_row)
+        audio_root_layout.setContentsMargins(0, 0, 0, 0)
+        audio_root_layout.addWidget(self.audio_root, stretch=1)
+        audio_root_button = PillButton("选择目录", "secondary")
+        audio_root_button.clicked.connect(self._browse_audio_root)
+        audio_root_layout.addWidget(audio_root_button)
+        form.addRow("本地音源目录", audio_root_row)
+
+        self.sample_pack = QLineEdit(parent.audio_sources.get("sample_pack", ""))
+        sample_pack_row = QWidget()
+        sample_pack_layout = QHBoxLayout(sample_pack_row)
+        sample_pack_layout.setContentsMargins(0, 0, 0, 0)
+        sample_pack_layout.addWidget(self.sample_pack, stretch=1)
+        sample_pack_button = PillButton("选择音源包", "secondary")
+        sample_pack_button.clicked.connect(self._browse_sample_pack)
+        sample_pack_layout.addWidget(sample_pack_button)
+        form.addRow("本地音源包", sample_pack_row)
+
         owner, owner_layout = self._section(
             "游戏编辑权限",
             "与 midi-to-bdo 相同：选择一份游戏内保存的单音符曲谱，读取角色名和 Owner ID。",
@@ -3165,6 +3187,19 @@ class SettingsDialog(QDialog):
             if radio.isChecked():
                 return mode
         return "layered"
+
+    def _browse_audio_root(self) -> None:
+        selected = QFileDialog.getExistingDirectory(self, tr("选择本地音源目录"), self.audio_root.text())
+        if selected:
+            self.audio_root.setText(selected)
+            self.sample_pack.clear()
+
+    def _browse_sample_pack(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self, tr("选择本地音源包"), self.sample_pack.text(), f"BDO Sample Pack (*{PACK_SUFFIX})"
+        )
+        if selected:
+            self.sample_pack.setText(selected)
 
     def _refresh_owner_status(self, error: str = "") -> None:
         if error:
@@ -4988,6 +5023,15 @@ class MidiToBdoWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
 
+        sample_pack = dialog.sample_pack.text().strip()
+        audio_root = dialog.audio_root.text().strip()
+        if sample_pack:
+            try:
+                audio_root = str(extract_sample_pack(Path(sample_pack), SAMPLE_PACK_CACHE_DIR))
+            except (OSError, SamplePackError) as exc:
+                QMessageBox.warning(self, tr("音源包不可用"), str(exc))
+                return
+
         self.char_name = dialog.char_name.text().strip() or "MIDI"
         self.language = str(dialog.language.currentData() or "zh_CN")
         self.owner_id = dialog.owner_id
@@ -5019,6 +5063,11 @@ class MidiToBdoWindow(QMainWindow):
                 dialog.chorus_depth.value(),
                 dialog.chorus_freq.value(),
             )
+
+        self.audio_sources["sample_pack"] = sample_pack
+        self.audio_sources["audio_root"] = audio_root
+        self.realtime_audio.source_config = dict(self.audio_sources)
+        self.config["audio_sources"] = dict(self.audio_sources)
 
         self.config["language"] = self.language
         self.config["conversion_settings"] = {

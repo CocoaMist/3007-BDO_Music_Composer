@@ -85,6 +85,18 @@ python -m venv .venv
 
 The GUI can import and edit MIDI without game audio. Configure extracted audio paths in the application before using real-time preview.
 
+### Local sample packs
+
+The application can load either a local `乐器_WAV` directory or one user-created `.bdosamples` archive. A pack is a ZIP-compatible local container with a versioned manifest and SHA-256 verification. It is extracted to `sample_cache/` before playback, so the real-time callback never reads compressed files.
+
+Create a pack only from audio you are legally entitled to use:
+
+```powershell
+.\.venv\Scripts\python.exe -m bdo_sample_pack "D:\your-audio-root" "D:\private\my-samples.bdosamples"
+```
+
+`.bdosamples` files and extracted caches are ignored by Git. Do not upload them to this repository or attach them to a Release. The program has no sample-pack sharing or upload feature.
+
 ## Tests
 
 ```powershell
