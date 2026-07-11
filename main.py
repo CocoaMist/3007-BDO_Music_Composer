@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-"""黑色沙漠 MIDI 转换器入口。
+"""BDO Music Composer application entry point.
 
-不带参数运行会打开图形界面。带参数运行会使用命令行转换，例如：
+Run without arguments to open the PySide6 desktop editor. Arguments retain
+the command-line conversion entry point, for example::
 
     python main.py samples/test_chord.mid test_song
 """
 
 import sys
-from pathlib import Path
-
-
-ROOT = Path(__file__).resolve().parent
-TOOL_DIR = ROOT / "tools" / "midi-to-bdo"
 
 
 def main() -> None:
@@ -21,10 +17,9 @@ def main() -> None:
         cli_main()
         return
 
-    sys.path.insert(0, str(TOOL_DIR))
-    from midi2bdo_gui import App
+    from pyside_bdo_gui import main as gui_main
 
-    App().mainloop()
+    raise SystemExit(gui_main())
 
 
 if __name__ == "__main__":

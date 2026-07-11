@@ -1,0 +1,48 @@
+# -*- mode: python ; coding: utf-8 -*-
+
+from pathlib import Path
+
+
+project_root = Path(SPECPATH).parents[1]
+tool_dir = project_root / "tools" / "midi-to-bdo"
+
+datas = [
+    (str(project_root / "assets" / "ui" / "timeline_background.png"), "assets/ui"),
+    (str(project_root / "assets" / "icons" / "app_icon.png"), "assets/icons"),
+    (str(project_root / "data" / "mappings" / "bdo_wwise_midi_map.json"), "data/mappings"),
+]
+
+a = Analysis(
+    [str(project_root / "main.py")],
+    pathex=[str(project_root), str(tool_dir)],
+    binaries=[],
+    datas=datas,
+    hiddenimports=["midi2bdo", "_ice", "PySide6.QtMultimedia"],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=["tkinter", "unittest"],
+    noarchive=False,
+    optimize=1,
+)
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name="BDO-Music-Composer",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=str(project_root / "assets" / "icons" / "app_icon.ico"),
+)
