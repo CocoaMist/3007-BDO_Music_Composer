@@ -68,7 +68,7 @@ An unofficial desktop MIDI editor, optimizer, game-sample previewer, and Black D
 - BDO v9 stores a `/4` meter representation; non-`/4` MIDI files are rejected instead of silently converted incorrectly.
 - Wwise preview requires local extracted WAV files. Preview routing and some DSP-heavy articulations are approximate until verified by in-game A/B testing.
 - Marnian source modes use the reserved contiguous instrument IDs documented in the code and tests.
-- Original project code is available under the PolyForm Noncommercial License 1.0.0. Commercial use is not permitted by that license, so this project should be described as noncommercial source-available rather than OSI open source.
+- Original project code is available under the MIT License.
 - Vendored and third-party components, including code under `tools/midi-to-bdo/`, remain subject to their own upstream license terms and are not relicensed by the root license.
 
 ## Quick start from source
@@ -177,8 +177,6 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md). AI coding agents must read [AGENTS.md](
 
 ## License
 
-Original project code is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE), with the required notice `Copyright CocoaMist`.
-
-The license permits personal, research, educational, charitable, and other noncommercial uses under its terms. It does not permit commercial use. Because commercial-use restrictions are incompatible with the Open Source Definition, describe this project as **noncommercial source-available**, not OSI open source.
+Original project code owned by CocoaMist is licensed under the [MIT License](LICENSE).
 
 Third-party and vendored components retain their own license terms. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the root license does not claim ownership of or relicense upstream work.
