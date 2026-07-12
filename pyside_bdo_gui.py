@@ -23,7 +23,7 @@ ROOT = (
     if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parent
 )
-from project_paths import ASSETS_DIR, WWISE_MIDI_MAP_PATH
+from project_paths import ASSETS_DIR, SAMPLE_PACK_CACHE_DIR, WWISE_MIDI_MAP_PATH
 TOOL_DIR = ROOT / "tools" / "midi-to-bdo"
 DEFAULT_OUTDIR = ROOT / "out" / "bdo"
 DEFAULT_MIDI_DIR = ROOT / "samples"
@@ -37,6 +37,7 @@ TIMELINE_BACKGROUND_OPACITY = 0.24
 DEFAULT_AUDIO_SOURCES = {
     "paz_root": os.environ.get("BDO_PAZ_ROOT", ""),
     "audio_root": os.environ.get("BDO_AUDIO_ROOT", ""),
+    "sample_pack": "",
 }
 
 sys.path.insert(0, str(TOOL_DIR))
@@ -78,7 +79,7 @@ def install_crash_logging() -> None:
 try:
     import mido
     from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal
-    from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
+    from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPalette, QPen, QPixmap, QShortcut
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -135,6 +136,7 @@ from bdo_sample_renderer import (  # noqa: E402
     sample_map_supports_note,
 )
 from bdo_realtime_audio import AudioEngineError, BdoRealtimeAudioEngine, bank_for_instrument  # noqa: E402
+from bdo_sample_pack import PACK_SUFFIX, SamplePackError, extract_sample_pack  # noqa: E402
 from i18n import LANGUAGE_CHOICES, install_localizer, localizer, tr, trf  # noqa: E402
 
 
@@ -2962,6 +2964,17 @@ class SettingsDialog(QDialog):
         self.transpose.setValue(parent.transpose)
         form.addRow("移调", self.transpose)
 
+        self.audio_source = QLineEdit(parent.audio_sources.get("sample_pack", ""))
+        self.audio_source.setReadOnly(True)
+        audio_source_row = QWidget()
+        audio_source_layout = QHBoxLayout(audio_source_row)
+        audio_source_layout.setContentsMargins(0, 0, 0, 0)
+        audio_source_layout.addWidget(self.audio_source, stretch=1)
+        sample_pack_button = PillButton("选择音源包", "secondary")
+        sample_pack_button.clicked.connect(self._browse_sample_pack)
+        audio_source_layout.addWidget(sample_pack_button)
+        form.addRow("本地音源包", audio_source_row)
+
         owner, owner_layout = self._section(
             "游戏编辑权限",
             "与 midi-to-bdo 相同：选择一份游戏内保存的单音符曲谱，读取角色名和 Owner ID。",
@@ -3166,6 +3179,13 @@ class SettingsDialog(QDialog):
                 return mode
         return "layered"
 
+    def _browse_sample_pack(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self, tr("选择本地音源包"), self.audio_source.text(), f"BDO Sample Pack (*{PACK_SUFFIX})"
+        )
+        if selected:
+            self.audio_source.setText(selected)
+
     def _refresh_owner_status(self, error: str = "") -> None:
         if error:
             self.owner_status.setText(error)
@@ -3291,6 +3311,9 @@ class MidiToBdoWindow(QMainWindow):
 
         self._build_ui()
         self._apply_style()
+        style_hints = QApplication.styleHints()
+        if hasattr(style_hints, "colorSchemeChanged"):
+            style_hints.colorSchemeChanged.connect(lambda _scheme: self._apply_style())
         latest_project = latest_autosave_project()
         if latest_project:
             self.status_label.setText(tr("发现自动保存工程"))
@@ -3512,8 +3535,7 @@ class MidiToBdoWindow(QMainWindow):
     def _apply_style(self) -> None:
         QApplication.instance().setStyle("Fusion")
         self.setFont(QFont("Microsoft YaHei UI", 9))
-        self.setStyleSheet(
-            """
+        style_sheet = """
             QWidget#Root { background: #151515; color: #f3f1ea; }
             QDialog QLabel { color: #ddd7cf; }
             QDialog#SettingsDialog {
@@ -3815,7 +3837,40 @@ class MidiToBdoWindow(QMainWindow):
                 background: #f5a524;
             }
             """
-        )
+        if not self._system_uses_dark_theme():
+            light_colors = {
+                "#151515": "#f4f4f4", "#181818": "#f7f7f7", "#202020": "#ffffff",
+                "#1f1f1f": "#fafafa", "#1d1d1d": "#f0f0f0", "#222222": "#ffffff",
+                "#201f1c": "#fffaf0", "#1b201b": "#f4f8f3", "#20251f": "#edf4eb",
+                "#2b362a": "#e2eddf", "#151915": "#ffffff", "#111511": "#f4f8f3",
+                "#262626": "#ffffff", "#1a1a1a": "#eeeeee", "#1e1e1e": "#ffffff",
+                "#2b2b2b": "#f6f6f6", "#343434": "#e7e7e7", "#302a20": "#fff4df",
+                "#232323": "#e5e5e5", "#1b1b1b": "#ededed", "#3a3a3a": "#c9c9c9",
+                "#333130": "#d7d3ce", "#3b3935": "#d2cec8", "#393735": "#d5d1cb",
+                "#353332": "#d9d5cf", "#3d3932": "#d3c9b8", "#3b4939": "#c4d2c1",
+                "#40503e": "#b8cab4", "#536a50": "#9ab294", "#313d30": "#c8d4c5",
+                "#313131": "#d4d4d4", "#3f3a33": "#d4c8b8", "#363636": "#d0d0d0",
+                "#404040": "#c8c8c8", "#55504a": "#aaa39b", "#4a4640": "#aaa49c",
+                "#56504a": "#9f9890", "#6a6259": "#8f877e", "#55514b": "#aaa49d",
+                "#f3f1ea": "#202020", "#ddd7cf": "#2b2b2b", "#c7c0b8": "#4b4742",
+                "#bdb6ad": "#55504a", "#aaa39a": "#66605a", "#e5dfd6": "#292724",
+                "#d6d1c9": "#3f3b36", "#a8a29e": "#68625d", "#d9ead3": "#31552d",
+                "#d8d3cc": "#45413d", "#bcd5b5": "#3f6639", "#a8b5a4": "#5d6e59",
+                "#c9c2ba": "#514c47", "#6f6a65": "#92908d", "#f0c66f": "#8a5a00",
+                "#d6b675": "#74500d", "#8f6b2e": "#d89a28", "#5d451e": "#ffe0a3",
+            }
+            for dark, light in light_colors.items():
+                style_sheet = style_sheet.replace(dark, light)
+        self.setStyleSheet(style_sheet)
+
+    @staticmethod
+    def _system_uses_dark_theme() -> bool:
+        scheme = QApplication.styleHints().colorScheme()
+        if scheme == Qt.ColorScheme.Dark:
+            return True
+        if scheme == Qt.ColorScheme.Light:
+            return False
+        return QApplication.palette().color(QPalette.ColorRole.Window).lightness() < 128
 
     def _browse_midi(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -4419,13 +4474,15 @@ class MidiToBdoWindow(QMainWindow):
         thanks_text = QTextEdit()
         thanks_text.setObjectName("ThanksText")
         thanks_text.setReadOnly(True)
+        thanks_body_color = "#d8d3cc" if self._system_uses_dark_theme() else "#45413d"
+        thanks_heading_color = "#b8d8b0" if self._system_uses_dark_theme() else "#31552d"
         thanks_text.setHtml(
             f"""
             <style>
-                body {{ color: #d8d3cc; font-family: "Microsoft YaHei UI"; font-size: 11px; }}
-                h2 {{ color: #b8d8b0; font-size: 17px; margin-top: 12px; margin-bottom: 5px; }}
+                body {{ color: {thanks_body_color}; font-family: "Microsoft YaHei UI"; font-size: 11px; }}
+                h2 {{ color: {thanks_heading_color}; font-size: 17px; margin-top: 12px; margin-bottom: 5px; }}
                 p {{ margin: 5px 0; line-height: 145%; }}
-                b {{ color: #d9ead3; }}
+                b {{ color: {thanks_heading_color}; }}
             </style>
             <h2>{tr("01 · MIDI 与游戏采样试听")}</h2>
             <p><b>mido</b>：{tr("把 MIDI 音符一颗颗读出来、写回去。")}</p>
@@ -4434,11 +4491,13 @@ class MidiToBdoWindow(QMainWindow):
             <h2>{tr("02 · GitHub 开源项目")}</h2>
             <p><b>Bishop-R / midi-to-bdo</b>：{tr("感谢 midi-to-bdo 作者，提供 MIDI 转黑色沙漠曲谱格式的核心基础。")}</p>
             <p><b>Skyro468 / BDO-Music-Composer-Stuff</b>：{tr("感谢黑色沙漠音乐文件研究与解码相关资料作者，帮助理解外部曲谱制作方向。")}</p>
+            <p><b>iDevelopThings / bdo-data-extractor</b>：{tr("感谢 bdo-data-extractor 作者公开清晰的 PAZ、ICE 与 LZ 只读实现，帮助完善本地音源制作工具。")}</p>
 
             <h2>{tr("03 · 开发协作")}</h2>
             <p><b>ChatGPT / OpenAI</b>：{tr("在旁边递思路、改文案、一起收拾代码。")}</p>
 
             <h2>{tr("04 · 还有大家")}</h2>
+            <p><b>CN Server · Rainbow Club / 彩虹乐队</b>：{tr("感谢 CN 服务器 Rainbow Club 彩虹乐队玩家的支持、测试与音乐交流。")}</p>
             <p>{tr("谢谢开源维护者、文档作者、issue 讨论者、测试者，以及每一个愿意分享经验的人。")}</p>
             """
         )
@@ -4988,6 +5047,20 @@ class MidiToBdoWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
 
+        selected_audio_source = dialog.audio_source.text().strip()
+        sample_pack = ""
+        audio_root = ""
+        if selected_audio_source.lower().endswith(PACK_SUFFIX):
+            sample_pack = selected_audio_source
+            try:
+                audio_root = str(extract_sample_pack(Path(sample_pack), SAMPLE_PACK_CACHE_DIR))
+            except (OSError, SamplePackError) as exc:
+                QMessageBox.warning(self, tr("音源包不可用"), str(exc))
+                return
+        elif selected_audio_source:
+            QMessageBox.warning(self, tr("音源包不可用"), selected_audio_source)
+            return
+
         self.char_name = dialog.char_name.text().strip() or "MIDI"
         self.language = str(dialog.language.currentData() or "zh_CN")
         self.owner_id = dialog.owner_id
@@ -5019,6 +5092,11 @@ class MidiToBdoWindow(QMainWindow):
                 dialog.chorus_depth.value(),
                 dialog.chorus_freq.value(),
             )
+
+        self.audio_sources["sample_pack"] = sample_pack
+        self.audio_sources["audio_root"] = audio_root
+        self.realtime_audio.source_config = dict(self.audio_sources)
+        self.config["audio_sources"] = dict(self.audio_sources)
 
         self.config["language"] = self.language
         self.config["conversion_settings"] = {

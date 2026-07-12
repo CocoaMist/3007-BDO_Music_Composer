@@ -85,6 +85,18 @@ python -m venv .venv
 
 The GUI can import and edit MIDI without game audio. Configure extracted audio paths in the application before using real-time preview.
 
+### Local sample packs
+
+The application settings accept one user-created `.bdosamples` archive. A pack is a ZIP-compatible local container with a versioned manifest and SHA-256 verification. It is extracted to `sample_cache/` before playback, so the real-time callback never reads compressed files. Developers may still use `BDO_AUDIO_ROOT` for an unpacked local WAV tree.
+
+Create a pack only from audio you are legally entitled to use:
+
+```powershell
+.\.venv\Scripts\python.exe -m bdo_sample_pack "D:\your-audio-root" "D:\private\my-samples.bdosamples"
+```
+
+`.bdosamples` files and extracted caches are ignored by Git. Do not upload them to this repository or attach them to a Release. The program has no sample-pack sharing or upload feature.
+
 ## Tests
 
 ```powershell
@@ -153,6 +165,7 @@ git grep -n -I -E "(C:\\Users\\|OPENAI_API_KEY|api[_-]?key|password)"
 
 - [mido](https://mido.readthedocs.io/) for Standard MIDI parsing and writing.
 - Bishop-R's `midi-to-bdo` work for the original BDO conversion foundation vendored under `tools/midi-to-bdo/`.
+- iDevelopThings' [`bdo-data-extractor`](https://github.com/iDevelopThings/bdo-data-extractor) for the clear read-only PAZ, ICE, and LZ implementation used by the separate local sample-pack development tool.
 - Community research around Black Desert music-score files, instrument IDs, and game UI behavior.
 - PySide6 / Qt and NumPy for the desktop and audio runtime.
 
