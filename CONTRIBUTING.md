@@ -32,4 +32,4 @@ Do not include generated EXEs, ZIP archives, scores, autosaves, crash logs, or g
 
 ## Licensing
 
-License selection and vendored dependency review are pending. Contributions should not introduce code with incompatible or unknown licensing.
+Original project code is licensed under MIT. Vendored dependency review remains pending; contributions must not introduce code with incompatible or unknown licensing.
