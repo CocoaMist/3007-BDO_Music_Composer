@@ -4,12 +4,20 @@
   <img src="assets/icons/app_icon.png" width="160" alt="BDO Music Composer icon">
 </p>
 
-An unofficial desktop MIDI editor, optimizer, game-sample previewer, and Black Desert Online music-score exporter.
+An unofficial Windows desktop workstation for arranging MIDI, editing notes, previewing user-supplied game samples, and exporting Black Desert Online v9 music scores.
 
-中文简介：这是一个面向《黑色沙漠》作曲系统的 MIDI 编排工具，支持钢琴卷帘编辑、单轨/全局优化、奏法、游戏音源近似试听和 BDO v9 曲谱导出。
+中文简介：这是一个面向《黑色沙漠》作曲系统的本地 MIDI 编排工作站。从标准 MIDI 导入开始，可以在时间轴与钢琴卷帘中继续编辑音符、分配 BDO 乐器、调整奏法与力度、使用自己合法准备的音源包进行近似试听，最后从当前编辑模型导出 BDO v9 曲谱。
 
 > [!IMPORTANT]
 > This is an independent community project. It is not affiliated with, endorsed by, or supported by Pearl Abyss. No game assets are distributed in this repository. Users must supply their own legally obtained game files and audio extracts.
+
+## 项目概览
+
+BDO Music Composer 适合希望把已有 MIDI 整理为游戏曲谱、继续手工编排，或研究 BDO 乐器映射与奏法的玩家。所有工程、Owner ID、音源、自动保存和导出文件都留在本地；程序没有账号系统、遥测或上传功能。
+
+```text
+MIDI 导入 → 轨道与乐器映射 → 钢琴卷帘编辑 → 安全优化/试听 → 转换检查 → BDO v9 导出
+```
 
 ## 功能实现
 
@@ -166,6 +174,7 @@ git grep -n -I -E "(C:\\Users\\|OPENAI_API_KEY|api[_-]?key|password)"
 - [mido](https://mido.readthedocs.io/) for Standard MIDI parsing and writing.
 - Bishop-R's `midi-to-bdo` work for the original BDO conversion foundation vendored under `tools/midi-to-bdo/`.
 - iDevelopThings' [`bdo-data-extractor`](https://github.com/iDevelopThings/bdo-data-extractor) for the clear read-only PAZ, ICE, and LZ implementation used by the separate local sample-pack development tool.
+- Players from **CN Server · Rainbow Club / 彩虹乐队** for their support, testing, and music exchange.
 - Community research around Black Desert music-score files, instrument IDs, and game UI behavior.
 - PySide6 / Qt and NumPy for the desktop and audio runtime.
 
