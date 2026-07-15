@@ -102,11 +102,14 @@ class BdoSampleMap:
 
     def choose(self, instrument_id: int, pitch: int, velocity: int) -> dict | None:
         bank = BDO_BANK_BY_ID.get(instrument_id)
-        rows = self.by_bank.get(bank or "", [])
-        if not rows:
-            return None
         if instrument_id == 0x0D:
             pitch = GM_TO_BDO_DRUM.get(pitch, pitch)
+        return self.choose_bank(bank or "", pitch, velocity)
+
+    def choose_bank(self, bank: str, pitch: int, velocity: int) -> dict | None:
+        rows = self.by_bank.get(bank, [])
+        if not rows:
+            return None
         matches = [
             row for row in rows
             if int(row["key_min"]) <= pitch <= int(row["key_max"])

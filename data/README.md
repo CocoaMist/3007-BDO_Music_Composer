@@ -2,6 +2,10 @@
 
 This directory contains derived metadata used to map application instruments and articulations to Black Desert Online-compatible identifiers.
 
+`profiles/` contains versioned game constraints with explicit `verified`,
+`inferred`, or `approximate` evidence. Profiles contain only portable rules and
+must not include Owner IDs, character names, audio assets, or local paths.
+
 No Black Desert Online audio, textures, executables, or other proprietary game assets are distributed here. Preview audio must be supplied and configured by the user from a lawful local source.
 
 Some research manifests retain historical absolute source paths. Those path fields are non-authoritative provenance metadata and are not used as portable installation locations. At runtime, missing sample paths are rebased under the user-configured `audio_root`, using the bank and source identifier stored in the mapping.

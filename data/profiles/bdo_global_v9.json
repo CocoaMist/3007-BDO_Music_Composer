@@ -1,0 +1,42 @@
+{
+  "profile_id": "bdo-global-v9-2026.07",
+  "format_version": 9,
+  "region": "global",
+  "game_version": "2026.07",
+  "limits": {"notes_per_track": 730, "notes_per_instrument": 10000},
+  "drum_set": {"instrument_id": 13, "pitch_min": 48, "pitch_max": 64},
+  "marnian_mode_offsets": {"basic": 0, "stereo": 1, "super": 2, "superoct": 3},
+  "evidence": {
+    "status": "verified",
+    "source": "game-saved BDO v9 score corpus and export round-trip tests",
+    "verified_at": "2026-07-15"
+  },
+  "instruments": {
+    "0x00": {"pitch_min": 12, "pitch_max": 119, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x01": {"pitch_min": 12, "pitch_max": 107, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x02": {"pitch_min": 36, "pitch_max": 83, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x04": {"pitch_min": null, "pitch_max": null, "evidence": {"status": "approximate", "source": "sample-only percussion mapping"}},
+    "0x05": {"pitch_min": null, "pitch_max": null, "evidence": {"status": "approximate", "source": "sample-only percussion mapping"}},
+    "0x06": {"pitch_min": 36, "pitch_max": 95, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x07": {"pitch_min": 12, "pitch_max": 107, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x08": {"pitch_min": 36, "pitch_max": 83, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x0A": {"pitch_min": 36, "pitch_max": 88, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x0B": {"pitch_min": 48, "pitch_max": 88, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x0D": {"pitch_min": 48, "pitch_max": 64, "allowed_pitches": [48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64], "articulations": [99], "evidence": {"status": "verified", "source": "game-saved drum score"}},
+    "0x0E": {"pitch_min": 28, "pitch_max": 64, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x0F": {"pitch_min": 28, "pitch_max": 64, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x10": {"pitch_min": 12, "pitch_max": 90, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x11": {"pitch_min": 12, "pitch_max": 107, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x12": {"pitch_min": 43, "pitch_max": 88, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x13": {"pitch_min": 45, "pitch_max": 88, "evidence": {"status": "approximate", "source": "sample map; full in-game range pending"}},
+    "0x14": {"pitch_min": 12, "pitch_max": 100, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x18": {"pitch_min": 12, "pitch_max": 100, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x1C": {"pitch_min": 12, "pitch_max": 100, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x20": {"pitch_min": 12, "pitch_max": 100, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x24": {"pitch_min": 24, "pitch_max": 95, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x25": {"pitch_min": 24, "pitch_max": 95, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x26": {"pitch_min": 24, "pitch_max": 95, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x27": {"pitch_min": 24, "pitch_max": 95, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
+    "0x28": {"pitch_min": 24, "pitch_max": 95, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}}
+  }
+}

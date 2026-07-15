@@ -23,7 +23,7 @@ ROOT = (
     if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parent
 )
-from project_paths import ASSETS_DIR, SAMPLE_PACK_CACHE_DIR, WWISE_MIDI_MAP_PATH
+from project_paths import ASSETS_DIR, PROFILES_DIR, SAMPLE_PACK_CACHE_DIR, WWISE_MIDI_MAP_PATH
 TOOL_DIR = ROOT / "tools" / "midi-to-bdo"
 DEFAULT_OUTDIR = ROOT / "out" / "bdo"
 DEFAULT_MIDI_DIR = ROOT / "samples"
@@ -78,8 +78,8 @@ def install_crash_logging() -> None:
 
 try:
     import mido
-    from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal
-    from PySide6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPalette, QPen, QPixmap, QShortcut
+    from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QThread, QTimer, QUrl, Signal
+    from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPainterPath, QPalette, QPen, QPixmap, QShortcut
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -93,6 +93,8 @@ try:
         QHBoxLayout,
         QLabel,
         QLineEdit,
+        QListWidget,
+        QListWidgetItem,
         QMainWindow,
         QMenu,
         QMessageBox,
@@ -128,8 +130,19 @@ from midi2bdo import (  # noqa: E402
     midi_to_bdo,
     parse_midi,
 )
-from optimization import OptimizationLevel, OptimizerConfig, optimize_tracks  # noqa: E402
-from bdo_lyrics import LyricExpressionMode  # noqa: E402
+from optimization import OptimizerConfig  # noqa: E402
+from optimization.plugin_api import InvalidOptimizationPreview, OptimizationIntensity  # noqa: E402
+from optimization.plugin_host import (  # noqa: E402
+    analyse_with_algorithm,
+    discover_host_algorithms,
+    optimizer_plugin_dir,
+)
+from bdo_profile import load_bdo_profile  # noqa: E402
+from bdo_audio_research import sample_coverage_for_tracks  # noqa: E402
+from bdo_score import compare_scores, read_bdo_score  # noqa: E402
+from bdo_validation import ValidationContext, ValidationIssue, issues_report, validate_tracks  # noqa: E402
+from project_schema import CURRENT_PROJECT_SCHEMA, migrate_project  # noqa: E402
+from editor_commands import ProjectCommandStack, ProjectSnapshot  # noqa: E402
 from bdo_sample_renderer import (  # noqa: E402
     sample_map_covers,
     sample_map_supported_pitches,
@@ -138,6 +151,7 @@ from bdo_sample_renderer import (  # noqa: E402
 from bdo_realtime_audio import AudioEngineError, BdoRealtimeAudioEngine, bank_for_instrument  # noqa: E402
 from bdo_sample_pack import PACK_SUFFIX, SamplePackError, extract_sample_pack  # noqa: E402
 from i18n import LANGUAGE_CHOICES, install_localizer, localizer, tr, trf  # noqa: E402
+from version import __version__  # noqa: E402
 
 
 TRACK_COLORS = [
@@ -399,8 +413,6 @@ MARNIAN_SYNTH_MODE_OFFSETS = {
     "super": 2,
     "superoct": 3,
 }
-
-
 def serialized_bdo_instrument_id(track: "TrackState") -> int:
     """Resolve the actual game track ID, including Marnian source mode."""
     instrument_id = int(track.bdo_instrument_id)
@@ -590,6 +602,17 @@ def game_supported_pitches(instrument_id: int) -> frozenset[int] | None:
         except Exception:
             pass
     return frozenset(editor_range) if editor_range is not None else None
+
+
+BDO_PROFILE = load_bdo_profile(
+    PROFILES_DIR / "bdo_global_v9.json",
+    articulation_map=BDO_ARTICULATIONS,
+    supported_pitch_map={
+        instrument_id: pitches
+        for instrument_id in BDO_EDITOR_PITCH_RANGES
+        if (pitches := game_supported_pitches(instrument_id))
+    },
+)
 
 
 def game_pitch_range_label(instrument_id: int) -> str:
@@ -907,7 +930,10 @@ class TimelineCanvas(QWidget):
         grid_h = max(80, area.bottom() - grid_top)
         content_h = lane_h * len(self.tracks)
         max_scroll = max(0, content_h - grid_h)
-        self.track_scroll.setGeometry(int(area.right() - 10), int(grid_top), 10, int(grid_h))
+        scrollbar_width = 12
+        self.track_scroll.setGeometry(
+            int(area.right() - scrollbar_width), int(grid_top), scrollbar_width, int(grid_h)
+        )
         self.track_scroll.setRange(0, int(max_scroll))
         self.track_scroll.setPageStep(int(grid_h))
         self.track_scroll.setSingleStep(lane_h)
@@ -1652,33 +1678,6 @@ class ConvertWorker(QThread):
                     pass
 
 
-class PlaybackTimelineSlider(QSlider):
-    seek_requested = Signal(int)
-
-    def _value_at(self, x: float) -> int:
-        span = max(1, self.width())
-        ratio = max(0.0, min(1.0, x / span))
-        return round(self.minimum() + ratio * (self.maximum() - self.minimum()))
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton:
-            value = self._value_at(event.position().x())
-            self.setValue(value)
-            self.seek_requested.emit(value)
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event) -> None:
-        if event.buttons() & Qt.LeftButton:
-            value = self._value_at(event.position().x())
-            self.setValue(value)
-            self.seek_requested.emit(value)
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-
 class PianoRollCanvas(QWidget):
     """Compact, dependency-free piano roll used by the per-track note editor."""
 
@@ -1688,13 +1687,14 @@ class PianoRollCanvas(QWidget):
     ruler_seek_requested = Signal(float)
 
     KEY_W = 66
-    RULER_H = 28
+    RULER_H = 31
     ROW_H = 16
 
     def __init__(self, editor) -> None:
         super().__init__(editor)
         self.editor = editor
         self.notes: list = []
+        self.ghost_notes: list = []
         self.selected: set[int] = set()
         self.anchor_index: int | None = None
         self.px_per_beat = 92.0
@@ -1705,14 +1705,19 @@ class PianoRollCanvas(QWidget):
         self.press_notes: list = []
         self.press_selected: set[int] = set()
         self.marquee = QRectF()
+        self.creation_preview = None
+        self.creation_anchor_ms = 0.0
+        self.creation_anchor_pitch = 60
         self.playhead_ms = 0.0
+        self.preload_progress = 0.0
+        self.preload_state = "idle"
         self.dragging_playhead = False
         self._note_order: list[int] = []
         self._note_starts: list[float] = []
         self._max_note_duration = 0.0
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
-        self.setMinimumSize(680, 440)
+        self.setMinimumSize(480, 300)
 
     @property
     def beat_ms(self) -> float:
@@ -1729,6 +1734,15 @@ class PianoRollCanvas(QWidget):
             self.selected.clear()
         else:
             self.selected = {i for i in self.selected if i < len(self.notes)}
+        self.update()
+
+    def set_ghost_notes(self, notes: list) -> None:
+        self.ghost_notes = sorted(list(notes), key=lambda note: float(note.start))
+        self.update()
+
+    def set_preload_progress(self, progress: float, state: str = "loading") -> None:
+        self.preload_progress = max(0.0, min(1.0, float(progress)))
+        self.preload_state = state if state in {"idle", "loading", "ready"} else "idle"
         self.update()
 
     def rebuild_note_index(self) -> None:
@@ -1805,10 +1819,24 @@ class PianoRollCanvas(QWidget):
             major = beat_index % max(1, self.editor.time_sig) == 0 and abs(t / self.beat_ms - beat_index) < .02
             painter.setPen(QPen(QColor("#565851" if major else "#30322f"), 1))
             painter.drawLine(x, 0 if major else self.RULER_H, x, self.height())
+            painter.drawLine(x, self.RULER_H - (8 if major else 5), x, self.RULER_H - 3)
             if major:
                 painter.setPen(QColor("#b8b3a9"))
                 painter.drawText(int(x + 4), 19, str(beat_index // max(1, self.editor.time_sig) + 1))
             t += step_ms
+        if self.ghost_notes:
+            left_ms = self.scroll_ms
+            for note in self.ghost_notes:
+                if note.start > right_ms:
+                    break
+                if note.start + note.dur < left_ms:
+                    continue
+                rect = self.note_rect(note)
+                if not rect.intersects(grid):
+                    continue
+                painter.fillRect(rect, QColor(130, 155, 170, 38))
+                painter.setPen(QPen(QColor(155, 184, 198, 75), 1))
+                painter.drawRect(rect)
         for index in self.visible_note_indices():
             note = self.notes[index]
             rect = self.note_rect(note)
@@ -1830,6 +1858,10 @@ class PianoRollCanvas(QWidget):
             painter.setPen(QColor(contrasting_text_color(color)))
             painter.drawText(rect.adjusted(3, 0, -2, 0), Qt.AlignCenter, note_name(note.pitch))
             painter.restore()
+            if index in self.selected and rect.width() >= 12:
+                handle = QColor("#fff4cf")
+                painter.fillRect(QRectF(rect.left() + 1, rect.top() + 3, 3, max(4, rect.height() - 6)), handle)
+                painter.fillRect(QRectF(rect.right() - 3, rect.top() + 3, 3, max(4, rect.height() - 6)), handle)
         play_x = self.KEY_W + (self.playhead_ms - self.scroll_ms) * self.px_per_ms
         if self.KEY_W - 1 <= play_x <= self.width():
             # Keep the zero-position cursor inside the grid instead of hiding it
@@ -1852,10 +1884,30 @@ class PianoRollCanvas(QWidget):
             painter.drawRect(label_rect)
             painter.setPen(QColor("#fff4d6"))
             painter.drawText(label_rect, Qt.AlignCenter, time_text)
+        if self.preload_state != "idle":
+            cache_y = self.RULER_H - 3
+            if self.preload_state == "loading":
+                painter.fillRect(QRectF(grid.left(), cache_y, grid.width(), 3), QColor("#30383a"))
+                painter.fillRect(
+                    QRectF(grid.left(), cache_y, grid.width() * self.preload_progress, 3),
+                    QColor("#55b8ad"),
+                )
+            else:
+                painter.fillRect(QRectF(grid.left(), cache_y + 1, grid.width(), 1), QColor("#477a74"))
         if not self.marquee.isNull():
             painter.fillRect(self.marquee, QColor(245, 165, 36, 35))
             painter.setPen(QPen(QColor("#f5a524"), 1, Qt.DashLine))
             painter.drawRect(self.marquee)
+        if self.creation_preview is not None:
+            preview_rect = self.note_rect(self.creation_preview)
+            painter.fillRect(preview_rect, QColor(245, 165, 36, 95))
+            painter.setPen(QPen(QColor("#ffd27b"), 1, Qt.DashLine))
+            painter.drawRect(preview_rect)
+            painter.setPen(QColor("#fff4d6"))
+            painter.drawText(
+                preview_rect.adjusted(4, 0, -3, 0), Qt.AlignVCenter | Qt.AlignLeft,
+                f"{note_name(self.creation_preview.pitch)} · v{self.creation_preview.vel}",
+            )
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.RightButton:
@@ -1869,6 +1921,10 @@ class PianoRollCanvas(QWidget):
         if event.button() == Qt.LeftButton and event.position().x() >= self.KEY_W and event.position().y() < self.RULER_H:
             self.dragging_playhead = True
             self.ruler_seek_requested.emit(self.time_at(event.position().x()))
+            event.accept()
+            return
+        if event.button() == Qt.LeftButton and event.position().x() < self.KEY_W and event.position().y() >= self.RULER_H:
+            self.editor.audition_pitch(self.pitch_at(event.position().y()))
             event.accept()
             return
         if event.button() != Qt.LeftButton or event.position().x() < self.KEY_W or event.position().y() < self.RULER_H:
@@ -1894,10 +1950,25 @@ class PianoRollCanvas(QWidget):
             self.anchor_index = index
             self.selection_changed.emit()
             self.update()
+            self.editor.audition_note(self.notes[index])
             return
         if not (mods & Qt.ControlModifier):
             self.selected.clear()
-        self.drag_mode = "pending_create"
+        if self.editor.draw_mode_button.isChecked():
+            raw_start = self.time_at(event.position().x())
+            start = raw_start if mods & Qt.AltModifier or not self.editor.snap_box.isChecked() else self.editor.snap_time(raw_start)
+            self.creation_anchor_ms = start
+            self.creation_anchor_pitch = self.pitch_at(event.position().y())
+            self.creation_preview = Note(
+                self.creation_anchor_pitch,
+                self.editor.default_note_velocity,
+                start,
+                self.editor.default_note_duration(),
+                self.editor.current_articulation(),
+            )
+            self.drag_mode = "draw_create"
+        else:
+            self.drag_mode = "pending_create"
         self.selection_changed.emit()
         self.update()
 
@@ -1909,8 +1980,34 @@ class PianoRollCanvas(QWidget):
             return
         self.hover_changed.emit(self.time_at(pos.x()), self.pitch_at(pos.y()))
         if not (event.buttons() & Qt.LeftButton):
+            if pos.x() < self.KEY_W:
+                self.setCursor(Qt.PointingHandCursor)
+            elif pos.y() < self.RULER_H:
+                self.setCursor(Qt.SizeHorCursor)
+            else:
+                _index, mode = self.note_at(pos)
+                if mode in ("resize_left", "resize_right"):
+                    self.setCursor(Qt.SizeHorCursor)
+                elif mode == "move":
+                    self.setCursor(Qt.SizeAllCursor)
+                else:
+                    self.setCursor(Qt.CrossCursor if self.editor.draw_mode_button.isChecked() else Qt.ArrowCursor)
             return
         dx, dy = pos.x() - self.press_pos.x(), pos.y() - self.press_pos.y()
+        if self.drag_mode == "draw_create" and self.creation_preview is not None:
+            current = self.time_at(pos.x())
+            snap = self.editor.snap_box.isChecked() and not (event.modifiers() & Qt.AltModifier)
+            if snap:
+                current = self.editor.snap_time(current)
+            start = min(self.creation_anchor_ms, current)
+            duration = max(self.editor.minimum_duration_ms(), abs(current - self.creation_anchor_ms))
+            if abs(dx) < 4:
+                start = self.creation_anchor_ms
+                duration = self.editor.default_note_duration()
+            velocity = max(1, min(127, self.editor.default_note_velocity - round(dy * 1.5)))
+            self.creation_preview = self.creation_preview._replace(start=start, dur=duration, vel=velocity)
+            self.update()
+            return
         if self.drag_mode == "pending_create" and math.hypot(dx, dy) > 4:
             self.drag_mode = "marquee"
         if self.drag_mode == "marquee":
@@ -1926,7 +2023,7 @@ class PianoRollCanvas(QWidget):
         if self.drag_mode not in ("move", "resize_left", "resize_right") or not self.selected:
             return
         dt = dx / self.px_per_ms
-        if self.editor.snap_box.isChecked():
+        if self.editor.snap_box.isChecked() and not (event.modifiers() & Qt.AltModifier):
             q = self.editor.quantize_ms()
             dt = round(dt / q) * q
         dp = -round(dy / self.ROW_H)
@@ -1957,19 +2054,40 @@ class PianoRollCanvas(QWidget):
             self.dragging_playhead = False
             event.accept()
             return
-        if self.drag_mode == "pending_create":
-            start = self.editor.snap_time(self.time_at(event.position().x()))
+        if self.drag_mode == "draw_create" and self.creation_preview is not None:
+            self.editor.push_snapshot()
+            self.notes.append(self.creation_preview)
+            self.selected = {len(self.notes) - 1}
+            self.anchor_index = len(self.notes) - 1
+            self.editor.default_note_velocity = self.creation_preview.vel
+            self.editor.last_note_duration_ms = self.creation_preview.dur
+            self.notes_changed.emit()
+            self.selection_changed.emit()
+            self.editor.audition_note(self.notes[-1])
+        elif self.drag_mode == "pending_create":
+            raw_start = self.time_at(event.position().x())
+            start = raw_start if event.modifiers() & Qt.AltModifier or not self.editor.snap_box.isChecked() else self.editor.snap_time(raw_start)
             pitch = self.pitch_at(event.position().y())
             self.editor.push_snapshot()
-            self.notes.append(Note(pitch, 100, start, self.editor.quantize_ms(), self.editor.current_articulation()))
+            self.notes.append(Note(
+                pitch, self.editor.default_note_velocity, start,
+                self.editor.default_note_duration(), self.editor.current_articulation(),
+            ))
             self.selected = {len(self.notes) - 1}
             self.anchor_index = len(self.notes) - 1
             self.notes_changed.emit()
             self.selection_changed.emit()
+            self.editor.audition_note(self.notes[-1])
         elif self.drag_mode in ("move", "resize_left", "resize_right") and self.notes != self.press_notes:
             self.editor.push_snapshot(self.press_notes, self.press_selected)
             self.notes_changed.emit()
+            if self.drag_mode == "move" and self.anchor_index is not None:
+                before = self.press_notes[self.anchor_index]
+                after = self.notes[self.anchor_index]
+                if before.pitch != after.pitch:
+                    self.editor.audition_note(after)
         self.marquee = QRectF()
+        self.creation_preview = None
         self.drag_mode = ""
         self.update()
 
@@ -1986,6 +2104,51 @@ class PianoRollCanvas(QWidget):
 
     def keyPressEvent(self, event) -> None:
         mods, key = event.modifiers(), event.key()
+        if key == Qt.Key_B and not (mods & (Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier)):
+            self.editor.draw_mode_button.toggle()
+            return
+        if key == Qt.Key_Escape and self.editor.draw_mode_button.isChecked():
+            self.editor.draw_mode_button.setChecked(False)
+            return
+        if mods & Qt.ControlModifier and key == Qt.Key_D and self.selected:
+            self.editor.duplicate_selected()
+            return
+        if mods & Qt.ControlModifier and key in (Qt.Key_Up, Qt.Key_Down) and self.selected:
+            self.editor.push_snapshot()
+            step = 8 if mods & Qt.ShiftModifier else 1
+            delta = step if key == Qt.Key_Up else -step
+            for index in self.selected:
+                note = self.notes[index]
+                self.notes[index] = note._replace(vel=max(1, min(127, note.vel + delta)))
+            self.notes_changed.emit()
+            self.selection_changed.emit()
+            return
+        if not (mods & Qt.ControlModifier) and key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down) and self.selected:
+            self.editor.push_snapshot()
+            changed = list(self.notes)
+            if key in (Qt.Key_Up, Qt.Key_Down):
+                step = 12 if mods & Qt.ShiftModifier else 1
+                delta = step if key == Qt.Key_Up else -step
+                for index in self.selected:
+                    changed[index] = changed[index]._replace(
+                        pitch=max(0, min(127, changed[index].pitch + delta))
+                    )
+            else:
+                step = max(1.0, self.editor.quantize_ms() / 8.0) if mods & Qt.AltModifier else self.editor.quantize_ms()
+                delta = step if key == Qt.Key_Right else -step
+                if mods & Qt.ShiftModifier:
+                    for index in self.selected:
+                        changed[index] = changed[index]._replace(
+                            dur=max(self.editor.minimum_duration_ms(), changed[index].dur + delta)
+                        )
+                else:
+                    delta = max(delta, -min(self.notes[index].start for index in self.selected))
+                    for index in self.selected:
+                        changed[index] = changed[index]._replace(start=changed[index].start + delta)
+            self.notes = changed
+            self.notes_changed.emit()
+            self.selection_changed.emit()
+            return
         if mods & Qt.ControlModifier and key == Qt.Key_A:
             self.selected = set(range(len(self.notes)))
             self.selection_changed.emit(); self.update(); return
@@ -2004,6 +2167,163 @@ class PianoRollCanvas(QWidget):
         super().keyPressEvent(event)
 
 
+class VelocityLaneCanvas(QWidget):
+    """Visible-range velocity bars sharing the piano-roll time transform."""
+
+    def __init__(self, editor) -> None:
+        super().__init__(editor)
+        self.editor = editor
+        self.drag_mode = ""
+        self.press_y = 0.0
+        self.press_velocities: dict[int, int] = {}
+        self.paint_origin: tuple[float, float] | None = None
+        self.painted_indices: set[int] = set()
+        self.before_notes: list = []
+        self.before_selected: set[int] = set()
+        self.hover_velocity: int | None = None
+        self.changed = False
+        self.setMouseTracking(True)
+        self.setCursor(Qt.SizeVerCursor)
+        self.setMinimumHeight(104)
+        self.setMaximumHeight(144)
+
+    def _velocity_at(self, y: float) -> int:
+        usable = max(1.0, self.height() - 10.0)
+        return max(1, min(127, round((1.0 - (y - 5.0) / usable) * 127)))
+
+    def _y_for_velocity(self, velocity: int) -> float:
+        return 5.0 + (1.0 - max(1, min(127, velocity)) / 127.0) * max(1.0, self.height() - 10.0)
+
+    def _bar_rect(self, index: int) -> QRectF:
+        canvas = self.editor.canvas
+        note = canvas.notes[index]
+        x = canvas.KEY_W + (note.start - canvas.scroll_ms) * canvas.px_per_ms
+        top = self._y_for_velocity(note.vel)
+        width = max(7.0, min(18.0, note.dur * canvas.px_per_ms))
+        return QRectF(x - width / 2.0, top, width, self.height() - top - 4.0)
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#171918"))
+        painter.fillRect(QRectF(0, 0, self.editor.canvas.KEY_W, self.height()), QColor("#242625"))
+        for value in (32, 64, 96, 127):
+            y = self._y_for_velocity(value)
+            painter.setPen(QColor("#343735" if value != 127 else "#474a47"))
+            painter.drawLine(QPointF(self.editor.canvas.KEY_W, y), QPointF(self.width(), y))
+            painter.setPen(QColor("#8d8b84"))
+            painter.drawText(QRectF(3, y - 8, self.editor.canvas.KEY_W - 8, 16), Qt.AlignRight | Qt.AlignVCenter, str(value))
+        for index in self.editor.canvas.visible_note_indices():
+            rect = self._bar_rect(index)
+            color = QColor("#f5a524" if index in self.editor.canvas.selected else "#6f9fd8")
+            painter.fillRect(rect, color)
+            painter.setBrush(color.lighter(115))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(QRectF(rect.center().x() - 4, rect.top() - 4, 8, 8))
+        if self.hover_velocity is not None:
+            y = self._y_for_velocity(self.hover_velocity)
+            painter.setPen(QColor("#d9a441"))
+            painter.drawLine(QPointF(self.editor.canvas.KEY_W, y), QPointF(self.width(), y))
+            badge = QRectF(5, max(3.0, min(self.height() - 25.0, y - 11.0)), self.editor.canvas.KEY_W - 10, 22)
+            painter.fillRect(badge, QColor("#5d451e"))
+            painter.setPen(QColor("#fff2d2"))
+            painter.drawText(badge, Qt.AlignCenter, str(self.hover_velocity))
+
+    def _index_at(self, x: float) -> int | None:
+        for index in reversed(self.editor.canvas.visible_note_indices()):
+            rect = self._bar_rect(index)
+            if rect.left() - 6 <= x <= rect.right() + 6:
+                return index
+        return None
+
+    def _set_velocity(self, index: int, velocity: int) -> bool:
+        note = self.editor.canvas.notes[index]
+        velocity = max(1, min(127, int(velocity)))
+        if note.vel == velocity:
+            return False
+        self.editor.canvas.notes[index] = note._replace(vel=velocity)
+        self.changed = True
+        return True
+
+    def _update_preview(self) -> None:
+        self.editor.canvas.update()
+        self.update()
+
+    def _paint_segment(self, start: tuple[float, float], end: tuple[float, float]) -> None:
+        x1, y1 = start
+        x2, y2 = end
+        left, right = sorted((x1, x2))
+        span = x2 - x1
+        for index in self.editor.canvas.visible_note_indices():
+            x = self._bar_rect(index).center().x()
+            if left - 7.0 <= x <= right + 7.0:
+                ratio = 0.0 if abs(span) < 0.001 else (x - x1) / span
+                y = y1 + (y2 - y1) * max(0.0, min(1.0, ratio))
+                if self._set_velocity(index, self._velocity_at(y)):
+                    self.painted_indices.add(index)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() != Qt.LeftButton:
+            return
+        index = self._index_at(event.position().x())
+        if index is None:
+            return
+        self.before_notes = list(self.editor.canvas.notes)
+        self.before_selected = set(self.editor.canvas.selected)
+        self.changed = False
+        self.press_y = event.position().y()
+        self.hover_velocity = self._velocity_at(self.press_y)
+        if index in self.editor.canvas.selected and len(self.editor.canvas.selected) > 1:
+            self.drag_mode = "group"
+            self.press_velocities = {
+                selected: self.editor.canvas.notes[selected].vel
+                for selected in self.editor.canvas.selected
+            }
+        else:
+            self.drag_mode = "paint"
+            self.paint_origin = (event.position().x(), event.position().y())
+            self.painted_indices = {index}
+            self.editor.canvas.selected = {index}
+            self._set_velocity(index, self.hover_velocity)
+            self.editor.canvas.selection_changed.emit()
+        self._update_preview()
+
+    def mouseMoveEvent(self, event) -> None:
+        self.hover_velocity = self._velocity_at(event.position().y())
+        if event.buttons() & Qt.LeftButton and self.drag_mode == "group":
+            delta = round((self.press_y - event.position().y()) / max(1.0, self.height() - 10.0) * 127)
+            for index, original in self.press_velocities.items():
+                self._set_velocity(index, original + delta)
+            self._update_preview()
+            return
+        if event.buttons() & Qt.LeftButton and self.drag_mode == "paint" and self.paint_origin is not None:
+            current = (event.position().x(), event.position().y())
+            self._paint_segment(self.paint_origin, current)
+            self.paint_origin = current
+            if self.painted_indices:
+                self.editor.canvas.selected = set(self.painted_indices)
+                self.editor.canvas.selection_changed.emit()
+            self._update_preview()
+            return
+        self.update()
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self.editor.canvas.notes != self.before_notes:
+            self.editor.push_snapshot(self.before_notes, self.before_selected)
+            self.editor.canvas.notes_changed.emit()
+        self.drag_mode = ""
+        self.press_velocities = {}
+        self.paint_origin = None
+        self.painted_indices = set()
+        self.before_notes = []
+        self.before_selected = set()
+
+    def leaveEvent(self, event) -> None:
+        if not self.drag_mode:
+            self.hover_velocity = None
+            self.update()
+        super().leaveEvent(event)
+
+
 class MidiNoteEditorDialog(QDialog):
     notes_applied = Signal(object)
 
@@ -2020,46 +2340,112 @@ class MidiNoteEditorDialog(QDialog):
         self.playback_timer = QTimer(self)
         self.playback_timer.setInterval(100)
         self.playback_timer.timeout.connect(self.poll_draft_playback)
+        self.audition_timer = QTimer(self)
+        self.audition_timer.setInterval(25)
+        self.audition_timer.timeout.connect(self._poll_note_audition)
+        self.audition_stop_timer = QTimer(self)
+        self.audition_stop_timer.setSingleShot(True)
+        self.audition_stop_timer.timeout.connect(self._stop_note_audition)
+        self.audition_pending = False
+        self.audition_note_name = ""
+        self.default_note_velocity = 100
+        self.last_note_duration_ms = 0.0
         self.setWindowTitle(f"编辑音符 · {track.display_name}")
         self.resize(1180, 720)
         self.setMinimumSize(920, 580)
         root = QVBoxLayout(self)
-        toolbar = QHBoxLayout()
+        root.setContentsMargins(10, 10, 10, 8)
+        root.setSpacing(7)
+        toolbar_frame = QFrame()
+        toolbar_frame.setObjectName("EditorToolbar")
+        toolbar = QHBoxLayout(toolbar_frame)
+        toolbar.setContentsMargins(11, 7, 11, 7)
+        toolbar.setSpacing(7)
         title = QLabel(f"{track.display_name} · {BDO_INSTRUMENT_NAMES.get(track.bdo_instrument_id, '未知乐器')}")
         title.setObjectName("PanelTitle")
-        toolbar.addWidget(title, 1)
-        self.snap_box = QCheckBox("吸附")
-        self.snap_box.setChecked(True)
-        toolbar.addWidget(self.snap_box)
-        toolbar.addWidget(QLabel("量化"))
-        self.quantize_combo = QComboBox()
-        for label, divisor in (("1/4", 1), ("1/8", 2), ("1/16", 4), ("1/32", 8)):
-            self.quantize_combo.addItem(label, divisor)
-        self.quantize_combo.setCurrentIndex(2)
-        toolbar.addWidget(self.quantize_combo)
-        toolbar.addWidget(QLabel("缩放"))
-        zoom = QSlider(Qt.Horizontal)
-        zoom.setRange(30, 320); zoom.setValue(92); zoom.setFixedWidth(100)
-        zoom.valueChanged.connect(self.set_zoom)
-        toolbar.addWidget(zoom)
+        toolbar.addWidget(title)
+        toolbar.addSpacing(8)
+        self.draft_play_button = PillButton("播放", "primary")
+        self.draft_play_button.clicked.connect(self.toggle_draft_playback)
+        toolbar.addWidget(self.draft_play_button)
+        self.draft_stop_button = PillButton("停止", "ghost")
+        self.draft_stop_button.clicked.connect(self.stop_draft)
+        toolbar.addWidget(self.draft_stop_button)
+        self.loop_box = QCheckBox("循环")
+        toolbar.addWidget(self.loop_box)
+        self.playback_time_label = QLabel("0:00.000 / 0:00.000")
+        self.playback_time_label.setObjectName("EditorTime")
+        self.playback_time_label.setFixedWidth(145)
+        toolbar.addWidget(self.playback_time_label)
+        toolbar.addStretch(1)
         for label, callback in (("撤销", self.undo), ("重做", self.redo), ("删除", self.delete_selected)):
-            button = PillButton(label, "ghost"); button.clicked.connect(callback); toolbar.addWidget(button)
+            button = PillButton(label, "ghost")
+            button.clicked.connect(callback)
+            toolbar.addWidget(button)
         optimize_button = PillButton("优化此轨", "secondary")
         optimize_button.clicked.connect(self.optimize_draft)
         toolbar.addWidget(optimize_button)
-        root.addLayout(toolbar)
-        properties = QFrame()
-        properties.setObjectName("Panel")
-        property_layout = QHBoxLayout(properties)
-        property_layout.setContentsMargins(9, 6, 9, 6)
-        property_layout.setSpacing(6)
-        property_layout.addWidget(QLabel("音符属性"))
-        self.pitch_edit = QLineEdit(); self.start_edit = QLineEdit(); self.duration_edit = QLineEdit(); self.velocity_edit = QLineEdit()
+        root.addWidget(toolbar_frame)
+
+        inspector = QFrame()
+        inspector.setObjectName("NoteInspectorTop")
+        inspector.setFixedHeight(48)
+        inspector_layout = QHBoxLayout(inspector)
+        inspector_layout.setContentsMargins(8, 6, 8, 6)
+        inspector_layout.setSpacing(7)
+        self.draw_mode_button = PillButton("绘制 B", "ghost")
+        self.draw_mode_button.setObjectName("DrawMode")
+        self.draw_mode_button.setCheckable(True)
+        self.draw_mode_button.setFixedHeight(30)
+        self.draw_mode_button.setToolTip("绘制模式：拖动可同时设置音符长度与力度（B）")
+        self.draw_mode_button.toggled.connect(self._toggle_draw_mode)
+        inspector_layout.addWidget(self.draw_mode_button)
+        self.note_mode_button = PillButton("音符属性", "ghost")
+        self.note_mode_button.setObjectName("InspectorMode")
+        self.note_mode_button.setFixedHeight(30)
+        self.note_mode_button.setCheckable(True)
+        self.note_mode_button.clicked.connect(lambda: self._set_top_inspector_mode("note"))
+        inspector_layout.addWidget(self.note_mode_button)
+        self.articulation_mode_button = PillButton("奏法", "ghost")
+        self.articulation_mode_button.setObjectName("InspectorMode")
+        self.articulation_mode_button.setFixedHeight(30)
+        self.articulation_mode_button.setCheckable(True)
+        self.articulation_mode_button.clicked.connect(lambda: self._set_top_inspector_mode("articulation"))
+        inspector_layout.addWidget(self.articulation_mode_button)
+        self.grid_mode_button = PillButton("网格", "ghost")
+        self.grid_mode_button.setObjectName("InspectorMode")
+        self.grid_mode_button.setFixedHeight(30)
+        self.grid_mode_button.setCheckable(True)
+        self.grid_mode_button.clicked.connect(lambda: self._set_top_inspector_mode("grid"))
+        inspector_layout.addWidget(self.grid_mode_button)
+
+        self.note_controls = QWidget()
+        note_layout = QHBoxLayout(self.note_controls)
+        note_layout.setContentsMargins(3, 0, 0, 0)
+        note_layout.setSpacing(7)
+        self.selection_summary = QLabel("未选择音符")
+        self.selection_summary.setObjectName("InspectorSelection")
+        self.selection_summary.setWordWrap(False)
+        self.selection_summary.setMinimumWidth(145)
+        self.selection_summary.setMaximumWidth(190)
+        note_layout.addWidget(self.selection_summary)
+        self.pitch_edit = QLineEdit()
+        self.start_edit = QLineEdit()
+        self.duration_edit = QLineEdit()
+        self.velocity_edit = QLineEdit()
         for label, widget, field in (("音高", self.pitch_edit, "pitch"), ("开始 ms", self.start_edit, "start"), ("时值 ms", self.duration_edit, "dur"), ("力度", self.velocity_edit, "vel")):
             widget.editingFinished.connect(lambda f=field, w=widget: self.apply_field(f, w.text()))
-            widget.setFixedWidth(74)
-            property_layout.addWidget(QLabel(label))
-            property_layout.addWidget(widget)
+            widget.setFixedWidth(64 if field in ("pitch", "vel") else 72)
+            group = QWidget()
+            group_layout = QHBoxLayout(group)
+            group_layout.setContentsMargins(0, 0, 0, 0)
+            group_layout.setSpacing(4)
+            field_label = QLabel(label)
+            field_label.setObjectName("Muted")
+            group_layout.addWidget(field_label)
+            group_layout.addWidget(widget)
+            note_layout.addWidget(group)
+
         self.articulation_combo = QComboBox()
         supported = BDO_ARTICULATIONS.get(track.bdo_instrument_id, [])
         known = {n for n, _ in supported}
@@ -2070,50 +2456,73 @@ class MidiNoteEditorDialog(QDialog):
         if self.articulation_combo.count() == 0:
             self.articulation_combo.addItem("普通", 0)
         self.articulation_combo.currentIndexChanged.connect(self.apply_articulation)
-        property_layout.addWidget(QLabel("奏法"))
-        property_layout.addWidget(self.articulation_combo)
-        property_layout.addSpacing(8)
-        property_layout.addWidget(QLabel("色板"))
-        for i, (ntype, label) in enumerate(supported):
-            button = PillButton(label, "ghost")
-            button.clicked.connect(lambda _checked=False, n=ntype: self.choose_articulation(n))
-            color = articulation_color(ntype)
-            button.setStyleSheet(
-                f"QPushButton {{ background: {color}; color: {contrasting_text_color(color)}; "
-                "border: 1px solid rgba(255,255,255,70); padding: 5px; }}"
-            )
-            button.setToolTip(f"{label} · type {ntype}")
-            property_layout.addWidget(button)
-        property_layout.addStretch(1)
-        property_scroll = QScrollArea()
-        property_scroll.setWidgetResizable(True)
-        property_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        property_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        property_scroll.setFixedHeight(62)
-        property_scroll.setWidget(properties)
-        root.addWidget(property_scroll)
+        note_layout.addStretch(1)
+        inspector_layout.addWidget(self.note_controls, 1)
 
-        transport = QFrame()
-        transport.setObjectName("TimelineControlBar")
-        transport_layout = QHBoxLayout(transport)
-        transport_layout.setContentsMargins(9, 5, 9, 5)
-        transport_layout.setSpacing(7)
-        self.draft_play_button = PillButton("播放", "secondary")
-        self.draft_play_button.clicked.connect(self.toggle_draft_playback)
-        transport_layout.addWidget(self.draft_play_button)
-        self.draft_stop_button = PillButton("停止", "secondary")
-        self.draft_stop_button.clicked.connect(self.stop_draft)
-        transport_layout.addWidget(self.draft_stop_button)
-        self.playback_time_label = QLabel("0:00.000 / 0:00.000")
-        self.playback_time_label.setObjectName("Muted")
-        self.playback_time_label.setFixedWidth(145)
-        transport_layout.addWidget(self.playback_time_label)
-        self.playback_timeline = PlaybackTimelineSlider(Qt.Horizontal)
-        self.playback_timeline.setRange(0, max(1, round(self.draft_duration_ms())))
-        self.playback_timeline.seek_requested.connect(self.seek_draft)
-        transport_layout.addWidget(self.playback_timeline, 1)
-        root.addWidget(transport)
+        self.articulation_controls = QWidget()
+        articulation_layout = QHBoxLayout(self.articulation_controls)
+        articulation_layout.setContentsMargins(3, 0, 0, 0)
+        articulation_layout.setSpacing(6)
+        articulation_hint = QLabel("选择音符后应用奏法")
+        articulation_hint.setObjectName("Muted")
+        articulation_layout.addWidget(articulation_hint)
+        self.articulation_combo.setObjectName("ArticulationCombo")
+        self.articulation_combo.setMinimumWidth(145)
+        articulation_layout.addWidget(self.articulation_combo)
+        self.articulation_buttons: dict[int, QPushButton] = {}
+        for ntype, label in supported:
+            button = QPushButton(label)
+            button.setObjectName("ArticulationChip")
+            button.setCheckable(True)
+            button.setAutoExclusive(True)
+            button.setProperty("ntype", ntype)
+            button.clicked.connect(lambda _checked=False, value=ntype: self._choose_articulation(value))
+            articulation_layout.addWidget(button)
+            self.articulation_buttons[ntype] = button
+        articulation_layout.addStretch(1)
+        inspector_layout.addWidget(self.articulation_controls, 1)
 
+        self.grid_controls = QWidget()
+        grid_layout = QHBoxLayout(self.grid_controls)
+        grid_layout.setContentsMargins(3, 0, 0, 0)
+        grid_layout.setSpacing(12)
+        self.snap_box = QCheckBox("吸附")
+        self.snap_box.setChecked(True)
+        grid_layout.addWidget(self.snap_box)
+        self.note_preview_box = QCheckBox("点击试听")
+        self.note_preview_box.setChecked(True)
+        grid_layout.addWidget(self.note_preview_box)
+        self.ghost_box = QCheckBox("其他轨道参考")
+        self.ghost_box.setChecked(True)
+        self.ghost_box.toggled.connect(self._toggle_ghost_notes)
+        grid_layout.addWidget(self.ghost_box)
+        grid_layout.addWidget(QLabel("量化"))
+        self.quantize_combo = QComboBox()
+        for label, divisor in (("1/4", 1), ("1/8", 2), ("1/16", 4), ("1/32", 8)):
+            self.quantize_combo.addItem(label, divisor)
+        self.quantize_combo.setCurrentIndex(2)
+        self.quantize_combo.setFixedWidth(76)
+        grid_layout.addWidget(self.quantize_combo)
+        grid_layout.addWidget(QLabel("水平缩放"))
+        self.editor_zoom = QSlider(Qt.Horizontal)
+        self.editor_zoom.setRange(30, 320)
+        self.editor_zoom.setValue(92)
+        self.editor_zoom.setFixedWidth(150)
+        self.editor_zoom.valueChanged.connect(self.set_zoom)
+        grid_layout.addWidget(self.editor_zoom)
+        grid_help = QLabel("Alt 临时取消吸附 · 方向键移动 · Ctrl+D 复制")
+        grid_help.setObjectName("Muted")
+        grid_layout.addWidget(grid_help)
+        grid_layout.addStretch(1)
+        inspector_layout.addWidget(self.grid_controls, 1)
+        root.addWidget(inspector)
+        self._set_top_inspector_mode("note")
+
+        workspace = QFrame()
+        workspace.setObjectName("EditorWorkspace")
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_layout.setSpacing(0)
         roll = QGridLayout()
         roll.setContentsMargins(0, 0, 0, 0)
         roll.setSpacing(0)
@@ -2124,26 +2533,57 @@ class MidiNoteEditorDialog(QDialog):
         self.canvas.hover_changed.connect(self._hover_changed)
         self.canvas.ruler_seek_requested.connect(self.seek_draft)
         self.pitch_scroll = QScrollBar(Qt.Vertical)
+        self.pitch_scroll.setObjectName("PianoPitchScroll")
         self.pitch_scroll.setRange(24, 127)
         self.pitch_scroll.setValue(self.canvas.pitch_top)
         self.pitch_scroll.valueChanged.connect(self.set_pitch_scroll)
         self.time_scroll = QScrollBar(Qt.Horizontal)
+        self.time_scroll.setObjectName("PianoTimeScroll")
         self.time_scroll.valueChanged.connect(self.set_time_scroll)
         roll.addWidget(self.canvas, 0, 0)
         roll.addWidget(self.pitch_scroll, 0, 1)
         roll.addWidget(self.time_scroll, 1, 0)
-        root.addLayout(roll, 1)
+        scroll_corner = QWidget()
+        scroll_corner.setObjectName("PianoScrollCorner")
+        scroll_corner.setFixedSize(12, 12)
+        roll.addWidget(scroll_corner, 1, 1)
+        workspace_layout.addLayout(roll, 1)
+        velocity_header_frame = QFrame()
+        velocity_header_frame.setObjectName("VelocityHeader")
+        velocity_header = QHBoxLayout(velocity_header_frame)
+        velocity_header.setContentsMargins(3, 0, 3, 0)
+        self.velocity_toggle = PillButton("显示力度编辑 ▸", "ghost")
+        self.velocity_toggle.setCheckable(True)
+        self.velocity_toggle.toggled.connect(self._toggle_velocity_lane)
+        velocity_header.addWidget(self.velocity_toggle)
+        velocity_hint = QLabel("拖动手柄 · 横向拖绘渐变 · 多选后整体调整 · Ctrl+↑↓ 微调")
+        velocity_hint.setObjectName("Muted")
+        velocity_header.addWidget(velocity_hint)
+        velocity_header.addStretch(1)
+        workspace_layout.addWidget(velocity_header_frame)
+        self.velocity_lane = VelocityLaneCanvas(self)
+        self.velocity_lane.setVisible(False)
+        workspace_layout.addWidget(self.velocity_lane)
+        root.addWidget(workspace, 1)
+
+        footer = QFrame()
+        footer.setObjectName("EditorFooter")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(8, 5, 8, 5)
         self.status = QLabel()
         self.status.setObjectName("Muted")
-        root.addWidget(self.status)
+        footer_layout.addWidget(self.status, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Apply | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("确定")
         buttons.button(QDialogButtonBox.Apply).setText("应用")
         buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        buttons.button(QDialogButtonBox.Ok).setProperty("kind", "convert")
         buttons.accepted.connect(self.accept_with_apply)
         buttons.rejected.connect(self.reject)
         buttons.button(QDialogButtonBox.Apply).clicked.connect(self.apply_notes)
-        root.addWidget(buttons)
+        footer_layout.addWidget(buttons)
+        root.addWidget(footer)
+        self._toggle_ghost_notes(True)
         self.finished.connect(lambda _result: self.stop_draft())
         self.space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
         self.space_shortcut.setContext(Qt.WindowShortcut)
@@ -2153,6 +2593,46 @@ class MidiNoteEditorDialog(QDialog):
 
     def quantize_ms(self) -> float:
         return self.canvas.beat_ms / int(self.quantize_combo.currentData() or 4)
+
+    def _toggle_ghost_notes(self, enabled: bool) -> None:
+        parent = self.parent()
+        if not enabled or not parent or not hasattr(parent, "tracks"):
+            if hasattr(self, "canvas"):
+                self.canvas.set_ghost_notes([])
+            return
+        notes = [
+            note
+            for item in parent.tracks
+            if int(item.track_id) != int(self.track.track_id) and not item.muted
+            for note in item.notes
+        ]
+        if hasattr(self, "canvas"):
+            self.canvas.set_ghost_notes(notes)
+
+    def _set_top_inspector_mode(self, mode: str) -> None:
+        show_notes = mode == "note"
+        show_articulation = mode == "articulation"
+        self.note_controls.setVisible(show_notes)
+        self.articulation_controls.setVisible(show_articulation)
+        self.grid_controls.setVisible(mode == "grid")
+        self.note_mode_button.setChecked(show_notes)
+        self.articulation_mode_button.setChecked(show_articulation)
+        self.grid_mode_button.setChecked(mode == "grid")
+
+    def _toggle_draw_mode(self, enabled: bool) -> None:
+        if hasattr(self, "canvas"):
+            self.canvas.setCursor(Qt.CrossCursor if enabled else Qt.ArrowCursor)
+            self.canvas.update()
+        if hasattr(self, "status"):
+            self.status.setText(tr(
+                "绘制模式：拖动设置长度，上下调整力度，Alt 取消吸附"
+                if enabled else "选择模式：拖动音符编辑，拖动空白框选"
+            ))
+
+    def _toggle_velocity_lane(self, visible: bool) -> None:
+        self.velocity_lane.setVisible(visible)
+        self.velocity_toggle.setText(tr("隐藏力度编辑 ▾" if visible else "显示力度编辑 ▸"))
+        QTimer.singleShot(0, self.update_scrollbars)
 
     def draft_duration_ms(self) -> float:
         notes = self.canvas.notes if hasattr(self, "canvas") else self.track.notes
@@ -2171,11 +2651,7 @@ class MidiNoteEditorDialog(QDialog):
         self.playhead_ms = max(0.0, min(float(ms), duration))
         if hasattr(self, "canvas"):
             self.canvas.set_playhead(self.playhead_ms)
-        if hasattr(self, "playback_timeline"):
-            self.playback_timeline.blockSignals(True)
-            self.playback_timeline.setRange(0, max(1, round(duration)))
-            self.playback_timeline.setValue(round(self.playhead_ms))
-            self.playback_timeline.blockSignals(False)
+        if hasattr(self, "playback_time_label"):
             self.playback_time_label.setText(
                 f"{self.format_playback_time(self.playhead_ms)} / {self.format_playback_time(duration)}"
             )
@@ -2201,16 +2677,43 @@ class MidiNoteEditorDialog(QDialog):
         if not parent or not hasattr(parent, "realtime_audio"):
             self.playback_timer.stop()
             return
-        status = parent.realtime_audio.get_status()
-        self.set_draft_playhead(status.position_ms, follow=self.draft_playback_state == "playing")
-        if status.position_ms >= status.duration_ms - 1 and status.duration_ms > 0:
-            self.stop_draft()
-        elif status.state == "paused" and self.draft_playback_state == "playing":
-            self._set_draft_playback_state("paused")
+        try:
+            if self.draft_playback_state == "loading":
+                status = parent.realtime_audio.get_status()
+                progress = status.preload_progress if status.preload_total else 0.0
+                self.canvas.set_preload_progress(progress, "loading")
+                self.status.setText(trf(
+                    "正在准备游戏音源… {loaded}/{total}",
+                    loaded=status.preload_loaded, total=status.preload_total,
+                ))
+                result = parent.realtime_audio.finish_loading(self.playhead_ms)
+                if result is None:
+                    return
+                self.canvas.set_preload_progress(1.0, "ready")
+                parent.realtime_audio.play()
+                self._set_draft_playback_state("playing")
+                self.status.setText(tr("游戏音源已缓存 · 开始试听"))
+            status = parent.realtime_audio.get_status()
+            self.set_draft_playhead(status.position_ms, follow=self.draft_playback_state == "playing")
+            if status.position_ms >= status.duration_ms - 1 and status.duration_ms > 0:
+                if self.loop_box.isChecked():
+                    self.seek_draft(0.0)
+                    parent.realtime_audio.play()
+                else:
+                    self.stop_draft()
+            elif status.state == "paused" and self.draft_playback_state == "playing":
+                self._set_draft_playback_state("paused")
+        except AudioEngineError as exc:
+            self.playback_timer.stop()
+            parent.realtime_audio.cancel_loading()
+            self.canvas.set_preload_progress(0.0, "idle")
+            self._set_draft_playback_state("stopped")
+            QMessageBox.warning(self, "试听失败", str(exc))
 
     def set_zoom(self, value: int) -> None:
         self.canvas.px_per_beat = float(value)
         self.canvas.update()
+        self.velocity_lane.update()
         self.update_scrollbars()
 
     def update_scrollbars(self) -> None:
@@ -2229,12 +2732,12 @@ class MidiNoteEditorDialog(QDialog):
         self.pitch_scroll.setPageStep(max(1, int((self.canvas.height() - self.canvas.RULER_H) / self.canvas.ROW_H)))
         self.pitch_scroll.setValue(self.canvas.pitch_top)
         self.pitch_scroll.blockSignals(False)
-        if hasattr(self, "playback_timeline"):
-            self.set_draft_playhead(self.playhead_ms)
+        self.set_draft_playhead(self.playhead_ms)
 
     def set_time_scroll(self, value: int) -> None:
         self.canvas.scroll_ms = float(value)
         self.canvas.update()
+        self.velocity_lane.update()
 
     def set_pitch_scroll(self, value: int) -> None:
         self.canvas.pitch_top = int(value)
@@ -2267,6 +2770,8 @@ class MidiNoteEditorDialog(QDialog):
         self.status.setText(f"单轨优化完成 · 当前草稿 {len(self.canvas.notes)} 音符 · 点击应用或确定后写回")
 
     def toggle_draft_playback(self) -> None:
+        if self.draft_playback_state == "loading":
+            return
         if self.draft_playback_state == "playing":
             self.pause_draft()
         elif self.draft_playback_state == "paused":
@@ -2276,13 +2781,17 @@ class MidiNoteEditorDialog(QDialog):
 
     def _set_draft_playback_state(self, state: str) -> None:
         self.draft_playback_state = state
-        labels = {"stopped": "播放", "playing": "暂停", "paused": "继续"}
-        self.draft_play_button.setText(labels.get(state, "播放"))
+        labels = {"stopped": "播放", "loading": "准备中…", "playing": "暂停", "paused": "继续"}
+        self.draft_play_button.setText(tr(labels.get(state, "播放")))
+        self.draft_play_button.setEnabled(state != "loading")
 
     def play_draft(self) -> None:
         parent = self.parent()
         if not parent or not hasattr(parent, "realtime_audio"):
             return
+        self.audition_timer.stop()
+        self.audition_stop_timer.stop()
+        self.audition_pending = False
         draft_track = replace(self.track, notes=self.edited_notes(), muted=False, solo=False)
         blockers = parent._realtime_preview_blockers([draft_track])
         if blockers:
@@ -2290,15 +2799,90 @@ class MidiNoteEditorDialog(QDialog):
             return
         try:
             parent._stop_preview(reset_playhead=False)
-            parent.realtime_audio.load_project(
+            parent.realtime_audio.load_project_async(
                 [draft_track], BDO_SAMPLE_MAP_PATH, self.playhead_ms, parent.reverb, parent.delay, parent.chorus
             )
-            parent.realtime_audio.play()
-            self._set_draft_playback_state("playing")
+            self.canvas.set_preload_progress(0.0, "loading")
+            self._set_draft_playback_state("loading")
+            self.status.setText(tr("正在准备游戏音源…"))
             self.playback_timer.start()
         except AudioEngineError as exc:
+            self.canvas.set_preload_progress(0.0, "idle")
             self._set_draft_playback_state("stopped")
             QMessageBox.warning(self, "试听失败", str(exc))
+
+    def audition_note(self, note) -> None:
+        """Asynchronously audition one editor note with the current game instrument."""
+        if hasattr(self, "note_preview_box") and not self.note_preview_box.isChecked():
+            return
+        parent = self.parent()
+        if not parent or not hasattr(parent, "realtime_audio"):
+            return
+        audition_track = replace(
+            self.track,
+            notes=[note._replace(start=0.0, dur=max(180.0, min(650.0, float(note.dur))))],
+            muted=False,
+            solo=False,
+        )
+        if parent._realtime_preview_blockers([audition_track]):
+            self.status.setText(tr("当前音符没有可用的游戏音源"))
+            return
+        try:
+            if self.draft_playback_state != "stopped":
+                self.stop_draft()
+            elif getattr(parent, "realtime_preview_active", False) or getattr(parent, "realtime_preview_loading", False):
+                parent._stop_preview(reset_playhead=False)
+            else:
+                parent.realtime_audio.clear_playback()
+            self.audition_stop_timer.stop()
+            self.audition_pending = True
+            self.audition_note_name = note_name(note.pitch)
+            parent.realtime_audio.load_project_async(
+                [audition_track], BDO_SAMPLE_MAP_PATH, 0.0,
+                parent.reverb, parent.delay, parent.chorus,
+            )
+            self.status.setText(trf("正在准备音符试听… {note}", note=self.audition_note_name))
+            self.audition_timer.start()
+        except AudioEngineError as exc:
+            self.audition_pending = False
+            self.audition_timer.stop()
+            self.status.setText(trf("音符试听不可用：{message}", message=str(exc)))
+
+    def audition_pitch(self, pitch: int) -> None:
+        self.audition_note(Note(
+            max(0, min(127, int(pitch))), self.default_note_velocity, 0.0,
+            self.default_note_duration(), self.current_articulation(),
+        ))
+
+    def _poll_note_audition(self) -> None:
+        if not self.audition_pending:
+            self.audition_timer.stop()
+            return
+        parent = self.parent()
+        if not parent or not hasattr(parent, "realtime_audio"):
+            self.audition_pending = False
+            self.audition_timer.stop()
+            return
+        try:
+            result = parent.realtime_audio.finish_loading(0.0)
+            if result is None:
+                return
+            parent.realtime_audio.play()
+            self.audition_pending = False
+            self.audition_timer.stop()
+            self.audition_stop_timer.start(700)
+            self.status.setText(trf("试听 {note}", note=self.audition_note_name))
+        except AudioEngineError as exc:
+            self.audition_pending = False
+            self.audition_timer.stop()
+            self.status.setText(trf("音符试听不可用：{message}", message=str(exc)))
+
+    def _stop_note_audition(self) -> None:
+        parent = self.parent()
+        if parent and hasattr(parent, "realtime_audio"):
+            parent.realtime_audio.clear_playback()
+        self.audition_pending = False
+        self.audition_timer.stop()
 
     def pause_draft(self) -> None:
         parent = self.parent()
@@ -2309,6 +2893,7 @@ class MidiNoteEditorDialog(QDialog):
             self._set_draft_playback_state("paused")
             self.playback_timer.start()
         except AudioEngineError as exc:
+            self.canvas.set_preload_progress(0.0, "idle")
             self._set_draft_playback_state("stopped")
             QMessageBox.warning(self, "试听失败", str(exc))
 
@@ -2321,11 +2906,15 @@ class MidiNoteEditorDialog(QDialog):
             self._set_draft_playback_state("playing")
             self.playback_timer.start()
         except AudioEngineError as exc:
+            self.canvas.set_preload_progress(0.0, "idle")
             self._set_draft_playback_state("stopped")
             QMessageBox.warning(self, "试听失败", str(exc))
 
     def stop_draft(self) -> None:
         self.playback_timer.stop()
+        self.audition_timer.stop()
+        self.audition_stop_timer.stop()
+        self.audition_pending = False
         parent = self.parent()
         if parent and hasattr(parent, "realtime_audio"):
             try:
@@ -2335,14 +2924,21 @@ class MidiNoteEditorDialog(QDialog):
         if hasattr(self, "draft_play_button"):
             self._set_draft_playback_state("stopped")
         if hasattr(self, "canvas"):
+            self.canvas.set_preload_progress(0.0, "idle")
             self.set_draft_playhead(0.0)
 
     def closeEvent(self, event) -> None:
+        self.audition_timer.stop()
+        self.audition_stop_timer.stop()
+        self.audition_pending = False
         self.stop_draft()
         super().closeEvent(event)
 
     def minimum_duration_ms(self) -> float:
         return max(1.0, self.quantize_ms() / 8.0)
+
+    def default_note_duration(self) -> float:
+        return self.last_note_duration_ms if self.last_note_duration_ms > 0 else self.quantize_ms()
 
     def snap_time(self, value: float) -> float:
         if not self.snap_box.isChecked():
@@ -2422,6 +3018,22 @@ class MidiNoteEditorDialog(QDialog):
         self.canvas.selected = set(range(first, len(self.canvas.notes)))
         self._notes_changed(); self.refresh_fields()
 
+    def duplicate_selected(self) -> None:
+        chosen = [self.canvas.notes[index] for index in sorted(self.canvas.selected)]
+        if not chosen:
+            return
+        self.push_snapshot()
+        start = min(note.start for note in chosen)
+        end = max(note.start + note.dur for note in chosen)
+        span = max(self.quantize_ms(), end - start)
+        offset = math.ceil(span / self.quantize_ms()) * self.quantize_ms()
+        first = len(self.canvas.notes)
+        self.canvas.notes.extend(note._replace(start=note.start + offset) for note in chosen)
+        self.canvas.selected = set(range(first, len(self.canvas.notes)))
+        self.canvas.anchor_index = first
+        self._notes_changed()
+        self.refresh_fields()
+
     def apply_field(self, field: str, text: str) -> None:
         if self.updating_fields or not self.canvas.selected or text.strip() in ("", "—"): return
         try: value = float(text) if field in ("start", "dur") else int(text)
@@ -2434,10 +3046,14 @@ class MidiNoteEditorDialog(QDialog):
         for i in self.canvas.selected: self.canvas.notes[i] = self.canvas.notes[i]._replace(**{field: value})
         self._notes_changed(); self.refresh_fields()
 
-    def choose_articulation(self, ntype: int) -> None:
+    def _choose_articulation(self, ntype: int) -> None:
         index = self.articulation_combo.findData(ntype)
-        if index >= 0: self.articulation_combo.setCurrentIndex(index)
-        elif self.canvas.selected: self.apply_articulation()
+        if index < 0:
+            return
+        if index == self.articulation_combo.currentIndex():
+            self.apply_articulation()
+        else:
+            self.articulation_combo.setCurrentIndex(index)
 
     def apply_articulation(self) -> None:
         if self.updating_fields or not self.canvas.selected: return
@@ -2446,10 +3062,23 @@ class MidiNoteEditorDialog(QDialog):
         self.push_snapshot()
         for i in self.canvas.selected: self.canvas.notes[i] = self.canvas.notes[i]._replace(ntype=value)
         self._notes_changed()
+        self.refresh_fields()
 
     def refresh_fields(self) -> None:
         self.updating_fields = True
         chosen = [self.canvas.notes[i] for i in sorted(self.canvas.selected)]
+        if not chosen:
+            self.selection_summary.setText(tr("未选择音符 · 单击网格新建"))
+        elif len(chosen) == 1:
+            note = chosen[0]
+            self.selection_summary.setText(trf(
+                "已选择 1 个音符 · {note} · {start} ms",
+                note=note_name(note.pitch), start=f"{note.start:.0f}",
+            ))
+        else:
+            self.selection_summary.setText(trf(
+                "已选择 {count} 个音符 · 可批量修改共同属性", count=len(chosen)
+            ))
         for widget, field in ((self.pitch_edit, "pitch"), (self.start_edit, "start"), (self.duration_edit, "dur"), (self.velocity_edit, "vel")):
             values = [getattr(n, field) for n in chosen]
             widget.setEnabled(bool(chosen)); widget.setText("" if not values else (str(round(values[0], 3)) if all(v == values[0] for v in values) else "—"))
@@ -2458,6 +3087,11 @@ class MidiNoteEditorDialog(QDialog):
             if len(types) == 1:
                 index = self.articulation_combo.findData(next(iter(types)))
                 if index >= 0: self.articulation_combo.setCurrentIndex(index)
+        self.articulation_combo.setEnabled(bool(chosen))
+        selected_type = next(iter(types)) if chosen and len(types) == 1 else None
+        for ntype, button in self.articulation_buttons.items():
+            button.setEnabled(bool(chosen))
+            button.setChecked(ntype == selected_type)
         self.updating_fields = False
         self._update_status()
 
@@ -2478,7 +3112,7 @@ class MidiNoteEditorDialog(QDialog):
         if self.draft_playback_state != "stopped":
             self.stop_draft()
         self.canvas.rebuild_note_index()
-        self.canvas.update(); self._update_status(); self.update_scrollbars()
+        self.canvas.update(); self.velocity_lane.update(); self._update_status(); self.update_scrollbars()
 
     def edited_notes(self) -> list:
         return sorted(self.canvas.notes, key=lambda n: (n.start, n.pitch, n.dur))
@@ -2577,7 +3211,36 @@ class TrackFxDialog(QDialog):
         )
 
 
+
+
+class OptimizerAnalysisWorker(QThread):
+    """Run optimizer code away from the GUI thread."""
+
+    succeeded = Signal(object)
+    failed = Signal(str, str)
+
+    def __init__(self, arguments: tuple, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.arguments = arguments
+
+    def run(self) -> None:
+        try:
+            session = analyse_with_algorithm(*self.arguments)
+        except Exception as exc:
+            self.failed.emit(str(exc) or type(exc).__name__, traceback.format_exc())
+        else:
+            self.succeeded.emit(session)
+
+
 class MidiOptimizeDialog(QDialog):
+    """Small host UI over the versioned optimizer-plugin contract."""
+
+    INTENSITIES = (
+        ("保守", OptimizationIntensity.CONSERVATIVE),
+        ("均衡", OptimizationIntensity.BALANCED),
+        ("深入", OptimizationIntensity.DEEP),
+    )
+
     def __init__(self, parent: "MidiToBdoWindow", target_track_id: int | None = None,
                  source_tracks: list[TrackState] | None = None) -> None:
         super().__init__(parent)
@@ -2585,166 +3248,190 @@ class MidiOptimizeDialog(QDialog):
         self.target_track_id = target_track_id
         self.source_tracks = list(source_tracks) if source_tracks is not None else parent.tracks
         self.track_checks: dict[int, QCheckBox] = {}
-        self.optimization_result = None
+        self.algorithms = ()
+        self.discovery_diagnostics: tuple[str, ...] = ()
+        self.session = None
+        self._applied_result = None
+        self.analysis_worker: OptimizerAnalysisWorker | None = None
         scope_title = "单轨优化" if target_track_id is not None else "全局 MIDI 优化"
         self.setWindowTitle(scope_title)
-        self.resize(920, 700)
-        self.setMinimumSize(760, 420)
+        self.resize(760, 320)
+        self.setMinimumSize(680, 300)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 18, 18, 16)
         layout.setSpacing(10)
 
-        header = QFrame()
-        header.setObjectName("OptimizerHeader")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(16, 13, 16, 13)
-        header_layout.setSpacing(3)
         title = QLabel(scope_title)
         title.setObjectName("OptimizerTitle")
-        subtitle = QLabel(
-            "读取全曲乐理与配器上下文，但只写入当前轨道。" if target_track_id is not None else
-            "分析全部轨道；静音和独奏不改变作用域，可在下方选择允许写入的轨道。"
-        )
-        subtitle.setObjectName("Muted")
-        header_layout.addWidget(title)
-        header_layout.addWidget(subtitle)
-        layout.addWidget(header)
+        layout.addWidget(title)
 
-        options_card = QFrame()
-        options_card.setObjectName("OptimizerOptions")
-        options = QGridLayout(options_card)
-        options.setContentsMargins(14, 10, 14, 10)
-        options.setHorizontalSpacing(18)
-        options.setVerticalSpacing(6)
-        self.level_combo = QComboBox()
-        self.level_combo.addItem("游戏安全优化", OptimizationLevel.SAFE.value)
-        self.style_combo = QComboBox()
-        self.style_combo.addItem("自动识别曲风", "")
-        for label, value in (
-            ("古典 / 管弦", "orchestral"), ("摇滚", "rock"), ("爵士 / Swing", "jazz_swing"),
-            ("放克", "funk"), ("电子", "electronic"), ("氛围", "ambient"),
-            ("中性", "neutral"),
-        ):
-            self.style_combo.addItem(label, value)
-        self.lyric_combo = QComboBox()
-        for label, value in (
-            ("自动判断", LyricExpressionMode.AUTO.value),
-            ("逐音节（清晰咬字）", LyricExpressionMode.SYLLABIC.value),
-            ("连续连唱（Legato）", LyricExpressionMode.LEGATO.value),
-            ("花腔延展（Melisma）", LyricExpressionMode.MELISMATIC.value),
-            ("节奏念唱 / Rap", LyricExpressionMode.SPOKEN.value),
-            ("问答分句（先建议）", LyricExpressionMode.CALL_RESPONSE.value),
-        ):
-            self.lyric_combo.addItem(label, value)
-        self.level_label = QLabel("优化等级")
-        self.style_label = QLabel("曲风")
-        self.lyric_label = QLabel("歌词表达")
-        options.addWidget(self.level_label, 2, 0)
-        options.addWidget(self.level_combo, 2, 1, 1, 2)
-        options.addWidget(self.style_label, 3, 0)
-        options.addWidget(self.style_combo, 3, 1, 1, 2)
-        options.addWidget(self.lyric_label, 4, 0)
-        options.addWidget(self.lyric_combo, 4, 1, 1, 2)
-        self.block_check = QCheckBox("修复音块")
-        self.block_check.setChecked(True)
-        self.velocity_check = QCheckBox("平衡力度")
-        self.velocity_check.setChecked(True)
-        self.articulation_check = QCheckBox("分析奏法")
-        self.articulation_check.setChecked(True)
-        self.humanize_check = QCheckBox("轻微自然化")
-        self.humanize_check.setChecked(True)
-        self.effects_check = QCheckBox("声音效果" if target_track_id is None else "声音效果（仅建议）")
-        self.effects_check.setChecked(True)
-        self.theory_check = QCheckBox("乐理分析（保守）")
-        self.theory_check.setChecked(True)
-        self.quantize_check = QCheckBox("柔性对齐")
-        self.quantize_check.setChecked(True)
-        for box in (self.articulation_check, self.humanize_check, self.effects_check):
-            box.stateChanged.connect(self._refresh_report)
-        options.addWidget(self.articulation_check, 0, 0)
-        options.addWidget(self.humanize_check, 0, 1)
-        options.addWidget(self.effects_check, 0, 2)
-        self.advanced_widgets = [
-            self.level_label, self.level_combo, self.style_label, self.style_combo,
-            self.lyric_label, self.lyric_combo, self.block_check, self.velocity_check,
-            self.quantize_check, self.theory_check,
-        ]
-        for index, box in enumerate((self.block_check, self.velocity_check, self.quantize_check, self.theory_check)):
-            box.stateChanged.connect(self._refresh_report)
-            options.addWidget(box, 5 + index // 3, index % 3)
-        self.level_combo.currentIndexChanged.connect(self._refresh_report)
-        self.style_combo.currentIndexChanged.connect(self._refresh_report)
-        self.lyric_combo.currentIndexChanged.connect(self._refresh_report)
-        layout.addWidget(options_card)
+        selector_card = QFrame()
+        selector_card.setObjectName("OptimizerOptions")
+        selector = QGridLayout(selector_card)
+        selector.setContentsMargins(14, 12, 14, 12)
+        selector.setHorizontalSpacing(10)
+        selector.addWidget(QLabel("优化算法"), 0, 0)
+        self.algorithm_combo = QComboBox()
+        self.algorithm_combo.currentIndexChanged.connect(self._algorithm_changed)
+        selector.addWidget(self.algorithm_combo, 0, 1, 1, 3)
+        self.open_plugins_button = QPushButton("算法包目录")
+        self.open_plugins_button.clicked.connect(self._open_plugin_directory)
+        selector.addWidget(self.open_plugins_button, 0, 4)
+        self.refresh_plugins_button = QPushButton("刷新")
+        self.refresh_plugins_button.clicked.connect(self._reload_algorithms)
+        selector.addWidget(self.refresh_plugins_button, 0, 5)
+        selector.addWidget(QLabel("优化强度"), 1, 0)
+        self.intensity_combo = QComboBox()
+        for label, value in self.INTENSITIES:
+            self.intensity_combo.addItem(label, value.value)
+        self.intensity_combo.setCurrentIndex(1)
+        self.intensity_combo.currentIndexChanged.connect(self._invalidate_preview)
+        selector.addWidget(self.intensity_combo, 1, 1, 1, 2)
+        self.algorithm_description = QLabel()
+        self.algorithm_description.setWordWrap(True)
+        self.algorithm_description.setObjectName("Muted")
+        selector.addWidget(self.algorithm_description, 2, 0, 1, 6)
+        self.scope_summary_label = QLabel()
+        self.scope_summary_label.setObjectName("Muted")
+        selector.addWidget(self.scope_summary_label, 3, 0, 1, 6)
+        layout.addWidget(selector_card)
+
+        self.summary_label = QLabel("选择算法和强度，然后分析优化。")
+        self.summary_label.setObjectName("OptimizerSummary")
+        self.summary_label.setWordWrap(True)
+        layout.addWidget(self.summary_label)
+
+        action_row = QHBoxLayout()
+        action_row.addStretch(1)
+        self.analyse_button = QPushButton("分析优化")
+        self.analyse_button.clicked.connect(self._analyse)
+        action_row.addWidget(self.analyse_button)
+        layout.addLayout(action_row)
+
+        self.details_button = QPushButton("详细信息 ▸")
+        self.details_button.setCheckable(True)
+        self.details_button.toggled.connect(self._toggle_details)
+        layout.addWidget(self.details_button)
+
+        self.details_container = QWidget()
+        details = QVBoxLayout(self.details_container)
+        details.setContentsMargins(0, 0, 0, 0)
+        self.capability_label = QLabel()
+        self.capability_label.setWordWrap(True)
+        self.capability_label.setObjectName("Muted")
+        details.addWidget(self.capability_label)
 
         scope_card = QFrame()
         scope_card.setObjectName("OptimizerOptions")
         scope_layout = QGridLayout(scope_card)
-        scope_layout.setContentsMargins(14, 9, 14, 9)
+        scope_layout.setContentsMargins(12, 8, 12, 8)
         if target_track_id is None:
-            scope_layout.addWidget(QLabel("允许写入的轨道（所有轨道始终参与只读上下文分析）"), 0, 0, 1, 2)
+            scope_layout.addWidget(QLabel("允许写入的轨道"), 0, 0, 1, 2)
             for index, track in enumerate(self.source_tracks):
                 box = QCheckBox(f"Track {track.track_id} · {track.display_name}")
                 box.setChecked(True)
-                box.stateChanged.connect(self._refresh_report)
+                box.stateChanged.connect(self._invalidate_preview)
                 self.track_checks[int(track.track_id)] = box
                 scope_layout.addWidget(box, 1 + index // 2, index % 2)
         else:
             track = next((item for item in self.source_tracks if int(item.track_id) == target_track_id), None)
             scope_layout.addWidget(QLabel(
-                f"目标：Track {target_track_id} · {track.display_name if track else '未知轨道'}；其他轨道只读。"
+                f"目标：Track {target_track_id} · {track.display_name if track else '未知轨道'}"
             ), 0, 0)
-        layout.addWidget(scope_card)
-        self.scope_card = scope_card
-
-        hint = QLabel(
-            "只在游戏支持范围内调整奏法、力度、轻微时序和全局声音效果。"
-            "不会增删音符、改音高、换乐器或新增轨道；未通过游戏 A/B 的奏法不会写入。"
-        )
-        hint.setWordWrap(True)
-        hint.setObjectName("Muted")
-        layout.addWidget(hint)
-
-        self.summary_label = QLabel()
-        self.summary_label.setObjectName("OptimizerSummary")
-        self.summary_label.setWordWrap(True)
-        layout.addWidget(self.summary_label)
-
-        self.details_button = QPushButton("详细说明 ▸")
-        self.details_button.setCheckable(True)
-        self.details_button.toggled.connect(self._toggle_details)
-        layout.addWidget(self.details_button)
+        details.addWidget(scope_card)
 
         self.report_text = QTextEdit()
         self.report_text.setReadOnly(True)
         self.report_text.setObjectName("OptimizerReport")
-        layout.addWidget(self.report_text, stretch=1)
+        details.addWidget(self.report_text, stretch=1)
+        layout.addWidget(self.details_container)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Apply | QDialogButtonBox.Cancel)
+        self.button_box = buttons
         self.apply_button = buttons.button(QDialogButtonBox.Apply)
-        self.apply_button.setText("应用游戏安全优化")
+        self.apply_button.setText("应用预览")
+        self.apply_button.setEnabled(False)
         buttons.button(QDialogButtonBox.Cancel).setText("取消")
         self.apply_button.clicked.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
         self._toggle_details(False)
-        self._refresh_report()
+        self._reload_algorithms()
+
+    @property
+    def scope(self) -> str:
+        return "single_track" if self.target_track_id is not None else "global"
+
+    def _target_track_ids(self) -> frozenset[int]:
+        if self.target_track_id is not None:
+            return frozenset({self.target_track_id})
+        return frozenset(track_id for track_id, box in self.track_checks.items() if box.isChecked())
+
+    def _selected_algorithm(self):
+        return self.algorithm_combo.currentData()
+
+    def _selected_intensity(self) -> OptimizationIntensity:
+        return OptimizationIntensity(str(self.intensity_combo.currentData()))
+
+    def _reload_algorithms(self) -> None:
+        previous = getattr(self._selected_algorithm(), "algorithm_id", None)
+        discovery = discover_host_algorithms()
+        self.discovery_diagnostics = discovery.diagnostics
+        self.algorithms = tuple(item for item in discovery.algorithms if self.scope in item.scopes)
+        self.algorithm_combo.blockSignals(True)
+        self.algorithm_combo.clear()
+        selected_index = 0
+        for index, descriptor in enumerate(self.algorithms):
+            self.algorithm_combo.addItem(descriptor.display_name, descriptor)
+            if descriptor.algorithm_id == previous:
+                selected_index = index
+        if self.algorithms:
+            self.algorithm_combo.setCurrentIndex(selected_index)
+        self.algorithm_combo.blockSignals(False)
+        self._algorithm_changed()
+
+    def _algorithm_changed(self, _index: int = -1) -> None:
+        descriptor = self._selected_algorithm()
+        if descriptor is None:
+            self.algorithm_description.setText("没有可用的优化算法。")
+            self.capability_label.clear()
+            self.analyse_button.setEnabled(False)
+        else:
+            prepass = " · 先运行游戏安全预处理" if descriptor.requires_safe_prepass else ""
+            self.algorithm_description.setText(f"{descriptor.description}{prepass}")
+            capabilities = "、".join(descriptor.capabilities) or "诊断"
+            self.capability_label.setText(
+                f"版本 {descriptor.version} · 能力：{capabilities} · 作用域：{'、'.join(descriptor.scopes)}"
+            )
+            self.analyse_button.setEnabled(True)
+        self._invalidate_preview()
+
+    def _invalidate_preview(self, _value: int = 0) -> None:
+        self._update_scope_summary()
+        self.session = None
+        self._applied_result = None
+        self.apply_button.setEnabled(False)
+        self.summary_label.setText("设置已变化，请重新分析优化。")
+        diagnostics = [f"算法包：{item}" for item in self.discovery_diagnostics]
+        self.report_text.setPlainText("\n".join(diagnostics))
+
+    def _update_scope_summary(self) -> None:
+        if self.target_track_id is not None:
+            self.scope_summary_label.setText(trf("作用轨道：Track {track_id}", track_id=self.target_track_id))
+            return
+        selected = len(self._target_track_ids())
+        self.scope_summary_label.setText(trf(
+            "作用轨道：{selected} / {total}", selected=selected, total=len(self.source_tracks)
+        ))
 
     def _toggle_details(self, visible: bool) -> None:
-        for widget in self.advanced_widgets:
-            widget.setVisible(visible)
-        self.scope_card.setVisible(visible)
-        self.report_text.setVisible(visible)
-        self.details_button.setText("详细说明 ▾" if visible else "详细说明 ▸")
-        self.resize(920, 700 if visible else 420)
+        self.details_container.setVisible(visible)
+        self.details_button.setText("详细信息 ▾" if visible else "详细信息 ▸")
+        self.resize(760, 680 if visible else 320)
 
-    def _config(self) -> OptimizerConfig:
-        if self.target_track_id is not None:
-            target_ids = frozenset({self.target_track_id})
-        else:
-            target_ids = frozenset(track_id for track_id, box in self.track_checks.items() if box.isChecked())
-        style = str(self.style_combo.currentData() or "")
+    def _base_config(self) -> OptimizerConfig:
         supported_pitches = {
             instrument_id: pitches
             for instrument_id in BDO_EDITOR_PITCH_RANGES
@@ -2761,59 +3448,112 @@ class MidiOptimizeDialog(QDialog):
             except (OSError, ValueError, TypeError, KeyError):
                 verified_articulations = set()
         return OptimizerConfig(
-            optimize_blocks=self.block_check.isChecked(),
-            polish_velocity=self.velocity_check.isChecked(),
-            apply_articulations=self.articulation_check.isChecked(),
-            analyse_music_theory=self.theory_check.isChecked(),
-            soft_quantize=self.quantize_check.isChecked(),
-            level=OptimizationLevel(str(self.level_combo.currentData())),
-            target_track_ids=target_ids,
-            style_override=(style,) if style else (),
+            target_track_ids=self._target_track_ids(),
             supported_pitches=supported_pitches,
-            allow_track_creation=False,
             verified_articulations=frozenset(verified_articulations),
             lyric_events=[dict(event) for event in self.parent_window.lyric_events],
-            lyric_mode=LyricExpressionMode(str(self.lyric_combo.currentData())),
-            game_safe_only=True,
-            humanize=self.humanize_check.isChecked(),
-            humanize_timing_ms=12.0,
-            humanize_velocity=6,
-            optimize_effects=self.effects_check.isChecked(),
             current_reverb=self.parent_window.reverb,
             current_delay=self.parent_window.delay,
             current_chorus=self.parent_window.chorus,
             allow_global_effect_write=self.target_track_id is None,
         )
 
-    def _refresh_report(self) -> None:
-        self.optimization_result = optimize_tracks(
+    def _analyse(self) -> None:
+        if self.analysis_worker is not None:
+            return
+        descriptor = self._selected_algorithm()
+        if descriptor is None:
+            return
+        if not self._target_track_ids():
+            self.summary_label.setText("请至少选择一条允许写入的轨道。")
+            return
+        self._set_analysis_busy(True)
+        self.summary_label.setText("正在分析优化…")
+        arguments = (
+            descriptor,
             self.source_tracks,
             self.parent_window.bpm_override or self.parent_window.bpm,
-            BDO_ARTICULATIONS,
-            self._config(),
             self.parent_window.time_sig,
+            BDO_ARTICULATIONS,
+            self._base_config(),
+            self._selected_intensity(),
+            self.scope,
+            frozenset(BDO_INSTRUMENT_NAMES),
         )
-        reports = self.optimization_result.reports
-        changed = sum(report.changed for report in reports)
-        techniques = sum(len(report.technique_candidates) for report in reports)
-        selected = len(self._config().target_track_ids or ())
-        self.summary_label.setText(self.optimization_result.simple_summary_text())
-        self.report_text.setPlainText(self.optimization_result.summary_text())
+        worker = OptimizerAnalysisWorker(arguments, self)
+        self.analysis_worker = worker
+        worker.succeeded.connect(self._analysis_succeeded)
+        worker.failed.connect(self._analysis_failed)
+        worker.finished.connect(self._analysis_finished)
+        worker.start()
+
+    def _set_analysis_busy(self, busy: bool) -> None:
+        self.analyse_button.setEnabled(not busy and self._selected_algorithm() is not None)
+        self.algorithm_combo.setEnabled(not busy)
+        self.intensity_combo.setEnabled(not busy)
+        self.open_plugins_button.setEnabled(not busy)
+        self.refresh_plugins_button.setEnabled(not busy)
+        for box in self.track_checks.values():
+            box.setEnabled(not busy)
+        cancel_button = self.button_box.button(QDialogButtonBox.Cancel)
+        cancel_button.setEnabled(not busy)
+
+    def _analysis_succeeded(self, session: object) -> None:
+        self.session = session
+        preview = session.preview
+        self.summary_label.setText(
+            f"{preview.summary or '分析完成'} · 修改操作 {len(preview.operations)}"
+        )
+        lines = list(preview.details)
+        lines.extend(f"诊断：{item}" for item in preview.diagnostics)
+        lines.extend(f"算法包：{item}" for item in self.discovery_diagnostics)
+        if not lines:
+            lines.append("当前输入没有需要应用的修改。")
+        self.report_text.setPlainText("\n".join(lines))
+        self.apply_button.setEnabled(bool(preview.operations))
+
+    def _analysis_failed(self, message: str, traceback_text: str) -> None:
+        append_crash_log("Optimizer plugin analysis failed", traceback_text)
+        self.session = None
+        self.summary_label.setText(f"分析失败：{message}")
+        self.report_text.setPlainText(
+            f"算法未应用任何修改。请检查算法包，或切换到 BDO 游戏安全优化。\n\n{message}"
+        )
+        self.apply_button.setEnabled(False)
+
+    def _analysis_finished(self) -> None:
+        worker = self.analysis_worker
+        self.analysis_worker = None
+        self._set_analysis_busy(False)
+        if worker is not None:
+            worker.deleteLater()
+
+    def reject(self) -> None:
+        if self.analysis_worker is not None:
+            return
+        super().reject()
+
+    def _open_plugin_directory(self) -> None:
+        directory = optimizer_plugin_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
 
     def optimized_tracks(self) -> list[TrackState]:
-        if self.optimization_result is None:
-            self._refresh_report()
-        return self.optimization_result.tracks
+        if self.session is None:
+            raise InvalidOptimizationPreview("no analysed optimization preview is available")
+        if self._applied_result is None:
+            self._applied_result = self.session.apply(self.source_tracks)
+        return self._applied_result[0]
 
     def optimized_effects(self) -> tuple[int, int, tuple[int, int, int] | None] | None:
-        if self.target_track_id is not None or not self.effects_check.isChecked():
+        if self.session is None:
             return None
-        if self.optimization_result is None:
-            self._refresh_report()
-        suggestion = self.optimization_result.effect_suggestion
-        if suggestion is None or not suggestion.writable or not suggestion.changed:
+        if self._applied_result is None:
+            self._applied_result = self.session.apply(self.source_tracks)
+        effect = self._applied_result[1]
+        if effect is None:
             return None
-        return suggestion.suggested_reverb, suggestion.suggested_delay, suggestion.suggested_chorus
+        return effect.reverb, effect.delay, effect.chorus
 
 
 class ConversionCheckDialog(QDialog):
@@ -2822,15 +3562,21 @@ class ConversionCheckDialog(QDialog):
         self.parent_window = parent
         self.report = ""
         self.setWindowTitle("转换检查")
-        self.resize(980, 660)
+        self.resize(1000, 700)
+        self.setMinimumSize(760, 560)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
+        title_row = QHBoxLayout()
         title = QLabel("转换检查")
         title.setObjectName("PanelTitle")
-        layout.addWidget(title)
+        title_row.addWidget(title)
+        subtitle = QLabel("先处理阻断项，再逐条确认预期变化；双击问题可定位。")
+        subtitle.setObjectName("Muted")
+        title_row.addWidget(subtitle, stretch=1)
+        layout.addLayout(title_row)
 
         summary = QHBoxLayout()
         summary.setSpacing(8)
@@ -2845,15 +3591,37 @@ class ConversionCheckDialog(QDialog):
             card.setWordWrap(True)
             summary.addWidget(card, stretch=1)
 
+        report_label = QLabel("导出摘要")
+        report_label.setObjectName("SectionLabel")
+        layout.addWidget(report_label)
         self.report_view = QTextEdit()
         self.report_view.setReadOnly(True)
-        layout.addWidget(self.report_view, stretch=1)
+        self.report_view.setMaximumHeight(140)
+        layout.addWidget(self.report_view)
+
+        issue_heading = QHBoxLayout()
+        issue_label = QLabel("问题与预期变化")
+        issue_label.setObjectName("SectionLabel")
+        issue_heading.addWidget(issue_label)
+        issue_hint = QLabel("严重问题优先显示")
+        issue_hint.setObjectName("Muted")
+        issue_heading.addWidget(issue_hint)
+        issue_heading.addStretch(1)
+        layout.addLayout(issue_heading)
+        self.issue_list = QListWidget()
+        self.issue_list.setToolTip("双击问题可定位到对应轨道和音符")
+        self.issue_list.itemDoubleClicked.connect(self._focus_issue)
+        layout.addWidget(self.issue_list, stretch=1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)
         self.fix_btn = buttons.addButton("修复可自动处理项", QDialogButtonBox.ActionRole)
         self.fix_btn.clicked.connect(self._apply_fixes)
         copy_btn = buttons.addButton("复制报告", QDialogButtonBox.ActionRole)
         copy_btn.clicked.connect(self._copy_report)
+        compare_btn = buttons.addButton("比较 BDO 乐谱", QDialogButtonBox.ActionRole)
+        compare_btn.clicked.connect(self._compare_scores)
+        coverage_btn = buttons.addButton("样本覆盖", QDialogButtonBox.ActionRole)
+        coverage_btn.clicked.connect(self._show_sample_coverage)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self._refresh()
@@ -2866,10 +3634,77 @@ class ConversionCheckDialog(QDialog):
         self._refresh()
         QMessageBox.information(self, "转换检查", message)
 
+    def _focus_issue(self, item: QListWidgetItem) -> None:
+        issue = item.data(Qt.UserRole)
+        if isinstance(issue, ValidationIssue):
+            self.parent_window._focus_validation_issue(issue)
+
+    def _compare_scores(self) -> None:
+        first_default = str(getattr(self.parent_window, "last_export_path", "") or self.parent_window.last_output_dir)
+        first, _filter = QFileDialog.getOpenFileName(self, "选择基准 BDO 乐谱", first_default, "BDO 乐谱 (*);;所有文件 (*.*)")
+        if not first:
+            return
+        second, _filter = QFileDialog.getOpenFileName(self, "选择对比 BDO 乐谱", str(Path(first).parent), "BDO 乐谱 (*);;所有文件 (*.*)")
+        if not second:
+            return
+        try:
+            result = compare_scores(read_bdo_score(Path(first)), read_bdo_score(Path(second)))
+        except Exception as exc:
+            QMessageBox.warning(self, "谱面对比失败", str(exc))
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("BDO 谱面对比")
+        dialog.resize(860, 560)
+        body = QVBoxLayout(dialog)
+        header = QLabel(f"基准：{Path(first).name}\n对比：{Path(second).name}")
+        header.setWordWrap(True)
+        body.addWidget(header)
+        report = QTextEdit()
+        report.setReadOnly(True)
+        report.setPlainText(result.summary())
+        body.addWidget(report, stretch=1)
+        close = QDialogButtonBox(QDialogButtonBox.Close)
+        close.rejected.connect(dialog.reject)
+        body.addWidget(close)
+        dialog.exec()
+
+    def _show_sample_coverage(self) -> None:
+        try:
+            active = selected_tracks(self.parent_window.tracks)
+            coverage = sample_coverage_for_tracks(active, BDO_SAMPLE_MAP_PATH)
+        except Exception as exc:
+            QMessageBox.warning(self, "样本覆盖检查失败", str(exc))
+            return
+        lines = ["当前工程的 Wwise 键位/力度层映射覆盖（不代表 DSP 已通过游戏 A/B）：", ""]
+        for track, item in zip(active, coverage):
+            lines.append(
+                f"Track {track.track_id} · {track.display_name}: "
+                f"{item.covered_notes}/{item.total_notes} · {item.status}"
+            )
+            if item.missing_note_indices:
+                lines.append(f"  缺失音符索引: {list(item.missing_note_indices[:24])}")
+        QMessageBox.information(self, "样本覆盖", "\n".join(lines))
+
     def _refresh(self) -> None:
         analysis = self.parent_window._analyze_conversion()
         self.report = analysis["report"]
         self.report_view.setPlainText(self.report)
+        self.issue_list.clear()
+        severity_labels = {"error": "需处理", "warning": "需人工确认", "info": "变化说明"}
+        for issue in analysis["issues"]:
+            location = f"Track {issue.track_id}" if issue.track_id is not None else "全局"
+            item = QListWidgetItem(f"[{severity_labels[issue.severity]}] {location} · {issue.message}")
+            item.setData(Qt.UserRole, issue)
+            if issue.severity == "error":
+                item.setForeground(QColor("#ef7772"))
+            elif issue.severity == "warning":
+                item.setForeground(QColor("#e2b968"))
+            self.issue_list.addItem(item)
+        if self.issue_list.count() == 0:
+            item = QListWidgetItem("未发现阻断项或待确认变化")
+            item.setFlags(Qt.NoItemFlags)
+            item.setForeground(QColor("#79c58a"))
+            self.issue_list.addItem(item)
         issue_count = analysis["issue_count"]
         warning_count = analysis["warning_count"]
         fixable_count = analysis["fixable_count"]
@@ -2896,8 +3731,8 @@ class SettingsDialog(QDialog):
         self.setObjectName("SettingsDialog")
         self.setWindowTitle("设置")
         self.setModal(True)
-        self.resize(920, 680)
-        self.setMinimumSize(820, 540)
+        self.resize(980, 720)
+        self.setMinimumSize(760, 560)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -2923,13 +3758,21 @@ class SettingsDialog(QDialog):
         body = QWidget()
         body.setObjectName("SettingsBody")
         body_layout = QGridLayout(body)
-        body_layout.setContentsMargins(18, 16, 18, 18)
-        body_layout.setHorizontalSpacing(12)
+        body_layout.setContentsMargins(10, 14, 10, 16)
+        body_layout.setHorizontalSpacing(10)
         body_layout.setVerticalSpacing(12)
-        body_layout.setColumnMinimumWidth(0, 435)
-        body_layout.setColumnMinimumWidth(1, 435)
         body_layout.setColumnStretch(0, 1)
         body_layout.setColumnStretch(1, 1)
+        left_column = QWidget()
+        left_layout = QVBoxLayout(left_column)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(10)
+        right_column = QWidget()
+        right_layout = QVBoxLayout(right_column)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
+        body_layout.addWidget(left_column, 0, 0)
+        body_layout.addWidget(right_column, 0, 1)
         scroll.setWidget(body)
         layout.addWidget(scroll, stretch=1)
 
@@ -2939,7 +3782,7 @@ class SettingsDialog(QDialog):
         )
         form = self._form_layout()
         general_layout.addLayout(form)
-        body_layout.addWidget(general, 0, 0)
+        left_layout.addWidget(general)
 
         self.language = QComboBox()
         self.language.setProperty("i18nSkipItems", True)
@@ -2979,11 +3822,11 @@ class SettingsDialog(QDialog):
             "游戏编辑权限",
             "与 midi-to-bdo 相同：选择一份游戏内保存的单音符曲谱，读取角色名和 Owner ID。",
         )
-        body_layout.addWidget(owner, 0, 1)
+        right_layout.addWidget(owner)
         self.owner_id = parent.owner_id
         owner_row = QHBoxLayout()
         self.owner_load_button = PillButton("从游戏曲谱读取", "secondary")
-        self.owner_load_button.setFixedWidth(136)
+        self.owner_load_button.setFixedWidth(124)
         self.owner_load_button.clicked.connect(self._load_owner_id)
         self.owner_status = QLabel()
         self.owner_status.setObjectName("OwnerStatus")
@@ -2999,7 +3842,8 @@ class SettingsDialog(QDialog):
             "MIDI 解析",
             "这两项会影响 MIDI 读入方式；修改后会重新载入当前文件。",
         )
-        body_layout.addWidget(parsing, 1, 0)
+        left_layout.addWidget(parsing)
+        left_layout.addStretch(1)
         self.apply_sustain = QCheckBox("读取并展开 MIDI sustain 踏板")
         self.apply_sustain.setChecked(parent.apply_sustain)
         parsing_layout.addWidget(self.apply_sustain)
@@ -3012,7 +3856,8 @@ class SettingsDialog(QDialog):
             "力度处理",
             "选择一种输出力度策略；下方仅显示当前策略需要的参数。",
         )
-        body_layout.addWidget(velocity, 1, 1)
+        right_layout.addWidget(velocity)
+        right_layout.addStretch(1)
         modes = QFrame()
         modes.setObjectName("SettingsModeRow")
         modes_layout = QGridLayout(modes)
@@ -3087,7 +3932,7 @@ class SettingsDialog(QDialog):
         for column in (1, 3, 5, 7, 9):
             effect_grid.setColumnStretch(column, 1)
         effects_layout.addLayout(effect_grid)
-        body_layout.addWidget(effects, 2, 0, 1, 2)
+        body_layout.addWidget(effects, 1, 0, 1, 2)
         self.reverb = QSpinBox()
         self.reverb.setRange(0, 127)
         self.reverb.setValue(parent.reverb)
@@ -3119,8 +3964,8 @@ class SettingsDialog(QDialog):
             field.setFixedWidth(92)
         note = QLabel("轨道 FX 中的奏法会写入支持的 BDO 乐器。")
         note.setObjectName("SettingsFootnote")
-        body_layout.addWidget(note, 3, 0, 1, 2)
-        body_layout.setRowStretch(4, 1)
+        body_layout.addWidget(note, 2, 0, 1, 2)
+        body_layout.setRowStretch(3, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.setObjectName("SettingsButtons")
@@ -3156,6 +4001,8 @@ class SettingsDialog(QDialog):
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         form.setFormAlignment(Qt.AlignTop)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(9)
         return form
@@ -3242,7 +4089,7 @@ class SettingsDialog(QDialog):
 class MidiToBdoWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("BDO MIDI Arranger")
+        self.setWindowTitle(f"BDO Music Composer v{__version__}")
         self.resize(1360, 820)
         self.setMinimumSize(1160, 720)
 
@@ -3276,6 +4123,11 @@ class MidiToBdoWindow(QMainWindow):
         self.autosave_project_dir: Path | None = None
         self.autosave_source_copy: Path | None = None
         self.loading_project = False
+        self.research_metadata = {
+            "profile_id": BDO_PROFILE.profile_id,
+            "ab_experiments": [],
+        }
+        self.project_commands = ProjectCommandStack()
         self.conversion_check_dirty = False
         self.check_blink_timer = QTimer(self)
         self.check_blink_timer.timeout.connect(self._blink_conversion_check_button)
@@ -3310,6 +4162,10 @@ class MidiToBdoWindow(QMainWindow):
             self.chorus = None
 
         self._build_ui()
+        self.project_undo_shortcut = QShortcut(QKeySequence.Undo, self)
+        self.project_undo_shortcut.activated.connect(self._undo_project)
+        self.project_redo_shortcut = QShortcut(QKeySequence.Redo, self)
+        self.project_redo_shortcut.activated.connect(self._redo_project)
         self._apply_style()
         style_hints = QApplication.styleHints()
         if hasattr(style_hints, "colorSchemeChanged"):
@@ -3354,6 +4210,11 @@ class MidiToBdoWindow(QMainWindow):
         optimize_btn.clicked.connect(lambda: self._open_midi_optimizer(None))
         layout.addWidget(optimize_btn)
 
+        separator = QFrame()
+        separator.setObjectName("ToolbarSeparator")
+        separator.setFrameShape(QFrame.VLine)
+        layout.addWidget(separator)
+
         self.file_label = QLabel("未导入 MIDI")
         self.file_label.setObjectName("ToolbarText")
         layout.addWidget(self.file_label, stretch=1)
@@ -3367,6 +4228,11 @@ class MidiToBdoWindow(QMainWindow):
         self.preview_source_badge = QLabel("游戏映射：检测中")
         self.preview_source_badge.setObjectName("ToolbarBadge")
         layout.addWidget(self.preview_source_badge)
+
+        separator = QFrame()
+        separator.setObjectName("ToolbarSeparator")
+        separator.setFrameShape(QFrame.VLine)
+        layout.addWidget(separator)
 
         thanks_btn = PillButton("致谢", "secondary")
         thanks_btn.clicked.connect(self._show_acknowledgements)
@@ -3411,6 +4277,7 @@ class MidiToBdoWindow(QMainWindow):
         self.track_layout.addStretch(1)
 
         scroll = QScrollArea()
+        scroll.setObjectName("TrackScroll")
         scroll.viewport().setObjectName("TrackViewport")
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.track_container)
@@ -3462,12 +4329,14 @@ class MidiToBdoWindow(QMainWindow):
         self.delete_track_button = PillButton("删除轨道", "ghost")
         self.delete_track_button.clicked.connect(self._delete_selected_track)
         header.addWidget(title)
-        header.addWidget(self.timeline_meta, stretch=1)
+        header.addWidget(self.timeline_meta)
         header.addWidget(self.play_button)
         header.addWidget(self.pause_button)
         header.addWidget(self.stop_button)
+        header.addSpacing(8)
         header.addWidget(self.add_track_button)
         header.addWidget(self.delete_track_button)
+        header.addStretch(1)
         header.addWidget(zoom_label)
         header.addWidget(self.timeline_zoom)
         header.addWidget(pan_label)
@@ -3494,17 +4363,29 @@ class MidiToBdoWindow(QMainWindow):
     def _build_inspector(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("Inspector")
-        layout = QHBoxLayout(panel)
-        layout.setContentsMargins(10, 7, 10, 7)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 7, 12, 8)
+        layout.setSpacing(6)
+
+        status_row = QHBoxLayout()
+        status_row.setSpacing(10)
 
         self.status_label = QLabel("就绪")
         self.status_label.setObjectName("Status")
-        layout.addWidget(self.status_label)
+        status_row.addWidget(self.status_label)
 
         self.inspector_text = QLabel("选择轨道查看详情。右键可修复和优化轨道或更换乐器；FX 可设置支持乐器的 BDO 奏法。")
         self.inspector_text.setObjectName("InspectorText")
-        layout.addWidget(self.inspector_text, stretch=1)
+        self.inspector_text.setWordWrap(True)
+        status_row.addWidget(self.inspector_text, stretch=1)
+
+        layout.addLayout(status_row)
+
+        output_row = QHBoxLayout()
+        output_row.setSpacing(9)
+        volume_label = QLabel("轨道音量")
+        volume_label.setObjectName("Muted")
+        output_row.addWidget(volume_label)
 
         self.selected_volume = QSlider(Qt.Horizontal)
         self.selected_volume.setRange(10, 200)
@@ -3512,24 +4393,28 @@ class MidiToBdoWindow(QMainWindow):
         self.selected_volume.setFixedWidth(90)
         self.selected_volume.setEnabled(False)
         self.selected_volume.valueChanged.connect(self._update_selected_volume)
-        layout.addWidget(self.selected_volume)
+        output_row.addWidget(self.selected_volume)
 
         self.selected_volume_label = QLabel("100%")
         self.selected_volume_label.setObjectName("Muted")
         self.selected_volume_label.setFixedWidth(38)
-        layout.addWidget(self.selected_volume_label)
+        output_row.addWidget(self.selected_volume_label)
+
+        output_row.addStretch(1)
 
         self.install_check = QCheckBox("复制到游戏目录")
-        layout.addWidget(self.install_check)
+        output_row.addWidget(self.install_check)
 
         self.open_output_button = PillButton("打开输出目录", "secondary")
         self.open_output_button.setEnabled(False)
         self.open_output_button.clicked.connect(self._open_output_dir)
-        layout.addWidget(self.open_output_button)
+        output_row.addWidget(self.open_output_button)
 
         self.out_dir = QLineEdit(str(DEFAULT_OUTDIR))
-        self.out_dir.setFixedWidth(300)
-        layout.addWidget(self.out_dir)
+        self.out_dir.setMinimumWidth(220)
+        self.out_dir.setMaximumWidth(360)
+        output_row.addWidget(self.out_dir, stretch=1)
+        layout.addLayout(output_row)
         return panel
 
     def _apply_style(self) -> None:
@@ -3613,6 +4498,11 @@ class MidiToBdoWindow(QMainWindow):
                 border-bottom: 1px solid #393735;
                 border-radius: 0;
             }
+            QFrame#ToolbarSeparator {
+                color: #46423d;
+                max-width: 1px;
+                margin: 3px 2px;
+            }
             QFrame#Inspector {
                 background: #202020;
                 border: 0;
@@ -3629,10 +4519,87 @@ class MidiToBdoWindow(QMainWindow):
                 border-bottom: 1px solid #353332;
                 border-radius: 0;
             }
+            QFrame#EditorToolbar {
+                background: #1d1d1d;
+                border: 1px solid #353332;
+                border-radius: 5px;
+            }
+            QFrame#EditorWorkspace {
+                background: #151515;
+                border: 1px solid #353332;
+                border-radius: 4px;
+            }
+            QFrame#VelocityHeader {
+                background: #202020;
+                border: 0;
+                border-top: 1px solid #353332;
+                border-radius: 0;
+                min-height: 32px;
+                max-height: 32px;
+            }
+            QFrame#NoteInspectorTop {
+                background: #202020;
+                border: 1px solid #3d3932;
+                border-radius: 5px;
+            }
+            QPushButton#InspectorMode:checked {
+                background: #6f4b17;
+                border-color: #dda03a;
+                color: #fff2d2;
+                font-weight: 800;
+            }
+            QPushButton#DrawMode:checked {
+                background: #245943;
+                border-color: #62b98b;
+                color: #e6fff0;
+                font-weight: 800;
+            }
+            QLabel#InspectorSelection {
+                background: #191919;
+                border: 1px solid #383531;
+                border-radius: 4px;
+                color: #d9d3ca;
+                padding: 5px 7px;
+            }
+            QComboBox#ArticulationCombo {
+                border-color: #9b7533;
+                color: #f0d39b;
+                font-weight: 700;
+            }
+            QPushButton#ArticulationChip {
+                background: #28251f;
+                border: 1px solid #575044;
+                border-radius: 4px;
+                color: #d8d1c5;
+                min-height: 27px;
+                padding: 2px 7px;
+            }
+            QPushButton#ArticulationChip:hover { border-color: #b88939; color: #f3dfb4; }
+            QPushButton#ArticulationChip:checked {
+                background: #78541c;
+                border-color: #e0a339;
+                color: #fff4db;
+                font-weight: 800;
+            }
+            QLabel#EditorTime {
+                color: #e4c17c;
+                font-family: Consolas, "Microsoft YaHei UI";
+            }
+            QFrame#EditorFooter {
+                background: #202020;
+                border: 1px solid #353332;
+                border-radius: 5px;
+            }
             QLabel#PanelTitle {
                 color: #f3f1ea;
                 font-size: 15px;
                 font-weight: 800;
+            }
+            QLabel#SectionLabel {
+                color: #e4c17c;
+                font-size: 12px;
+                font-weight: 800;
+                padding-top: 2px;
             }
             QFrame#OptimizerHeader, QFrame#OptimizerOptions, QTextEdit#OptimizerReport {
                 background: #201f1c;
@@ -3728,7 +4695,7 @@ class MidiToBdoWindow(QMainWindow):
                 border: 1px solid #313131;
                 border-radius: 3px;
                 padding: 5px 9px;
-                color: #d8d3cc;
+                color: #e5dfd6;
             }
             QLabel#CheckCard {
                 background: #202020;
@@ -3757,6 +4724,22 @@ class MidiToBdoWindow(QMainWindow):
                 color: #f3f1ea;
                 padding: 6px 8px;
                 selection-background-color: #8f6b2e;
+            }
+            QListWidget {
+                background: #191919;
+                border: 1px solid #3a3834;
+                border-radius: 4px;
+                color: #ddd7cf;
+                outline: 0;
+                padding: 4px;
+            }
+            QListWidget::item {
+                border-bottom: 1px solid #2c2b29;
+                padding: 8px 7px;
+            }
+            QListWidget::item:selected {
+                background: #4a391f;
+                color: #fff3d6;
             }
             QLineEdit:focus, QComboBox:focus, QTextEdit:focus {
                 border-color: #d9a441;
@@ -3790,8 +4773,9 @@ class MidiToBdoWindow(QMainWindow):
                 color: #c9c2ba;
             }
             QPushButton:disabled {
-                color: #6f6a65;
+                color: #8d8780;
                 background: #232323;
+                border-color: #34322f;
             }
             QCheckBox { color: #d8d3cc; spacing: 7px; }
             QCheckBox::indicator {
@@ -3809,20 +4793,87 @@ class MidiToBdoWindow(QMainWindow):
                 border: 0;
                 background: transparent;
             }
-            QScrollBar#TimelineScroll:vertical {
+            QWidget#PianoScrollCorner {
+                background: #171918;
+            }
+            QScrollBar:vertical {
                 background: #1b1b1b;
-                width: 10px;
+                width: 12px;
+                margin: 1px;
                 border: 0;
+                border-left: 1px solid #2c2b29;
             }
-            QScrollBar#TimelineScroll::handle:vertical {
+            QScrollBar:horizontal {
+                background: #1b1b1b;
+                height: 12px;
+                margin: 1px;
+                border: 0;
+                border-top: 1px solid #2c2b29;
+            }
+            QScrollBar::handle:vertical {
                 background: #4a4640;
-                min-height: 36px;
-                border-radius: 2px;
+                min-height: 32px;
+                border-radius: 4px;
+                margin: 2px 1px;
             }
-            QScrollBar#TimelineScroll::add-line:vertical,
-            QScrollBar#TimelineScroll::sub-line:vertical {
-                height: 0;
+            QScrollBar::handle:horizontal {
+                background: #4a4640;
+                min-width: 32px;
+                border-radius: 4px;
+                margin: 1px 2px;
+            }
+            QScrollBar::handle:vertical:hover,
+            QScrollBar::handle:horizontal:hover {
+                background: #766b5e;
+            }
+            QScrollBar::handle:vertical:pressed,
+            QScrollBar::handle:horizontal:pressed {
+                background: #b27b25;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+                subcontrol-origin: margin;
                 background: transparent;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+                subcontrol-origin: margin;
+                background: transparent;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background: transparent;
+            }
+            QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical,
+            QScrollBar::left-arrow:horizontal, QScrollBar::right-arrow:horizontal {
+                width: 0px;
+                height: 0px;
+                background: transparent;
+            }
+            QAbstractScrollArea::corner { background: #1b1b1b; }
+            QScrollBar#TimelineScroll:vertical,
+            QScrollBar#PianoPitchScroll:vertical {
+                background: #171918;
+                border-left-color: #292c2a;
+            }
+            QScrollBar#PianoTimeScroll:horizontal {
+                background: #171918;
+                border-top-color: #292c2a;
+            }
+            QScrollBar#TimelineScroll::handle:vertical,
+            QScrollBar#PianoPitchScroll::handle:vertical,
+            QScrollBar#PianoTimeScroll::handle:horizontal {
+                background: #626660;
+            }
+            QScrollBar#TimelineScroll::handle:vertical:hover,
+            QScrollBar#PianoPitchScroll::handle:vertical:hover,
+            QScrollBar#PianoTimeScroll::handle:horizontal:hover {
+                background: #8b806f;
+            }
+            QScrollBar#TimelineScroll::handle:vertical:pressed,
+            QScrollBar#PianoPitchScroll::handle:vertical:pressed,
+            QScrollBar#PianoTimeScroll::handle:horizontal:pressed {
+                background: #c58a2d;
             }
             QSlider::groove:horizontal {
                 height: 5px;
@@ -3852,12 +4903,15 @@ class MidiToBdoWindow(QMainWindow):
                 "#313131": "#d4d4d4", "#3f3a33": "#d4c8b8", "#363636": "#d0d0d0",
                 "#404040": "#c8c8c8", "#55504a": "#aaa39b", "#4a4640": "#aaa49c",
                 "#56504a": "#9f9890", "#6a6259": "#8f877e", "#55514b": "#aaa49d",
+                "#46423d": "#c8c3bd", "#3a3834": "#ccc8c2", "#383531": "#d0cbc4", "#2c2b29": "#dedbd7",
+                "#34322f": "#d1cdc7", "#191919": "#ffffff", "#4a391f": "#ffe3ae",
                 "#f3f1ea": "#202020", "#ddd7cf": "#2b2b2b", "#c7c0b8": "#4b4742",
                 "#bdb6ad": "#55504a", "#aaa39a": "#66605a", "#e5dfd6": "#292724",
                 "#d6d1c9": "#3f3b36", "#a8a29e": "#68625d", "#d9ead3": "#31552d",
                 "#d8d3cc": "#45413d", "#bcd5b5": "#3f6639", "#a8b5a4": "#5d6e59",
                 "#c9c2ba": "#514c47", "#6f6a65": "#92908d", "#f0c66f": "#8a5a00",
                 "#d6b675": "#74500d", "#8f6b2e": "#d89a28", "#5d451e": "#ffe0a3",
+                "#e4c17c": "#80550c", "#d9d3ca": "#3e3a35", "#fff3d6": "#3b2a12", "#8d8780": "#8a867f",
             }
             for dark, light in light_colors.items():
                 style_sheet = style_sheet.replace(dark, light)
@@ -3902,9 +4956,45 @@ class MidiToBdoWindow(QMainWindow):
         if path:
             self._load_project(Path(path))
 
+    def _project_snapshot(self) -> ProjectSnapshot:
+        return ProjectSnapshot.capture(self.tracks, self.reverb, self.delay, self.chorus)
+
+    def _push_project_snapshot(self) -> None:
+        self.project_commands.push(self._project_snapshot())
+
+    def _restore_project_snapshot(self, snapshot: ProjectSnapshot, action: str) -> None:
+        self._stop_preview(reset_playhead=False)
+        self.tracks = snapshot.restored_tracks()
+        self.reverb, self.delay, self.chorus = snapshot.reverb, snapshot.delay, snapshot.chorus
+        self.selected_track = None
+        self._refresh_tracks()
+        self.timeline.set_tracks(self.tracks)
+        self._on_track_changed()
+        self._mark_conversion_check_dirty()
+        self._autosave_project(action, immediate=True)
+        self.status_label.setText(tr("已撤销工程修改" if action == "project undo" else "已重做工程修改"))
+
+    def _undo_project(self) -> None:
+        focus = QApplication.focusWidget()
+        if isinstance(focus, (QLineEdit, QTextEdit)) and not focus.isReadOnly():
+            focus.undo()
+            return
+        snapshot = self.project_commands.undo(self._project_snapshot())
+        if snapshot is not None:
+            self._restore_project_snapshot(snapshot, "project undo")
+
+    def _redo_project(self) -> None:
+        focus = QApplication.focusWidget()
+        if isinstance(focus, (QLineEdit, QTextEdit)) and not focus.isReadOnly():
+            focus.redo()
+            return
+        snapshot = self.project_commands.redo(self._project_snapshot())
+        if snapshot is not None:
+            self._restore_project_snapshot(snapshot, "project redo")
+
     def _load_project(self, project_path: Path) -> None:
         try:
-            payload = json.loads(project_path.read_text(encoding="utf-8"))
+            payload = migrate_project(json.loads(project_path.read_text(encoding="utf-8")))
         except Exception as exc:
             QMessageBox.warning(self, "打开工程失败", f"无法读取工程文件：{exc}")
             return
@@ -3925,6 +5015,14 @@ class MidiToBdoWindow(QMainWindow):
             self.output_name.setText(payload.get("output_name") or midi_path.stem)
             self.owner_id = int(payload.get("owner_id") or self.owner_id or 0)
             self.char_name = payload.get("char_name") or self.char_name
+            research = payload.get("research")
+            if isinstance(research, dict):
+                self.research_metadata = {
+                    "profile_id": str(research.get("profile_id") or BDO_PROFILE.profile_id),
+                    "ab_experiments": [
+                        dict(item) for item in research.get("ab_experiments", []) if isinstance(item, dict)
+                    ],
+                }
             self._apply_conversion_settings(payload.get("conversion_settings", {}))
             self._load_midi_info(str(midi_path))
             saved_lyrics = payload.get("lyric_events")
@@ -4079,7 +5177,7 @@ class MidiToBdoWindow(QMainWindow):
                 return
             saved_at = time.strftime("%Y-%m-%d %H:%M:%S")
             payload = {
-                "version": 1,
+                "schema_version": CURRENT_PROJECT_SCHEMA,
                 "saved_at": saved_at,
                 "reason": reason,
                 "original_midi_path": str(Path(self.midi_path)),
@@ -4093,6 +5191,7 @@ class MidiToBdoWindow(QMainWindow):
                 "lyric_events": [dict(event) for event in self.lyric_events],
                 "conversion_settings": self._conversion_settings_payload(),
                 "tracks": [self._track_state_payload(track) for track in self.tracks],
+                "research": dict(self.research_metadata),
             }
             project_path = self.autosave_project_dir / "project.json"
             tmp_path = project_path.with_suffix(".json.tmp")
@@ -4148,7 +5247,7 @@ class MidiToBdoWindow(QMainWindow):
         else:
             self._open_midi_optimizer(None)
 
-    def _open_note_editor(self, track: TrackState) -> None:
+    def _open_note_editor(self, track: TrackState, selected_note_indices: tuple[int, ...] = ()) -> None:
         if track not in self.tracks:
             return
         dialog = MidiNoteEditorDialog(
@@ -4158,8 +5257,15 @@ class MidiToBdoWindow(QMainWindow):
             self.time_sig,
             self.transpose,
         )
+        if selected_note_indices:
+            dialog.canvas.selected = {
+                index for index in selected_note_indices if 0 <= index < len(dialog.canvas.notes)
+            }
+            dialog.canvas.update()
+            dialog.refresh_fields()
 
         def apply_notes(notes) -> None:
+            self._push_project_snapshot()
             self._stop_preview(reset_playhead=False)
             track.notes = list(notes)
             track.notes_optimized = False
@@ -4174,6 +5280,16 @@ class MidiToBdoWindow(QMainWindow):
         dialog.notes_applied.connect(apply_notes)
         dialog.exec()
 
+    def _focus_validation_issue(self, issue: ValidationIssue) -> None:
+        if issue.track_id is None:
+            return
+        track = next((item for item in self.tracks if int(item.track_id) == issue.track_id), None)
+        if track is None:
+            return
+        self._select_track(track)
+        if issue.note_indices:
+            self._open_note_editor(track, issue.note_indices)
+
     def _open_midi_optimizer(self, target_track_id: int | None = None) -> None:
         if not self.tracks:
             QMessageBox.information(self, "MIDI 优化", "请先导入 MIDI。")
@@ -4181,6 +5297,7 @@ class MidiToBdoWindow(QMainWindow):
         dialog = MidiOptimizeDialog(self, target_track_id)
         if dialog.exec() != QDialog.Accepted:
             return
+        self._push_project_snapshot()
         self._stop_preview(reset_playhead=False)
         self.tracks = dialog.optimized_tracks()
         optimized_effects = dialog.optimized_effects()
@@ -4222,34 +5339,21 @@ class MidiToBdoWindow(QMainWindow):
             return 0
         return lower_bound if abs(lower_bound) <= abs(upper_bound) else upper_bound
 
-    def _transpose_recommendation(self, low: int, high: int) -> str:
-        if low >= BDO_NOTE_MIN and high <= BDO_NOTE_MAX:
-            return "无需移调"
-        if high - low > BDO_NOTE_MAX - BDO_NOTE_MIN:
-            return "无单一移调可完全容纳，建议拆轨或换乐器"
-        min_shift = BDO_NOTE_MIN - low if low < BDO_NOTE_MIN else 0
-        max_shift = BDO_NOTE_MAX - high if high > BDO_NOTE_MAX else 0
-        shift = min_shift or max_shift
-        octave_shift = int(math.ceil(shift / 12) * 12) if shift > 0 else int(math.floor(shift / 12) * 12)
-        if octave_shift == 0:
-            octave_shift = shift
-        return f"建议移调 {octave_shift:+d}（最小 {shift:+d}）"
-
     def _analyze_conversion(self) -> dict:
-        report = self._build_conversion_check_report()
-        issue_count = report.count("[需处理]")
-        warning_count = report.count("[需人工确认]")
-        invalid_fx = 0
-        for track in self.tracks:
-            if track.articulation_type is None:
-                continue
-            supported = {ntype for ntype, _label in BDO_ARTICULATIONS.get(track.bdo_instrument_id, [])}
-            if track.articulation_type not in supported:
-                invalid_fx += 1
+        issues = self._validation_issues()
+        structured_report = issues_report(issues)
+        report = (
+            f"BDO Profile: {BDO_PROFILE.profile_id} · {BDO_PROFILE.evidence.status}\n"
+            f"时间差比较容差: 0.001 ms\n\n{structured_report}"
+        )
+        issue_count = sum(item.severity == "error" for item in issues)
+        warning_count = sum(item.severity == "warning" for item in issues)
+        invalid_fx = sum(item.fix_id == "clear_track_articulation" for item in issues)
         suggested_transpose = self._suggest_global_transpose()
         fixable_count = invalid_fx + (1 if suggested_transpose is not None else 0)
         return {
             "report": report,
+            "issues": issues,
             "issue_count": issue_count,
             "warning_count": warning_count,
             "invalid_fx": invalid_fx,
@@ -4257,8 +5361,24 @@ class MidiToBdoWindow(QMainWindow):
             "fixable_count": fixable_count,
         }
 
+    def _validation_issues(self) -> tuple[ValidationIssue, ...]:
+        active_ids = frozenset(int(track.track_id) for track in selected_tracks(self.tracks))
+        context = ValidationContext(
+            transpose=int(self.transpose),
+            active_track_ids=active_ids,
+            instrument_names=BDO_INSTRUMENT_NAMES,
+            gm_drum_map=_GM_TO_BDO_DRUM,
+            serialize_instrument=serialized_bdo_instrument_id,
+            sample_only_percussion_ids=frozenset(BDO_SAMPLE_ONLY_PERCUSSION),
+            velocity_mode=str(self.velocity_mode),
+            effects=(int(self.reverb), int(self.delay), self.chorus),
+        )
+        return validate_tracks(self.tracks, BDO_PROFILE, context)
+
     def _apply_conversion_check_fixes(self) -> str:
         analysis = self._analyze_conversion()
+        if analysis.get("fixable_count"):
+            self._push_project_snapshot()
         fixed: list[str] = []
         suggested_transpose = analysis.get("suggested_transpose")
         if suggested_transpose is not None:
@@ -4282,117 +5402,6 @@ class MidiToBdoWindow(QMainWindow):
             self.status_label.setText(tr("转换检查已修复"))
             return "已修复：" + "；".join(fixed)
         return "没有可自动修复的项目。未知打击乐、样本音域和需要拆轨的情况仍需人工处理。"
-
-    def _build_conversion_check_report(self) -> str:
-        lines = [
-            "BDO MIDI 转换检查",
-            f"文件: {Path(getattr(self, 'midi_path', '')).name}",
-            f"全局移调: {self.transpose:+d} 半音 · BPM: {self.bpm_override or self.bpm} · 轨道: {len(self.tracks)}",
-            "定义: 100% 转换 = 不裁剪/折返音高、不丢音符、不使用未知 FX、不落到未知打击乐 pitch。",
-            "",
-        ]
-        active = selected_tracks(self.tracks)
-        active_ids = {track.track_id for track in active}
-        merged_counts: dict[int, int] = {}
-        merged_sources: dict[int, list[str]] = {}
-        for track in active:
-            merged_counts[track.bdo_instrument_id] = merged_counts.get(track.bdo_instrument_id, 0) + len(track.notes)
-            merged_sources.setdefault(track.bdo_instrument_id, []).append(track.display_name)
-
-        for track in self.tracks:
-            issues: list[str] = []
-            warnings: list[str] = []
-            status = "OK"
-            inst_name = BDO_INSTRUMENT_NAMES.get(track.bdo_instrument_id, str(track.bdo_instrument_id))
-            pitches = [note.pitch for note in track.notes]
-            midi_range = "-" if not pitches else f"{note_name(min(pitches))}-{note_name(max(pitches))}"
-            converted_range = "-"
-            if track.track_id not in active_ids:
-                warnings.append("当前不参与导出（Mute/Solo 过滤）")
-
-            if track.bdo_instrument_id == 0x0d:
-                mapped = [_GM_TO_BDO_DRUM.get(pitch) for pitch in pitches]
-                known = [pitch for pitch in mapped if pitch is not None]
-                unknown = sorted(set(pitch for pitch, mapped_pitch in zip(pitches, mapped) if mapped_pitch is None))
-                if known:
-                    converted_range = f"{min(known)}-{max(known)}"
-                if unknown:
-                    issues.append(
-                        "未知 GM 打击乐: "
-                        + ", ".join(f"{pitch} {note_name(pitch)}" for pitch in unknown[:12])
-                        + (" ..." if len(unknown) > 12 else "")
-                    )
-                supported = game_supported_pitches(track.bdo_instrument_id)
-                illegal = sorted(
-                    {
-                        pitch
-                        for pitch in known
-                        if pitch < BDO_DRUM_MIN
-                        or pitch > BDO_DRUM_MAX
-                        or (supported is not None and pitch not in supported)
-                    }
-                )
-                if illegal:
-                    issues.append(f"映射后没有对应游戏架子鼓音源: {illegal}")
-                if 37 in pitches and _GM_TO_BDO_DRUM.get(37) == 49:
-                    warnings.append("GM 37 Side Stick 会映射到 49 SnrSide")
-            elif track.is_percussion:
-                warnings.append("独立打击乐尚无 GM 到该乐器的完整逐音映射，不能标记为 1:1")
-            else:
-                shifted = [pitch + self.transpose for pitch in pitches]
-                if shifted:
-                    converted_range = f"{note_name(min(shifted))}-{note_name(max(shifted))}"
-                    out_count = sum(1 for pitch in shifted if pitch < BDO_NOTE_MIN or pitch > BDO_NOTE_MAX)
-                    if out_count:
-                        issues.append(
-                            f"{out_count} 个音符超出 C1-C8({BDO_NOTE_MIN}-{BDO_NOTE_MAX}); "
-                            f"{self._transpose_recommendation(min(shifted), max(shifted))}"
-                        )
-                    supported = game_supported_pitches(track.bdo_instrument_id)
-                    if supported is None:
-                        warnings.append("当前乐器未找到可核验的游戏采样键位，不能标记为 1:1")
-                    else:
-                        unsupported = [pitch for pitch in shifted if pitch not in supported]
-                        if unsupported:
-                            issues.append(
-                                f"{len(unsupported)} 个音符超出 {game_pitch_range_label(track.bdo_instrument_id)}；"
-                                "时间轴已标红，游戏可能无声"
-                            )
-                if track.bdo_instrument_id in BDO_SAMPLE_ONLY_PERCUSSION and pitches:
-                    warnings.append("该独立打击/手碟乐器目前只有样本音高，完整音域需人工验证")
-
-            if track.articulation_type is not None:
-                supported = {ntype for ntype, _label in BDO_ARTICULATIONS.get(track.bdo_instrument_id, [])}
-                if track.articulation_type not in supported:
-                    issues.append(f"FX type {track.articulation_type} 不属于当前乐器，建议清空 FX 或换乐器")
-
-            if issues:
-                status = "需处理"
-            elif warnings:
-                status = "需人工确认"
-
-            lines.append(
-                f"[{status}] Track {track.track_id}: {track.display_name} -> {inst_name} · "
-                f"{len(track.notes)} notes · MIDI {midi_range} · 转换后 {converted_range} · 问题 {len(issues)}"
-            )
-            for issue in issues:
-                lines.append(f"  - {issue}")
-            for warning in warnings:
-                lines.append(f"  - {warning}")
-
-        lines.append("")
-        lines.append("合并与容量检查")
-        for inst_id, sources in sorted(merged_sources.items()):
-            inst_name = BDO_INSTRUMENT_NAMES.get(inst_id, str(inst_id))
-            if len(sources) > 1:
-                lines.append(f"- 导出会按乐器合并: {inst_name} <= {', '.join(sources)}")
-            count = merged_counts.get(inst_id, 0)
-            if count > MAX_NOTES_PER_INSTRUMENT:
-                lines.append(f"- 需处理: {inst_name} 合并后 {count} notes，超过 {MAX_NOTES_PER_INSTRUMENT}，导出会丢弃尾部音符")
-        lines.append("- 架子鼓有效 pitch: 48-64，包含 63 SnrRollS / 64 SnrRollL。")
-        lines.append("- 红色音块 = 转换后音高不在该乐器解包 Wwise 的触发键位内，不能承诺游戏发声。")
-        lines.append("- 手鼓、钹、手碟暂不自动拆分；缺完整 GM 映射时报告为需人工验证。")
-        return "\n".join(lines)
 
     def _show_acknowledgements(self) -> None:
         dialog = QDialog(self)
@@ -4522,6 +5531,7 @@ class MidiToBdoWindow(QMainWindow):
 
     def _load_midi_info(self, path: str) -> None:
         self._stop_preview()
+        self.project_commands.clear()
         self._clear_track_selection()
         try:
             bpm, tsig, groups, tempo_changes, controls, lyric_events = parse_midi(
@@ -4650,6 +5660,7 @@ class MidiToBdoWindow(QMainWindow):
         self._create_track(int(selected.data()))
 
     def _create_track(self, instrument_id: int) -> None:
+        self._push_project_snapshot()
         self._stop_preview(reset_playhead=False)
         track_id = max((int(track.track_id) for track in self.tracks), default=-1) + 1
         instrument_name = BDO_INSTRUMENT_NAMES.get(instrument_id, f"乐器 {instrument_id}")
@@ -4689,6 +5700,7 @@ class MidiToBdoWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
+        self._push_project_snapshot()
         self._stop_preview(reset_playhead=False)
         self.tracks.remove(track)
         self._clear_track_selection()
@@ -5197,6 +6209,30 @@ class MidiToBdoWindow(QMainWindow):
         }
 
     def _convert(self) -> None:
+        analysis = self._analyze_conversion()
+        if analysis["issue_count"]:
+            QMessageBox.warning(
+                self,
+                "导出已阻止",
+                f"转换检查仍有 {analysis['issue_count']} 项必须处理的问题。请先打开转换检查定位并修复。",
+            )
+            self._mark_conversion_check_dirty()
+            return
+        confirmable = [
+            item for item in analysis["issues"]
+            if item.severity == "warning" or item.code.startswith(("export.", "drum.remap", "tracks.merge"))
+        ]
+        if confirmable:
+            answer = QMessageBox.question(
+                self,
+                "确认导出变化",
+                f"检查发现 {len(confirmable)} 项需要确认的近似结果或预期变化。\n"
+                "这些项目已在转换检查中列出。确认继续导出吗？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
         try:
             params = self._build_params()
         except Exception as exc:
@@ -5213,14 +6249,27 @@ class MidiToBdoWindow(QMainWindow):
     def _on_convert_finished(self, out_path: str, byte_count: int, summary: object, installed: str) -> None:
         self.convert_button.setEnabled(True)
         self.last_output_dir = Path(out_path).parent
+        self.last_export_path = Path(out_path)
         self.open_output_button.setEnabled(True)
         self.status_label.setText(tr("转换完成"))
         summary = dict(summary)
         extra = tr(" · 已复制到游戏目录") if installed else ""
+        roundtrip_text = ""
+        try:
+            snapshot = read_bdo_score(Path(out_path))
+            if snapshot.total_notes != int(summary["total_notes"]):
+                raise ValueError(
+                    f"回读音符数 {snapshot.total_notes} 与导出摘要 {summary['total_notes']} 不一致"
+                )
+            roundtrip_text = tr(" · BDO v9 结构回读通过")
+        except Exception as exc:
+            append_crash_log("Export round-trip verification failed", traceback.format_exc())
+            roundtrip_text = trf(" · 回读检查失败：{error}", error=exc)
+            self.status_label.setText(tr("转换完成（回读检查失败）"))
         self.inspector_text.setText(trf(
             "已保存 {file} · {bytes} bytes · {instruments} 乐器 · {tracks} 轨 · {notes} 音符{extra}",
             file=Path(out_path).name, bytes=byte_count, instruments=summary["instruments"],
-            tracks=summary["tracks"], notes=summary["total_notes"], extra=extra,
+            tracks=summary["tracks"], notes=summary["total_notes"], extra=extra + roundtrip_text,
         ))
         self._autosave_project("convert finished", immediate=True)
         self.worker = None
@@ -5264,6 +6313,12 @@ def main() -> int:
             pass
     app = QApplication(sys.argv)
     install_localizer(app, str(load_config().get("language", "zh_CN")))
+    plugin_discovery = discover_host_algorithms()
+    if plugin_discovery.diagnostics:
+        append_crash_log(
+            "Optimizer bundle discovery",
+            "\n".join(plugin_discovery.diagnostics),
+        )
     icon_path = ASSETS_DIR / "icons" / "app_icon.png"
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))

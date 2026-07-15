@@ -204,7 +204,11 @@ def map_drum_notes(notes):
     """
     mapped = []
     for n in notes:
-        bdo_pitch = _GM_TO_BDO_DRUM.get(n.pitch, 48)  # default to kick
+        # Notes edited or restored inside the BDO editor may already be in the
+        # canonical game wire form. Remapping those pitches as GM percussion
+        # would silently turn (for example) BDO pitch 48 into a different drum.
+        canonical = n.ntype == DRUM_NOTE_TYPE and 48 <= n.pitch <= 64
+        bdo_pitch = n.pitch if canonical else _GM_TO_BDO_DRUM.get(n.pitch, 48)
         dur = n.dur if bdo_pitch in DRUM_ROLL_PITCHES else min(n.dur, DRUM_NOTE_MAX_DURATION_MS)
         mapped.append(Note(bdo_pitch, n.vel, n.start, max(1.0, dur), DRUM_NOTE_TYPE))
     return mapped

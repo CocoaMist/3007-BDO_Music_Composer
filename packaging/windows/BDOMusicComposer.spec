@@ -11,6 +11,7 @@ datas = [
     (str(project_root / "assets" / "icons" / "app_icon.png"), "assets/icons"),
     (str(project_root / "data" / "mappings" / "bdo_wwise_midi_map.json"), "data/mappings"),
     (str(project_root / "data" / "mappings" / "bdo_instrument_sample_map.json"), "data/mappings"),
+    (str(project_root / "data" / "profiles" / "bdo_global_v9.json"), "data/profiles"),
 ]
 
 a = Analysis(

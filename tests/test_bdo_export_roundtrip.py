@@ -17,6 +17,23 @@ from pyside_bdo_gui import BDO_ARTICULATIONS  # noqa: E402
 
 
 class BdoExportRoundTripTests(unittest.TestCase):
+    def test_canonical_bdo_drums_are_not_mapped_as_gm_a_second_time(self) -> None:
+        source = [Note(48, 90, 0.0, 100.0, 99), Note(64, 90, 200.0, 100.0, 99)]
+        data, _summary = channel_groups_to_bdo(
+            120, 4, [(source, 0, True)], instrument_map={0: 0x0D}, preserve_note_types=True
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "canonical_drums"
+            output.write_bytes(data)
+            report = parse_bdo(output, sample_notes=10)
+        notes = next(
+            track["sample_notes"]
+            for group in report["groups"] for track in group["tracks"]
+            if track["note_count"]
+        )
+        self.assertEqual([item["pitch"] for item in notes], [48, 64])
+        self.assertEqual([item["ntype"] for item in notes], [99, 99])
+
     def test_all_gui_articulations_survive_gui_export_core_roundtrip(self) -> None:
         channel_groups = []
         instrument_map = {}

@@ -16,6 +16,7 @@ ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) el
 DATA_DIR = RESOURCE_ROOT / "data"
 MAPPINGS_DIR = DATA_DIR / "mappings"
 MANIFESTS_DIR = DATA_DIR / "manifests"
+PROFILES_DIR = DATA_DIR / "profiles"
 DOCS_DIR = RESOURCE_ROOT / "docs"
 ASSETS_DIR = RESOURCE_ROOT / "assets"
 WWISE_MIDI_MAP_PATH = MAPPINGS_DIR / "bdo_wwise_midi_map.json"
