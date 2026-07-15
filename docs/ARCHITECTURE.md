@@ -42,16 +42,38 @@ Widgets mutate a draft list through `_replace()`. The note editor commits a sort
 ## Editing and optimization
 
 - Main timeline: mute, solo, duration scaling, instrument assignment, FX, selection, and preview seeking.
-- Piano roll: draft note creation/deletion/movement/resizing, batch properties, articulations, undo/redo, and isolated track preview.
+- Piano roll: draft note creation/deletion/movement/resizing, batch properties, articulations, undo/redo, and isolated track preview. Draw mode sets duration and initial velocity in one gesture; Alt temporarily bypasses snap, arrow keys edit selections, and `Ctrl+D` duplicates them. Clicking the piano ruler, creating, selecting, or repitching a note asynchronously auditions it with the current game instrument without doing sample I/O in the audio callback. Its ruler owns seeking, playhead display, and sample-preload progress; there is no separate editor timeline slider. Note, articulation, and grid controls share a fixed-height top switcher so the roll uses the editor's full width. The collapsible velocity lane supports direct handles, horizontal ramp painting, relative multi-note adjustment, and keyboard fine tuning.
 - Optimizer: full-song read context plus scoped writes. Reports are generated before the result is applied.
 
-The `optimization/` package separates stable dispatch from implementations. `registry.py` provides process-local discovery and registration, while `builtin.py` contains the default BDO-safe pipeline. The root `bdo_midi_optimizer.py` module is a compatibility facade; new optimization logic belongs in the package.
+The `optimization/` package separates the BDO-safe implementation from optimizer
+API v1. `.bdoopt` archives are discovered by manifest without executing code,
+then lazily loaded from a hash-isolated user cache. Plugins receive immutable
+editor snapshots and return structured preview operations; the host owns stale
+checks, scope validation, BDO instrument/drum rules, resource limits, and final
+application. Analysis runs on a Qt worker thread so a large or external
+optimizer cannot block repainting the main UI. `registry.py` and
+`bdo_midi_optimizer.py` remain compatibility surfaces for older integrations.
+
+`bdo_profile.py` loads the versioned game constraint profile. `bdo_validation.py`
+produces location-aware `ValidationIssue` values and is the export gate;
+known note loss, unsupported pitches, illegal articulations, and unmapped drums
+cannot pass silently. `bdo_score.py` owns full BDO v9 snapshots and score diffs,
+with private Owner/name fields excluded from comparison unless explicitly requested.
+
+Marnian Muse is the first external optimizer package. Its runtime package is
+built by the independent project and is not embedded in Music Composer. Corpus
+MIDI, audio, reports, profiles under development, and model assets remain owned
+outside this repository.
 
 ## Preview
 
-`BdoRealtimeAudioEngine` reads the Wwise MIDI-zone map, resolves every note to a user-provided WAV, decodes/cache-loads off the callback path, and schedules events by exact sample frame. The Qt audio worker only pulls prepared PCM.
+`BdoRealtimeAudioEngine` reads the Wwise MIDI-zone map, resolves every note to a user-provided WAV, decodes/cache-loads off the callback path, and schedules events by exact sample frame. Async consumers poll `AudioStatus.preload_progress`, commit with `finish_loading()`, and invalidate abandoned work with `cancel_loading()`. The Qt audio worker only pulls prepared PCM.
 
 The repository contains metadata and mappings, not game audio. `audio_root` points to a user-owned extracted directory.
+
+`bdo_audio_research.py` reports key/velocity-zone coverage and measures local
+render versus game-capture alignment. `bdo_experiments.py` stores only hashes and
+experiment metadata, never local paths or audio assets.
 
 ## Export
 

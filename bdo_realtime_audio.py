@@ -439,6 +439,7 @@ class BdoRealtimeAudioEngine(QObject):
             self._underruns += 1
 
     def stop(self) -> None:
+        self.cancel_loading()
         with self._lock:
             self._playing = False
             self._voices.clear()
@@ -449,6 +450,19 @@ class BdoRealtimeAudioEngine(QObject):
             self._output_thread.wait(1000)
         self._output_worker = None
         self._output_thread = None
+
+    def clear_playback(self) -> None:
+        """Silence and invalidate current material without reopening the audio device."""
+        self.cancel_loading()
+        with self._lock:
+            self._playing = False
+            self._events = []
+            self._event_frames = np.empty(0, dtype=np.int64)
+            self._max_event_tail_frames = 0
+            self._voices.clear()
+            self._event_index = 0
+            self._frame = 0
+            self._duration_frames = 0
 
     def load_project(
         self,
@@ -509,6 +523,17 @@ class BdoRealtimeAudioEngine(QObject):
 
     def is_loading(self) -> bool:
         return bool(self._load_future and not self._load_future.done())
+
+    def cancel_loading(self) -> None:
+        """Invalidate an in-flight preload so its result can never be committed."""
+        with self._lock:
+            self._load_generation += 1
+            future = self._load_future
+            self._load_future = None
+            self._preload_loaded = 0
+            self._preload_total = 0
+        if future is not None and not future.done():
+            future.cancel()
 
     def _prepare_project(
         self,
@@ -573,16 +598,24 @@ class BdoRealtimeAudioEngine(QObject):
                     float(getattr(track, "duration_scale", 1.0)),
                 ))
 
-        futures = {key: self._decode_pool.submit(self._decode_wav, path) for key, path in sources.items()}
+        with self._lock:
+            cache.update({key: self._cache[key] for key in sources if key in self._cache})
+        futures = {
+            key: self._decode_pool.submit(self._decode_wav, path)
+            for key, path in sources.items()
+            if key not in cache
+        }
         if load_generation is not None:
             with self._lock:
                 if load_generation == self._load_generation:
                     self._preload_total = len(sources)
-                    self._preload_loaded = 0
-        cache_bytes = 0
+                    self._preload_loaded = len(cache)
+        cache_bytes = sum(sample.pcm.nbytes for sample in cache.values())
         # Consume in source order for deterministic errors and cache limits;
         # futures still execute in parallel while we prepare this result.
         for key in sources:
+            if key in cache:
+                continue
             sample = futures[key].result()
             cache_bytes += sample.pcm.nbytes
             if cache_bytes > cache_limit_bytes:

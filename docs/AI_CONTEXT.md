@@ -9,12 +9,16 @@ This document helps an AI agent find the correct subsystem without scanning ever
 | Main window/timeline UI | `TimelineCanvas`, `MidiToBdoWindow._build_*` | `pyside_bdo_gui.py` |
 | Piano-roll behavior | `PianoRollCanvas`, `MidiNoteEditorDialog` | `pyside_bdo_gui.py` |
 | MIDI optimization | package README, configs/reports/tests | `optimization/` |
+| Optimizer packages / Marnian | `optimization/README.md`, `docs/MARNIAN_MUSE_OPTIONAL_BOUNDARY.md` | `optimization/plugin_api.py`, `optimization/plugin_loader.py`, `optimization/plugin_host.py` |
 | Articulation recommendation | profile + technique registry | `bdo_articulation_profiles.py`, `bdo_techniques.py` |
 | Harmony/role analysis | theory context | `bdo_music_theory.py` |
 | Lyrics | lyric expression mode | `bdo_lyrics.py` |
 | Preview/audio timing | engine and tests | `bdo_realtime_audio.py` |
 | Sample selection/offline render | renderer and mapping | `bdo_sample_renderer.py` |
 | BDO export/binary format | export round-trip test + serializer | `tools/midi-to-bdo/midi2bdo.py` |
+| Game rules / conversion issues | profile + validation tests | `bdo_profile.py`, `bdo_validation.py`, `data/profiles/` |
+| BDO score inspection / comparison | score snapshot tests | `bdo_score.py`, `scripts/inspect_bdo.py` |
+| Audio A/B research | coverage/alignment tests | `bdo_audio_research.py`, `bdo_experiments.py` |
 | Localization | catalog tests | `i18n.py` |
 | Windows build | spec/build script/path split | `packaging/windows/`, `project_paths.py` |
 
@@ -36,8 +40,9 @@ Do not promote an inference to “verified” without game evidence.
 - `PianoRollCanvas`: per-note editing surface.
 - `MidiNoteEditorDialog`: draft lifecycle and track-only playback.
 - `MidiOptimizeDialog`: preview/report/apply workflow.
-- `OptimizerConfig`: optimizer behavior contract.
-- `register_algorithm`: extension boundary for additional optimizer implementations.
+- `OptimizerConfig`: built-in optimizer behavior contract.
+- `OptimizationRequest` / `OptimizationPreview`: stable optimizer-package API.
+- `discover_host_algorithms`: unified built-in and `.bdoopt` discovery boundary.
 - `BdoRealtimeAudioEngine`: preload, event schedule, voice pool, Qt output.
 - `channel_groups_to_bdo`: canonical model-to-BDO conversion.
 - `build_bdo_binary`: plaintext binary layout.

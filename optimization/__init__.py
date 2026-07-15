@@ -24,6 +24,22 @@ from .registry import (
     register_algorithm,
     unregister_algorithm,
 )
+from .plugin_api import (
+    PLUGIN_API_VERSION,
+    CreateTrack,
+    DeleteNote,
+    EffectChange,
+    InsertNote,
+    NoteSnapshot,
+    OptimizationIntensity,
+    OptimizationPreview,
+    OptimizationRequest,
+    PluginEnvironment,
+    ReplaceTrackNotes,
+    ReplaceNote,
+    SetTrackInstrument,
+    TrackSnapshot,
+)
 
 DEFAULT_ALGORITHM = "bdo-safe"
 
@@ -65,6 +81,20 @@ __all__ = [
     "OptimizationResult",
     "OptimizerAlgorithm",
     "OptimizerConfig",
+    "PLUGIN_API_VERSION",
+    "CreateTrack",
+    "DeleteNote",
+    "EffectChange",
+    "InsertNote",
+    "NoteSnapshot",
+    "OptimizationIntensity",
+    "OptimizationPreview",
+    "OptimizationRequest",
+    "PluginEnvironment",
+    "ReplaceTrackNotes",
+    "ReplaceNote",
+    "SetTrackInstrument",
+    "TrackSnapshot",
     "TrackOptimizationReport",
     "get_algorithm",
     "list_algorithms",

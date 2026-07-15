@@ -18,6 +18,7 @@ dist/
 sample_cache/
 *.spec.bak
 *.zip
+*.bdoopt
 .pytest_cache/
 .coverage
 htmlcov/

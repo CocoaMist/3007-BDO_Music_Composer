@@ -209,6 +209,19 @@ EN.update({
     "读取全曲乐理与配器上下文，但只写入当前轨道。": "Analyze full-song theory and orchestration context, but modify only the current track.",
     "分析全部轨道；静音和独奏不改变作用域，可在下方选择允许写入的轨道。": "Analyze every track; Mute and Solo do not change scope. Select writable tracks below.",
 })
+EN.update({
+    "优化算法": "Optimization Algorithm", "算法包目录": "Algorithm Packages", "刷新": "Refresh",
+    "优化强度": "Optimization Intensity", "保守": "Conservative", "均衡": "Balanced", "深入": "Deep",
+    "选择算法和强度，然后分析优化。": "Choose an algorithm and intensity, then analyze.",
+    "分析优化": "Analyze Optimization", "详细信息 ▸": "Details ▸", "详细信息 ▾": "Details ▾",
+    "允许写入的轨道": "Writable Tracks", "应用预览": "Apply Preview",
+    "设置已变化，请重新分析优化。": "Settings changed. Analyze again.",
+    "没有可用的优化算法。": "No optimization algorithm is available.",
+    "请至少选择一条允许写入的轨道。": "Select at least one writable track.",
+    "正在分析优化…": "Analyzing optimization…",
+    "作用轨道：Track {track_id}": "Scope: Track {track_id}",
+    "作用轨道：{selected} / {total}": "Scope: {selected} / {total}",
+})
 
 JA.update({
     "自动（根据时区）": "自動（タイムゾーン）",
@@ -231,6 +244,19 @@ JA.update({
     "读取全曲乐理与配器上下文，但只写入当前轨道。": "曲全体の楽理と編成を分析し、現在のトラックだけを変更します。",
     "分析全部轨道；静音和独奏不改变作用域，可在下方选择允许写入的轨道。": "全トラックを分析します。Mute/Soloは範囲に影響せず、変更可能なトラックを下で選択できます。",
 })
+JA.update({
+    "优化算法": "最適化アルゴリズム", "算法包目录": "アルゴリズムパッケージ", "刷新": "更新",
+    "优化强度": "最適化の強度", "保守": "保守的", "均衡": "バランス", "深入": "詳細",
+    "选择算法和强度，然后分析优化。": "アルゴリズムと強度を選択して解析してください。",
+    "分析优化": "最適化を解析", "详细信息 ▸": "詳細 ▸", "详细信息 ▾": "詳細 ▾",
+    "允许写入的轨道": "書き込み可能なトラック", "应用预览": "プレビューを適用",
+    "设置已变化，请重新分析优化。": "設定が変更されました。再解析してください。",
+    "没有可用的优化算法。": "利用可能な最適化アルゴリズムがありません。",
+    "请至少选择一条允许写入的轨道。": "書き込み可能なトラックを1つ以上選択してください。",
+    "正在分析优化…": "最適化を解析中…",
+    "作用轨道：Track {track_id}": "対象：Track {track_id}",
+    "作用轨道：{selected} / {total}": "対象：{selected} / {total}",
+})
 
 KO.update({
     "自动（根据时区）": "자동(시간대 기준)",
@@ -252,6 +278,19 @@ KO.update({
     "打开输出目录": "출력 폴더 열기", "无法原声试听": "미리듣기 불가",
     "读取全曲乐理与配器上下文，但只写入当前轨道。": "전체 곡의 음악 이론과 편성 맥락을 분석하지만 현재 트랙만 변경합니다.",
     "分析全部轨道；静音和独奏不改变作用域，可在下方选择允许写入的轨道。": "모든 트랙을 분석합니다. 음소거와 Solo는 범위를 바꾸지 않으며 아래에서 변경할 트랙을 선택합니다.",
+})
+KO.update({
+    "优化算法": "최적화 알고리즘", "算法包目录": "알고리즘 패키지", "刷新": "새로 고침",
+    "优化强度": "최적화 강도", "保守": "보수적", "均衡": "균형", "深入": "심층",
+    "选择算法和强度，然后分析优化。": "알고리즘과 강도를 선택한 뒤 분석하세요.",
+    "分析优化": "최적화 분석", "详细信息 ▸": "세부 정보 ▸", "详细信息 ▾": "세부 정보 ▾",
+    "允许写入的轨道": "쓰기 허용 트랙", "应用预览": "미리보기 적용",
+    "设置已变化，请重新分析优化。": "설정이 변경되었습니다. 다시 분석하세요.",
+    "没有可用的优化算法。": "사용 가능한 최적화 알고리즘이 없습니다.",
+    "请至少选择一条允许写入的轨道。": "쓰기 가능한 트랙을 하나 이상 선택하세요.",
+    "正在分析优化…": "최적화 분석 중…",
+    "作用轨道：Track {track_id}": "대상: Track {track_id}",
+    "作用轨道：{selected} / {total}": "대상: {selected} / {total}",
 })
 
 # Text used by secondary dialogs and their initial dynamic summaries.  Keep
@@ -397,6 +436,162 @@ KO.update({
     "轨": "트랙", "当前": "활성", "块": "블록", "{track} · {count} 音符 · {pitch_range} · BDO: {instrument} · FX: {articulation} · 右键轨道更换乐器": "{track} · 음표 {count}개 · {pitch_range} · BDO: {instrument} · FX: {articulation} · 우클릭으로 악기 변경", "{file} · {tracks} 轨 · {notes} 音符 · {minutes}m {seconds:02d}s · {pitch}": "{file} · 트랙 {tracks}개 · 음표 {notes}개 · {minutes}m {seconds:02d}s · {pitch}", " · 已复制到游戏目录": " · 게임 폴더에 복사됨", "已保存 {file} · {bytes} bytes · {instruments} 乐器 · {tracks} 轨 · {notes} 音符{extra}": "{file} 저장 · {bytes} bytes · 악기 {instruments}개 · 트랙 {tracks}개 · 음표 {notes}개{extra}",
 })
 
+
+EN.update({
+    "启用 Marnian Muse 深度优化": "Enable Marnian Muse Deep Optimization",
+    "乐谱修复": "Score Repair", "旋律修复": "Melody Repair", "和弦修复": "Chord Repair",
+    "伴奏生成": "Accompaniment", "乐器交接": "Instrument Handoff", "情绪表达": "Emotion Expression",
+    "演奏表达": "Performance Expression", "应用所选优化": "Apply Selected Optimization",
+    "深度候选会在游戏安全优化之后分析；只有勾选的类别才会增删音符、修改音高或创建建议轨。":
+        "Deep candidates are analyzed after game-safe optimization. Only selected categories may add/delete notes, change pitch, or create suggestion tracks.",
+})
+JA.update({
+    "启用 Marnian Muse 深度优化": "Marnian Muse 深層最適化を有効化",
+    "乐谱修复": "スコア修復", "旋律修复": "メロディ修復", "和弦修复": "コード修復",
+    "伴奏生成": "伴奏生成", "乐器交接": "楽器の受け渡し", "情绪表达": "感情表現",
+    "演奏表达": "演奏表現", "应用所选优化": "選択した最適化を適用",
+    "深度候选会在游戏安全优化之后分析；只有勾选的类别才会增删音符、修改音高或创建建议轨。":
+        "深層候補はゲーム安全最適化の後に解析されます。選択したカテゴリだけが音符の追加・削除、音高変更、提案トラック作成を行います。",
+})
+KO.update({
+    "启用 Marnian Muse 深度优化": "Marnian Muse 심층 최적화 사용",
+    "乐谱修复": "악보 복구", "旋律修复": "멜로디 복구", "和弦修复": "화음 복구",
+    "伴奏生成": "반주 생성", "乐器交接": "악기 전환", "情绪表达": "감정 표현",
+    "演奏表达": "연주 표현", "应用所选优化": "선택한 최적화 적용",
+    "深度候选会在游戏安全优化之后分析；只有勾选的类别才会增删音符、修改音高或创建建议轨。":
+        "심층 후보는 게임 안전 최적화 후 분석됩니다. 선택한 범주만 음표 추가·삭제, 음높이 변경 또는 제안 트랙 생성을 수행합니다.",
+})
+
+EN.update({
+    "比较 BDO 乐谱": "Compare BDO Scores",
+    "样本覆盖": "Sample Coverage",
+    "其他轨道参考": "Other Track Reference",
+    "循环": "Loop",
+    "双击问题可定位到对应轨道和音符": "Double-click an issue to locate its track and notes.",
+    "BDO 谱面对比": "BDO Score Comparison",
+    "已撤销工程修改": "Project change undone",
+    "已重做工程修改": "Project change redone",
+})
+JA.update({
+    "比较 BDO 乐谱": "BDOスコアを比較",
+    "样本覆盖": "サンプル範囲",
+    "其他轨道参考": "他トラックを参照",
+    "循环": "ループ",
+    "双击问题可定位到对应轨道和音符": "問題をダブルクリックするとトラックと音符を表示します。",
+    "BDO 谱面对比": "BDOスコア比較",
+    "已撤销工程修改": "プロジェクトの変更を元に戻しました",
+    "已重做工程修改": "プロジェクトの変更をやり直しました",
+})
+KO.update({
+    "比较 BDO 乐谱": "BDO 악보 비교",
+    "样本覆盖": "샘플 범위",
+    "其他轨道参考": "다른 트랙 참조",
+    "循环": "반복",
+    "双击问题可定位到对应轨道和音符": "문제를 두 번 클릭하면 해당 트랙과 음표로 이동합니다.",
+    "BDO 谱面对比": "BDO 악보 비교",
+    "已撤销工程修改": "프로젝트 변경을 실행 취소했습니다",
+    "已重做工程修改": "프로젝트 변경을 다시 실행했습니다",
+})
+
+EN.update({
+    "拖动编辑 · 双击新建 · Space 播放": "Drag to edit · Double-click to add · Space to play",
+    "先处理阻断项，再逐条确认预期变化；双击问题可定位。": "Resolve blockers first, then review expected changes. Double-click an issue to locate it.",
+    "导出摘要": "Export Summary",
+    "问题与预期变化": "Issues and Expected Changes",
+    "严重问题优先显示": "Critical issues are shown first",
+    "未发现阻断项或待确认变化": "No blockers or changes awaiting confirmation",
+    "轨道音量": "Track Volume",
+    "显示力度编辑 ▸": "Show Velocity Editor ▸", "隐藏力度编辑 ▾": "Hide Velocity Editor ▾",
+    "拖动柱形可直接调整所选音符力度": "Drag bars to adjust note velocity",
+    "拖动手柄 · 横向拖绘渐变 · 多选后整体调整 · Ctrl+↑↓ 微调": "Drag handles · Paint ramps horizontally · Adjust selections together · Ctrl+↑↓ to fine-tune",
+    "音符检查器": "Note Inspector", "未选择音符": "No note selected",
+    "未选择音符 · 单击网格新建": "No note selected · Click the grid to add one",
+    "在网格空白处单击即可新建": "Click an empty grid cell to add a note",
+    "音符": "Note", "音符属性": "Note", "奏法": "Articulation", "网格": "Grid",
+    "绘制 B": "Draw B", "点击试听": "Audition",
+    "绘制模式：拖动可同时设置音符长度与力度（B）": "Draw mode: drag to set note length and velocity (B)",
+    "绘制模式：拖动设置长度，上下调整力度，Alt 取消吸附": "Draw mode: drag for length, move vertically for velocity, Alt bypasses snap",
+    "选择模式：拖动音符编辑，拖动空白框选": "Select mode: drag notes to edit, drag empty space to marquee-select",
+    "选择音符后应用奏法": "Select notes, then apply an articulation",
+    "常用奏法": "Common Articulations", "网格与参考": "Grid and Reference", "水平缩放": "Horizontal Zoom",
+    "右键删除音符 · Ctrl 拖选追加 · 拖动音符两端调整时值": "Right-click to delete · Ctrl-drag to add selection · Drag note edges to resize",
+    "右键删除 · Ctrl 拖选追加 · 拖动两端调整时值": "Right-click to delete · Ctrl-drag to add selection · Drag edges to resize",
+    "Alt 临时取消吸附 · 方向键移动 · Ctrl+D 复制": "Alt bypasses snap · Arrow keys move · Ctrl+D duplicates",
+    "已选择 1 个音符 · {note} · {start} ms": "1 note selected · {note} · {start} ms",
+    "已选择 {count} 个音符 · 可批量修改共同属性": "{count} notes selected · Shared properties can be edited together",
+    "准备中…": "Preparing…", "正在准备游戏音源… {loaded}/{total}": "Preparing game audio… {loaded}/{total}",
+    "游戏音源已缓存 · 开始试听": "Game audio cached · Starting preview",
+    "当前音符没有可用的游戏音源": "No game-audio sample is available for this note",
+    "正在准备音符试听… {note}": "Preparing note preview… {note}",
+    "试听 {note}": "Previewing {note}",
+    "音符试听不可用：{message}": "Note preview unavailable: {message}",
+})
+JA.update({
+    "拖动编辑 · 双击新建 · Space 播放": "ドラッグで編集・ダブルクリックで追加・Spaceで再生",
+    "先处理阻断项，再逐条确认预期变化；双击问题可定位。": "まず阻害項目を解決し、想定される変更を確認します。ダブルクリックで場所を表示できます。",
+    "导出摘要": "書き出し概要",
+    "问题与预期变化": "問題と想定される変更",
+    "严重问题优先显示": "重大な問題を優先表示",
+    "未发现阻断项或待确认变化": "阻害項目や確認待ちの変更はありません",
+    "轨道音量": "トラック音量",
+    "显示力度编辑 ▸": "ベロシティ編集を表示 ▸", "隐藏力度编辑 ▾": "ベロシティ編集を隠す ▾",
+    "拖动柱形可直接调整所选音符力度": "バーをドラッグしてベロシティを調整",
+    "拖动手柄 · 横向拖绘渐变 · 多选后整体调整 · Ctrl+↑↓ 微调": "ハンドルをドラッグ・横方向にランプを描画・複数選択を一括調整・Ctrl+↑↓で微調整",
+    "音符检查器": "ノートインスペクタ", "未选择音符": "ノート未選択",
+    "未选择音符 · 单击网格新建": "ノート未選択・グリッドをクリックして追加",
+    "在网格空白处单击即可新建": "空のグリッドをクリックしてノートを追加",
+    "音符": "ノート", "音符属性": "ノート属性", "奏法": "奏法", "网格": "グリッド",
+    "绘制 B": "描画 B", "点击试听": "試聴",
+    "绘制模式：拖动可同时设置音符长度与力度（B）": "描画モード：ドラッグでノート長とベロシティを設定（B）",
+    "绘制模式：拖动设置长度，上下调整力度，Alt 取消吸附": "描画モード：ドラッグで長さ、上下でベロシティ、Altでスナップ解除",
+    "选择模式：拖动音符编辑，拖动空白框选": "選択モード：ノートをドラッグして編集、空白をドラッグして範囲選択",
+    "选择音符后应用奏法": "ノートを選択して奏法を適用",
+    "常用奏法": "よく使う奏法", "网格与参考": "グリッドと参照", "水平缩放": "横方向ズーム",
+    "右键删除音符 · Ctrl 拖选追加 · 拖动音符两端调整时值": "右クリックで削除・Ctrlドラッグで選択追加・端をドラッグして長さを調整",
+    "右键删除 · Ctrl 拖选追加 · 拖动两端调整时值": "右クリックで削除・Ctrlドラッグで選択追加・端をドラッグして長さを調整",
+    "Alt 临时取消吸附 · 方向键移动 · Ctrl+D 复制": "Altでスナップ解除・矢印キーで移動・Ctrl+Dで複製",
+    "已选择 1 个音符 · {note} · {start} ms": "1ノート選択・{note}・{start} ms",
+    "已选择 {count} 个音符 · 可批量修改共同属性": "{count}ノート選択・共通属性を一括編集できます",
+    "准备中…": "準備中…", "正在准备游戏音源… {loaded}/{total}": "ゲーム音源を準備中… {loaded}/{total}",
+    "游戏音源已缓存 · 开始试听": "ゲーム音源をキャッシュしました・プレビューを開始",
+    "当前音符没有可用的游戏音源": "このノートに使用できるゲーム音源がありません",
+    "正在准备音符试听… {note}": "ノートプレビューを準備中… {note}",
+    "试听 {note}": "{note} をプレビュー中",
+    "音符试听不可用：{message}": "ノートプレビューを利用できません：{message}",
+})
+KO.update({
+    "拖动编辑 · 双击新建 · Space 播放": "드래그로 편집 · 더블 클릭으로 추가 · Space로 재생",
+    "先处理阻断项，再逐条确认预期变化；双击问题可定位。": "차단 문제를 먼저 해결한 뒤 예상 변경을 확인하세요. 더블 클릭하면 위치로 이동합니다.",
+    "导出摘要": "내보내기 요약",
+    "问题与预期变化": "문제 및 예상 변경",
+    "严重问题优先显示": "심각한 문제 우선 표시",
+    "未发现阻断项或待确认变化": "차단 문제나 확인 대기 중인 변경이 없습니다",
+    "轨道音量": "트랙 볼륨",
+    "显示力度编辑 ▸": "벨로시티 편집 표시 ▸", "隐藏力度编辑 ▾": "벨로시티 편집 숨기기 ▾",
+    "拖动柱形可直接调整所选音符力度": "막대를 드래그하여 음표 벨로시티 조정",
+    "拖动手柄 · 横向拖绘渐变 · 多选后整体调整 · Ctrl+↑↓ 微调": "핸들 드래그 · 가로로 램프 그리기 · 다중 선택 함께 조정 · Ctrl+↑↓ 미세 조정",
+    "音符检查器": "음표 검사기", "未选择音符": "선택한 음표 없음",
+    "未选择音符 · 单击网格新建": "선택한 음표 없음 · 그리드를 클릭하여 추가",
+    "在网格空白处单击即可新建": "빈 그리드를 클릭하여 음표 추가",
+    "音符": "음표", "音符属性": "음표 속성", "奏法": "주법", "网格": "그리드",
+    "绘制 B": "그리기 B", "点击试听": "미리듣기",
+    "绘制模式：拖动可同时设置音符长度与力度（B）": "그리기 모드: 드래그하여 음표 길이와 벨로시티 설정(B)",
+    "绘制模式：拖动设置长度，上下调整力度，Alt 取消吸附": "그리기 모드: 드래그로 길이, 위아래로 벨로시티, Alt로 스냅 해제",
+    "选择模式：拖动音符编辑，拖动空白框选": "선택 모드: 음표를 드래그해 편집하고 빈 공간을 드래그해 범위 선택",
+    "选择音符后应用奏法": "음표를 선택한 뒤 주법 적용",
+    "常用奏法": "자주 쓰는 주법", "网格与参考": "그리드 및 참조", "水平缩放": "가로 확대/축소",
+    "右键删除音符 · Ctrl 拖选追加 · 拖动音符两端调整时值": "우클릭으로 삭제 · Ctrl 드래그로 선택 추가 · 음표 가장자리를 드래그하여 길이 조절",
+    "右键删除 · Ctrl 拖选追加 · 拖动两端调整时值": "우클릭으로 삭제 · Ctrl 드래그로 선택 추가 · 가장자리를 드래그하여 길이 조절",
+    "Alt 临时取消吸附 · 方向键移动 · Ctrl+D 复制": "Alt로 스냅 해제 · 방향키로 이동 · Ctrl+D로 복제",
+    "已选择 1 个音符 · {note} · {start} ms": "음표 1개 선택 · {note} · {start} ms",
+    "已选择 {count} 个音符 · 可批量修改共同属性": "음표 {count}개 선택 · 공통 속성을 함께 편집할 수 있습니다",
+    "准备中…": "준비 중…", "正在准备游戏音源… {loaded}/{total}": "게임 음원 준비 중… {loaded}/{total}",
+    "游戏音源已缓存 · 开始试听": "게임 음원 캐시 완료 · 미리듣기 시작",
+    "当前音符没有可用的游戏音源": "이 음표에 사용할 수 있는 게임 음원이 없습니다",
+    "正在准备音符试听… {note}": "음표 미리듣기 준비 중… {note}",
+    "试听 {note}": "{note} 미리듣기",
+    "音符试听不可用：{message}": "음표 미리듣기를 사용할 수 없음: {message}",
+})
 
 TRANSLATIONS = {"en_US": EN, "ja_JP": JA, "ko_KR": KO}
 class Localizer(QObject):

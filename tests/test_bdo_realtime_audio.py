@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 import json
 import tempfile
+from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -53,6 +54,21 @@ class RealtimeAudioTests(unittest.TestCase):
         for _ in range(300):
             self.engine._start_voice(sample, 0.0, 1.0, 1.0)
         self.assertEqual(len(self.engine._voices), 256)
+
+    def test_clear_playback_silences_without_destroying_output_state(self) -> None:
+        sample = _Sample(np.ones((32, 2), dtype=np.float32), 48_000, 32)
+        self.engine._events = [_Event(0, sample, 1.0, 0.5)]
+        self.engine._event_frames = np.asarray([0], dtype=np.int64)
+        self.engine._voices = [SimpleNamespace(sample=sample)]
+        self.engine._playing = True
+        self.engine._duration_frames = 32
+
+        self.engine.clear_playback()
+
+        self.assertFalse(self.engine._playing)
+        self.assertEqual(self.engine._events, [])
+        self.assertEqual(self.engine._voices, [])
+        self.assertEqual(self.engine._duration_frames, 0)
 
     def test_interpolation_at_float_sample_tail_does_not_read_past_pcm(self) -> None:
         sample = _Sample(np.ones((4, 2), dtype=np.float32), 48_000, 4)
@@ -126,6 +142,24 @@ class RealtimeAudioTests(unittest.TestCase):
         self.assertEqual(status.preload_loaded, 3)
         self.assertEqual(status.preload_total, 8)
         self.assertAlmostEqual(status.preload_progress, 0.375)
+
+    def test_cancel_loading_invalidates_future_and_resets_progress(self) -> None:
+        future = Future()
+        self.engine._load_future = future
+        self.engine._load_generation = 7
+        self.engine._preload_total = 8
+        self.engine._preload_loaded = 3
+
+        self.engine.cancel_loading()
+
+        self.assertTrue(future.cancelled())
+        self.assertEqual(self.engine._load_generation, 8)
+        self.assertFalse(self.engine.is_loading())
+        self.assertIsNone(self.engine.finish_loading(0.0))
+        status = self.engine.get_status()
+        self.assertEqual(status.preload_loaded, 0)
+        self.assertEqual(status.preload_total, 0)
+        self.assertEqual(status.preload_progress, 0.0)
 
     def test_sample_loudness_matching_reduces_source_level_difference(self) -> None:
         quiet = np.full((4096, 2), 0.02, dtype=np.float32)
