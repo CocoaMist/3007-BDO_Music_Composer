@@ -73,6 +73,8 @@ class HomePageTests(unittest.TestCase):
                     assert window.game_score_list.item(0).text().splitlines()[0] == "score-one"
                     assert window.toolbar_import_btn.isHidden()
                     assert window.convert_button.isHidden()
+                    assert window.status_label.text() != "发现自动保存工程"
+                    assert "发现自动保存工程" not in window.inspector_text.text()
                     window._show_workspace()
                     assert not window.toolbar_import_btn.isHidden()
                     assert not window.convert_button.isHidden()

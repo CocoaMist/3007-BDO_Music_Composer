@@ -135,12 +135,33 @@ velocity line to mirror the game's composition workspace. Theme work must not
 replace those visible-range paint paths or introduce UI-library licensing into
 the MIDI, preview, or export layers.
 
+The settings dialog uses a persistent left navigation rail for three bounded
+domains: export identity, MIDI/velocity processing, and local audio/effects.
+The acknowledgements dialog shares the same charcoal surfaces, amber accents,
+panel rhythm, and button hierarchy as the editor instead of defining a separate
+feature palette.
+
+Application startup uses a portrait, full-image conductor line-art splash with a
+small overlaid status panel and code-drawn indeterminate spinner. It reports
+extension discovery, main-window construction, and local home-page loading
+phases, then hands focus to the main window after a short minimum display
+interval. The packaged illustration is static; the loading animation has no GIF
+dependency.
+
+Transient guidance uses one reusable `GlobalToast` per top-level window. It
+fades in, holds briefly, and fades out without accepting input. Homepage privacy
+guidance, piano-roll shortcuts, drawing-mode help, and settings FX notes use this
+surface instead of permanently occupying layout rows; durable state, errors,
+selection details, and export results remain in their existing status surfaces.
+
 The main window starts on a lightweight home page before entering the editor
 workspace. It has two collections: immediate files from the default Black
 Desert music folder, and a unified project list that merges autosaved
 `project.json` files with the bounded recent-file list stored in local config.
-The project list is path-deduplicated and ordered by recent activity. Homepage
-scanning never parses game scores, so embedded Owner IDs and character names are
+The project list is path-deduplicated and ordered by recent activity. Startup
+does not add a separate "autosave found" status banner; recovery stays inside
+this unified project list. Homepage scanning never parses game scores, so
+embedded Owner IDs and character names are
 not surfaced. Double-clicking a game score explicitly decrypts and parses its
 BDO v9 data, collapses physical 730-note chunks into logical `TrackState`
 entries, preserves per-note articulation values, and switches to the existing

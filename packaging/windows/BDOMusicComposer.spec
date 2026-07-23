@@ -7,6 +7,7 @@ project_root = Path(SPECPATH).parents[1]
 
 datas = [
     (str(project_root / "assets" / "ui" / "timeline_background.png"), "assets/ui"),
+    (str(project_root / "assets" / "ui" / "loading_conductor_lineart.png"), "assets/ui"),
     (str(project_root / "assets" / "icons" / "app_icon.png"), "assets/icons"),
     (str(project_root / "data" / "mappings" / "bdo_wwise_midi_map.json"), "data/mappings"),
     (str(project_root / "data" / "profiles" / "bdo_global_v9.json"), "data/profiles"),

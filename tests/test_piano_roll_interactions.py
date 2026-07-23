@@ -45,6 +45,42 @@ class PianoRollInteractionTests(unittest.TestCase):
             assert track_title is not None and track_title.text() == "lead"
             assert "lead" not in editor.track_meta.text()
 
+            # The vertical bar follows the usual viewport direction: dragging
+            # down reveals lower pitches and never scrolls below MIDI pitch 0.
+            editor.update_scrollbars()
+            pitch_min, pitch_max = editor.pitch_top_bounds()
+            visible_rows = editor.visible_pitch_rows()
+            assert editor.pitch_scroll.minimum() == 0
+            assert editor.pitch_scroll.maximum() == pitch_max - pitch_min
+            assert editor.pitch_scroll.pageStep() == visible_rows
+            editor.pitch_scroll.setValue(editor.pitch_scroll.maximum())
+            assert editor.canvas.pitch_top == pitch_min
+            assert editor.canvas.pitch_top - visible_rows + 1 >= editor.canvas.MIN_PITCH
+            editor.pitch_scroll.setValue(0)
+            assert editor.canvas.pitch_top == editor.canvas.MAX_PITCH
+            editor.pitch_scroll.setValue(editor.canvas.MAX_PITCH - 84)
+            assert editor.canvas.pitch_top == 84
+
+            # Content/zoom changes must clamp the canvas and the horizontal bar
+            # together instead of leaving the roll stranded in blank space.
+            initial_notes = list(editor.canvas.notes)
+            editor.canvas.set_notes([Note(60, 91, 0.0, 12000.0, 0)])
+            editor.editor_zoom.setValue(320)
+            editor.update_scrollbars()
+            assert editor.time_scroll.maximum() > 0
+            editor.set_time_scroll(10**9)
+            assert editor.canvas.scroll_ms == editor.time_scroll.maximum()
+            assert editor.time_scroll.value() == editor.time_scroll.maximum()
+            editor.canvas.set_notes(initial_notes)
+            editor.editor_zoom.setValue(30)
+            editor.update_scrollbars()
+            assert editor.time_scroll.maximum() == 0
+            assert editor.time_scroll.value() == 0
+            assert editor.canvas.scroll_ms == 0
+            editor.editor_zoom.setValue(92)
+            editor.canvas.set_notes(initial_notes)
+            editor.update_scrollbars()
+
             def grid_point(time_ms, pitch):
                 return QPoint(
                     round(editor.canvas.x_at_time(time_ms)),

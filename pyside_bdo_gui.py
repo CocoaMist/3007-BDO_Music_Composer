@@ -33,6 +33,7 @@ BDO_SAMPLE_MAP_PATH = WWISE_MIDI_MAP_PATH
 AUDIO_VALIDATION_PATH = DEFAULT_OUTDIR / "bdo_audio_validation_matrix.json"
 CRASH_LOG_PATH = DEFAULT_OUTDIR / "crash.log"
 TIMELINE_BACKGROUND_IMAGE = ASSETS_DIR / "ui" / "timeline_background.png"
+STARTUP_ART_IMAGE = ASSETS_DIR / "ui" / "loading_conductor_lineart.png"
 TIMELINE_BACKGROUND_OPACITY = 0.24
 DEFAULT_AUDIO_SOURCES = {
     "paz_root": os.environ.get("BDO_PAZ_ROOT", ""),
@@ -76,7 +77,20 @@ def install_crash_logging() -> None:
 
 try:
     import mido
-    from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, QThread, QTimer, QUrl, Signal
+    from PySide6.QtCore import (
+        QEasingCurve,
+        QEvent,
+        QObject,
+        QPointF,
+        QPropertyAnimation,
+        QRectF,
+        QSize,
+        Qt,
+        QThread,
+        QTimer,
+        QUrl,
+        Signal,
+    )
     from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShortcut
     from PySide6.QtWidgets import (
         QApplication,
@@ -87,6 +101,7 @@ try:
         QFileDialog,
         QFormLayout,
         QFrame,
+        QGraphicsOpacityEffect,
         QGridLayout,
         QHBoxLayout,
         QLabel,
@@ -844,15 +859,6 @@ def safe_filename(value: str, fallback: str = "project") -> str:
     return cleaned[:80] or fallback
 
 
-def latest_autosave_project() -> Path | None:
-    if not AUTO_SAVE_DIR.is_dir():
-        return None
-    projects = [path for path in AUTO_SAVE_DIR.glob("*/project.json") if path.is_file()]
-    if not projects:
-        return None
-    return max(projects, key=lambda path: path.stat().st_mtime)
-
-
 def selected_tracks(tracks: list[TrackState]) -> list[TrackState]:
     solo_tracks = [track for track in tracks if track.solo]
     return solo_tracks if solo_tracks else [track for track in tracks if not track.muted]
@@ -959,55 +965,379 @@ class PillButton(QPushButton):
             self.setIconSize(fluent_icon_size())
 
 
-class ThanksShareSquare(QWidget):
-    def __init__(self) -> None:
-        super().__init__()
-        self.setObjectName("ThanksShareSquare")
-        self.setMinimumSize(220, 220)
-        self.setMaximumSize(320, 320)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.items = [
-            ("游戏采样映射", 48, "#9fc79a"),
-            ("自主 MIDI 导入", 22, "#82aa9b"),
-            ("BDO 解码资料", 14, "#779a73"),
-            ("mido", 8, "#b0cfaa"),
-            ("PySide6", 4, "#66845f"),
-            ("ChatGPT", 4, "#c0d8bb"),
-        ]
-        self.labels: list[QLabel] = []
-        for name, percent, color in self.items:
-            label = QLabel(f"{name}\n{percent}%", self)
-            label.setAlignment(Qt.AlignCenter)
-            label.setWordWrap(True)
-            label.setStyleSheet(
-                f"background: {color}; color: #102010; border: 1px solid #182018; "
-                'border-radius: 5px; font-family: "Microsoft YaHei UI"; '
-                "font-size: 10px; font-weight: 800; padding: 4px;"
+class LoadingSpinner(QWidget):
+    """Small code-drawn indeterminate indicator with no image dependency."""
+
+    def __init__(self, size: int = 42, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("LoadingSpinner")
+        self.setFixedSize(size, size)
+        self._frame = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(65)
+        self._timer.timeout.connect(self._advance)
+
+    @property
+    def frame(self) -> int:
+        return self._frame
+
+    def start(self) -> None:
+        if not self._timer.isActive():
+            self._timer.start()
+        self.update()
+
+    def stop(self) -> None:
+        self._timer.stop()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.start()
+
+    def hideEvent(self, event) -> None:
+        self.stop()
+        super().hideEvent(event)
+
+    def _advance(self) -> None:
+        self._frame = (self._frame + 1) % 12
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.translate(self.width() / 2.0, self.height() / 2.0)
+        radius = max(7.0, min(self.width(), self.height()) / 2.0 - 5.0)
+        spoke = max(4.0, radius * 0.34)
+        line_width = max(2.0, self.width() / 15.0)
+        for index in range(12):
+            distance = (index - self._frame) % 12
+            alpha = max(38, 255 - distance * 19)
+            pen = QPen(QColor(245, 165, 36, alpha), line_width)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.drawLine(
+                QPointF(0.0, -radius),
+                QPointF(0.0, -radius + spoke),
             )
-            self.labels.append(label)
+            painter.rotate(30.0)
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        side = min(self.width(), self.height())
-        chart = QRectF((self.width() - side) / 2 + 8, (self.height() - side) / 2 + 8, side - 16, side - 16)
-        gap = 5
-        left_w = chart.width() * 0.58
-        right_w = chart.width() - left_w - gap
-        left_x = chart.left()
-        right_x = left_x + left_w + gap
-        left_top_h = chart.height() * 0.68
-        right_row_h = (chart.height() - gap * 3) / 4
 
-        rects = [
-            QRectF(left_x, chart.top(), left_w, left_top_h),
-            QRectF(left_x, chart.top() + left_top_h + gap, left_w, chart.height() - left_top_h - gap),
-            QRectF(right_x, chart.top(), right_w, right_row_h),
-            QRectF(right_x, chart.top() + (right_row_h + gap), right_w, right_row_h),
-            QRectF(right_x, chart.top() + (right_row_h + gap) * 2, right_w, right_row_h),
-            QRectF(right_x, chart.top() + (right_row_h + gap) * 3, right_w, right_row_h),
-        ]
-        for label, rect in zip(self.labels, rects):
-            label.setGeometry(int(rect.left()), int(rect.top()), int(rect.width()), int(rect.height()))
+class StartupArtwork(QWidget):
+    """Clipped cover rendering for the startup illustration."""
+
+    def __init__(self, image_path: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("StartupArtwork")
+        self.setFixedSize(454, 718)
+        self._source = QPixmap(str(image_path))
+        self._cover = QPixmap()
+        self._refresh_cover()
+
+    @property
+    def has_artwork(self) -> bool:
+        return not self._source.isNull()
+
+    def _refresh_cover(self) -> None:
+        if self._source.isNull():
+            self._cover = QPixmap()
+            return
+        self._cover = self._source.scaled(
+            self.size(),
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bounds = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        clip = QPainterPath()
+        clip.addRoundedRect(bounds, 7.0, 7.0)
+        painter.setClipPath(clip)
+        painter.fillRect(self.rect(), QColor("#eee7da"))
+        if not self._cover.isNull():
+            source_x = max(0, (self._cover.width() - self.width()) // 2)
+            source_y = max(0, (self._cover.height() - self.height()) // 2)
+            painter.drawPixmap(
+                self.rect(),
+                self._cover,
+                self._cover.rect().adjusted(
+                    source_x,
+                    source_y,
+                    -source_x,
+                    -source_y,
+                ),
+            )
+        shade = QLinearGradient(0.0, 0.0, 0.0, float(self.height()))
+        shade.setColorAt(0.0, QColor(24, 22, 19, 0))
+        shade.setColorAt(0.72, QColor(24, 22, 19, 0))
+        shade.setColorAt(1.0, QColor(24, 22, 19, 118))
+        painter.fillRect(self.rect(), shade)
+        painter.setClipping(False)
+        painter.setPen(QPen(QColor("#7b5a2c"), 1.0))
+        painter.drawRoundedRect(bounds, 7.0, 7.0)
+
+
+class StartupSplash(QWidget):
+    """Theme-aligned startup surface shown while the real window is built."""
+
+    MINIMUM_VISIBLE_MS = 650
+
+    def __init__(self) -> None:
+        super().__init__(
+            None,
+            Qt.WindowType.SplashScreen
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint,
+        )
+        self.setObjectName("StartupSplash")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFixedSize(470, 734)
+        self._shown_at = time.monotonic()
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 8, 8, 8)
+        card = QFrame()
+        card.setObjectName("StartupSplashCard")
+        outer.addWidget(card)
+        card_layout = QGridLayout(card)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(0)
+
+        self.artwork = StartupArtwork(STARTUP_ART_IMAGE)
+        card_layout.addWidget(self.artwork, 0, 0)
+
+        content = QFrame()
+        content.setObjectName("StartupOverlay")
+        content.setFixedWidth(self.artwork.width())
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(22, 15, 22, 17)
+        layout.setSpacing(9)
+        brand = QHBoxLayout()
+        brand.setSpacing(9)
+        eyebrow = QLabel("BDO MUSIC COMPOSER")
+        eyebrow.setObjectName("StartupEyebrow")
+        brand.addWidget(eyebrow)
+        brand.addStretch(1)
+        title = QLabel("正在打开曲谱工作台")
+        title.setObjectName("StartupTitle")
+        brand.addWidget(title)
+        layout.addLayout(brand)
+
+        activity = QHBoxLayout()
+        activity.setSpacing(12)
+        self.spinner = LoadingSpinner(34)
+        activity.addWidget(self.spinner, alignment=Qt.AlignVCenter)
+        status_group = QVBoxLayout()
+        status_group.setSpacing(3)
+        self.status_label = QLabel("正在启动音乐工作台…")
+        self.status_label.setObjectName("StartupStatus")
+        detail = QLabel("本地项目和游戏曲谱只在这台电脑上读取")
+        detail.setObjectName("StartupDetail")
+        detail.setWordWrap(True)
+        status_group.addWidget(self.status_label)
+        status_group.addWidget(detail)
+        activity.addLayout(status_group, stretch=1)
+        layout.addLayout(activity)
+        card_layout.addWidget(content, 0, 0, alignment=Qt.AlignBottom)
+
+        self.setStyleSheet(
+            """
+            QWidget#StartupSplash { background: transparent; }
+            QFrame#StartupSplashCard {
+                background: #171614;
+                border: 1px solid #5b4527;
+                border-radius: 11px;
+            }
+            QFrame#StartupOverlay {
+                background: rgba(20, 18, 15, 226);
+                border: 0;
+                border-top: 1px solid rgba(216, 155, 55, 120);
+            }
+            QLabel#StartupEyebrow {
+                color: #d89b37;
+                font-family: "Microsoft YaHei UI";
+                font-size: 9px;
+                font-weight: 900;
+                letter-spacing: 2px;
+            }
+            QLabel#StartupTitle {
+                color: #d1c8b9;
+                font-family: "Microsoft YaHei UI";
+                font-size: 10px;
+                font-weight: 700;
+            }
+            QLabel#StartupStatus {
+                color: #f0c66f;
+                font-family: "Microsoft YaHei UI";
+                font-size: 13px;
+                font-weight: 800;
+            }
+            QLabel#StartupDetail {
+                color: #948e87;
+                font-family: "Microsoft YaHei UI";
+                font-size: 10px;
+            }
+            """
+        )
+
+    def showEvent(self, event) -> None:
+        self._shown_at = time.monotonic()
+        super().showEvent(event)
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            self.move(available.center() - self.rect().center())
+        self.spinner.start()
+
+    def set_status(self, text: str) -> None:
+        self.status_label.setText(text)
+
+    def finish(self, window: QWidget, minimum_visible_ms: int | None = None) -> None:
+        minimum = self.MINIMUM_VISIBLE_MS if minimum_visible_ms is None else max(0, minimum_visible_ms)
+        elapsed = round((time.monotonic() - self._shown_at) * 1000.0)
+        QTimer.singleShot(max(0, minimum - elapsed), lambda: self._reveal(window))
+
+    def _reveal(self, window: QWidget) -> None:
+        self.spinner.stop()
+        self.hide()
+        window.raise_()
+        window.activateWindow()
+
+
+class GlobalToast(QFrame):
+    """One non-blocking message surface shared by each top-level window."""
+
+    COLORS = {
+        "info": "#f0c66f",
+        "success": "#8fcf9d",
+        "warning": "#f5a524",
+        "error": "#ef8178",
+    }
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName("GlobalToast")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setMinimumWidth(280)
+        self.setMaximumWidth(540)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(13, 10, 15, 10)
+        layout.setSpacing(10)
+        self.marker = QLabel("●")
+        self.marker.setObjectName("ToastMarker")
+        self.marker.setAlignment(Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(self.marker)
+        self.message = QLabel()
+        self.message.setObjectName("ToastMessage")
+        self.message.setWordWrap(True)
+        self.message.setMaximumWidth(460)
+        layout.addWidget(self.message, stretch=1)
+
+        self.opacity = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity)
+        self.animation = QPropertyAnimation(self.opacity, b"opacity", self)
+        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.animation.finished.connect(self._animation_finished)
+        self._animation_phase = ""
+        self._hold_duration_ms = 2600
+        self.hold_timer = QTimer(self)
+        self.hold_timer.setSingleShot(True)
+        self.hold_timer.timeout.connect(self.fade_out)
+        self.setStyleSheet(
+            """
+            QFrame#GlobalToast {
+                background: #28241e;
+                border: 1px solid #66502d;
+                border-radius: 7px;
+            }
+            QLabel#ToastMessage {
+                color: #f3eee6;
+                font-family: "Microsoft YaHei UI";
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QLabel#ToastMarker {
+                font-family: "Microsoft YaHei UI";
+                font-size: 11px;
+            }
+            """
+        )
+        parent.installEventFilter(self)
+        self.hide()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.parent() and event.type() in {
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+        }:
+            QTimer.singleShot(0, self._reposition)
+        return super().eventFilter(watched, event)
+
+    def show_message(self, text: str, kind: str = "info", duration_ms: int = 2600) -> None:
+        if not text:
+            return
+        self.animation.stop()
+        self.hold_timer.stop()
+        self.message.setText(text)
+        self.marker.setStyleSheet(f"color: {self.COLORS.get(kind, self.COLORS['info'])};")
+        self.opacity.setOpacity(0.0)
+        self.show()
+        self.adjustSize()
+        self._reposition()
+        self.raise_()
+        self.animation.setDuration(170)
+        self.animation.setStartValue(0.0)
+        self.animation.setEndValue(1.0)
+        self._animation_phase = "in"
+        self._hold_duration_ms = max(0, duration_ms)
+        self.animation.start()
+
+    def fade_out(self) -> None:
+        self.animation.stop()
+        self.animation.setDuration(260)
+        self.animation.setStartValue(self.opacity.opacity())
+        self.animation.setEndValue(0.0)
+        self._animation_phase = "out"
+        self.animation.start()
+
+    def _animation_finished(self) -> None:
+        if self._animation_phase == "in":
+            self.hold_timer.start(self._hold_duration_ms)
+        elif self._animation_phase == "out":
+            self.hide()
+        self._animation_phase = ""
+
+    def _reposition(self) -> None:
+        parent = self.parentWidget()
+        if parent is None or not self.isVisible():
+            return
+        x = max(16, (parent.width() - self.width()) // 2)
+        if parent.objectName() == "MidiNoteEditorDialog":
+            workspace = parent.findChild(QFrame, "EditorWorkspace")
+            y = (workspace.geometry().top() + 12) if workspace is not None else 148
+        elif parent.objectName() == "SettingsDialog":
+            content = parent.findChild(QWidget, "SettingsContent")
+            y = (content.geometry().top() + 12) if content is not None else 84
+        else:
+            y = 64 if parent.height() >= 180 else 16
+        self.move(x, y)
+
+
+def show_global_toast(
+    host: QWidget,
+    text: str,
+    kind: str = "info",
+    duration_ms: int = 2600,
+) -> GlobalToast:
+    top_level = host.window()
+    toast = getattr(top_level, "_global_toast", None)
+    if not isinstance(toast, GlobalToast):
+        toast = GlobalToast(top_level)
+        setattr(top_level, "_global_toast", toast)
+    toast.show_message(tr(text), kind=kind, duration_ms=duration_ms)
+    return toast
 
 
 class TimelineCanvas(QWidget):
@@ -2027,6 +2357,8 @@ class PianoRollCanvas(QWidget):
     BLACK_KEY_W = 48
     RULER_H = 31
     ROW_H = 20
+    MIN_PITCH = 0
+    MAX_PITCH = 127
 
     def __init__(self, editor) -> None:
         super().__init__(editor)
@@ -2752,7 +3084,11 @@ class PianoRollCanvas(QWidget):
         elif event.modifiers() & Qt.ShiftModifier:
             self.scroll_ms = max(0.0, self.scroll_ms - delta / 120 * self.beat_ms)
         else:
-            self.pitch_top = max(24, min(127, self.pitch_top + (3 if delta > 0 else -3)))
+            pitch_min, pitch_max = self.editor.pitch_top_bounds()
+            self.pitch_top = max(
+                pitch_min,
+                min(pitch_max, self.pitch_top + (3 if delta > 0 else -3)),
+            )
         self.update()
         self.editor.update_scrollbars()
         event.accept()
@@ -3196,9 +3532,6 @@ class MidiNoteEditorDialog(QDialog):
         articulation_layout = QHBoxLayout(self.articulation_controls)
         articulation_layout.setContentsMargins(3, 0, 0, 0)
         articulation_layout.setSpacing(6)
-        articulation_hint = QLabel("选择音符后应用奏法")
-        articulation_hint.setObjectName("Muted")
-        articulation_layout.addWidget(articulation_hint)
         self.articulation_combo.setObjectName("ArticulationCombo")
         self.articulation_combo.setMinimumWidth(145)
         articulation_layout.addWidget(self.articulation_combo)
@@ -3243,9 +3576,6 @@ class MidiNoteEditorDialog(QDialog):
         self.editor_zoom.setFixedWidth(150)
         self.editor_zoom.valueChanged.connect(self.set_zoom)
         grid_layout.addWidget(self.editor_zoom)
-        grid_help = QLabel("双击新建 · Ctrl+拖动复制 · Alt 临时取消吸附 · Ctrl+D 复制")
-        grid_help.setObjectName("Muted")
-        grid_layout.addWidget(grid_help)
         grid_layout.addStretch(1)
         inspector_layout.addWidget(self.grid_controls, 1)
         add_inset(inspector, "EditorInspectorInset")
@@ -3267,8 +3597,7 @@ class MidiNoteEditorDialog(QDialog):
         self.canvas.ruler_seek_requested.connect(self.seek_draft)
         self.pitch_scroll = QScrollBar(Qt.Vertical)
         self.pitch_scroll.setObjectName("PianoPitchScroll")
-        self.pitch_scroll.setRange(24, 127)
-        self.pitch_scroll.setValue(self.canvas.pitch_top)
+        self.pitch_scroll.setRange(0, 0)
         self.pitch_scroll.valueChanged.connect(self.set_pitch_scroll)
         self.time_scroll = QScrollBar(Qt.Horizontal)
         self.time_scroll.setObjectName("PianoTimeScroll")
@@ -3304,6 +3633,13 @@ class MidiNoteEditorDialog(QDialog):
         self._update_track_meta()
         self.refresh_fields()
         QTimer.singleShot(0, self.update_scrollbars)
+        QTimer.singleShot(
+            180,
+            lambda: show_global_toast(
+                self,
+                "双击网格新建音符；按 B 切换绘制模式。",
+            ),
+        )
 
     def quantize_ms(self) -> float:
         return self.canvas.beat_ms / int(self.quantize_combo.currentData() or 4)
@@ -3332,16 +3668,25 @@ class MidiNoteEditorDialog(QDialog):
         self.note_mode_button.setChecked(show_notes)
         self.articulation_mode_button.setChecked(show_articulation)
         self.grid_mode_button.setChecked(mode == "grid")
+        if show_articulation and self.isVisible():
+            show_global_toast(self, "选择音符后即可批量应用奏法。")
+        elif mode == "grid" and self.isVisible():
+            show_global_toast(
+                self,
+                "双击新建 · Ctrl+拖动复制 · Alt 临时取消吸附 · Ctrl+D 复制",
+            )
 
     def _toggle_draw_mode(self, enabled: bool) -> None:
         if hasattr(self, "canvas"):
             self.canvas.setCursor(Qt.CrossCursor if enabled else Qt.ArrowCursor)
             self.canvas.update()
         if hasattr(self, "status"):
-            self.status.setText(tr(
+            show_global_toast(
+                self,
                 "绘制模式：拖动设置长度，上下调整力度，Alt 取消吸附"
                 if enabled else "选择模式：双击新建，拖动空白框选，Ctrl+拖动复制"
-            ))
+            )
+            self._update_status()
 
     def _toggle_velocity_lane(self, visible: bool) -> None:
         self.velocity_lane.setVisible(visible)
@@ -3503,31 +3848,69 @@ class MidiNoteEditorDialog(QDialog):
         visible_ms = max(1.0, (self.canvas.width() - self.canvas.KEY_W) / self.canvas.px_per_ms)
         content_end = self.canvas.content_end_ms + self.canvas.beat_ms * 4
         maximum = max(0, round(content_end - visible_ms))
+        scroll_ms = float(max(0, min(maximum, round(self.canvas.scroll_ms))))
+        time_changed = not math.isclose(scroll_ms, self.canvas.scroll_ms, abs_tol=1e-6)
+        self.canvas.scroll_ms = scroll_ms
         self.time_scroll.blockSignals(True)
         self.time_scroll.setRange(0, maximum)
         self.time_scroll.setPageStep(max(1, round(visible_ms)))
         self.time_scroll.setSingleStep(max(1, round(self.quantize_ms())))
-        self.time_scroll.setValue(min(maximum, round(self.canvas.scroll_ms)))
+        self.time_scroll.setValue(round(scroll_ms))
         self.time_scroll.blockSignals(False)
+
+        pitch_min, pitch_max = self.pitch_top_bounds()
+        pitch_top = max(pitch_min, min(pitch_max, int(self.canvas.pitch_top)))
+        pitch_changed = pitch_top != self.canvas.pitch_top
+        self.canvas.pitch_top = pitch_top
         self.pitch_scroll.blockSignals(True)
-        self.pitch_scroll.setPageStep(max(1, int((self.canvas.height() - self.canvas.RULER_H) / self.canvas.ROW_H)))
-        self.pitch_scroll.setValue(self.canvas.pitch_top)
+        self.pitch_scroll.setRange(0, pitch_max - pitch_min)
+        self.pitch_scroll.setPageStep(self.visible_pitch_rows())
+        self.pitch_scroll.setSingleStep(1)
+        # Scrollbar value grows downwards while MIDI pitches grow upwards.
+        self.pitch_scroll.setValue(pitch_max - pitch_top)
         self.pitch_scroll.blockSignals(False)
+        if time_changed:
+            self.velocity_lane.update()
+        if time_changed or pitch_changed:
+            self.canvas.update()
         self.set_draft_playhead(self.playhead_ms)
 
+    def visible_pitch_rows(self) -> int:
+        grid_height = max(0, self.canvas.height() - self.canvas.RULER_H)
+        return max(1, math.ceil(grid_height / self.canvas.ROW_H))
+
+    def pitch_top_bounds(self) -> tuple[int, int]:
+        pitch_max = self.canvas.MAX_PITCH
+        visible_rows = min(
+            pitch_max - self.canvas.MIN_PITCH + 1,
+            self.visible_pitch_rows(),
+        )
+        pitch_min = self.canvas.MIN_PITCH + visible_rows - 1
+        return pitch_min, pitch_max
+
     def set_time_scroll(self, value: int) -> None:
-        value = float(value)
-        if math.isclose(value, self.canvas.scroll_ms, abs_tol=0.5):
+        value = float(max(self.time_scroll.minimum(), min(self.time_scroll.maximum(), int(value))))
+        if self.time_scroll.value() != round(value):
+            self.time_scroll.blockSignals(True)
+            self.time_scroll.setValue(round(value))
+            self.time_scroll.blockSignals(False)
+        if math.isclose(value, self.canvas.scroll_ms, abs_tol=1e-6):
             return
         self.canvas.scroll_ms = value
         self.canvas.update()
         self.velocity_lane.update()
 
     def set_pitch_scroll(self, value: int) -> None:
-        value = int(value)
-        if value == self.canvas.pitch_top:
+        pitch_min, pitch_max = self.pitch_top_bounds()
+        scroll_value = max(0, min(pitch_max - pitch_min, int(value)))
+        pitch_top = pitch_max - scroll_value
+        if self.pitch_scroll.value() != scroll_value:
+            self.pitch_scroll.blockSignals(True)
+            self.pitch_scroll.setValue(scroll_value)
+            self.pitch_scroll.blockSignals(False)
+        if pitch_top == self.canvas.pitch_top:
             return
-        self.canvas.pitch_top = value
+        self.canvas.pitch_top = pitch_top
         self.canvas.update()
 
     def optimize_draft(self) -> None:
@@ -3871,7 +4254,7 @@ class MidiNoteEditorDialog(QDialog):
         self.updating_fields = True
         chosen = [self.canvas.notes[i] for i in sorted(self.canvas.selected)]
         if not chosen:
-            self.selection_summary.setText(tr("未选择音符 · 双击网格新建"))
+            self.selection_summary.setText(tr("未选择音符"))
         elif len(chosen) == 1:
             note = chosen[0]
             self.selection_summary.setText(trf(
@@ -4546,7 +4929,7 @@ class SettingsDialog(QDialog):
         self.setObjectName("SettingsDialog")
         self.setWindowTitle("设置")
         self.setModal(True)
-        self.resize(980, 720)
+        self.resize(920, 680)
         self.setMinimumSize(760, 560)
 
         layout = QVBoxLayout(self)
@@ -4566,30 +4949,39 @@ class SettingsDialog(QDialog):
         header_layout.addWidget(subtitle)
         layout.addWidget(header)
 
-        scroll = QScrollArea()
-        scroll.setObjectName("SettingsScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        body = QWidget()
-        body.setObjectName("SettingsBody")
-        body_layout = QGridLayout(body)
-        body_layout.setContentsMargins(10, 18, 10, 20)
-        body_layout.setHorizontalSpacing(14)
-        body_layout.setVerticalSpacing(14)
-        body_layout.setColumnStretch(0, 1)
-        body_layout.setColumnStretch(1, 1)
-        left_column = QWidget()
-        left_layout = QVBoxLayout(left_column)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(10)
-        right_column = QWidget()
-        right_layout = QVBoxLayout(right_column)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
-        body_layout.addWidget(left_column, 0, 0)
-        body_layout.addWidget(right_column, 0, 1)
-        scroll.setWidget(body)
-        layout.addWidget(scroll, stretch=1)
+        content = QWidget()
+        content.setObjectName("SettingsContent")
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        self.settings_nav = QListWidget()
+        self.settings_nav.setObjectName("SettingsNav")
+        self.settings_nav.setFixedWidth(150)
+        self.settings_nav.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.settings_nav.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.settings_pages = QStackedWidget()
+        self.settings_pages.setObjectName("SettingsPages")
+        general_scroll, general_page_layout = self._settings_page(
+            "SettingsScroll", "SettingsGeneralPage"
+        )
+        midi_scroll, midi_page_layout = self._settings_page(
+            "SettingsMidiScroll", "SettingsMidiPage"
+        )
+        audio_scroll, audio_page_layout = self._settings_page(
+            "SettingsAudioScroll", "SettingsAudioPage"
+        )
+        for label, page in (
+            (tr("通用与导出"), general_scroll),
+            (tr("MIDI 与力度"), midi_scroll),
+            (tr("音源与效果"), audio_scroll),
+        ):
+            self.settings_nav.addItem(label)
+            self.settings_pages.addWidget(page)
+        self.settings_nav.currentRowChanged.connect(self.settings_pages.setCurrentIndex)
+        self.settings_nav.setCurrentRow(0)
+        content_layout.addWidget(self.settings_nav)
+        content_layout.addWidget(self.settings_pages, stretch=1)
+        layout.addWidget(content, stretch=1)
 
         general, general_layout = self._section(
             "基础导出",
@@ -4597,7 +4989,7 @@ class SettingsDialog(QDialog):
         )
         form = self._form_layout()
         general_layout.addLayout(form)
-        left_layout.addWidget(general)
+        general_page_layout.addWidget(general)
 
         self.language = QComboBox()
         self.language.setProperty("i18nSkipItems", True)
@@ -4622,22 +5014,11 @@ class SettingsDialog(QDialog):
         self.transpose.setValue(parent.transpose)
         form.addRow("移调", self.transpose)
 
-        self.audio_source = QLineEdit(parent.audio_sources.get("sample_pack", ""))
-        self.audio_source.setReadOnly(True)
-        audio_source_row = QWidget()
-        audio_source_layout = QHBoxLayout(audio_source_row)
-        audio_source_layout.setContentsMargins(0, 0, 0, 0)
-        audio_source_layout.addWidget(self.audio_source, stretch=1)
-        sample_pack_button = PillButton("选择音源包", "secondary")
-        sample_pack_button.clicked.connect(self._browse_sample_pack)
-        audio_source_layout.addWidget(sample_pack_button)
-        form.addRow("本地音源包", audio_source_row)
-
         owner, owner_layout = self._section(
             "游戏编辑权限",
             "选择一份游戏内保存的曲谱，读取角色名和 Owner ID。",
         )
-        right_layout.addWidget(owner)
+        general_page_layout.addWidget(owner)
         self.owner_id = parent.owner_id
         owner_row = QHBoxLayout()
         self.owner_load_button = PillButton("从游戏曲谱读取", "secondary")
@@ -4657,8 +5038,7 @@ class SettingsDialog(QDialog):
             "MIDI 解析",
             "这两项会影响 MIDI 读入方式；修改后会重新载入当前文件。",
         )
-        right_layout.addWidget(parsing)
-        right_layout.addStretch(1)
+        midi_page_layout.addWidget(parsing)
         self.apply_sustain = QCheckBox("读取并展开 MIDI sustain 踏板")
         self.apply_sustain.setChecked(parent.apply_sustain)
         parsing_layout.addWidget(self.apply_sustain)
@@ -4671,7 +5051,7 @@ class SettingsDialog(QDialog):
             "力度处理",
             "选择一种输出力度策略；下方仅显示当前策略需要的参数。",
         )
-        body_layout.addWidget(velocity, 1, 0, 1, 2)
+        midi_page_layout.addWidget(velocity)
         modes = QFrame()
         modes.setObjectName("SettingsModeRow")
         modes_layout = QGridLayout(modes)
@@ -4734,6 +5114,23 @@ class SettingsDialog(QDialog):
         self.vel_floor_row.setLayout(self._labeled_row("抬底值", floor_row))
         vel_layout.addWidget(self.vel_floor_row)
 
+        audio, audio_layout = self._section(
+            "本地音源包",
+            "仅用于本机近似试听，不会写入曲谱，也不会上传。",
+        )
+        audio_page_layout.addWidget(audio)
+        self.audio_source = QLineEdit(parent.audio_sources.get("sample_pack", ""))
+        self.audio_source.setReadOnly(True)
+        audio_source_row = QWidget()
+        audio_source_layout = QHBoxLayout(audio_source_row)
+        audio_source_layout.setContentsMargins(0, 0, 0, 0)
+        audio_source_layout.setSpacing(10)
+        audio_source_layout.addWidget(self.audio_source, stretch=1)
+        sample_pack_button = PillButton("选择音源包", "secondary")
+        sample_pack_button.clicked.connect(self._browse_sample_pack)
+        audio_source_layout.addWidget(sample_pack_button)
+        audio_layout.addWidget(audio_source_row)
+
         effects, effects_layout = self._section(
             "MIDI 效果",
             "数值范围为 0–127；设为 0 即不写入对应效果。",
@@ -4742,10 +5139,10 @@ class SettingsDialog(QDialog):
         effect_grid.setContentsMargins(0, 0, 0, 0)
         effect_grid.setHorizontalSpacing(10)
         effect_grid.setVerticalSpacing(10)
-        for column in (1, 3, 5, 7, 9):
+        for column in (1, 3, 5):
             effect_grid.setColumnStretch(column, 1)
         effects_layout.addLayout(effect_grid)
-        body_layout.addWidget(effects, 2, 0, 1, 2)
+        audio_page_layout.addWidget(effects)
         self.reverb = QSpinBox()
         self.reverb.setRange(0, 127)
         self.reverb.setValue(parent.reverb)
@@ -4767,18 +5164,17 @@ class SettingsDialog(QDialog):
         self.chorus_freq.setRange(0, 127)
         self.chorus_freq.setValue(parent.chorus[2] if parent.chorus else 0)
         for column, label, field in (
-            (4, "合唱反馈", self.chorus_feedback),
-            (6, "深度", self.chorus_depth),
-            (8, "频率", self.chorus_freq),
+            (0, "合唱反馈", self.chorus_feedback),
+            (2, "深度", self.chorus_depth),
+            (4, "频率", self.chorus_freq),
         ):
-            effect_grid.addWidget(QLabel(label), 0, column, alignment=Qt.AlignRight | Qt.AlignVCenter)
-            effect_grid.addWidget(field, 0, column + 1)
+            effect_grid.addWidget(QLabel(label), 1, column, alignment=Qt.AlignRight | Qt.AlignVCenter)
+            effect_grid.addWidget(field, 1, column + 1)
         for field in (self.reverb, self.delay, self.chorus_feedback, self.chorus_depth, self.chorus_freq):
             field.setFixedWidth(92)
-        note = QLabel("轨道 FX 中的奏法会写入支持的 BDO 乐器。")
-        note.setObjectName("SettingsFootnote")
-        body_layout.addWidget(note, 3, 0, 1, 2)
-        body_layout.setRowStretch(4, 1)
+        general_page_layout.addStretch(1)
+        midi_page_layout.addStretch(1)
+        audio_page_layout.addStretch(1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.setObjectName("SettingsButtons")
@@ -4788,7 +5184,26 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self.settings_nav.currentRowChanged.connect(self._show_page_tip)
         self._sync_velocity_controls()
+
+    @staticmethod
+    def _settings_page(
+        scroll_name: str,
+        page_name: str,
+    ) -> tuple[QScrollArea, QVBoxLayout]:
+        scroll = QScrollArea()
+        scroll.setObjectName(scroll_name)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        page = QWidget()
+        page.setObjectName(page_name)
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(18, 16, 18, 20)
+        page_layout.setSpacing(12)
+        page_layout.setAlignment(Qt.AlignTop)
+        scroll.setWidget(page)
+        return scroll, page_layout
 
     @staticmethod
     def _section(title_text: str, description: str) -> tuple[QFrame, QVBoxLayout]:
@@ -4838,6 +5253,10 @@ class SettingsDialog(QDialog):
             if radio.isChecked():
                 return mode
         return "layered"
+
+    def _show_page_tip(self, index: int) -> None:
+        if index == 2 and self.isVisible():
+            show_global_toast(self, "轨道 FX 中的奏法会写入支持的 BDO 乐器。")
 
     def _browse_sample_pack(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(
@@ -4989,10 +5408,6 @@ class MidiToBdoWindow(QMainWindow):
         self.project_redo_shortcut = QShortcut(QKeySequence.Redo, self)
         self.project_redo_shortcut.activated.connect(self._redo_project)
         self._apply_style()
-        latest_project = latest_autosave_project()
-        if latest_project:
-            self.status_label.setText(tr("发现自动保存工程"))
-            self.inspector_text.setText(trf("发现自动保存工程：{project} · 可点打开工程恢复", project=latest_project))
         self._sync_preview_state()
 
     def _build_ui(self) -> None:
@@ -5115,11 +5530,8 @@ class MidiToBdoWindow(QMainWindow):
         eyebrow.setObjectName("HomeEyebrow")
         title = QLabel("曲谱主页")
         title.setObjectName("HomeTitle")
-        subtitle = QLabel("从游戏曲谱、本地工程或最近使用中快速开始")
-        subtitle.setObjectName("HomeSubtitle")
         heading.addWidget(eyebrow)
         heading.addWidget(title)
-        heading.addWidget(subtitle)
         header.addLayout(heading)
         header.addStretch(1)
         import_btn = PillButton("导入 MIDI", "primary", FluentSymbol.OPEN)
@@ -5140,7 +5552,6 @@ class MidiToBdoWindow(QMainWindow):
         content.setSpacing(0)
         game_card, self.game_score_list, game_footer, self.game_score_count = self._build_home_card(
             "游戏曲谱",
-            "双击打开游戏曲谱；主页扫描不读取身份信息",
             "打开目录",
             "primary",
         )
@@ -5154,7 +5565,6 @@ class MidiToBdoWindow(QMainWindow):
         side_layout.setSpacing(0)
         project_card, self.project_list, project_footer, self.project_count = self._build_home_card(
             "项目",
-            "本地工程与最近打开的 MIDI · 同名项目自动合并",
             "打开工程",
             "primary",
         )
@@ -5170,7 +5580,6 @@ class MidiToBdoWindow(QMainWindow):
     def _build_home_card(
         self,
         title: str,
-        subtitle: str,
         action: str,
         density: str,
     ) -> tuple[QWidget, QListWidget, QPushButton, QLabel]:
@@ -5190,16 +5599,12 @@ class MidiToBdoWindow(QMainWindow):
         card_header.addWidget(title_label)
         card_header.addWidget(count_label)
         card_header.addStretch(1)
-        subtitle_label = QLabel(subtitle)
-        subtitle_label.setObjectName("HomeCardSubtitle")
-        subtitle_label.setWordWrap(True)
         item_list = QListWidget()
         item_list.setObjectName("HomeList")
         item_list.setSpacing(2)
         action_button = PillButton(action, "ghost")
         action_button.setProperty("homeAction", True)
         layout.addLayout(card_header)
-        layout.addWidget(subtitle_label)
         layout.addWidget(item_list, stretch=1)
         layout.addWidget(action_button, alignment=Qt.AlignLeft)
         return card, item_list, action_button, count_label
@@ -5253,6 +5658,7 @@ class MidiToBdoWindow(QMainWindow):
         self._refresh_home()
         self.page_stack.setCurrentWidget(self.home_page)
         self._set_home_toolbar_mode(True)
+        self.show_toast("双击曲谱或项目即可打开；主页扫描不会读取曲谱中的身份信息。")
 
     def _show_workspace(self) -> None:
         self.page_stack.setCurrentWidget(self.workspace_page)
@@ -5270,6 +5676,14 @@ class MidiToBdoWindow(QMainWindow):
             self.convert_button,
         ):
             widget.setVisible(not home)
+
+    def show_toast(
+        self,
+        text: str,
+        kind: str = "info",
+        duration_ms: int = 2600,
+    ) -> GlobalToast:
+        return show_global_toast(self, text, kind=kind, duration_ms=duration_ms)
 
     def _open_game_music_directory(self) -> None:
         directory = default_game_music_dir()
@@ -5438,7 +5852,7 @@ class MidiToBdoWindow(QMainWindow):
         self.status_label.setObjectName("Status")
         status_row.addWidget(self.status_label)
 
-        self.inspector_text = QLabel("选择轨道查看详情。右键可修复和优化轨道或更换乐器；FX 可设置支持乐器的 BDO 奏法。")
+        self.inspector_text = QLabel("")
         self.inspector_text.setObjectName("InspectorText")
         self.inspector_text.setWordWrap(True)
         status_row.addWidget(self.inspector_text, stretch=1)
@@ -5491,23 +5905,68 @@ class MidiToBdoWindow(QMainWindow):
                 color: #f3f1ea;
             }
             QFrame#SettingsHeader {
-                background: #1b1b1b;
+                background: #191919;
                 border: 0;
-                border-bottom: 1px solid #34322f;
+                border-bottom: 1px solid #4a3b27;
             }
-            QWidget#SettingsBody { background: #151515; }
-            QScrollArea#SettingsScroll { border: 0; background: #151515; }
-            QScrollArea#SettingsScroll > QWidget > QWidget { background: #151515; }
+            QWidget#SettingsContent {
+                background: #151515;
+                border: 0;
+            }
+            QStackedWidget#SettingsPages {
+                background: #151515;
+                border: 0;
+            }
+            QListWidget#SettingsNav {
+                background: #181818;
+                border: 0;
+                border-right: 1px solid #302f2d;
+                outline: 0;
+                padding: 0;
+            }
+            QListWidget#SettingsNav::item {
+                background: #181818;
+                color: #aaa39a;
+                border: 0;
+                border-right: 1px solid #302f2d;
+                min-height: 52px;
+                padding: 0 18px;
+                font-weight: 700;
+            }
+            QListWidget#SettingsNav::item:hover {
+                background: #202020;
+                color: #e5dfd6;
+            }
+            QListWidget#SettingsNav::item:selected {
+                background: #25211b;
+                color: #f0c66f;
+                border-left: 3px solid #f5a524;
+                border-right: 1px solid #4a3b27;
+            }
+            QWidget#SettingsGeneralPage, QWidget#SettingsMidiPage,
+            QWidget#SettingsAudioPage {
+                background: #151515;
+            }
+            QScrollArea#SettingsScroll, QScrollArea#SettingsMidiScroll,
+            QScrollArea#SettingsAudioScroll {
+                border: 0;
+                background: #151515;
+            }
+            QScrollArea#SettingsScroll > QWidget > QWidget,
+            QScrollArea#SettingsMidiScroll > QWidget > QWidget,
+            QScrollArea#SettingsAudioScroll > QWidget > QWidget {
+                background: #151515;
+            }
             QDialog#SettingsDialog QLabel { color: #ddd7cf; }
             QLabel#SettingsTitle {
-                color: #f5a524;
+                color: #f3f1ea;
                 font-size: 24px;
                 font-weight: 900;
             }
             QFrame#SettingsSection {
-                background: #202020;
+                background: #1e1e1e;
                 border: 1px solid #353332;
-                border-radius: 9px;
+                border-radius: 7px;
             }
             QLabel#SettingsSectionTitle {
                 color: #f0c66f;
@@ -5517,13 +5976,6 @@ class MidiToBdoWindow(QMainWindow):
             QLabel#SettingsFieldLabel { color: #c7c0b8; }
             QLabel#OwnerStatus { color: #bdb6ad; }
             QLabel#OwnerStatus[ownerError="true"] { color: #e06c62; }
-            QLabel#SettingsFootnote {
-                color: #aaa39a;
-                background: #1d1d1d;
-                border: 1px solid #34322f;
-                border-radius: 6px;
-                padding: 9px 11px;
-            }
             QFrame#SettingsModeRow {
                 background: #1a1a1a;
                 border: 1px solid #34322f;
@@ -5552,7 +6004,7 @@ class MidiToBdoWindow(QMainWindow):
                 border-top: 1px solid #34322f;
                 padding: 12px 18px;
             }
-            QDialog#ThanksDialog { background: #181818; color: #f3f1ea; }
+            QDialog#ThanksDialog { background: #151515; color: #f3f1ea; }
             QFrame#Panel {
                 background: #222222;
                 border: 1px solid #343434;
@@ -5578,9 +6030,6 @@ class MidiToBdoWindow(QMainWindow):
                 color: #f3f1ea;
                 font-size: 24px;
                 font-weight: 900;
-            }
-            QLabel#HomeSubtitle, QLabel#HomeCardSubtitle {
-                color: #aaa39a;
             }
             QFrame#HomeCard {
                 background: transparent;
@@ -5842,61 +6291,42 @@ class MidiToBdoWindow(QMainWindow):
             QLabel#ToolbarText, QLabel#InspectorText { color: #c7c0b8; }
             QLabel#Muted { color: #a8a29e; }
             QLabel#ThanksTitle {
-                color: #d9ead3;
+                color: #f3f1ea;
                 font-size: 23px;
                 font-weight: 900;
             }
             QLabel#ThanksSubtitle {
-                color: #d8d3cc;
+                color: #aaa39a;
                 font-size: 12px;
                 line-height: 140%;
             }
-            QFrame#ThanksChartPanel, QFrame#ThanksTextPanel {
-                background: #1b201b;
-                border: 1px solid #3b4939;
-                border-radius: 10px;
+            QFrame#ThanksTextPanel {
+                background: #1e1e1e;
+                border: 1px solid #353332;
+                border-radius: 7px;
             }
             QFrame#ThanksHeader {
-                background: #20251f;
-                border: 1px solid #40503e;
-                border-radius: 10px;
-            }
-            QLabel#ThanksBadge {
-                background: #2b362a;
-                color: #bcd5b5;
-                border: 1px solid #536a50;
-                border-radius: 12px;
-                padding: 7px 12px;
-                font-size: 10px;
-                font-weight: 900;
+                background: #191919;
+                border: 0;
+                border-bottom: 1px solid #4a3b27;
+                border-radius: 0;
             }
             QLabel#ThanksSectionLabel {
-                color: #d9ead3;
+                color: #f0c66f;
                 font-size: 14px;
                 font-weight: 900;
             }
             QLabel#ThanksMutedNote {
-                color: #a8b5a4;
+                color: #aaa39a;
                 font-size: 11px;
                 line-height: 135%;
             }
-            QLabel#ThanksFooter {
-                color: #a8a29e;
-                background: #202020;
-                border: 1px solid #343434;
-                border-radius: 6px;
-                padding: 8px 10px;
-            }
             QTextEdit#ThanksText {
-                background: #151915;
-                border: 1px solid #313d30;
-                border-radius: 8px;
+                background: #181818;
+                border: 1px solid #34322f;
+                border-radius: 5px;
                 color: #d8d3cc;
-                padding: 12px 14px;
-            }
-            QWidget#ThanksShareSquare {
-                background: #111511;
-                border: 2px solid #d9ead3;
+                padding: 16px 18px;
             }
             QLabel#Status {
                 color: #f5a524;
@@ -6131,7 +6561,12 @@ class MidiToBdoWindow(QMainWindow):
         self._record_recent("midi", path, path.stem)
         self._show_workspace()
         self.status_label.setText(tr("建议转换检查"))
-        self.inspector_text.setText(tr("MIDI 已载入。建议先点“转换检查”，确认音域、FX 和打击乐映射后再导出。"))
+        self.inspector_text.clear()
+        self.show_toast(
+            "MIDI 已载入。建议先点“转换检查”，确认音域、FX 和打击乐映射后再导出。",
+            kind="warning",
+            duration_ms=4200,
+        )
 
     def _open_bdo_score_path(self, path: Path) -> None:
         if not self._load_bdo_info(path):
@@ -6558,7 +6993,10 @@ class MidiToBdoWindow(QMainWindow):
             self._mark_conversion_check_dirty()
             self._autosave_project("note edit", immediate=True)
             self.status_label.setText(trf("已更新 {track} · {count} 音符", track=track.display_name, count=len(track.notes)))
-            self.inspector_text.setText(tr("音符编辑已写回；转换前建议运行一次转换检查。"))
+            self.show_toast(
+                "音符编辑已写回；转换前建议运行一次转换检查。",
+                kind="success",
+            )
 
         dialog.notes_applied.connect(apply_notes)
         dialog.exec()
@@ -6595,10 +7033,10 @@ class MidiToBdoWindow(QMainWindow):
         scope = f"Track {target_track_id}" if target_track_id is not None else "全局 MIDI"
         self.status_label.setText(trf("{scope} 已优化", scope=tr(scope)))
         effect_text = "，并应用游戏声音效果建议" if optimized_effects is not None else ""
-        self.inspector_text.setText(trf(
+        self.show_toast(trf(
             "已应用 {scope} 优化{effects}：建议再运行一次转换检查后导出。",
             scope=tr(scope), effects=tr(effect_text) if effect_text else "",
-        ))
+        ), kind="success", duration_ms=3600)
 
     def _suggest_global_transpose(self) -> int | None:
         active = selected_tracks(self.tracks)
@@ -6689,8 +7127,8 @@ class MidiToBdoWindow(QMainWindow):
     def _show_acknowledgements(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("致谢")
-        dialog.resize(960, 640)
-        dialog.setMinimumSize(760, 520)
+        dialog.resize(860, 640)
+        dialog.setMinimumSize(700, 520)
         dialog.setObjectName("ThanksDialog")
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(20, 18, 20, 16)
@@ -6698,115 +7136,69 @@ class MidiToBdoWindow(QMainWindow):
 
         header = QFrame()
         header.setObjectName("ThanksHeader")
-        header_layout = QHBoxLayout(header)
+        header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(18, 14, 18, 14)
-        header_layout.setSpacing(12)
-        heading = QVBoxLayout()
-        heading.setSpacing(3)
-        title = QLabel("感谢，让音乐工具成为可能")
+        header_layout.setSpacing(4)
+        title = QLabel("致谢")
         title.setObjectName("ThanksTitle")
-        heading.addWidget(title)
-        subtitle = QLabel("从 MIDI 解析、游戏曲谱研究到原声试听，每一份开源代码、文档和测试都很重要。")
+        header_layout.addWidget(title)
+        subtitle = QLabel("感谢以下项目、作者与社区。")
         subtitle.setObjectName("ThanksSubtitle")
         subtitle.setWordWrap(True)
-        heading.addWidget(subtitle)
-        header_layout.addLayout(heading, 1)
-        badge = QLabel("OPEN SOURCE  ·  COMMUNITY")
-        badge.setObjectName("ThanksBadge")
-        badge.setAlignment(Qt.AlignCenter)
-        header_layout.addWidget(badge)
+        header_layout.addWidget(subtitle)
         layout.addWidget(header)
-
-        body = QHBoxLayout()
-        body.setSpacing(14)
-        layout.addLayout(body, stretch=1)
-
-        chart_panel = QFrame()
-        chart_panel.setObjectName("ThanksChartPanel")
-        chart_layout = QVBoxLayout(chart_panel)
-        chart_layout.setContentsMargins(16, 15, 16, 15)
-        chart_layout.setSpacing(9)
-
-        chart_title = QLabel("项目组成")
-        chart_title.setObjectName("ThanksSectionLabel")
-        chart_layout.addWidget(chart_title)
-
-        chart_intro = QLabel("以当前代码中实际承担的功能作粗略估算")
-        chart_intro.setObjectName("ThanksMutedNote")
-        chart_intro.setWordWrap(True)
-        chart_layout.addWidget(chart_intro)
-
-        share_square = ThanksShareSquare()
-        chart_layout.addWidget(share_square, stretch=1, alignment=Qt.AlignCenter)
-
-        chart_note = QLabel("占比仅用于表达感谢，不代表代码所有权或精确工作量。Python 与 Qt 作为运行基础未计入图表。")
-        chart_note.setObjectName("ThanksMutedNote")
-        chart_note.setWordWrap(True)
-        chart_layout.addWidget(chart_note)
-        chart_panel.setMinimumWidth(330)
-        chart_panel.setMaximumWidth(370)
-        body.addWidget(chart_panel)
 
         text_panel = QFrame()
         text_panel.setObjectName("ThanksTextPanel")
         text_layout = QVBoxLayout(text_panel)
-        text_layout.setContentsMargins(16, 15, 16, 15)
-        text_layout.setSpacing(10)
+        text_layout.setContentsMargins(18, 16, 18, 16)
+        text_layout.setSpacing(9)
 
-        text_header = QHBoxLayout()
-        text_title = QLabel("致谢名单")
+        text_title = QLabel("项目、作者与社区")
         text_title.setObjectName("ThanksSectionLabel")
-        text_header.addWidget(text_title)
-        text_header.addStretch(1)
-        count_label = QLabel("6 项核心依赖与贡献")
-        count_label.setObjectName("ThanksMutedNote")
-        text_header.addWidget(count_label)
-        text_layout.addLayout(text_header)
+        text_layout.addWidget(text_title)
 
         thanks_text = QTextEdit()
         thanks_text.setObjectName("ThanksText")
         thanks_text.setReadOnly(True)
         thanks_body_color = "#d8d3cc" if self._system_uses_dark_theme() else "#45413d"
-        thanks_heading_color = "#b8d8b0" if self._system_uses_dark_theme() else "#31552d"
+        thanks_heading_color = "#f0c66f" if self._system_uses_dark_theme() else "#8a5a00"
         thanks_text.setHtml(
             f"""
             <style>
                 body {{ color: {thanks_body_color}; font-family: "Microsoft YaHei UI"; font-size: 11px; }}
-                h2 {{ color: {thanks_heading_color}; font-size: 17px; margin-top: 12px; margin-bottom: 5px; }}
-                p {{ margin: 5px 0; line-height: 145%; }}
+                h2 {{ color: {thanks_heading_color}; font-size: 17px; margin-top: 14px; margin-bottom: 6px; }}
+                p {{ margin: 7px 0; line-height: 145%; }}
                 b {{ color: {thanks_heading_color}; }}
             </style>
-            <h2>{tr("01 · MIDI 与游戏采样试听")}</h2>
-            <p><b>mido</b>：{tr("把 MIDI 音符一颗颗读出来、写回去。")}</p>
-            <p><b>{tr("BDO 原始采样映射")}</b>：{tr("试听只使用从游戏提取并验证过的键位映射。")}</p>
+            <h2>{tr("格式研究与早期启发")}</h2>
+            <p>• <b>Bishop-R / midi-to-bdo</b></p>
+            <p>• <b>Skyro468 / BDO-Music-Composer-Stuff</b></p>
+            <p>• <b>iDevelopThings / bdo-data-extractor</b></p>
 
-            <h2>{tr("02 · GitHub 开源项目")}</h2>
-            <p><b>Skyro468 / BDO-Music-Composer-Stuff</b>：{tr("感谢黑色沙漠音乐文件研究与解码相关资料作者，帮助理解外部曲谱制作方向。")}</p>
-            <p><b>iDevelopThings / bdo-data-extractor</b>：{tr("感谢 bdo-data-extractor 作者公开清晰的 PAZ、ICE 与 LZ 只读实现，帮助完善本地音源制作工具。")}</p>
+            <h2>{tr("开源基础")}</h2>
+            <p>• <b>mido</b></p>
+            <p>• <b>PySide6 / Qt</b></p>
 
-            <h2>{tr("03 · 开发协作")}</h2>
-            <p><b>ChatGPT / OpenAI</b>：{tr("在旁边递思路、改文案、一起收拾代码。")}</p>
-
-            <h2>{tr("04 · 还有大家")}</h2>
-            <p><b>CN Server · Rainbow Club / 彩虹乐队</b>：{tr("感谢 CN 服务器 Rainbow Club 彩虹乐队玩家的支持、测试与音乐交流。")}</p>
-            <p>{tr("谢谢开源维护者、文档作者、issue 讨论者、测试者，以及每一个愿意分享经验的人。")}</p>
+            <h2>{tr("采样、验证与协作")}</h2>
+            <p>• <b>{tr("BDO 原始采样映射")}</b></p>
+            <p>• <b>CN Server · Rainbow Club / 彩虹乐队</b></p>
+            <p>• <b>ChatGPT / OpenAI</b></p>
+            <p>• <b>{tr("开源维护者、文档作者、测试者与社区玩家")}</b></p>
             """
         )
         text_layout.addWidget(thanks_text, stretch=1)
-        body.addWidget(text_panel, stretch=1)
-
-        footer = QLabel("这不是一份排名，而是一张合作地图。谢谢每一个把工具、文档和经验分享出来的人。")
-        footer.setObjectName("ThanksFooter")
-        footer.setWordWrap(True)
-        layout.addWidget(footer)
+        layout.addWidget(text_panel, stretch=1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok)
         copy_button = buttons.addButton("复制致谢名单", QDialogButtonBox.ActionRole)
+        copy_button.setProperty("kind", "secondary")
         copy_button.setToolTip("复制为纯文本，便于放入项目说明或发布页面")
         copy_button.clicked.connect(
             lambda: QApplication.clipboard().setText(thanks_text.toPlainText().strip())
         )
         buttons.button(QDialogButtonBox.Ok).setText("关闭")
+        buttons.button(QDialogButtonBox.Ok).setProperty("kind", "convert")
         buttons.accepted.connect(dialog.accept)
         layout.addWidget(buttons)
         dialog.exec()
@@ -6970,7 +7362,7 @@ class MidiToBdoWindow(QMainWindow):
         self._mark_conversion_check_dirty()
         self._autosave_project("create track", immediate=True)
         self.status_label.setText(trf("已新建 Track {track_id} · {instrument}", track_id=track_id, instrument=instrument_name))
-        self.inspector_text.setText(tr("空轨道已创建；双击轨道可进入音符编辑器添加音符。"))
+        self.show_toast("空轨道已创建；双击轨道可进入音符编辑器添加音符。", kind="success")
 
     def _delete_selected_track(self) -> None:
         track = self.selected_track
@@ -6995,13 +7387,14 @@ class MidiToBdoWindow(QMainWindow):
         self._mark_conversion_check_dirty()
         self._autosave_project("delete track", immediate=True)
         self.status_label.setText(trf("已删除 {track}", track=track.display_name))
-        self.inspector_text.setText(tr("轨道已删除。请选择其他轨道，或新建一条空轨道。"))
+        self.inspector_text.clear()
+        self.show_toast("轨道已删除。请选择其他轨道，或新建一条空轨道。")
 
     def _select_track(self, track: TrackState) -> None:
         self.selected_track = track
         self.timeline.set_selected_track(track)
         self.inspector_text.setText(trf(
-            "{track} · {count} 音符 · {pitch_range} · BDO: {instrument} · FX: {articulation} · 右键轨道更换乐器",
+            "{track} · {count} 音符 · {pitch_range} · BDO: {instrument} · FX: {articulation}",
             track=track.display_name, count=track.note_count, pitch_range=track.pitch_range,
             instrument=BDO_INSTRUMENT_NAMES.get(track.bdo_instrument_id, track.bdo_instrument_id),
             articulation=tr(articulation_label(track.bdo_instrument_id, track.articulation_type)),
@@ -7629,6 +8022,11 @@ def main() -> int:
             pass
     app = QApplication(sys.argv)
     install_localizer(app, str(load_config().get("language", "zh_CN")))
+    startup = StartupSplash()
+    startup.show()
+    app.processEvents()
+    startup.set_status(tr("正在检查扩展组件…"))
+    app.processEvents()
     plugin_discovery = discover_host_algorithms()
     if plugin_discovery.diagnostics:
         append_crash_log(
@@ -7639,12 +8037,23 @@ def main() -> int:
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
     try:
+        startup.set_status(tr("正在载入界面与本地项目…"))
+        app.processEvents()
         window = MidiToBdoWindow()
         window.show()
+        startup.set_status(tr("准备完成"))
+        startup.finish(window)
+        QTimer.singleShot(
+            StartupSplash.MINIMUM_VISIBLE_MS + 180,
+            lambda: window.show_toast(
+                "双击曲谱或项目即可打开；主页扫描不会读取曲谱中的身份信息。"
+            ),
+        )
         result = app.exec()
         append_crash_log("Application exited", f"exit_code={result}")
         return result
     except BaseException as exc:
+        startup.hide()
         append_crash_log("Fatal error in main()", f"{exc}\n\n{traceback.format_exc()}")
         QMessageBox.critical(None, "程序错误", f"程序发生错误，日志已写入：\n{CRASH_LOG_PATH}\n\n{exc}")
         return 1

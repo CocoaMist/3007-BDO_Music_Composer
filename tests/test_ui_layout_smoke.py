@@ -17,8 +17,11 @@ class UiLayoutSmokeTests(unittest.TestCase):
             """
             from PySide6.QtCore import QPoint, Qt
             from PySide6.QtTest import QTest
-            from PySide6.QtWidgets import QApplication, QFrame, QScrollArea, QWidget
-            from pyside_bdo_gui import MidiNoteEditorDialog, MidiToBdoWindow, Note, SettingsDialog, TrackState
+            from PySide6.QtWidgets import QApplication, QFrame, QListWidget, QScrollArea, QStackedWidget, QWidget
+            from pyside_bdo_gui import (
+                GlobalToast, MidiNoteEditorDialog, MidiToBdoWindow, Note,
+                SettingsDialog, StartupSplash, TrackState,
+            )
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -27,6 +30,37 @@ class UiLayoutSmokeTests(unittest.TestCase):
             app.processEvents()
             assert app.property("bdoFixedDarkTheme") is True
             assert window._system_uses_dark_theme()
+
+            splash = StartupSplash()
+            splash.show()
+            app.processEvents()
+            assert splash.size().width() == 470
+            assert splash.size().height() == 734
+            assert splash.artwork.has_artwork
+            assert not splash.artwork._cover.isNull()
+            assert splash.spinner._timer.isActive()
+            initial_spinner_frame = splash.spinner.frame
+            QTest.qWait(90)
+            app.processEvents()
+            assert splash.spinner.frame != initial_spinner_frame
+            splash.set_status("准备完成")
+            assert splash.status_label.text() == "准备完成"
+            splash.finish(window, minimum_visible_ms=0)
+            QTest.qWait(20)
+            app.processEvents()
+            assert splash.isHidden()
+
+            toast = window.show_toast("测试提示", duration_ms=80)
+            app.processEvents()
+            assert isinstance(toast, GlobalToast)
+            assert toast.isVisible()
+            assert toast.message.text() == "测试提示"
+            assert 0 <= toast.x() <= window.width() - toast.width()
+            QTest.qWait(190)
+            assert toast.opacity.opacity() > 0.9
+            QTest.qWait(380)
+            app.processEvents()
+            assert toast.isHidden()
 
             inspector = window.findChild(QFrame, "Inspector")
             assert inspector is not None
@@ -41,6 +75,21 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert scroll.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
             assert scroll.widget().minimumSizeHint().width() <= scroll.viewport().width()
             assert scroll.verticalScrollBar().sizeHint().width() == 12
+            nav = settings.findChild(QListWidget, "SettingsNav")
+            pages = settings.findChild(QStackedWidget, "SettingsPages")
+            assert nav is not None and pages is not None
+            assert nav.count() == pages.count() == 3
+            assert [nav.item(index).text() for index in range(nav.count())] == [
+                "通用与导出", "MIDI 与力度", "音源与效果"
+            ]
+            for index in range(nav.count()):
+                nav.setCurrentRow(index)
+                app.processEvents()
+                assert pages.currentIndex() == index
+                active_scroll = pages.currentWidget()
+                assert isinstance(active_scroll, QScrollArea)
+                assert active_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+                assert active_scroll.widget().minimumSizeHint().width() <= active_scroll.viewport().width()
             settings.close()
 
             track = TrackState(1, [Note(60, 96, 0, 400, 0)], 0, False, "lead", 0x0B)
@@ -103,6 +152,10 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert top_inspector.height() == inspector_height
             assert editor.grid_controls.isVisible()
             assert not editor.note_controls.isVisible()
+            editor_toast = getattr(editor, "_global_toast", None)
+            assert isinstance(editor_toast, GlobalToast)
+            assert "Ctrl+拖动复制" in editor_toast.message.text()
+            assert editor_toast.y() >= workspace.geometry().top()
             editor.note_mode_button.click()
             app.processEvents()
             assert top_inspector.height() == inspector_height
