@@ -1,6 +1,6 @@
 # BDO Music Composer
 
-Current release: **v0.2.0**
+Current release candidate: **v0.3.0**
 
 <p align="center">
   <img src="assets/icons/app_icon.png" width="160" alt="BDO Music Composer icon">
@@ -79,6 +79,15 @@ track scope, explicit analysis, and preview application. Trusted local
 algorithms can be distributed as one `.bdoopt` file; use the panel's algorithm
 package button to open the install directory, copy the file there, and refresh.
 
+### Lossless BDO v9 codec
+
+The independent `bdo_codec` package can inspect and byte-for-byte round-trip an
+unchanged v9 score, or canonically encode an edited document. It preserves both
+velocity bytes, physical tracks, game track volume, eight settings bytes, and
+opaque data with a fail-closed safety policy. See
+[BDO v9 codec](docs/BDO_V9_CODEC.md) for its Python API, CLI, and private
+in-game evidence workflow.
+
 ## Current status and limitations
 
 - The editor and BDO v9 serialization path are functional and covered by automated tests.
@@ -90,7 +99,7 @@ package button to open the install directory, copy the file there, and refresh.
 - Wwise preview requires local extracted WAV files. Preview routing and some DSP-heavy articulations are approximate until verified by in-game A/B testing.
 - Marnian source modes use the reserved contiguous instrument IDs documented in the code and tests.
 - Original project code is available under the MIT License.
-- Vendored and third-party components, including code under `tools/midi-to-bdo/`, remain subject to their own upstream license terms and are not relicensed by the root license.
+- MIDI import, MIDI-to-BDO adaptation, BDO v9 serialization, and ICE are maintained as independent project code under `bdo_midi/`, `bdo_export/`, and `bdo_codec/`.
 
 ## Quick start from source
 
@@ -158,11 +167,15 @@ Primary entry points:
 - `pyside_bdo_gui.py` — desktop UI, editor state, export orchestration, and autosave.
 - `optimization/` — extensible optimization package, built-in pipeline, and algorithm registry.
 - `bdo_midi_optimizer.py` — backward-compatible facade for older integrations.
+- `bdo_midi/` — independent MIDI parser, immutable note model, instrument maps, and transforms.
+- `bdo_export/` — current-editor/MIDI adaptation into canonical BDO v9 documents.
 - `bdo_realtime_audio.py` — low-latency sample preview engine.
-- `tools/midi-to-bdo/midi2bdo.py` — vendored BDO v9 serializer and MIDI parser.
+- `bdo_codec/` — independent BDO v9 lossless codec, validation, and CLI.
 - `i18n.py` — runtime localization catalogs.
 
 See [Architecture](docs/ARCHITECTURE.md), [AI Context](docs/AI_CONTEXT.md), and [Project Structure](docs/PROJECT_STRUCTURE.md) for deeper documentation.
+The v0.3.0 clean-room boundary and validation gates are recorded in
+[Independent MIDI-to-BDO implementation](docs/INDEPENDENT_MIDI_IMPLEMENTATION.md).
 
 ## Repository hygiene and privacy
 
@@ -185,13 +198,14 @@ git grep -n -I -E "(C:\\Users\\|OPENAI_API_KEY|api[_-]?key|password)"
 ## Attribution
 
 - [mido](https://mido.readthedocs.io/) for Standard MIDI parsing and writing.
-- Bishop-R's `midi-to-bdo` work for the original BDO conversion foundation vendored under `tools/midi-to-bdo/`.
+- Historical community research, including Bishop-R's `midi-to-bdo`, which informed early project exploration; v0.3.0 contains no runtime or vendored source from that repository.
 - iDevelopThings' [`bdo-data-extractor`](https://github.com/iDevelopThings/bdo-data-extractor) for the clear read-only PAZ, ICE, and LZ implementation used by the separate local sample-pack development tool.
 - Players from **CN Server · Rainbow Club / 彩虹乐队** for their support, testing, and music exchange.
 - Community research around Black Desert music-score files, instrument IDs, and game UI behavior.
 - PySide6 / Qt and NumPy for the desktop and audio runtime.
 
-Before public release, add exact upstream commit references and license texts for all vendored components.
+Before public release, inspect the source archive and executable to confirm that
+historical vendor modules and private/generated artifacts are absent.
 
 ## Contributing
 

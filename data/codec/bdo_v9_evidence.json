@@ -1,0 +1,47 @@
+{
+  "schema": "bdo-v9-codec-evidence/v1",
+  "format_version": 9,
+  "evidence_policy": "game-save-diff-plus-import-plus-resave",
+  "verified_structure": {
+    "version_prefix": "uint32-le",
+    "cipher": "ICE-level-0",
+    "fixed_header_bytes": 336,
+    "note_record": "<BBBBdd",
+    "note_record_bytes": 20,
+    "track_note_limit": 730,
+    "trailing_empty_track_per_instrument": true,
+    "cipher_block_alignment": 8
+  },
+  "wire_fields": {
+    "note_type": {"width_bits": 8, "roundtrip_range": [0, 255], "semantic_status": "instrument-specific evidence required"},
+    "velocity_a": {"width_bits": 8, "game_range": [0, 127], "status": "verified"},
+    "velocity_b": {"width_bits": 8, "game_range": [0, 127], "status": "roundtrip verified; independent audible meaning unresolved"},
+    "track_volume": {"width_bits": 8, "observed_values": [70, 100], "status": "roundtrip verified; full game behavior matrix pending"},
+    "track_settings": {"bytes": 8, "status": "roundtrip verified; per-byte game behavior matrix pending"}
+  },
+  "probe_matrix": {
+    "instrument_baselines": 26,
+    "registered_articulation_cases": 102,
+    "marnian_base_instruments": 4,
+    "marnian_modes_per_base": 4,
+    "drum_pitch_range": [48, 64],
+    "electric_fx_instrument_ids": [36, 37, 38],
+    "status": "generator complete; controlled in-game execution pending"
+  },
+  "unresolved": [
+    {
+      "path": "payload.trailing_data[0]",
+      "observed_nonzero_values": [1],
+      "status": "preserved losslessly; structural edits are blocked until meaning is verified"
+    },
+    {
+      "path": "instrument_id x ntype semantics",
+      "status": "complete controlled in-game matrix pending"
+    }
+  ],
+  "privacy": {
+    "real_scores_committed": false,
+    "game_assets_committed": false,
+    "local_validation_command": "python scripts/verify_private_bdo_corpus.py <private-music-directory>"
+  }
+}

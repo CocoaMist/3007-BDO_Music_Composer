@@ -25,6 +25,8 @@ class UiLayoutSmokeTests(unittest.TestCase):
             window.resize(window.minimumSize())
             window.show()
             app.processEvents()
+            assert app.property("bdoFixedDarkTheme") is True
+            assert window._system_uses_dark_theme()
 
             inspector = window.findChild(QFrame, "Inspector")
             assert inspector is not None
@@ -44,15 +46,34 @@ class UiLayoutSmokeTests(unittest.TestCase):
             track = TrackState(1, [Note(60, 96, 0, 400, 0)], 0, False, "lead", 0x0B)
             window.tracks = [track]
             editor = MidiNoteEditorDialog(window, track, 120, 4)
+            assert window.realtime_status_timer.interval() == 16
+            assert editor.playback_timer.interval() == 16
+            assert editor.objectName() == "MidiNoteEditorDialog"
+            assert editor.windowFlags() & Qt.WindowMinimizeButtonHint
+            assert editor.windowFlags() & Qt.WindowMaximizeButtonHint
             editor.resize(editor.minimumSize())
             editor.show()
             app.processEvents()
             toolbar = editor.findChild(QFrame, "EditorToolbar")
             assert toolbar is not None
             assert toolbar.height() >= 38
+            workspace = editor.findChild(QFrame, "EditorWorkspace")
+            assert workspace is not None
+            workspace_left = workspace.mapTo(editor, QPoint(0, 0)).x()
+            assert workspace_left == editor.contentsRect().left()
+            assert workspace_left + workspace.width() == editor.contentsRect().right() + 1
+            assert toolbar.mapTo(editor, QPoint(0, 0)).x() > workspace_left
+            assert toolbar.isAncestorOf(editor.apply_button)
+            assert toolbar.isAncestorOf(editor.cancel_button)
+            assert toolbar.isAncestorOf(editor.confirm_button)
             assert not hasattr(editor, "playback_timeline")
             top_inspector = editor.findChild(QFrame, "NoteInspectorTop")
             assert top_inspector is not None and top_inspector.isVisible()
+            assert top_inspector.isAncestorOf(editor.velocity_toggle)
+            assert editor.canvas.ROW_H == 20
+            assert editor.canvas.KEY_W == 86
+            assert editor.canvas.BLACK_KEY_X == 8
+            assert editor.canvas.BLACK_KEY_W == 48
             inspector_height = top_inspector.height()
             assert editor.note_mode_button.height() == editor.articulation_mode_button.height() == editor.grid_mode_button.height()
             assert editor.note_controls.isVisible()
@@ -60,6 +81,12 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert not editor.grid_controls.isVisible()
             assert editor.pitch_scroll.width() == 12
             assert editor.time_scroll.height() == 12
+            grid_rect = editor.canvas.grid_rect()
+            assert grid_rect.left() == editor.canvas.KEY_W
+            assert grid_rect.right() == editor.canvas.width()
+            assert editor.canvas.note_rect(editor.canvas.notes[0]).left() == editor.canvas.x_at_time(
+                editor.canvas.notes[0].start
+            )
             scroll_corner = editor.findChild(QWidget, "PianoScrollCorner")
             assert scroll_corner is not None and scroll_corner.size().width() == 12
             editor.articulation_mode_button.click()
@@ -82,6 +109,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert editor.note_controls.isVisible()
             footer = editor.findChild(QFrame, "EditorFooter")
             assert footer is not None
+            assert footer.height() == 31
             assert footer.geometry().bottom() <= editor.contentsRect().bottom()
             assert not editor.velocity_lane.isVisible()
             editor.canvas.selected = {0}
@@ -116,11 +144,14 @@ class UiLayoutSmokeTests(unittest.TestCase):
                     )
                     self.ready = False
                     self.loaded_from = None
+                    self.loaded_pitch = None
                     self.committed_from = None
                     self.played = False
+                    self.clear_count = 0
 
                 def load_project_async(self, _tracks, _map, start, *_effects):
                     self.loaded_from = start
+                    self.loaded_pitch = _tracks[0].notes[0].pitch if _tracks and _tracks[0].notes else None
                     self.status.preload_loaded = 0
                     self.status.preload_total = 4
                     self.status.preload_progress = 0.0
@@ -134,6 +165,14 @@ class UiLayoutSmokeTests(unittest.TestCase):
                     self.committed_from = start
                     return {"events": 1, "samples": 1, "cache_bytes": 64, "unverified": []}
 
+                def finish_audition_loading(self):
+                    if not self.ready:
+                        return None
+                    self.committed_from = 0.0
+                    self.played = True
+                    self.status.state = "playing"
+                    return {"events": 1, "samples": 1, "cache_bytes": 64, "unverified": []}
+
                 def play(self):
                     self.played = True
                     self.status.state = "playing"
@@ -142,6 +181,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
                     self.status.state = "stopped"
 
                 def clear_playback(self):
+                    self.clear_count += 1
                     self.cancel_loading()
                     self.status.state = "stopped"
 
@@ -179,6 +219,27 @@ class UiLayoutSmokeTests(unittest.TestCase):
             QTest.mouseClick(editor.canvas, Qt.LeftButton, pos=QPoint(20, round(keyboard_y)))
             assert editor.audition_pending
             assert fake.loaded_from == 0.0
+            assert fake.loaded_pitch == 60
+            editor._stop_note_audition()
+            next_keyboard_y = keyboard_y - editor.canvas.ROW_H * 2
+            cleared_before_gliss = fake.clear_count
+            QTest.mousePress(
+                editor.canvas, Qt.LeftButton,
+                pos=QPoint(20, round(keyboard_y)),
+            )
+            assert editor.canvas.piano_key_dragging
+            assert editor.canvas.piano_pressed_pitch == 60
+            QTest.mouseMove(editor.canvas, pos=QPoint(20, round(next_keyboard_y)))
+            app.processEvents()
+            assert editor.canvas.piano_pressed_pitch == 62
+            assert fake.loaded_pitch == 62
+            assert fake.clear_count == cleared_before_gliss
+            QTest.mouseRelease(
+                editor.canvas, Qt.LeftButton,
+                pos=QPoint(20, round(next_keyboard_y)),
+            )
+            assert not editor.canvas.piano_key_dragging
+            assert editor.canvas.piano_pressed_pitch is None
             editor._stop_note_audition()
             note_rect = editor.canvas.note_rect(editor.canvas.notes[0])
             QTest.mouseClick(

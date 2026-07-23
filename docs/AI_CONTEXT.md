@@ -6,7 +6,9 @@ This document helps an AI agent find the correct subsystem without scanning ever
 
 | User request | Read first | Likely edit |
 |---|---|---|
-| Main window/timeline UI | `TimelineCanvas`, `MidiToBdoWindow._build_*` | `pyside_bdo_gui.py` |
+| Main window/timeline UI | `TimelineCanvas`, `MidiToBdoWindow._build_*`, `fluent_theme.py` | `pyside_bdo_gui.py`, `fluent_theme.py` |
+| Home page/unified projects | `scan_game_scores`, `scan_local_projects`, `MidiToBdoWindow._build_home_page` | `pyside_bdo_gui.py`, `i18n.py` |
+| Open/edit a BDO v9 score | `read_bdo_score`, `track_states_from_bdo_score`, `MidiToBdoWindow._load_bdo_info` | `bdo_score.py`, `pyside_bdo_gui.py` |
 | Piano-roll behavior | `PianoRollCanvas`, `MidiNoteEditorDialog` | `pyside_bdo_gui.py` |
 | MIDI optimization | package README, configs/reports/tests | `optimization/` |
 | Optimizer packages / Marnian | `optimization/README.md`, `docs/MARNIAN_MUSE_OPTIONAL_BOUNDARY.md` | `optimization/plugin_api.py`, `optimization/plugin_loader.py`, `optimization/plugin_host.py` |
@@ -14,8 +16,11 @@ This document helps an AI agent find the correct subsystem without scanning ever
 | Harmony/role analysis | theory context | `bdo_music_theory.py` |
 | Lyrics | lyric expression mode | `bdo_lyrics.py` |
 | Preview/audio timing | engine and tests | `bdo_realtime_audio.py` |
+| Timeline track meters | `AudioStatus.track_levels`, `TimelineCanvas.set_track_levels` | `bdo_realtime_audio.py`, `pyside_bdo_gui.py` |
 | Sample selection/offline render | renderer and mapping | `bdo_sample_renderer.py` |
-| BDO export/binary format | export round-trip test + serializer | `tools/midi-to-bdo/midi2bdo.py` |
+| BDO v9 codec/binary format | `docs/BDO_V9_CODEC.md`, codec tests | `bdo_codec/` |
+| MIDI import / mappings | MIDI parser tests | `bdo_midi/` |
+| MIDI/editor-to-BDO adaptation | export round-trip tests | `bdo_export/` |
 | Game rules / conversion issues | profile + validation tests | `bdo_profile.py`, `bdo_validation.py`, `data/profiles/` |
 | BDO score inspection / comparison | score snapshot tests | `bdo_score.py`, `scripts/inspect_bdo.py` |
 | Audio A/B research | coverage/alignment tests | `bdo_audio_research.py`, `bdo_experiments.py` |
@@ -35,7 +40,7 @@ Do not promote an inference to “verified” without game evidence.
 ## Important symbols
 
 - `TrackState`: mutable track container.
-- `Note`: immutable five-field note tuple from `midi2bdo`.
+- `Note`: immutable five-field note tuple from `bdo_midi`.
 - `TimelineCanvas`: compact overview and main transport.
 - `PianoRollCanvas`: per-note editing surface.
 - `MidiNoteEditorDialog`: draft lifecycle and track-only playback.
@@ -44,9 +49,9 @@ Do not promote an inference to “verified” without game evidence.
 - `OptimizationRequest` / `OptimizationPreview`: stable optimizer-package API.
 - `discover_host_algorithms`: unified built-in and `.bdoopt` discovery boundary.
 - `BdoRealtimeAudioEngine`: preload, event schedule, voice pool, Qt output.
-- `channel_groups_to_bdo`: canonical model-to-BDO conversion.
-- `build_bdo_binary`: plaintext binary layout.
-- `encrypt_bdo`: v9 prefix and ICE encryption.
+- `decode_score` / `encode_score`: lossless document decode and safe encoding.
+- `channel_groups_to_bdo`: current editor-to-codec adapter in `bdo_export`.
+- `build_bdo_binary` / `encrypt_bdo`: probe-generator helpers delegated to `bdo_codec`.
 - `Localizer`: exact-source widget translation.
 
 ## Common traps
@@ -69,6 +74,16 @@ Do not promote an inference to “verified” without game evidence.
 ```
 
 Verify edited pitch/start/duration/`ntype`, Owner ID round trip, track marker IDs, empty trailing tracks, and 8-byte alignment.
+
+### Lossless codec
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_bdo_codec -v
+.\.venv\Scripts\python.exe scripts\verify_private_bdo_corpus.py <private-music-directory>
+```
+
+The first command verifies artificial structure and safety fixtures. The second
+must point at private local evidence and must never copy its inputs into Git.
 
 ### Audio
 
@@ -93,7 +108,7 @@ Run `tests.test_i18n_catalog`, then create an offscreen `QApplication`, switch `
 ## Public-release checklist
 
 - Add and review a root `LICENSE`.
-- Verify and document the license/commit of `tools/midi-to-bdo`.
+- Confirm source archives and binaries contain no historical `midi2bdo` or `_ice` modules.
 - Remove tracked `out/` scores and any Owner IDs from Git history.
 - Do not publish extracted game audio or PAZ contents.
 - Replace personal defaults with empty/configured paths.

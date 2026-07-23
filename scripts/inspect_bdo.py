@@ -11,12 +11,10 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TOOL_DIR = ROOT / "tools" / "midi-to-bdo"
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(TOOL_DIR))
 
 from bdo_score import read_bdo_score  # noqa: E402
-from midi2bdo import BDO_INSTRUMENT_NAMES  # noqa: E402
+from bdo_midi import BDO_INSTRUMENT_NAMES  # noqa: E402
 
 
 SETTING_NAMES = (

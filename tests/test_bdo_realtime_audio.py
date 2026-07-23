@@ -39,8 +39,19 @@ class RealtimeAudioTests(unittest.TestCase):
         self.engine._playing = True
         rendered = self.engine._render_locked(16)
         self.assertTrue(np.allclose(rendered[:5], 0.0))
-        self.assertGreater(float(rendered[5:, 0].max()), 0.49)
+        self.assertGreater(float(rendered[5, 0]), 0.0)
+        self.assertGreater(float(rendered[5:, 0].max()), float(rendered[5, 0]))
         self.assertEqual(self.engine._frame, 16)
+
+    def test_scheduled_notes_receive_a_short_click_free_attack(self) -> None:
+        sample = _Sample(np.ones((512, 2), dtype=np.float32), 48_000, 512)
+        self.engine._start_event(_Event(0, sample, 1.0, 1.0))
+        voice = self.engine._voices[0]
+        self.assertEqual(voice.fade_in_frames, 144)
+        self.engine._playing = True
+        self.engine._duration_frames = 512
+        rendered = self.engine._render_locked(144)
+        self.assertLess(float(rendered[0, 0]), float(rendered[-1, 0]))
 
     def test_seek_restores_an_active_voice_without_disk_io(self) -> None:
         sample = _Sample(np.ones((128, 2), dtype=np.float32), 48_000, 128)
@@ -62,13 +73,32 @@ class RealtimeAudioTests(unittest.TestCase):
         self.engine._voices = [SimpleNamespace(sample=sample)]
         self.engine._playing = True
         self.engine._duration_frames = 32
-
         self.engine.clear_playback()
 
         self.assertFalse(self.engine._playing)
         self.assertEqual(self.engine._events, [])
         self.assertEqual(self.engine._voices, [])
         self.assertEqual(self.engine._duration_frames, 0)
+        self.engine.clear_playback()
+
+    def test_audition_handoff_crossfades_without_stopping_stream(self) -> None:
+        sample = _Sample(np.ones((4096, 2), dtype=np.float32), 48_000, 4096)
+        self.engine._start_voice(sample, 0.0, 1.0, 0.5)
+        old = self.engine._voices[0]
+        self.engine._playing = True
+        future = Future()
+        future.set_result(([_Event(0, sample, 1.0, 0.5)], {}, 0, [], 4096))
+        self.engine._load_future = future
+
+        result = self.engine.finish_audition_loading()
+
+        self.assertEqual(result["events"], 1)
+        self.assertTrue(self.engine._playing)
+        self.assertEqual(len(self.engine._voices), 2)
+        self.assertGreater(old.release_frames, 0)
+        self.assertGreater(self.engine._voices[-1].fade_in_frames, 0)
+        self.engine._render_locked(old.release_frames + 1)
+        self.assertNotIn(old, self.engine._voices)
 
     def test_interpolation_at_float_sample_tail_does_not_read_past_pcm(self) -> None:
         sample = _Sample(np.ones((4, 2), dtype=np.float32), 48_000, 4)

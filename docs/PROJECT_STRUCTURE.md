@@ -5,10 +5,12 @@
 - `i18n.py` — Chinese, English, Japanese, and Korean UI catalogs.
 - `optimization/` — extensible optimizer package with built-in pipeline and registry.
 - `bdo_midi_optimizer.py` — compatibility facade for the historical optimizer import path.
+- `bdo_midi/` — independent MIDI parsing, note model, instrument maps, and transforms.
+- `bdo_export/` — MIDI/editor adaptation to canonical BDO v9 codec documents.
+- `bdo_codec/` — lossless BDO v9 reader/writer, document model, validation, and ICE.
 - Other `bdo_*.py` files — analysis, articulation, lyrics, preview, and rendering modules.
 - `assets/` — application-owned UI resources and Windows icon sources.
 - `data/mappings/` — runtime BDO/Wwise mappings; manifests are research inputs and are not packaged.
-- `tools/midi-to-bdo/` — vendored BDO v9 serializer and ICE implementation.
 - `scripts/` — command-line conversion and research utilities.
 - `tests/` — automated regression tests.
 - `docs/` — architecture, format knowledge, algorithms, validation notes, and UI references.

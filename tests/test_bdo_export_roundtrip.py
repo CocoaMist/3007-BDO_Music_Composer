@@ -8,11 +8,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools" / "midi-to-bdo"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from inspect_bdo import parse_bdo  # noqa: E402
-from midi2bdo import Note, channel_groups_to_bdo  # noqa: E402
+from bdo_midi import Note  # noqa: E402
+from bdo_export import channel_groups_to_bdo  # noqa: E402
 from pyside_bdo_gui import BDO_ARTICULATIONS  # noqa: E402
 
 
