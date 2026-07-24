@@ -17,18 +17,81 @@ class UiLayoutSmokeTests(unittest.TestCase):
             """
             from PySide6.QtCore import QPoint, Qt
             from PySide6.QtTest import QTest
-            from PySide6.QtWidgets import QApplication, QFrame, QScrollArea, QWidget
-            from pyside_bdo_gui import MidiNoteEditorDialog, MidiToBdoWindow, Note, SettingsDialog, TrackState
+            from PySide6.QtWidgets import QApplication, QFrame, QListWidget, QScrollArea, QStackedWidget, QWidget
+            from pyside_bdo_gui import (
+                GlobalToast, MidiNoteEditorDialog, MidiToBdoWindow, Note,
+                ReferenceAudioController, SettingsDialog, StartupSplash,
+                TrackFxDialog, TrackState,
+            )
 
             app = QApplication([])
             window = MidiToBdoWindow()
             window.resize(window.minimumSize())
             window.show()
             app.processEvents()
+            assert app.property("bdoFixedDarkTheme") is True
+            assert window._system_uses_dark_theme()
+
+            splash = StartupSplash()
+            splash.show()
+            app.processEvents()
+            assert splash.size().width() == 470
+            assert splash.size().height() == 734
+            assert splash.windowFlags() & Qt.WindowStaysOnTopHint
+            assert splash.MINIMUM_VISIBLE_MS >= 1400
+            assert splash.artwork.has_artwork
+            assert not splash.artwork._cover.isNull()
+            assert splash.spinner._timer.isActive()
+            initial_spinner_frame = splash.spinner.frame
+            QTest.qWait(90)
+            app.processEvents()
+            assert splash.spinner.frame != initial_spinner_frame
+            splash.set_status("准备完成")
+            assert splash.status_label.text() == "准备完成"
+            splash.finish(window, minimum_visible_ms=0)
+            QTest.qWait(splash.FADE_OUT_MS // 2)
+            app.processEvents()
+            assert splash.isVisible()
+            assert 0.0 < splash.opacity.opacity() < 1.0
+            QTest.qWait(splash.FADE_OUT_MS)
+            app.processEvents()
+            assert splash.isHidden()
+
+            toast = window.show_toast("测试提示", duration_ms=80)
+            app.processEvents()
+            assert isinstance(toast, GlobalToast)
+            assert toast.isVisible()
+            assert toast.message.text() == "测试提示"
+            assert 0 <= toast.x() <= window.width() - toast.width()
+            QTest.qWait(190)
+            assert toast.opacity.opacity() > 0.9
+            QTest.qWait(380)
+            app.processEvents()
+            assert toast.isHidden()
 
             inspector = window.findChild(QFrame, "Inspector")
             assert inspector is not None
-            assert inspector.height() >= 70
+            assert window.findChild(QFrame, "InfoBar") is None
+            assert window.status_label.isHidden()
+            assert window.inspector_text.isHidden()
+            assert not hasattr(window, "install_check")
+            assert window.track_actions_button.menu() is not None
+            assert len(window.track_actions_button.menu().actions()) == 4
+            assert window.transcription_tools_slot.isHidden()
+            assert not hasattr(window, "delete_track_button")
+            reference = window.reference_audio
+            assert isinstance(reference, ReferenceAudioController)
+            assert reference.parent() is window
+            assert window.timeline.reference_audio is reference
+            assert not reference.audio_path
+            assert not reference.is_playing
+            assert reference.volume_percent == 50
+
+            marnian = TrackState(99, [], 0, False, "marnian", 0x14)
+            fx_dialog = TrackFxDialog(window, marnian)
+            assert not hasattr(fx_dialog, "articulation")
+            assert fx_dialog.marnian_mode is not None
+            fx_dialog.close()
 
             settings = SettingsDialog(window)
             settings.resize(settings.minimumSize())
@@ -39,20 +102,54 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert scroll.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
             assert scroll.widget().minimumSizeHint().width() <= scroll.viewport().width()
             assert scroll.verticalScrollBar().sizeHint().width() == 12
+            nav = settings.findChild(QListWidget, "SettingsNav")
+            pages = settings.findChild(QStackedWidget, "SettingsPages")
+            assert nav is not None and pages is not None
+            assert nav.count() == pages.count() == 3
+            assert [nav.item(index).text() for index in range(nav.count())] == [
+                "通用与导出", "MIDI 与力度", "音源与效果"
+            ]
+            for index in range(nav.count()):
+                nav.setCurrentRow(index)
+                app.processEvents()
+                assert pages.currentIndex() == index
+                active_scroll = pages.currentWidget()
+                assert isinstance(active_scroll, QScrollArea)
+                assert active_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+                assert active_scroll.widget().minimumSizeHint().width() <= active_scroll.viewport().width()
             settings.close()
 
             track = TrackState(1, [Note(60, 96, 0, 400, 0)], 0, False, "lead", 0x0B)
             window.tracks = [track]
             editor = MidiNoteEditorDialog(window, track, 120, 4)
+            assert window.realtime_status_timer.interval() == 16
+            assert editor.playback_timer.interval() == 16
+            assert editor.objectName() == "MidiNoteEditorDialog"
+            assert editor.windowFlags() & Qt.WindowMinimizeButtonHint
+            assert editor.windowFlags() & Qt.WindowMaximizeButtonHint
             editor.resize(editor.minimumSize())
             editor.show()
             app.processEvents()
             toolbar = editor.findChild(QFrame, "EditorToolbar")
             assert toolbar is not None
             assert toolbar.height() >= 38
+            workspace = editor.findChild(QFrame, "EditorWorkspace")
+            assert workspace is not None
+            workspace_left = workspace.mapTo(editor, QPoint(0, 0)).x()
+            assert workspace_left == editor.contentsRect().left()
+            assert workspace_left + workspace.width() == editor.contentsRect().right() + 1
+            assert toolbar.mapTo(editor, QPoint(0, 0)).x() > workspace_left
+            assert toolbar.isAncestorOf(editor.apply_button)
+            assert toolbar.isAncestorOf(editor.cancel_button)
+            assert toolbar.isAncestorOf(editor.confirm_button)
             assert not hasattr(editor, "playback_timeline")
             top_inspector = editor.findChild(QFrame, "NoteInspectorTop")
             assert top_inspector is not None and top_inspector.isVisible()
+            assert top_inspector.isAncestorOf(editor.velocity_toggle)
+            assert editor.canvas.ROW_H == 20
+            assert editor.canvas.KEY_W == 86
+            assert editor.canvas.BLACK_KEY_X == 8
+            assert editor.canvas.BLACK_KEY_W == 48
             inspector_height = top_inspector.height()
             assert editor.note_mode_button.height() == editor.articulation_mode_button.height() == editor.grid_mode_button.height()
             assert editor.note_controls.isVisible()
@@ -60,6 +157,12 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert not editor.grid_controls.isVisible()
             assert editor.pitch_scroll.width() == 12
             assert editor.time_scroll.height() == 12
+            grid_rect = editor.canvas.grid_rect()
+            assert grid_rect.left() == editor.canvas.KEY_W
+            assert grid_rect.right() == editor.canvas.width()
+            assert editor.canvas.note_rect(editor.canvas.notes[0]).left() == editor.canvas.x_at_time(
+                editor.canvas.notes[0].start
+            )
             scroll_corner = editor.findChild(QWidget, "PianoScrollCorner")
             assert scroll_corner is not None and scroll_corner.size().width() == 12
             editor.articulation_mode_button.click()
@@ -76,14 +179,29 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert top_inspector.height() == inspector_height
             assert editor.grid_controls.isVisible()
             assert not editor.note_controls.isVisible()
+            editor_toast = getattr(editor, "_global_toast", None)
+            assert isinstance(editor_toast, GlobalToast)
+            assert "Ctrl+拖动复制" in editor_toast.message.text()
+            assert editor_toast.y() >= workspace.geometry().top()
             editor.note_mode_button.click()
             app.processEvents()
             assert top_inspector.height() == inspector_height
             assert editor.note_controls.isVisible()
             footer = editor.findChild(QFrame, "EditorFooter")
             assert footer is not None
+            assert footer.height() == 31
             assert footer.geometry().bottom() <= editor.contentsRect().bottom()
+            assert footer.isAncestorOf(editor.music_volume_slider)
+            assert footer.isAncestorOf(editor.transcription_mode_toggle)
+            assert editor.music_volume_slider.value() == window.reference_audio.volume_percent == 50
+            editor.music_volume_slider.setValue(35)
+            assert editor.music_volume_value.text() == "35%"
+            assert window.reference_audio.volume_percent == 35
+            editor.transcription_mode_toggle.setChecked(True)
+            assert editor.transcription_mode_enabled
             assert not editor.velocity_lane.isVisible()
+            assert not hasattr(editor, "velocity_curve_button")
+            assert editor.velocity_toggle.property("fluentSymbol") == "curve"
             editor.canvas.selected = {0}
             editor.refresh_fields()
             assert editor.selection_summary.text().startswith("已选择 1 个音符")
@@ -116,11 +234,14 @@ class UiLayoutSmokeTests(unittest.TestCase):
                     )
                     self.ready = False
                     self.loaded_from = None
+                    self.loaded_pitch = None
                     self.committed_from = None
                     self.played = False
+                    self.clear_count = 0
 
                 def load_project_async(self, _tracks, _map, start, *_effects):
                     self.loaded_from = start
+                    self.loaded_pitch = _tracks[0].notes[0].pitch if _tracks and _tracks[0].notes else None
                     self.status.preload_loaded = 0
                     self.status.preload_total = 4
                     self.status.preload_progress = 0.0
@@ -134,6 +255,14 @@ class UiLayoutSmokeTests(unittest.TestCase):
                     self.committed_from = start
                     return {"events": 1, "samples": 1, "cache_bytes": 64, "unverified": []}
 
+                def finish_audition_loading(self):
+                    if not self.ready:
+                        return None
+                    self.committed_from = 0.0
+                    self.played = True
+                    self.status.state = "playing"
+                    return {"events": 1, "samples": 1, "cache_bytes": 64, "unverified": []}
+
                 def play(self):
                     self.played = True
                     self.status.state = "playing"
@@ -142,6 +271,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
                     self.status.state = "stopped"
 
                 def clear_playback(self):
+                    self.clear_count += 1
                     self.cancel_loading()
                     self.status.state = "stopped"
 
@@ -179,6 +309,27 @@ class UiLayoutSmokeTests(unittest.TestCase):
             QTest.mouseClick(editor.canvas, Qt.LeftButton, pos=QPoint(20, round(keyboard_y)))
             assert editor.audition_pending
             assert fake.loaded_from == 0.0
+            assert fake.loaded_pitch == 60
+            editor._stop_note_audition()
+            next_keyboard_y = keyboard_y - editor.canvas.ROW_H * 2
+            cleared_before_gliss = fake.clear_count
+            QTest.mousePress(
+                editor.canvas, Qt.LeftButton,
+                pos=QPoint(20, round(keyboard_y)),
+            )
+            assert editor.canvas.piano_key_dragging
+            assert editor.canvas.piano_pressed_pitch == 60
+            QTest.mouseMove(editor.canvas, pos=QPoint(20, round(next_keyboard_y)))
+            app.processEvents()
+            assert editor.canvas.piano_pressed_pitch == 62
+            assert fake.loaded_pitch == 62
+            assert fake.clear_count == cleared_before_gliss
+            QTest.mouseRelease(
+                editor.canvas, Qt.LeftButton,
+                pos=QPoint(20, round(next_keyboard_y)),
+            )
+            assert not editor.canvas.piano_key_dragging
+            assert editor.canvas.piano_pressed_pitch is None
             editor._stop_note_audition()
             note_rect = editor.canvas.note_rect(editor.canvas.notes[0])
             QTest.mouseClick(

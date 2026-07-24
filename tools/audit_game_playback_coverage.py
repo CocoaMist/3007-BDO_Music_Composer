@@ -12,11 +12,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-sys.path.insert(0, str(ROOT / "tools" / "midi-to-bdo"))
 
 from bdo_sample_renderer import BDO_BANK_BY_ID, sample_map_supported_pitches, sample_map_supports_note  # noqa: E402
 from inspect_bdo import parse_bdo  # noqa: E402
-from midi2bdo import BDO_INSTRUMENT_NAMES  # noqa: E402
+from bdo_midi import BDO_INSTRUMENT_NAMES  # noqa: E402
 from pyside_bdo_gui import BDO_ARTICULATIONS, BDO_SAMPLE_MAP_PATH, game_pitch_range_label, game_supported_pitches  # noqa: E402
 
 

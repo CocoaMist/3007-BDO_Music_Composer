@@ -16,6 +16,7 @@ build/
 dist/
 *.bdosamples
 sample_cache/
+transcription_cache/
 *.spec.bak
 *.zip
 *.bdoopt
@@ -27,3 +28,5 @@ htmlcov/
 # Downloaded/extracted third-party tooling
 _tools/
 tools/.midi-to-bdo-git-backup/
+# Historical local converter inputs/outputs may still exist after v0.3 removal.
+tools/midi-to-bdo/

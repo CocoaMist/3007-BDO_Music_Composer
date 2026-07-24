@@ -12,6 +12,8 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
     def test_v1_project_migrates_without_losing_tracks(self) -> None:
         payload = migrate_project({"version": 1, "tracks": [{"track_id": 2}]})
         self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA)
+        self.assertEqual(payload["tracks"][0]["bdo_track_volume"], 70)
+        self.assertEqual(payload["tracks"][0]["bdo_track_settings"], [0] * 8)
         self.assertEqual(payload["tracks"][0]["track_id"], 2)
         self.assertIn("research", payload)
 

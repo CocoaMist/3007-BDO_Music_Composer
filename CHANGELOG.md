@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 - 2026-07-23
+
+- Replace the vendored MIDI-to-BDO runtime with independent `bdo_midi`,
+  `bdo_export`, and `bdo_codec` packages.
+- Preserve the editor's five-field note model while covering MIDI tempo,
+  program, sustain, performance-control, lyric, and percussion behavior.
+- Keep dual velocities, game track volume, eight-byte settings, articulations,
+  physical 730-note tracks, and empty trailing tracks through canonical export.
+- Remove historical `midi2bdo` and `_ice` imports from the application,
+  developer tools, tests, and Windows packaging.
+
 ## 0.2.0 - 2026-07-15
 
 - Reposition the project as a BDO score research and editing lab.

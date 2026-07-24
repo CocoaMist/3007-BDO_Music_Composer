@@ -4,26 +4,44 @@ from pathlib import Path
 
 
 project_root = Path(SPECPATH).parents[1]
-tool_dir = project_root / "tools" / "midi-to-bdo"
+
+# This spec is intentionally the Standard edition. Transcription is an
+# optional source-install feature for now; excluding the entire inference
+# stack prevents a developer's local environment from silently adding roughly
+# 100 MB of models/native libraries to a normal release.
+standard_edition_excludes = [
+    "basic_pitch",
+    "onnxruntime",
+    "librosa",
+    "mir_eval",
+    "pretty_midi",
+    "resampy",
+    "scipy",
+    "sklearn",
+    "numba",
+    "llvmlite",
+    "soundfile",
+    "soxr",
+]
 
 datas = [
     (str(project_root / "assets" / "ui" / "timeline_background.png"), "assets/ui"),
+    (str(project_root / "assets" / "ui" / "loading_conductor_lineart.png"), "assets/ui"),
     (str(project_root / "assets" / "icons" / "app_icon.png"), "assets/icons"),
     (str(project_root / "data" / "mappings" / "bdo_wwise_midi_map.json"), "data/mappings"),
-    (str(project_root / "data" / "mappings" / "bdo_instrument_sample_map.json"), "data/mappings"),
     (str(project_root / "data" / "profiles" / "bdo_global_v9.json"), "data/profiles"),
 ]
 
 a = Analysis(
     [str(project_root / "main.py")],
-    pathex=[str(project_root), str(tool_dir)],
+    pathex=[str(project_root)],
     binaries=[],
     datas=datas,
-    hiddenimports=["midi2bdo", "_ice", "PySide6.QtMultimedia"],
+    hiddenimports=["PySide6.QtMultimedia"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "unittest"],
+    excludes=["tkinter", "unittest", *standard_edition_excludes],
     noarchive=False,
     optimize=1,
 )

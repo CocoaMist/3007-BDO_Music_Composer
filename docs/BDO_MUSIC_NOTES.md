@@ -1,19 +1,21 @@
 # Black Desert Music Conversion Notes
 
-Status checked: 2026-07-07.
+Status checked: 2026-07-23.
 
 ## Local setup
 
-The converter is vendored at:
+The conversion path is maintained by three project packages:
 
 ```text
-tools/midi-to-bdo
+bdo_midi   -> MIDI parsing, mappings, and note transforms
+bdo_export -> editor/MIDI adaptation
+bdo_codec  -> BDO v9 document model, binary encoding, and ICE
 ```
 
 Install dependencies in the project virtualenv:
 
 ```powershell
-& .\.venv\Scripts\python.exe -m pip install -r tools\midi-to-bdo\requirements.txt
+& .\.venv\Scripts\python.exe -m pip install -r requirements-pyside.txt
 ```
 
 Run the local wrapper:
@@ -49,14 +51,15 @@ first, save it, then pass that file as the owner source:
 & .\.venv\Scripts\python.exe scripts\bdo_convert.py song.mid song_name --owner-file "C:\Users\you\Documents\Black Desert\music\one_note"
 ```
 
-The upstream tool intentionally only extracts owner data from very small
-single-note files.
+Owner data is read through the lossless v9 codec. Use only a score belonging to
+your own account and never commit or attach that file to a release.
 
 ## Important converter behavior
 
 - BDO file format version: 9.
-- BDO melodic pitch range is MIDI note 24 through 108.
-- Out-of-range notes are octave-shifted into range, then clamped.
+- The broad verified BDO melodic range is MIDI note 12 through 119; individual
+  instruments are validated against narrower game-evidence ranges.
+- Out-of-range notes are clamped by the conversion adapter after transposition.
 - MIDI channel 10, zero-based channel 9, is treated as percussion.
 - General MIDI programs are mapped to available BDO instruments.
 - Notes are merged by target BDO instrument.
@@ -83,6 +86,7 @@ single-note files.
 
 ## Integration direction
 
-Treat `tools/midi-to-bdo/midi2bdo.py` as the low-level encoder. Project code
-should generate or clean MIDI, then call `scripts/bdo_convert.py` or import
-`midi_to_bdo()` directly.
+Project code imports `Note` and `parse_midi()` from `bdo_midi`, and imports
+`midi_to_bdo()` or `channel_groups_to_bdo()` from `bdo_export`. Binary format
+work belongs only in `bdo_codec`; no historical vendor module or path fallback
+is supported.

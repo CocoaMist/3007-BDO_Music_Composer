@@ -40,6 +40,28 @@ class TranslationCatalogTests(unittest.TestCase):
             with self.subTest(language=language):
                 self.assertEqual(keys, baseline)
 
+    def test_transcription_candidate_workflow_is_translated(self):
+        required = {
+            "扒谱模式",
+            "开启参考音频分析与候选音符审阅",
+            "分析参考音频",
+            "识别结果仅作为候选，不会自动写入当前轨道",
+            "写入草稿",
+            "清除候选",
+            "扒谱分析未改变任何正式音符",
+            "仅播放参考音频",
+        }
+        for language, catalog in TRANSLATIONS.items():
+            with self.subTest(language=language):
+                self.assertTrue(required.issubset(catalog))
+                self.assertTrue(all(catalog[source] != source for source in required))
+                rendered = catalog[
+                    "已写入草稿 {accepted} 个 · 跳过重复 {duplicates} · 越界 {invalid}"
+                ].format(accepted=3, duplicates=1, invalid=2)
+                self.assertIn("3", rendered)
+                self.assertIn("1", rendered)
+                self.assertIn("2", rendered)
+
     def test_parameterized_text_formats_without_a_localizer(self):
         self.assertEqual(
             trf("已选 {selected} · 共 {total} 音符{position}{warning}",
