@@ -49,9 +49,15 @@ class HomePageTests(unittest.TestCase):
     def test_window_starts_on_home_with_three_collections(self) -> None:
         script = textwrap.dedent(
             """
+            import json
+            import math
+            import struct
             import tempfile
+            import time
+            import wave
             from pathlib import Path
             from unittest.mock import patch
+            from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication
             import pyside_bdo_gui as gui
 
@@ -78,6 +84,73 @@ class HomePageTests(unittest.TestCase):
                     window._show_workspace()
                     assert not window.toolbar_import_btn.isHidden()
                     assert not window.convert_button.isHidden()
+                    source = root / "source.mid"
+                    source.write_bytes(b"MThd")
+                    reference_audio = root / "reference.wav"
+                    with wave.open(str(reference_audio), "wb") as audio:
+                        audio.setnchannels(1)
+                        audio.setsampwidth(2)
+                        audio.setframerate(22050)
+                        samples = [
+                            int(10000 * math.sin(2 * math.pi * 440 * index / 22050))
+                            for index in range(44100)
+                        ]
+                        audio.writeframes(struct.pack("<" + "h" * len(samples), *samples))
+                    window.midi_path = str(source)
+                    window.tracks = [
+                        gui.TrackState(
+                            1, [gui.Note(60, 90, 0.0, 250.0, 0)],
+                            0, False, "lead", 0x0B,
+                        )
+                    ]
+                    window.reference_audio.set_volume_percent(65)
+                    assert window.reference_audio.set_audio_path(reference_audio)
+                    deadline = time.monotonic() + 4.0
+                    while window.reference_audio.waveform_loading and time.monotonic() < deadline:
+                        QTest.qWait(20)
+                        app.processEvents()
+                    window._play_preview()
+                    QTest.qWait(220)
+                    app.processEvents()
+                    assert window.reference_audio.is_playing
+                    assert window.timeline.playhead_ms > 50
+                    window._pause_preview()
+                    paused_at = window.timeline.playhead_ms
+                    QTest.qWait(80)
+                    app.processEvents()
+                    assert not window.reference_audio.is_playing
+                    assert abs(window.timeline.playhead_ms - paused_at) < 30
+                    window._seek_preview(500.0)
+                    assert abs(window.reference_audio.player.position() - 500) < 80
+                    window._stop_preview(reset_playhead=True)
+                    assert window.timeline.playhead_ms == 0.0
+                    project_files = list(autosave_dir.glob("*/project.json"))
+                    assert len(project_files) == 1
+                    payload = json.loads(project_files[0].read_text(encoding="utf-8"))
+                    assert payload["reference_audio_path"] == str(reference_audio.resolve())
+                    assert payload["reference_audio_volume"] == 65
+                    window._create_new_project("Blank Demo")
+                    assert window.source_format == "project"
+                    assert window.midi_path == ""
+                    assert len(window.tracks) == 1
+                    assert window.tracks[0].notes == []
+                    assert window.reference_audio.volume_percent == 50
+                    blank_project = next(autosave_dir.glob("Blank Demo_*/project.json"))
+                    blank_payload = json.loads(blank_project.read_text(encoding="utf-8"))
+                    assert blank_payload["source_format"] == "project"
+                    assert blank_payload["original_midi_path"] == ""
+                    assert blank_payload["source_midi_path"] == ""
+                    window.tracks[0].notes = [gui.Note(64, 88, 125.0, 375.0, 0)]
+                    window.reference_audio.set_volume_percent(35)
+                    window._autosave_project("test blank notes", immediate=True)
+                    window._load_project(blank_project)
+                    assert window.source_format == "project"
+                    assert window.tracks[0].notes == [gui.Note(64, 88, 125.0, 375.0, 0)]
+                    assert window.reference_audio.volume_percent == 35
+                    window.owner_id = 123
+                    params = window._build_params()
+                    assert params["midi_path"] == ""
+                    assert params["direct_tracks"] == window.tracks
                     window.close()
                     app.processEvents()
             app.quit()

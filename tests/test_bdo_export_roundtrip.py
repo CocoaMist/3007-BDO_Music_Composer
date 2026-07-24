@@ -13,10 +13,24 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from inspect_bdo import parse_bdo  # noqa: E402
 from bdo_midi import Note  # noqa: E402
 from bdo_export import channel_groups_to_bdo  # noqa: E402
-from pyside_bdo_gui import BDO_ARTICULATIONS  # noqa: E402
+from pyside_bdo_gui import BDO_ARTICULATIONS, copy_export_to_game  # noqa: E402
 
 
 class BdoExportRoundTripTests(unittest.TestCase):
+    def test_export_is_copied_to_game_folder_and_same_folder_is_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "out" / "score"
+            output.parent.mkdir()
+            output.write_bytes(b"score-data")
+            game_dir = root / "game" / "music"
+
+            installed = copy_export_to_game(output, game_dir)
+
+            self.assertEqual(installed, game_dir / "score")
+            self.assertEqual(installed.read_bytes(), b"score-data")
+            self.assertEqual(copy_export_to_game(installed, game_dir), installed)
+
     def test_canonical_bdo_drums_are_not_mapped_as_gm_a_second_time(self) -> None:
         source = [Note(48, 90, 0.0, 100.0, 99), Note(64, 90, 200.0, 100.0, 99)]
         data, _summary = channel_groups_to_bdo(

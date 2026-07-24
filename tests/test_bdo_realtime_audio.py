@@ -6,12 +6,14 @@ import tempfile
 from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 from PySide6.QtCore import QCoreApplication
 
 from bdo_realtime_audio import (
     BdoRealtimeAudioEngine,
+    _AudioOutputWorker,
     _Event,
     _Sample,
     articulation_preview_envelope,
@@ -74,6 +76,29 @@ class RealtimeAudioTests(unittest.TestCase):
         self.engine._playing = True
         self.engine._duration_frames = 32
         self.engine.clear_playback()
+
+    def test_partial_device_write_is_retained_before_next_render(self) -> None:
+        class PartialOutput:
+            def __init__(self) -> None:
+                self.accepted = bytearray()
+
+            def write(self, payload: bytes) -> int:
+                count = min(3, len(payload))
+                self.accepted.extend(payload[:count])
+                return count
+
+        worker = _AudioOutputWorker(self.engine)
+        output = PartialOutput()
+        worker.output = output
+        worker.pending_pcm = b"abcdefgh"
+
+        self.assertFalse(worker._write_pending())
+        self.assertEqual(worker.pending_pcm, b"defgh")
+        self.assertFalse(worker._write_pending())
+        self.assertEqual(worker.pending_pcm, b"gh")
+        self.assertTrue(worker._write_pending())
+        self.assertEqual(worker.pending_pcm, b"")
+        self.assertEqual(bytes(output.accepted), b"abcdefgh")
 
         self.assertFalse(self.engine._playing)
         self.assertEqual(self.engine._events, [])
@@ -164,6 +189,42 @@ class RealtimeAudioTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             self.assertEqual(len(cache), 1)
             self.assertEqual(len(events), 2)
+
+    def test_project_preload_memoizes_repeated_zone_lookups(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            wav_path = root / "sample.wav"
+            wav_path.touch()
+            map_path = root / "map.json"
+            bank = "midi_instrument_10_proguitar"
+            map_path.write_text(json.dumps({"banks": {bank: [{
+                "wav_exists": True, "wav_path": str(wav_path), "source_id": 7,
+                "key_min": 0, "key_max": 127, "velocity_min": 0,
+                "velocity_max": 127, "root_note": 60,
+            }]}}), encoding="utf-8")
+            sample = _Sample(np.ones((8, 2), dtype=np.float32), 48_000, 8)
+            original_decode = self.engine._decode_wav
+            self.engine._decode_wav = lambda _path: sample
+            track = SimpleNamespace(
+                bdo_instrument_id=0x0A, marnian_synth_mode="basic", volume_scale=1.0,
+                articulation_type=None,
+                notes=[
+                    SimpleNamespace(pitch=60, vel=90, start=index * 10, dur=100, ntype=0)
+                    for index in range(500)
+                ],
+            )
+            try:
+                with patch(
+                    "bdo_realtime_audio.select_wwise_zone",
+                    wraps=select_wwise_zone,
+                ) as select_mock:
+                    events, _cache, _bytes, _unverified, _duration = self.engine._prepare_project(
+                        [track], map_path, 0, 0, 0, None, 1024 * 1024
+                    )
+            finally:
+                self.engine._decode_wav = original_decode
+            self.assertEqual(len(events), 500)
+            self.assertEqual(select_mock.call_count, 1)
 
     def test_preload_progress_is_reported(self) -> None:
         self.engine._preload_total = 8

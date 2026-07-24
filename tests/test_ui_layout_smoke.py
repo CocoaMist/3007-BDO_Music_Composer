@@ -20,7 +20,8 @@ class UiLayoutSmokeTests(unittest.TestCase):
             from PySide6.QtWidgets import QApplication, QFrame, QListWidget, QScrollArea, QStackedWidget, QWidget
             from pyside_bdo_gui import (
                 GlobalToast, MidiNoteEditorDialog, MidiToBdoWindow, Note,
-                SettingsDialog, StartupSplash, TrackState,
+                ReferenceAudioController, SettingsDialog, StartupSplash,
+                TrackFxDialog, TrackState,
             )
 
             app = QApplication([])
@@ -36,6 +37,8 @@ class UiLayoutSmokeTests(unittest.TestCase):
             app.processEvents()
             assert splash.size().width() == 470
             assert splash.size().height() == 734
+            assert splash.windowFlags() & Qt.WindowStaysOnTopHint
+            assert splash.MINIMUM_VISIBLE_MS >= 1400
             assert splash.artwork.has_artwork
             assert not splash.artwork._cover.isNull()
             assert splash.spinner._timer.isActive()
@@ -46,7 +49,11 @@ class UiLayoutSmokeTests(unittest.TestCase):
             splash.set_status("准备完成")
             assert splash.status_label.text() == "准备完成"
             splash.finish(window, minimum_visible_ms=0)
-            QTest.qWait(20)
+            QTest.qWait(splash.FADE_OUT_MS // 2)
+            app.processEvents()
+            assert splash.isVisible()
+            assert 0.0 < splash.opacity.opacity() < 1.0
+            QTest.qWait(splash.FADE_OUT_MS)
             app.processEvents()
             assert splash.isHidden()
 
@@ -64,7 +71,27 @@ class UiLayoutSmokeTests(unittest.TestCase):
 
             inspector = window.findChild(QFrame, "Inspector")
             assert inspector is not None
-            assert inspector.height() >= 70
+            assert window.findChild(QFrame, "InfoBar") is None
+            assert window.status_label.isHidden()
+            assert window.inspector_text.isHidden()
+            assert not hasattr(window, "install_check")
+            assert window.track_actions_button.menu() is not None
+            assert len(window.track_actions_button.menu().actions()) == 4
+            assert window.transcription_tools_slot.isHidden()
+            assert not hasattr(window, "delete_track_button")
+            reference = window.reference_audio
+            assert isinstance(reference, ReferenceAudioController)
+            assert reference.parent() is window
+            assert window.timeline.reference_audio is reference
+            assert not reference.audio_path
+            assert not reference.is_playing
+            assert reference.volume_percent == 50
+
+            marnian = TrackState(99, [], 0, False, "marnian", 0x14)
+            fx_dialog = TrackFxDialog(window, marnian)
+            assert not hasattr(fx_dialog, "articulation")
+            assert fx_dialog.marnian_mode is not None
+            fx_dialog.close()
 
             settings = SettingsDialog(window)
             settings.resize(settings.minimumSize())
@@ -164,7 +191,17 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert footer is not None
             assert footer.height() == 31
             assert footer.geometry().bottom() <= editor.contentsRect().bottom()
+            assert footer.isAncestorOf(editor.music_volume_slider)
+            assert footer.isAncestorOf(editor.transcription_mode_toggle)
+            assert editor.music_volume_slider.value() == window.reference_audio.volume_percent == 50
+            editor.music_volume_slider.setValue(35)
+            assert editor.music_volume_value.text() == "35%"
+            assert window.reference_audio.volume_percent == 35
+            editor.transcription_mode_toggle.setChecked(True)
+            assert editor.transcription_mode_enabled
             assert not editor.velocity_lane.isVisible()
+            assert not hasattr(editor, "velocity_curve_button")
+            assert editor.velocity_toggle.property("fluentSymbol") == "curve"
             editor.canvas.selected = {0}
             editor.refresh_fields()
             assert editor.selection_summary.text().startswith("已选择 1 个音符")

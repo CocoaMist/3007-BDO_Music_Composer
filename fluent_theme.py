@@ -91,6 +91,7 @@ class FluentSymbol(str, Enum):
     STOP = "stop"
     ADD_TRACK = "add_track"
     DELETE = "delete"
+    CURVE = "curve"
 
 
 def _draw_fluent_symbol(symbol: FluentSymbol, color: str, size: int = 16) -> QPixmap:
@@ -180,6 +181,22 @@ def _draw_fluent_symbol(symbol: FluentSymbol, color: str, size: int = 16) -> QPi
         rect(4, 4.5, 8, 9)
         line(3, 4.5, 13, 4.5); line(6, 2.5, 10, 2.5)
         line(6.5, 7, 6.5, 11); line(9.5, 7, 9.5, 11)
+    elif symbol == FluentSymbol.CURVE:
+        painter.drawPolyline([
+            _point(2.0, 11.5, scale),
+            _point(5.0, 8.5, scale),
+            _point(8.0, 9.5, scale),
+            _point(11.0, 4.5, scale),
+            _point(14.0, 6.0, scale),
+        ])
+        painter.setBrush(QColor(color))
+        for x, y in ((2.0, 11.5), (5.0, 8.5), (8.0, 9.5), (11.0, 4.5), (14.0, 6.0)):
+            painter.drawEllipse(
+                round((x - 0.9) * scale),
+                round((y - 0.9) * scale),
+                round(1.8 * scale),
+                round(1.8 * scale),
+            )
 
     painter.end()
     return pixmap

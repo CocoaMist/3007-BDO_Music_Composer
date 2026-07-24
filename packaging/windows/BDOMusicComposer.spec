@@ -5,6 +5,25 @@ from pathlib import Path
 
 project_root = Path(SPECPATH).parents[1]
 
+# This spec is intentionally the Standard edition. Transcription is an
+# optional source-install feature for now; excluding the entire inference
+# stack prevents a developer's local environment from silently adding roughly
+# 100 MB of models/native libraries to a normal release.
+standard_edition_excludes = [
+    "basic_pitch",
+    "onnxruntime",
+    "librosa",
+    "mir_eval",
+    "pretty_midi",
+    "resampy",
+    "scipy",
+    "sklearn",
+    "numba",
+    "llvmlite",
+    "soundfile",
+    "soxr",
+]
+
 datas = [
     (str(project_root / "assets" / "ui" / "timeline_background.png"), "assets/ui"),
     (str(project_root / "assets" / "ui" / "loading_conductor_lineart.png"), "assets/ui"),
@@ -22,7 +41,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "unittest"],
+    excludes=["tkinter", "unittest", *standard_edition_excludes],
     noarchive=False,
     optimize=1,
 )

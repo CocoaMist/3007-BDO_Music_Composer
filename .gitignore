@@ -16,6 +16,7 @@ build/
 dist/
 *.bdosamples
 sample_cache/
+transcription_cache/
 *.spec.bak
 *.zip
 *.bdoopt

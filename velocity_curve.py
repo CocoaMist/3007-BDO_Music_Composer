@@ -9,6 +9,58 @@ from typing import Any
 VELOCITY_CURVE_SHAPES = frozenset({"linear", "smooth", "ease_in", "ease_out"})
 
 
+def velocity_neighbor_weight(distance_ms: float, radius_ms: float) -> float:
+    """Smooth compact falloff for a dragged curve point and its neighbours."""
+    radius = max(0.001, float(radius_ms))
+    normalized = abs(float(distance_ms)) / radius
+    if normalized >= 1.0:
+        return 0.0
+    # Quartic falloff: full influence at the point, soft near the edge, and
+    # exactly zero outside the selected time neighbourhood.
+    return (1.0 - normalized * normalized) ** 2
+
+
+def velocity_time_points(
+    notes: Sequence[Any],
+    indices: Iterable[int] | None = None,
+) -> list[tuple[float, tuple[int, ...], float]]:
+    """Group simultaneous notes into one editable curve point per onset."""
+    chosen = (
+        range(len(notes))
+        if indices is None
+        else sorted({int(index) for index in indices if 0 <= int(index) < len(notes)})
+    )
+    groups: dict[float, list[int]] = {}
+    for index in chosen:
+        onset = round(float(notes[index].start), 3)
+        groups.setdefault(onset, []).append(index)
+    return [
+        (
+            onset,
+            tuple(point_indices),
+            sum(float(notes[index].vel) for index in point_indices) / len(point_indices),
+        )
+        for onset, point_indices in sorted(groups.items())
+    ]
+
+
+def apply_weighted_velocity_delta(
+    notes: Sequence[Any],
+    center_ms: float,
+    delta: float,
+    radius_ms: float,
+) -> list[Any]:
+    """Move one time point while smoothly influencing neighbouring points."""
+    result = list(notes)
+    for index, note in enumerate(notes):
+        weight = velocity_neighbor_weight(float(note.start) - center_ms, radius_ms)
+        if weight <= 0.0:
+            continue
+        velocity = max(1, min(127, round(float(note.vel) + float(delta) * weight)))
+        result[index] = note._replace(vel=velocity)
+    return result
+
+
 def velocity_curve_progress(position: float, shape: str = "linear") -> float:
     """Map normalized time to a stable 0..1 curve position."""
     position = max(0.0, min(1.0, float(position)))

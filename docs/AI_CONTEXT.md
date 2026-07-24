@@ -16,6 +16,7 @@ This document helps an AI agent find the correct subsystem without scanning ever
 | Harmony/role analysis | theory context | `bdo_music_theory.py` |
 | Lyrics | lyric expression mode | `bdo_lyrics.py` |
 | Preview/audio timing | engine and tests | `bdo_realtime_audio.py` |
+| Reference transcription/candidate notes | candidate boundary + editor lifecycle | `bdo_transcription.py`, `pyside_bdo_gui.py` |
 | Timeline track meters | `AudioStatus.track_levels`, `TimelineCanvas.set_track_levels` | `bdo_realtime_audio.py`, `pyside_bdo_gui.py` |
 | Sample selection/offline render | renderer and mapping | `bdo_sample_renderer.py` |
 | BDO v9 codec/binary format | `docs/BDO_V9_CODEC.md`, codec tests | `bdo_codec/` |
@@ -49,6 +50,11 @@ Do not promote an inference to “verified” without game evidence.
 - `OptimizationRequest` / `OptimizationPreview`: stable optimizer-package API.
 - `discover_host_algorithms`: unified built-in and `.bdoopt` discovery boundary.
 - `BdoRealtimeAudioEngine`: preload, event schedule, voice pool, Qt output.
+- `TranscriptionCandidate` / `TranscriptionResult`: immutable,
+  non-authoritative Basic Pitch output that stays outside `TrackState` until
+  explicit acceptance.
+- `TranscriptionAnalysisWorker`: cancellable Qt bridge around the optional,
+  Qt-free transcription service.
 - `decode_score` / `encode_score`: lossless document decode and safe encoding.
 - `channel_groups_to_bdo`: current editor-to-codec adapter in `bdo_export`.
 - `build_bdo_binary` / `encrypt_bdo`: probe-generator helpers delegated to `bdo_codec`.
@@ -59,6 +65,12 @@ Do not promote an inference to “verified” without game evidence.
 - Re-reading the source MIDI during export discards manual editor changes.
 - `duration_scale` must be folded into note durations before serialization.
 - A BDO drum track is not a normal melodic track; avoid double GM remapping.
+- Never append transcription output directly to `TrackState`. Keep candidates in
+  the editor sidecar, then use the explicit Write to Draft and Apply/OK gates.
+- Basic Pitch MIDI pitches are not BDO drum-piece mappings; keep automatic
+  transcription disabled for percussion tracks.
+- Stop reference and game-sample playback before model inference. Optional model
+  loading and cache I/O must never enter the real-time audio callback.
 - `Path("")` resolves to the current directory; explicitly test empty configured paths.
 - `sys._MEIPASS` is read-only/temporary from the app's perspective; do not write exports there.
 - Qt widgets can store non-ASCII dynamic properties incorrectly on some Windows locale paths; localization keeps source strings in Python `WeakKeyDictionary` storage.
@@ -92,6 +104,17 @@ must point at private local evidence and must never copy its inputs into Git.
 ```
 
 Look for exact event frames, seek voice restoration, bounded voices, preload deduplication, and limiter stability.
+
+### Transcription
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_bdo_transcription -v
+```
+
+Check candidate conversion, cache invalidation and fail-closed cache loading
+without requiring the optional model packages. UI smoke tests must also verify
+that analysis alone leaves notes unchanged, one explicit insertion is undoable,
+and repeated insertion does not duplicate accepted candidates.
 
 ### Optimizer
 

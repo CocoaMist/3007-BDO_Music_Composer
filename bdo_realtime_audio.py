@@ -26,6 +26,9 @@ from PySide6.QtMultimedia import QAudio, QAudioFormat, QAudioSink, QMediaDevices
 
 PLAYBACK_ATTACK_MS = 3.0
 AUDITION_CROSSFADE_MS = 18.0
+AUDIO_BUFFER_MS = 96
+AUDIO_REFILL_TARGET_RATIO = 0.75
+AUDIO_RENDER_BLOCK_FRAMES = 2048
 
 
 class AudioEngineError(RuntimeError):
@@ -295,6 +298,7 @@ class _AudioOutputWorker(QObject):
         self.output: QIODevice | None = None
         self.timer: QTimer | None = None
         self.target_frames = 0
+        self.pending_pcm = b""
 
     @Slot()
     def open(self) -> None:
@@ -316,15 +320,22 @@ class _AudioOutputWorker(QObject):
             # Keep enough headroom for Qt timer jitter without making piano-key
             # audition feel detached from the pointer. Voice hand-off happens
             # inside the mixer, so this queue is never reset for each key.
-            self.sink.setBufferSize(max(self.engine._frame_bytes * 1024, self.engine._sample_rate * self.engine._frame_bytes * 64 // 1000))
+            self.sink.setBufferSize(max(
+                self.engine._frame_bytes * AUDIO_RENDER_BLOCK_FRAMES,
+                self.engine._sample_rate * self.engine._frame_bytes * AUDIO_BUFFER_MS // 1000,
+            ))
             self.sink.stateChanged.connect(self._on_sink_state_changed)
             self.output = self.sink.start()
             if self.output is None:
                 raise AudioEngineError("无法打开系统音频输出")
             self.timer = QTimer(self)
             self.engine._set_buffer_frames(self.sink.bufferSize() // self.engine._frame_bytes)
-            self.target_frames = max(1024, self.engine._buffer_frames * 7 // 10)
-            self.timer.setInterval(3)
+            self.target_frames = max(
+                AUDIO_RENDER_BLOCK_FRAMES,
+                round(self.engine._buffer_frames * AUDIO_REFILL_TARGET_RATIO),
+            )
+            self.timer.setTimerType(Qt.TimerType.PreciseTimer)
+            self.timer.setInterval(2)
             self.timer.timeout.connect(self.pump)
             self.timer.start()
         except Exception as exc:
@@ -336,9 +347,23 @@ class _AudioOutputWorker(QObject):
     def close(self) -> None:
         if self.timer:
             self.timer.stop()
+        self.pending_pcm = b""
         if self.sink:
             self.sink.stop()
         self.thread().quit()
+
+    def _write_pending(self) -> bool:
+        """Flush rendered PCM completely before advancing the mixer timeline."""
+        if not self.pending_pcm or self.output is None:
+            return not self.pending_pcm
+        written = int(self.output.write(self.pending_pcm))
+        if written < 0:
+            self.engine.last_error = "系统音频输出写入失败"
+            self.engine._playing = False
+            return False
+        if written:
+            self.pending_pcm = self.pending_pcm[written:]
+        return not self.pending_pcm
 
     @Slot()
     def pump(self) -> None:
@@ -348,13 +373,20 @@ class _AudioOutputWorker(QObject):
             self.engine.last_error = f"系统音频输出已停止：{self.sink.error()}"
             self.engine._playing = False
             return
+        if not self._write_pending():
+            return
         free_frames = max(0, self.sink.bytesFree()) // self.engine._frame_bytes
         queued_frames = max(0, self.engine._buffer_frames - free_frames)
         # Refill in larger blocks after a scheduling hiccup, while retaining a
         # bounded render call so a dense project cannot monopolise the thread.
-        frames = min(1024, max(0, self.target_frames - queued_frames), free_frames)
+        frames = min(
+            AUDIO_RENDER_BLOCK_FRAMES,
+            max(0, self.target_frames - queued_frames),
+            free_frames,
+        )
         if frames:
-            self.output.write(self.engine._read_pcm(frames * self.engine._frame_bytes))
+            self.pending_pcm = self.engine._read_pcm(frames * self.engine._frame_bytes)
+            self._write_pending()
 
     @Slot(QAudio.State)
     def _on_sink_state_changed(self, state: QAudio.State) -> None:
@@ -395,7 +427,7 @@ class BdoRealtimeAudioEngine(QObject):
         # float conversion run in a bounded pool so a cold cache no longer
         # stalls on hundreds of serial disk reads.
         self._loader = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bdo-project-loader")
-        self._decode_workers = min(4, max(2, (os.cpu_count() or 2) // 2))
+        self._decode_workers = min(8, max(4, (os.cpu_count() or 4) // 2))
         self._decode_pool = ThreadPoolExecutor(max_workers=self._decode_workers, thread_name_prefix="bdo-wav-cache")
         self._load_future: Future[tuple[list[_Event], dict[tuple[str, int], _Sample], int, list[str], int]] | None = None
         self._format: QAudioFormat | None = None
@@ -632,6 +664,7 @@ class BdoRealtimeAudioEngine(QObject):
         # by Wwise source ID and happens concurrently below.
         resolved: list[tuple[Any, int, int, int, str, dict, tuple[str, int], float, int, int]] = []
         sources: dict[tuple[str, int], Path] = {}
+        zone_cache: dict[tuple[int, str, int, int, int], tuple[str, dict] | None] = {}
         for track_slot, track in enumerate(tracks):
             track_id = int(getattr(track, "track_id", track_slot))
             instrument_id = int(track.bdo_instrument_id)
@@ -658,9 +691,12 @@ class BdoRealtimeAudioEngine(QObject):
                     unverified.append(
                         f"0x{instrument_id:02x}/type {ntype}: 已启用近似奏法 DSP；待游戏 A/B"
                     )
-                selected = select_wwise_zone(
-                    banks, instrument_id, int(note.pitch), velocity, ntype, synth_mode
-                )
+                zone_key = (instrument_id, synth_mode, int(note.pitch), velocity, ntype)
+                if zone_key not in zone_cache:
+                    zone_cache[zone_key] = select_wwise_zone(
+                        banks, instrument_id, int(note.pitch), velocity, ntype, synth_mode
+                    )
+                selected = zone_cache[zone_key]
                 if not selected:
                     unverified.append(f"0x{instrument_id:02x}: pitch {pitch} velocity {velocity} 无 Wwise zone")
                     continue

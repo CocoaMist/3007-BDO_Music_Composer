@@ -16,3 +16,12 @@ public API, observed format behavior, local test vectors, and game-save
 evidence.
 
 Black Desert Online names and format references are used for interoperability. This repository is unofficial, is not affiliated with Pearl Abyss, and must not include proprietary game assets.
+
+Source installations may optionally enable local audio transcription through
+the upstream Basic Pitch package, ONNX Runtime, librosa, and their transitive
+dependencies listed by `requirements-transcription.txt` and
+`scripts/install_transcription.ps1`. These packages retain their own upstream
+terms and notices. Before distributing any executable that includes the optional
+transcription stack, collect and review the exact dependency licenses and notices
+for that build; this notice does not assert that such a bundled build has already
+been produced or cleared for release.

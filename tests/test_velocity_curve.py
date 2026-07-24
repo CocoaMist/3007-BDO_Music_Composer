@@ -3,7 +3,13 @@ from __future__ import annotations
 import unittest
 from collections import namedtuple
 
-from velocity_curve import apply_velocity_curve, velocity_curve_progress
+from velocity_curve import (
+    apply_velocity_curve,
+    apply_weighted_velocity_delta,
+    velocity_curve_progress,
+    velocity_neighbor_weight,
+    velocity_time_points,
+)
 
 
 Note = namedtuple("Note", "pitch vel start dur ntype", defaults=(0,))
@@ -40,6 +46,33 @@ class VelocityCurveTests(unittest.TestCase):
     def test_unknown_shape_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             velocity_curve_progress(0.5, "broken")
+
+    def test_time_points_group_chords_into_one_curve_point(self) -> None:
+        notes = [
+            Note(60, 60, 0.0, 100.0, 0),
+            Note(64, 100, 0.0, 100.0, 0),
+            Note(67, 80, 500.0, 100.0, 0),
+        ]
+        points = velocity_time_points(notes)
+        self.assertEqual(points, [
+            (0.0, (0, 1), 80.0),
+            (500.0, (2,), 80.0),
+        ])
+
+    def test_dragged_point_uses_smooth_distance_weight(self) -> None:
+        notes = [
+            Note(60, 60, 0.0, 100.0, 0),
+            Note(62, 60, 250.0, 100.0, 0),
+            Note(64, 60, 500.0, 100.0, 0),
+            Note(65, 60, 1000.0, 100.0, 0),
+        ]
+        changed = apply_weighted_velocity_delta(notes, 0.0, 40.0, 1000.0)
+        self.assertEqual(changed[0].vel, 100)
+        self.assertGreater(changed[1].vel, changed[2].vel)
+        self.assertGreater(changed[2].vel, changed[3].vel)
+        self.assertEqual(changed[3].vel, 60)
+        self.assertEqual(velocity_neighbor_weight(0.0, 1000.0), 1.0)
+        self.assertEqual(velocity_neighbor_weight(1000.0, 1000.0), 0.0)
 
 
 if __name__ == "__main__":
