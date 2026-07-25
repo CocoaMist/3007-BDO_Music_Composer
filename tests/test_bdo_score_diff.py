@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from bdo_score import compare_scores, snapshot_from_bytes
+from bdo_score import compare_scores, read_bdo_score, snapshot_from_bytes
 from pyside_bdo_gui import Note, channel_groups_to_bdo
 
 
@@ -27,6 +29,25 @@ class BdoScoreDiffTests(unittest.TestCase):
         self.assertEqual(snapshot.tracks[0].notes[0].pitch, 60)
         self.assertEqual(snapshot.owner_id, 12345)
         self.assertGreaterEqual(snapshot.trailing_zero_bytes, 0)
+
+    def test_large_game_score_can_supply_owner_identity(self) -> None:
+        notes = [Note(60 + index % 12, 90, index * 100.0, 80.0, 0) for index in range(80)]
+        data, _summary = channel_groups_to_bdo(
+            120,
+            4,
+            [(notes, 0, False)],
+            char_name="PrivateName",
+            owner_id=12345,
+            instrument_map={0: 11},
+            preserve_note_types=True,
+        )
+        self.assertGreater(len(data), 1024)
+        with TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "game-score"
+            path.write_bytes(data)
+            snapshot = read_bdo_score(path, allow_trailing_data=True)
+        self.assertEqual(snapshot.owner_id, 12345)
+        self.assertEqual(snapshot.character_name_1, "PrivateName")
 
     def test_diff_ignores_private_fields_by_default_and_detects_notes(self) -> None:
         baseline = snapshot_from_bytes(score(60))

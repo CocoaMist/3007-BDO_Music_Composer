@@ -10,10 +10,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TOOL_DIR = ROOT / "tools" / "midi-to-bdo"
-sys.path.insert(0, str(TOOL_DIR))
+sys.path.insert(0, str(ROOT))
 
-from midi2bdo import BDO_INSTRUMENT_NAMES, Note, build_bdo_binary, encrypt_bdo, extract_owner_id  # noqa: E402
+from bdo_midi import BDO_INSTRUMENT_NAMES, Note  # noqa: E402
+from bdo_export import build_bdo_binary, encrypt_bdo, extract_owner_id  # noqa: E402
 
 
 BPM = 120

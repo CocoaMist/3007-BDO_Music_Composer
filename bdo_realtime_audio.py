@@ -24,6 +24,13 @@ from PySide6.QtCore import QIODevice, QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtMultimedia import QAudio, QAudioFormat, QAudioSink, QMediaDevices
 
 
+PLAYBACK_ATTACK_MS = 3.0
+AUDITION_CROSSFADE_MS = 18.0
+AUDIO_BUFFER_MS = 96
+AUDIO_REFILL_TARGET_RATIO = 0.75
+AUDIO_RENDER_BLOCK_FRAMES = 2048
+
+
 class AudioEngineError(RuntimeError):
     pass
 
@@ -44,6 +51,7 @@ class AudioStatus:
     render_p95_ms: float = 0.0
     render_max_ms: float = 0.0
     unverified: list[str] = field(default_factory=list)
+    track_levels: dict[int, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -62,6 +70,8 @@ class _Event:
     duration_frames: int = 0
     instrument_id: int = 0
     ntype: int = 0
+    track_slot: int = -1
+    track_id: int = -1
 
 
 @dataclass
@@ -74,6 +84,10 @@ class _Voice:
     instrument_id: int = 0
     ntype: int = 0
     age_frames: int = 0
+    track_slot: int = -1
+    fade_in_frames: int = 0
+    release_start_age: int = -1
+    release_frames: int = 0
 
 
 BANK_BY_ID = {
@@ -284,6 +298,7 @@ class _AudioOutputWorker(QObject):
         self.output: QIODevice | None = None
         self.timer: QTimer | None = None
         self.target_frames = 0
+        self.pending_pcm = b""
 
     @Slot()
     def open(self) -> None:
@@ -302,18 +317,25 @@ class _AudioOutputWorker(QObject):
                 raise AudioEngineError("音频设备不支持双声道 Int16/Float PCM")
             self.engine._set_output_format(audio_format)
             self.sink = QAudioSink(device, audio_format, self)
-            # A slightly deeper device queue absorbs Qt timer jitter and dense
-            # chord bursts.  Decoding/mixing is still real time; only the
-            # hardware queue grows from ~60 ms to ~120 ms.
-            self.sink.setBufferSize(max(self.engine._frame_bytes * 1024, self.engine._sample_rate * self.engine._frame_bytes * 120 // 1000))
+            # Keep enough headroom for Qt timer jitter without making piano-key
+            # audition feel detached from the pointer. Voice hand-off happens
+            # inside the mixer, so this queue is never reset for each key.
+            self.sink.setBufferSize(max(
+                self.engine._frame_bytes * AUDIO_RENDER_BLOCK_FRAMES,
+                self.engine._sample_rate * self.engine._frame_bytes * AUDIO_BUFFER_MS // 1000,
+            ))
             self.sink.stateChanged.connect(self._on_sink_state_changed)
             self.output = self.sink.start()
             if self.output is None:
                 raise AudioEngineError("无法打开系统音频输出")
             self.timer = QTimer(self)
             self.engine._set_buffer_frames(self.sink.bufferSize() // self.engine._frame_bytes)
-            self.target_frames = max(1024, self.engine._buffer_frames * 7 // 8)
-            self.timer.setInterval(3)
+            self.target_frames = max(
+                AUDIO_RENDER_BLOCK_FRAMES,
+                round(self.engine._buffer_frames * AUDIO_REFILL_TARGET_RATIO),
+            )
+            self.timer.setTimerType(Qt.TimerType.PreciseTimer)
+            self.timer.setInterval(2)
             self.timer.timeout.connect(self.pump)
             self.timer.start()
         except Exception as exc:
@@ -325,9 +347,23 @@ class _AudioOutputWorker(QObject):
     def close(self) -> None:
         if self.timer:
             self.timer.stop()
+        self.pending_pcm = b""
         if self.sink:
             self.sink.stop()
         self.thread().quit()
+
+    def _write_pending(self) -> bool:
+        """Flush rendered PCM completely before advancing the mixer timeline."""
+        if not self.pending_pcm or self.output is None:
+            return not self.pending_pcm
+        written = int(self.output.write(self.pending_pcm))
+        if written < 0:
+            self.engine.last_error = "系统音频输出写入失败"
+            self.engine._playing = False
+            return False
+        if written:
+            self.pending_pcm = self.pending_pcm[written:]
+        return not self.pending_pcm
 
     @Slot()
     def pump(self) -> None:
@@ -337,13 +373,20 @@ class _AudioOutputWorker(QObject):
             self.engine.last_error = f"系统音频输出已停止：{self.sink.error()}"
             self.engine._playing = False
             return
+        if not self._write_pending():
+            return
         free_frames = max(0, self.sink.bytesFree()) // self.engine._frame_bytes
         queued_frames = max(0, self.engine._buffer_frames - free_frames)
         # Refill in larger blocks after a scheduling hiccup, while retaining a
         # bounded render call so a dense project cannot monopolise the thread.
-        frames = min(1024, max(0, self.target_frames - queued_frames), free_frames)
+        frames = min(
+            AUDIO_RENDER_BLOCK_FRAMES,
+            max(0, self.target_frames - queued_frames),
+            free_frames,
+        )
         if frames:
-            self.output.write(self.engine._read_pcm(frames * self.engine._frame_bytes))
+            self.pending_pcm = self.engine._read_pcm(frames * self.engine._frame_bytes)
+            self._write_pending()
 
     @Slot(QAudio.State)
     def _on_sink_state_changed(self, state: QAudio.State) -> None:
@@ -384,7 +427,7 @@ class BdoRealtimeAudioEngine(QObject):
         # float conversion run in a bounded pool so a cold cache no longer
         # stalls on hundreds of serial disk reads.
         self._loader = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bdo-project-loader")
-        self._decode_workers = min(4, max(2, (os.cpu_count() or 2) // 2))
+        self._decode_workers = min(8, max(4, (os.cpu_count() or 4) // 2))
         self._decode_pool = ThreadPoolExecutor(max_workers=self._decode_workers, thread_name_prefix="bdo-wav-cache")
         self._load_future: Future[tuple[list[_Event], dict[tuple[str, int], _Sample], int, list[str], int]] | None = None
         self._format: QAudioFormat | None = None
@@ -396,6 +439,9 @@ class BdoRealtimeAudioEngine(QObject):
         self._voice_b = np.empty((0, 2), dtype=np.float32)
         self._voice_positions = np.empty(0, dtype=np.float32)
         self._voice_indices = np.empty(0, dtype=np.intp)
+        self._track_meter_ids: list[int] = []
+        self._track_peaks = np.empty(0, dtype=np.float32)
+        self._track_block_peaks = np.empty(0, dtype=np.float32)
         self.last_error = ""
 
     def available(self) -> bool:
@@ -445,6 +491,8 @@ class BdoRealtimeAudioEngine(QObject):
             self._voices.clear()
             self._frame = 0
             self._event_index = 0
+            self._track_peaks.fill(0.0)
+            self._track_block_peaks.fill(0.0)
         if self._output_thread and self._output_thread.isRunning():
             self.output_stop_requested.emit()
             self._output_thread.wait(1000)
@@ -463,7 +511,9 @@ class BdoRealtimeAudioEngine(QObject):
             self._event_index = 0
             self._frame = 0
             self._duration_frames = 0
-
+            self._track_meter_ids = []
+            self._track_peaks = np.empty(0, dtype=np.float32)
+            self._track_block_peaks = np.empty(0, dtype=np.float32)
     def load_project(
         self,
         tracks: list[Any],
@@ -521,6 +571,64 @@ class BdoRealtimeAudioEngine(QObject):
             raise AudioEngineError(f"游戏音源预取失败：{exc}") from exc
         return self._commit_project(*prepared, start_ms=start_ms)
 
+    def finish_audition_loading(self) -> dict[str, Any] | None:
+        """Hand a prepared key audition to the live mixer without stopping output.
+
+        The previous key keeps sounding while its replacement is decoded. Once
+        ready, old voices receive a short release and the new key a short attack;
+        the device stream remains continuous, avoiding reset-induced gaps.
+        """
+        future = self._load_future
+        if future is None or not future.done():
+            return None
+        self._load_future = None
+        try:
+            events, cache, cache_bytes, unverified, duration = future.result()
+        except AudioEngineError:
+            raise
+        except Exception as exc:
+            raise AudioEngineError(f"游戏音源预取失败：{exc}") from exc
+
+        fade_frames = max(1, round(self._sample_rate * AUDITION_CROSSFADE_MS / 1000.0))
+        with self._lock:
+            for voice in self._voices:
+                voice.release_start_age = voice.age_frames
+                voice.release_frames = fade_frames
+
+            self._events = events
+            self._event_frames = np.fromiter(
+                (event.frame for event in events), dtype=np.int64, count=len(events)
+            )
+            self._max_event_tail_frames = max(
+                (math.ceil(event.sample.frames / event.ratio) for event in events),
+                default=0,
+            )
+            self._event_index = 0
+            self._frame = 0
+            self._duration_frames = max(duration, fade_frames)
+            self._cache = cache
+            self._cache_bytes = cache_bytes
+            self._preload_loaded = self._preload_total
+            self._unverified = unverified
+
+            meter_slots = max((event.track_slot for event in events), default=-1) + 1
+            self._track_meter_ids = [-1] * meter_slots
+            for event in events:
+                if event.track_slot >= 0:
+                    self._track_meter_ids[event.track_slot] = event.track_id
+            self._track_peaks = np.zeros(meter_slots, dtype=np.float32)
+            self._track_block_peaks = np.zeros(meter_slots, dtype=np.float32)
+
+            while self._event_index < len(events) and events[self._event_index].frame <= 0:
+                self._start_event(events[self._event_index], fade_in_frames=fade_frames)
+                self._event_index += 1
+            self._playing = bool(self._voices or self._event_index < len(events))
+
+        return {
+            "events": len(events), "samples": len(cache),
+            "cache_bytes": cache_bytes, "unverified": list(unverified),
+        }
+
     def is_loading(self) -> bool:
         return bool(self._load_future and not self._load_future.done())
 
@@ -554,9 +662,11 @@ class BdoRealtimeAudioEngine(QObject):
         duration = 0
         # Resolve all note→zone relationships first.  Decoding is deduplicated
         # by Wwise source ID and happens concurrently below.
-        resolved: list[tuple[Any, int, int, int, str, dict, tuple[str, int], float]] = []
+        resolved: list[tuple[Any, int, int, int, str, dict, tuple[str, int], float, int, int]] = []
         sources: dict[tuple[str, int], Path] = {}
-        for track in tracks:
+        zone_cache: dict[tuple[int, str, int, int, int], tuple[str, dict] | None] = {}
+        for track_slot, track in enumerate(tracks):
+            track_id = int(getattr(track, "track_id", track_slot))
             instrument_id = int(track.bdo_instrument_id)
             synth_mode = str(getattr(track, "marnian_synth_mode", "basic") or "basic")
             bank = bank_for_instrument(instrument_id, synth_mode)
@@ -581,9 +691,12 @@ class BdoRealtimeAudioEngine(QObject):
                     unverified.append(
                         f"0x{instrument_id:02x}/type {ntype}: 已启用近似奏法 DSP；待游戏 A/B"
                     )
-                selected = select_wwise_zone(
-                    banks, instrument_id, int(note.pitch), velocity, ntype, synth_mode
-                )
+                zone_key = (instrument_id, synth_mode, int(note.pitch), velocity, ntype)
+                if zone_key not in zone_cache:
+                    zone_cache[zone_key] = select_wwise_zone(
+                        banks, instrument_id, int(note.pitch), velocity, ntype, synth_mode
+                    )
+                selected = zone_cache[zone_key]
                 if not selected:
                     unverified.append(f"0x{instrument_id:02x}: pitch {pitch} velocity {velocity} 无 Wwise zone")
                     continue
@@ -596,6 +709,7 @@ class BdoRealtimeAudioEngine(QObject):
                 resolved.append((
                     note, velocity, pitch, instrument_id, bank, row, key,
                     float(getattr(track, "duration_scale", 1.0)),
+                    track_slot, track_id,
                 ))
 
         with self._lock:
@@ -626,7 +740,7 @@ class BdoRealtimeAudioEngine(QObject):
                     if load_generation == self._load_generation:
                         self._preload_loaded += 1
 
-        for note, velocity, pitch, _instrument_id, _bank, row, key, duration_scale in resolved:
+        for note, velocity, pitch, _instrument_id, _bank, row, key, duration_scale, track_slot, track_id in resolved:
             sample = cache[key]
             ratio = 2.0 ** ((pitch - int(row["root_note"])) / 12.0) * sample.rate / self._sample_rate
             frame = round(max(0.0, float(note.start)) * self._sample_rate / 1000.0)
@@ -643,7 +757,7 @@ class BdoRealtimeAudioEngine(QObject):
             preview_ratio = ratio * (2.0 if ntype == 14 else 1.0)
             events.append(_Event(
                 frame, sample, preview_ratio, velocity / 127.0 * 0.72,
-                note_duration, _instrument_id, ntype,
+                note_duration, _instrument_id, ntype, track_slot, track_id,
             ))
             duration = max(duration, frame + math.ceil(sample.frames / ratio))
         if reverb or delay or chorus and any(chorus):
@@ -678,6 +792,13 @@ class BdoRealtimeAudioEngine(QObject):
             self._underruns = 0
             self._render_times_ms.clear()
             self._unverified = unverified
+            meter_slots = max((event.track_slot for event in events), default=-1) + 1
+            self._track_meter_ids = [-1] * meter_slots
+            for event in events:
+                if event.track_slot >= 0:
+                    self._track_meter_ids[event.track_slot] = event.track_id
+            self._track_peaks = np.zeros(meter_slots, dtype=np.float32)
+            self._track_block_peaks = np.zeros(meter_slots, dtype=np.float32)
             self._seek_locked(self._frame)
         return {"events": len(events), "samples": len(cache), "cache_bytes": cache_bytes, "unverified": self._unverified}
 
@@ -736,19 +857,27 @@ class BdoRealtimeAudioEngine(QObject):
     def _start_voice(
         self, sample: _Sample, position: float, ratio: float, gain: float,
         duration_frames: int = 0, instrument_id: int = 0, ntype: int = 0,
-        age_frames: int = 0,
+        age_frames: int = 0, track_slot: int = -1, fade_in_frames: int = 0,
     ) -> None:
         if len(self._voices) >= 256:
             quietest_index = min(range(len(self._voices)), key=lambda index: self._voices[index].gain)
             self._voices.pop(quietest_index)
         self._voices.append(_Voice(
-            sample, position, ratio, gain, duration_frames, instrument_id, ntype, age_frames
+            sample, position, ratio, gain, duration_frames, instrument_id, ntype,
+            age_frames, track_slot, fade_in_frames,
         ))
 
-    def _start_event(self, event: _Event, age_frames: int = 0) -> None:
+    def _start_event(
+        self, event: _Event, age_frames: int = 0, fade_in_frames: int = 0,
+    ) -> None:
+        if fade_in_frames <= 0:
+            fade_in_frames = max(
+                1, round(self._sample_rate * PLAYBACK_ATTACK_MS / 1000.0)
+            )
         self._start_voice(
             event.sample, age_frames * event.ratio, event.ratio, event.gain,
             event.duration_frames, event.instrument_id, event.ntype, age_frames,
+            event.track_slot, fade_in_frames,
         )
         # Harp chord note types are Wwise-generated note stacks. Recreate the
         # audible chord while retaining the single serialized BDO note.
@@ -759,6 +888,7 @@ class BdoRealtimeAudioEngine(QObject):
                 event.sample, age_frames * chord_ratio,
                 chord_ratio, event.gain * 0.52,
                 event.duration_frames, event.instrument_id, 0, age_frames,
+                event.track_slot, fade_in_frames,
             )
 
     def _read_pcm(self, max_bytes: int) -> bytes:
@@ -796,6 +926,8 @@ class BdoRealtimeAudioEngine(QObject):
             offset = int(start)
             np.multiply(sample.pcm[offset:offset + active], voice.gain, out=first)
             self._apply_articulation_to_voice(first, active, voice)
+            self._apply_voice_transition(first, active, voice)
+            self._record_track_peak(first, int(getattr(voice, "track_slot", -1)))
             output[:active] += first
             return
         positions = self._voice_positions[:active]
@@ -816,7 +948,39 @@ class BdoRealtimeAudioEngine(QObject):
         first += self._voice_b[:active]
         first *= voice.gain
         self._apply_articulation_to_voice(first, active, voice)
+        self._apply_voice_transition(first, active, voice)
+        self._record_track_peak(first, int(getattr(voice, "track_slot", -1)))
         output[:active] += first
+
+    def _apply_voice_transition(self, pcm: np.ndarray, active: int, voice: _Voice) -> None:
+        """Apply bounded, allocation-free attack/release ramps for key hand-off."""
+        if active <= 0:
+            return
+        ages = self._voice_positions[:active]
+        fade_in_frames = int(getattr(voice, "fade_in_frames", 0))
+        age_frames = int(getattr(voice, "age_frames", 0))
+        if fade_in_frames > 0 and age_frames < fade_in_frames:
+            np.add(self._timeline_buffer[:active], age_frames + 1, out=ages)
+            ages /= fade_in_frames
+            np.clip(ages, 0.0, 1.0, out=ages)
+            pcm *= ages[:, None]
+        release_start_age = int(getattr(voice, "release_start_age", -1))
+        release_frames = int(getattr(voice, "release_frames", 0))
+        if release_start_age >= 0 and release_frames > 0:
+            remaining = release_start_age + release_frames - age_frames
+            np.subtract(remaining, self._timeline_buffer[:active], out=ages)
+            ages /= release_frames
+            np.clip(ages, 0.0, 1.0, out=ages)
+            pcm *= ages[:, None]
+
+    def _record_track_peak(self, pcm: np.ndarray, track_slot: int, gain: float = 1.0) -> None:
+        if track_slot < 0 or track_slot >= len(self._track_block_peaks) or pcm.size == 0:
+            return
+        peak = max(float(pcm.max(initial=0.0)), -float(pcm.min(initial=0.0))) * abs(gain)
+        self._track_block_peaks[track_slot] = min(
+            1.0,
+            float(self._track_block_peaks[track_slot]) + peak,
+        )
 
     def _apply_articulation_to_voice(self, pcm: np.ndarray, active: int, voice: _Voice) -> None:
         ntype = int(getattr(voice, "ntype", 0))
@@ -838,6 +1002,9 @@ class BdoRealtimeAudioEngine(QObject):
         self._ensure_render_buffers(frames)
         output = self._mix_buffer[:frames]
         output.fill(0.0)
+        if self._track_peaks.size:
+            np.multiply(self._track_peaks, 0.82, out=self._track_peaks)
+            self._track_block_peaks.fill(0.0)
         if not self._playing:
             return output
         written = 0
@@ -852,7 +1019,12 @@ class BdoRealtimeAudioEngine(QObject):
                 for voice in self._voices:
                     groups.setdefault(id(voice.sample), (voice.sample, []))[1].append(voice)
                 for sample, voices in groups.values():
-                    if len(voices) <= 4 or any(voice.ntype not in {0, 99} for voice in voices):
+                    if len(voices) <= 4 or any(
+                        voice.ntype not in {0, 99}
+                        or voice.fade_in_frames > 0
+                        or voice.release_start_age >= 0
+                        for voice in voices
+                    ):
                         # Small unisons are common and the vectorised branch
                         # used to allocate several 2-D/3-D temporaries per
                         # segment.  Reusing the single-voice buffers is faster
@@ -861,7 +1033,11 @@ class BdoRealtimeAudioEngine(QObject):
                             self._mix_single_voice(output[written:written + length], length, voice)
                             voice.position += length * voice.ratio
                             voice.age_frames += length
-                            if voice.position < sample.frames - 1:
+                            release_alive = (
+                                voice.release_start_age < 0
+                                or voice.age_frames < voice.release_start_age + voice.release_frames
+                            )
+                            if voice.position < sample.frames - 1 and release_alive:
                                 alive.append(voice)
                         continue
                     starts = np.asarray([voice.position for voice in voices], dtype=np.float32)
@@ -876,7 +1052,10 @@ class BdoRealtimeAudioEngine(QObject):
                     interpolated = first + (second - first) * fraction
                     interpolated *= valid[..., None]
                     output[written:written + length] += (interpolated * gains[:, None, None]).sum(axis=0)
-                    for voice in voices:
+                    for voice_index, voice in enumerate(voices):
+                        self._record_track_peak(
+                            interpolated[voice_index], int(getattr(voice, "track_slot", -1)), voice.gain,
+                        )
                         voice.position += length * voice.ratio
                         voice.age_frames += length
                         if voice.position < sample.frames - 1:
@@ -892,6 +1071,8 @@ class BdoRealtimeAudioEngine(QObject):
                 break
         if self._frame >= self._duration_frames and not self._voices:
             self._playing = False
+        if self._track_peaks.size:
+            np.maximum(self._track_peaks, self._track_block_peaks, out=self._track_peaks)
         soft_limit_in_place(output)
         return output
 
@@ -917,4 +1098,9 @@ class BdoRealtimeAudioEngine(QObject):
                 render_p95_ms=render_p95,
                 render_max_ms=max(render_times, default=0.0),
                 unverified=list(self._unverified),
+                track_levels={
+                    track_id: float(self._track_peaks[slot])
+                    for slot, track_id in enumerate(self._track_meter_ids)
+                    if track_id >= 0 and slot < len(self._track_peaks)
+                },
             )

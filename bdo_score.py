@@ -4,22 +4,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import struct
-import sys
 from typing import Sequence
 
-
-if not getattr(sys, "frozen", False):
-    tool_dir = Path(__file__).resolve().parent / "tools" / "midi-to-bdo"
-    if str(tool_dir) not in sys.path:
-        sys.path.insert(0, str(tool_dir))
-
-import _ice  # noqa: E402
-from midi2bdo import BDO_VERSION, HEADER_SIZE, NAME_FIELD_SIZE  # noqa: E402
-
-
-TRACK_HEADER = struct.Struct("<HH8sH")
-NOTE_RECORD = struct.Struct("<BBBBdd")
+from bdo_codec import (  # noqa: E402
+    BDO_VERSION,
+    BdoDocument,
+    compare_score_documents,
+    decode_score,
+    encode_score,
+    read_score,
+    validate_score,
+    write_score,
+)
 TIME_TOLERANCE_MS = 0.001
 
 
@@ -92,91 +88,43 @@ class ScoreDiff:
         return "\n".join(lines)
 
 
-def _decode_name(data: bytes) -> str:
-    return data.decode("utf-16-le", errors="replace").rstrip("\x00")
-
-
-def snapshot_from_bytes(data: bytes) -> BdoScoreSnapshot:
-    if len(data) < 4:
-        raise ValueError("BDO score is too small")
-    version = struct.unpack_from("<I", data, 0)[0]
-    if version != BDO_VERSION:
-        raise ValueError(f"unsupported BDO version {version}; expected {BDO_VERSION}")
-    plaintext = _ice.decrypt(data[4:])
-    if len(plaintext) < HEADER_SIZE:
-        raise ValueError("decrypted BDO payload is shorter than the fixed header")
-    owner_id = struct.unpack_from("<I", plaintext, 0)[0]
-    name_a_start = 8
-    name_b_start = name_a_start + NAME_FIELD_SIZE
-    bpm_offset = name_b_start + NAME_FIELD_SIZE
-    bpm, time_signature = struct.unpack_from("<HH", plaintext, bpm_offset)
-    instrument_tag = plaintext[bpm_offset + 4:HEADER_SIZE].split(b"\x00", 1)[0].decode(
-        "ascii", errors="replace"
-    )
-    offset = HEADER_SIZE
-    if offset >= len(plaintext) or plaintext[offset] != 0:
-        raise ValueError(f"unexpected BDO group marker at 0x{offset:x}")
-    offset += 1
-    instrument_count = struct.unpack_from("<H", plaintext, offset)[0]
-    offset += 2
+def snapshot_from_bytes(data: bytes, *, allow_trailing_data: bool = False) -> BdoScoreSnapshot:
+    document = decode_score(data)
+    if any(document.trailing_data) and not allow_trailing_data:
+        raise ValueError("BDO payload contains non-zero trailing data")
     tracks: list[BdoTrackSnapshot] = []
-    for group_index in range(instrument_count):
-        if offset + 2 > len(plaintext):
-            raise ValueError("BDO instrument group exceeds payload")
-        track_count = struct.unpack_from("<H", plaintext, offset)[0]
-        offset += 2
-        for track_index in range(track_count):
-            track_start = offset
-            if offset + TRACK_HEADER.size > len(plaintext):
-                raise ValueError(f"BDO track header exceeds payload at 0x{offset:x}")
-            data_size, marker, settings, note_count = TRACK_HEADER.unpack_from(plaintext, offset)
-            offset += TRACK_HEADER.size
-            note_bytes = note_count * NOTE_RECORD.size
-            if offset + note_bytes > len(plaintext):
-                raise ValueError(f"BDO notes exceed payload at 0x{offset:x}")
-            notes = []
-            for _note_index in range(note_count):
-                pitch, ntype, velocity_a, velocity_b, start_ms, duration_ms = NOTE_RECORD.unpack_from(
-                    plaintext, offset
-                )
-                offset += NOTE_RECORD.size
-                notes.append(BdoNoteSnapshot(
-                    pitch, ntype, velocity_a, velocity_b, start_ms, duration_ms
-                ))
-            consumed = offset - track_start - 2
-            if consumed > data_size:
-                raise ValueError("BDO track data exceeds declared data_size")
-            offset += data_size - consumed
+    for group_index, group in enumerate(document.groups):
+        for track_index, track in enumerate(group.tracks):
             tracks.append(BdoTrackSnapshot(
                 group_index,
                 track_index,
-                marker & 0xFF,
-                (marker >> 8) & 0xFF,
-                data_size,
-                tuple(settings),
-                tuple(notes),
+                track.instrument_id,
+                track.volume,
+                track.declared_data_size,
+                tuple(track.settings.values),
+                tuple(BdoNoteSnapshot(
+                    note.pitch, note.ntype, note.velocity_a, note.velocity_b,
+                    note.start_ms, note.duration_ms,
+                ) for note in track.notes),
             ))
-    trailing = plaintext[offset:]
-    if any(trailing):
-        raise ValueError("BDO payload contains non-zero trailing data")
     return BdoScoreSnapshot(
-        version,
-        owner_id,
-        _decode_name(plaintext[name_a_start:name_b_start]),
-        _decode_name(plaintext[name_b_start:bpm_offset]),
-        bpm,
-        time_signature,
-        instrument_tag,
-        instrument_count,
+        document.version,
+        document.header.owner_id,
+        document.header.character_name_1,
+        document.header.character_name_2,
+        document.header.bpm,
+        document.header.time_signature,
+        document.header.instrument_tag,
+        len(document.groups),
         tuple(tracks),
-        len(plaintext),
-        offset,
-        len(trailing),
+        len(data) - 4,
+        len(data) - 4 - len(document.trailing_data),
+        len(document.trailing_data),
     )
 
 
-def read_bdo_score(path: Path) -> BdoScoreSnapshot:
-    return snapshot_from_bytes(path.read_bytes())
+def read_bdo_score(path: Path, *, allow_trailing_data: bool = False) -> BdoScoreSnapshot:
+    return snapshot_from_bytes(path.read_bytes(), allow_trailing_data=allow_trailing_data)
 
 
 def _append(differences: list[ScoreDiffEntry], path: str, expected: object,
@@ -245,5 +193,6 @@ def compare_scores(
 __all__ = [
     "BdoNoteSnapshot", "BdoScoreSnapshot", "BdoTrackSnapshot", "ScoreDiff",
     "ScoreDiffEntry", "TIME_TOLERANCE_MS", "compare_scores", "read_bdo_score",
-    "snapshot_from_bytes",
+    "snapshot_from_bytes", "BdoDocument", "compare_score_documents", "decode_score",
+    "encode_score", "read_score", "validate_score", "write_score",
 ]

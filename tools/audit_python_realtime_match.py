@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT), str(ROOT / "scripts"), str(ROOT / "tools" / "midi-to-bdo")]
+sys.path[:0] = [str(ROOT), str(ROOT / "scripts")]
 
 from bdo_realtime_audio import (  # noqa: E402
     BANK_BY_ID,
@@ -25,7 +25,7 @@ from bdo_realtime_audio import (  # noqa: E402
     select_wwise_zone,
 )
 from inspect_bdo import parse_bdo  # noqa: E402
-from midi2bdo import BDO_INSTRUMENT_NAMES  # noqa: E402
+from bdo_midi import BDO_INSTRUMENT_NAMES  # noqa: E402
 from pyside_bdo_gui import BDO_ARTICULATIONS, BDO_EDITOR_PITCH_RANGES  # noqa: E402
 from project_paths import WWISE_MIDI_MAP_PATH  # noqa: E402
 

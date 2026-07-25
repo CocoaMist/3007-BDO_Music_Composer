@@ -10,6 +10,7 @@ if (-not (Test-Path -LiteralPath $Python)) {
 
 Push-Location $ProjectRoot
 try {
+    Write-Host "Building Standard edition (optional transcription runtime excluded)."
     & $Python -m PyInstaller --noconfirm --clean --distpath dist --workpath build $Spec
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code $LASTEXITCODE"

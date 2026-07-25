@@ -6,6 +6,7 @@ files tracked or generated inside the repository.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 
@@ -22,3 +23,28 @@ ASSETS_DIR = RESOURCE_ROOT / "assets"
 WWISE_MIDI_MAP_PATH = MAPPINGS_DIR / "bdo_wwise_midi_map.json"
 INSTRUMENT_SAMPLE_MAP_PATH = MAPPINGS_DIR / "bdo_instrument_sample_map.json"
 SAMPLE_PACK_CACHE_DIR = ROOT / "sample_cache"
+
+
+def _transcription_cache_dir() -> Path:
+    override = os.environ.get("BDO_TRANSCRIPTION_CACHE")
+    if override:
+        return Path(override).expanduser()
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return (
+            Path(local_app_data)
+            / "BDO Music Composer"
+            / "transcription_cache"
+        )
+    # LOCALAPPDATA normally exists on Windows. Keep the fallback user-writable
+    # for unusual launch environments instead of writing next to a frozen EXE.
+    return (
+        Path.home()
+        / "AppData"
+        / "Local"
+        / "BDO Music Composer"
+        / "transcription_cache"
+    )
+
+
+TRANSCRIPTION_CACHE_DIR = _transcription_cache_dir()

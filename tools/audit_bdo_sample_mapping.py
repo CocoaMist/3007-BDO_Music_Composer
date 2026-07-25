@@ -11,11 +11,10 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "tools" / "midi-to-bdo"))
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from midi2bdo import BDO_INSTRUMENT_NAMES, BDO_INSTRUMENTS  # noqa: E402
+from bdo_midi import BDO_INSTRUMENT_NAMES, BDO_INSTRUMENTS  # noqa: E402
 from bdo_sample_renderer import BDO_BANK_BY_ID  # noqa: E402
 from bdo_realtime_audio import marnian_synth_matrix  # noqa: E402
 from inspect_bdo import parse_bdo  # noqa: E402

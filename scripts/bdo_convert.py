@@ -6,10 +6,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TOOL_DIR = ROOT / "tools" / "midi-to-bdo"
-sys.path.insert(0, str(TOOL_DIR))
+sys.path.insert(0, str(ROOT))
 
-from midi2bdo import extract_owner_id, midi_to_bdo  # noqa: E402
+from bdo_export import extract_owner_id, midi_to_bdo  # noqa: E402
 
 
 def default_game_music_dir() -> Path:

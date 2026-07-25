@@ -37,7 +37,9 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 - `bdo_music_theory.py`, `bdo_techniques.py`, `bdo_articulation_profiles.py`, `bdo_lyrics.py`: analysis and semantic recommendations.
 - `bdo_realtime_audio.py`: real-time preview, sample caching, Qt audio-thread lifecycle. Do not add disk I/O to the callback path.
 - `bdo_sample_renderer.py`: offline sample-map selection and rendering helpers.
-- `tools/midi-to-bdo/midi2bdo.py`: vendored MIDI parser, BDO v9 binary writer, ICE encryption. Treat binary layout changes as high risk.
+- `bdo_codec/`: independent BDO v9 model, reader/writer, ICE, validation, and CLI. Treat binary layout changes as high risk.
+- `bdo_midi/`: independent MIDI parser, immutable note model, GM/BDO mappings, and pure note transforms.
+- `bdo_export/`: editor/MIDI-to-document adapter; all binary output must delegate to `bdo_codec`.
 - `i18n.py`: exact-source runtime catalogs. Chinese UI literals are source keys; add translations for new fixed UI text.
 - `project_paths.py`: source vs. frozen-resource paths. In a one-file build, writable output must not target `sys._MEIPASS`.
 
@@ -83,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 | Note editing/selection | editor smoke test plus export round trip |
 | Optimizer/theory/articulation | optimizer tests and deterministic/idempotence checks |
 | Audio engine | real-time audio tests; check callback allocations/I/O |
-| Serializer/export | `tests/test_bdo_export_roundtrip.py` and binary structure checks |
+| Serializer/export | `tests/test_bdo_codec.py`, `tests/test_bdo_export_roundtrip.py`, and binary structure checks |
 | Localization | `tests/test_i18n_catalog.py` plus offscreen language-switch smoke test |
 | Packaging/resources | clean PyInstaller build and 10+ second startup test |
 
