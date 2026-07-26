@@ -621,7 +621,10 @@ The settings dialog uses a persistent left navigation rail for three bounded
 domains: export identity, MIDI/velocity processing, and local audio/effects.
 The acknowledgements dialog shares the same charcoal surfaces, amber accents,
 panel rhythm, and button hierarchy as the editor instead of defining a separate
-feature palette.
+feature palette. Its curated entries come from `third_party_credits.py`; every
+software/research row carries a license/usage label and a clickable GitHub URL,
+while the exact transitive build inventory remains a separate generated
+artifact embedded in the executable.
 
 Application startup uses a portrait, full-image conductor line-art splash with a
 small overlaid status panel and code-drawn indeterminate spinner. It reports

@@ -1061,6 +1061,94 @@ KO.update({
 })
 
 EN.update({
+    "许可证": "License",
+    "自动扒谱、音频与科学计算": "Automatic Transcription, Audio, and Scientific Computing",
+    "应用运行、界面与打包": "Application Runtime, UI, and Packaging",
+    "格式研究、引用与开发协作": "Format Research, References, and Development Collaboration",
+    "仅作引用；采用上游条款": "Reference only; upstream terms apply",
+    "仅作引用；未捆绑代码": "Reference only; no code is bundled",
+    "开发致谢；无运行时依赖": "Development acknowledgement; no runtime dependency",
+    "Basic Pitch 代码与模型许可": "Basic Pitch Code and Model License",
+    "Basic Pitch 0.4.0 的代码、随包 nmp.onnx、LICENSE 与 NOTICE 位于同一官方发行树；未发现模型目录中的单独限制性许可证。按 Apache-2.0 再分发时必须附带 LICENSE 并保留 NOTICE。": (
+        "Basic Pitch 0.4.0 keeps its code, bundled nmp.onnx, LICENSE, and NOTICE "
+        "in the same official release tree; no separate restrictive license was "
+        "found in the model directory. Apache-2.0 redistribution must include "
+        "the LICENSE and preserve the NOTICE."
+    ),
+    "论文引用": "Research Citation",
+    "论文": "Paper",
+    "社区、测试与音乐交流": "Community, Testing, and Music Exchange",
+    "本程序未内置 OpenAI API 或云端模型；OpenAI 仅列为开发协作致谢。": (
+        "This app does not embed the OpenAI API or any cloud model; OpenAI is "
+        "acknowledged only for development collaboration."
+    ),
+    "完整许可清单": "Complete License Inventory",
+    "这里是便于阅读的致谢；每次构建仍会生成并随 EXE 嵌入完整的依赖、许可证、NOTICE 与二进制哈希清单。": (
+        "This is a readable acknowledgement list. Every build still generates "
+        "and embeds in the EXE a complete dependency, license, NOTICE, and "
+        "binary-hash inventory."
+    ),
+})
+
+JA.update({
+    "许可证": "ライセンス",
+    "自动扒谱、音频与科学计算": "自動採譜・オーディオ・科学計算",
+    "应用运行、界面与打包": "アプリ実行環境・UI・パッケージング",
+    "格式研究、引用与开发协作": "形式研究・参考資料・開発協力",
+    "仅作引用；采用上游条款": "参考のみ・上流の利用条件に従います",
+    "仅作引用；未捆绑代码": "参考のみ・コードは同梱していません",
+    "开发致谢；无运行时依赖": "開発協力への謝辞・実行時依存なし",
+    "Basic Pitch 代码与模型许可": "Basic Pitch のコードとモデルのライセンス",
+    "Basic Pitch 0.4.0 的代码、随包 nmp.onnx、LICENSE 与 NOTICE 位于同一官方发行树；未发现模型目录中的单独限制性许可证。按 Apache-2.0 再分发时必须附带 LICENSE 并保留 NOTICE。": (
+        "Basic Pitch 0.4.0では、コード、同梱のnmp.onnx、LICENSE、NOTICEが同じ"
+        "公式リリースツリーにあり、モデルディレクトリに別の制限的ライセンスは"
+        "見当たりません。Apache-2.0で再配布する際はLICENSEを同梱し、NOTICEを"
+        "保持する必要があります。"
+    ),
+    "论文引用": "論文の引用",
+    "论文": "論文",
+    "社区、测试与音乐交流": "コミュニティ・テスト・音楽交流",
+    "本程序未内置 OpenAI API 或云端模型；OpenAI 仅列为开发协作致谢。": (
+        "本アプリはOpenAI APIやクラウドモデルを内蔵していません。OpenAIは"
+        "開発協力への謝辞としてのみ掲載しています。"
+    ),
+    "完整许可清单": "完全なライセンス一覧",
+    "这里是便于阅读的致谢；每次构建仍会生成并随 EXE 嵌入完整的依赖、许可证、NOTICE 与二进制哈希清单。": (
+        "これは読みやすさを優先した謝辞です。各ビルドでは、依存関係、ライセンス、"
+        "NOTICE、バイナリハッシュの完全な一覧を生成し、EXEに同梱します。"
+    ),
+})
+
+KO.update({
+    "许可证": "라이선스",
+    "自动扒谱、音频与科学计算": "자동 채보·오디오·과학 계산",
+    "应用运行、界面与打包": "앱 런타임·UI·패키징",
+    "格式研究、引用与开发协作": "형식 연구·참고 자료·개발 협업",
+    "仅作引用；采用上游条款": "참고용이며 업스트림 조건을 따름",
+    "仅作引用；未捆绑代码": "참고용이며 코드를 포함하지 않음",
+    "开发致谢；无运行时依赖": "개발 협업 감사·런타임 의존성 없음",
+    "Basic Pitch 代码与模型许可": "Basic Pitch 코드 및 모델 라이선스",
+    "Basic Pitch 0.4.0 的代码、随包 nmp.onnx、LICENSE 与 NOTICE 位于同一官方发行树；未发现模型目录中的单独限制性许可证。按 Apache-2.0 再分发时必须附带 LICENSE 并保留 NOTICE。": (
+        "Basic Pitch 0.4.0의 코드, 포함된 nmp.onnx, LICENSE 및 NOTICE는 동일한 "
+        "공식 릴리스 트리에 있으며 모델 디렉터리에서 별도의 제한적 라이선스는 "
+        "확인되지 않았습니다. Apache-2.0으로 재배포할 때는 LICENSE를 포함하고 "
+        "NOTICE를 유지해야 합니다."
+    ),
+    "论文引用": "논문 인용",
+    "论文": "논문",
+    "社区、测试与音乐交流": "커뮤니티·테스트·음악 교류",
+    "本程序未内置 OpenAI API 或云端模型；OpenAI 仅列为开发协作致谢。": (
+        "이 앱은 OpenAI API 또는 클라우드 모델을 내장하지 않습니다. OpenAI는 "
+        "개발 협업 감사 항목으로만 표시됩니다."
+    ),
+    "完整许可清单": "전체 라이선스 목록",
+    "这里是便于阅读的致谢；每次构建仍会生成并随 EXE 嵌入完整的依赖、许可证、NOTICE 与二进制哈希清单。": (
+        "이 목록은 읽기 쉬운 감사 목록입니다. 각 빌드는 전체 의존성, 라이선스, "
+        "NOTICE 및 바이너리 해시 목록을 생성하여 EXE에 포함합니다."
+    ),
+})
+
+EN.update({
     "扒谱": "Transcription",
     "标准/独奏": "Standard / Solo",
     "混音增强": "Mix Enhanced",

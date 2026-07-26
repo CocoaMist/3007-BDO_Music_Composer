@@ -45,6 +45,7 @@ This document helps an AI agent find the correct subsystem without scanning ever
 | BDO score inspection / comparison | score snapshot tests | `bdo_score.py`, `scripts/inspect_bdo.py` |
 | Audio A/B research | coverage/alignment tests | `bdo_audio_research.py`, `bdo_experiments.py` |
 | Localization / regional terminology | `docs/LOCALIZATION.md`, catalog and four-locale UI tests | `i18n.py`, fixed-text producers only |
+| Credits / license links / citations | `THIRD_PARTY_NOTICES.md`, Basic Pitch license evidence | `third_party_credits.py`, Credits dialog, release docs |
 | Windows build | spec/build script/path split | `packaging/windows/`, `project_paths.py` |
 
 ## Source-of-truth hierarchy

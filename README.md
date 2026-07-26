@@ -162,9 +162,12 @@ UI, one project schema, one cache format, and one executable; transcription
 analysis is enabled inside its embedded note-editor mode.
 
 Basic Pitch and its scientific/native dependency closure retain their upstream
-terms. The sole Windows artifact must not be uploaded publicly until the exact
-generated dependency inventory, model redistribution terms, native-library
-notices, and bundled notice set have passed the checked-in release gate.
+terms. The Basic Pitch 0.4.0 code and bundled ONNX model are covered by the
+official Apache-2.0 release tree and preserved NOTICE, as recorded in the
+[license evidence](docs/BASIC_PITCH_LICENSE_REVIEW.md). The sole Windows
+artifact must still not be uploaded publicly until the exact generated
+dependency inventory, native-library notices, and complete bundled notice set
+have passed the checked-in release gate.
 
 ### Local sample packs
 
@@ -235,7 +238,9 @@ alternate models remain excluded. Every build generates an exact
 dependency/license inventory from the active environment and embeds it with
 the notices.
 
-The sole executable is **not yet cleared for public distribution**.
+The Basic Pitch model evidence is documented, but the sole executable is
+**not yet cleared for public distribution** because the remaining native and
+transitive notice set has not been approved.
 `build.ps1 -PublicRelease` is fail-closed against
 `packaging/transcription_release_policy.json` until a reviewer approves the
 exact inventory digest and all required notices. See
@@ -294,6 +299,8 @@ Primary entry points:
 - `project_schema.py` — versioned autosave migration, including schema-v8/review-v4 explicit cleanup opt-in compatibility.
 - `bdo_codec/` — independent BDO v9 lossless codec, validation, and CLI.
 - `i18n.py` — runtime localization catalogs.
+- `third_party_credits.py` — categorized credits, license/usage labels,
+  GitHub links, and research citations used by the in-app Credits dialog.
 
 See [Architecture](docs/ARCHITECTURE.md), [AI Context](docs/AI_CONTEXT.md),
 [Localization](docs/LOCALIZATION.md), and [Project Structure](docs/PROJECT_STRUCTURE.md)
@@ -322,14 +329,61 @@ git grep -n -I -E "(C:\\Users\\|OPENAI_API_KEY|api[_-]?key|password)"
 .\.venv\Scripts\python.exe -m unittest discover -s tests -q
 ```
 
-## Attribution
+## Attribution and research citations
 
-- [mido](https://mido.readthedocs.io/) for Standard MIDI parsing and writing.
-- Historical community research, including Bishop-R's `midi-to-bdo`, which informed early project exploration; v0.3.0 contains no runtime or vendored source from that repository.
-- iDevelopThings' [`bdo-data-extractor`](https://github.com/iDevelopThings/bdo-data-extractor) for the clear read-only PAZ, ICE, and LZ implementation used by the separate local sample-pack development tool.
-- Players from **CN Server · Rainbow Club / 彩虹乐队** for their support, testing, and music exchange.
-- Community research around Black Desert music-score files, instrument IDs, and game UI behavior.
-- PySide6 / Qt and NumPy for the desktop and audio runtime.
+The in-app Credits dialog presents a categorized, clickable list with a GitHub
+link and license/usage label for every software or research entry. The complete
+human-readable table is also maintained in
+[Third-party notices](THIRD_PARTY_NOTICES.md); each frozen EXE additionally
+contains the exact build-specific transitive inventory and copied notices.
+
+Core acknowledgements include:
+
+| Project | Contribution | License / terms | GitHub |
+|---|---|---|---|
+| Spotify Basic Pitch + `nmp.onnx` | Local automatic music transcription | Apache-2.0 | [spotify/basic-pitch](https://github.com/spotify/basic-pitch) |
+| Microsoft ONNX Runtime | CPU inference for the bundled ONNX model | MIT | [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime) |
+| PySide6 / Qt | Desktop UI and multimedia runtime | LGPL/GPL, module-specific | [Qt official GitHub mirror](https://github.com/qt) |
+| Mido | Standard MIDI parsing and writing | MIT | [mido/mido](https://github.com/mido/mido) |
+| NumPy / SciPy / librosa | Audio and scientific computation | Upstream BSD/ISC terms | [NumPy](https://github.com/numpy/numpy), [SciPy](https://github.com/scipy/scipy), [librosa](https://github.com/librosa/librosa) |
+| SoundFile / libsndfile | Audio-file I/O | BSD-3-Clause / LGPL-2.1-or-later | [SoundFile](https://github.com/bastibe/python-soundfile), [libsndfile](https://github.com/libsndfile/libsndfile) |
+| python-soxr / libsoxr | High-quality streaming resampling | LGPL-2.1-or-later | [python-soxr](https://github.com/dofuuz/python-soxr), [libsoxr](https://github.com/chirlu/soxr) |
+| PyInstaller | Windows one-file packaging | GPL-2.0-or-later with special exception | [pyinstaller/pyinstaller](https://github.com/pyinstaller/pyinstaller) |
+
+Basic Pitch 0.4.0 publishes its code, Apache-2.0
+[`LICENSE`](https://github.com/spotify/basic-pitch/blob/v0.4.0/LICENSE),
+[`NOTICE`](https://github.com/spotify/basic-pitch/blob/v0.4.0/NOTICE), and the
+packaged
+[`nmp.onnx`](https://github.com/spotify/basic-pitch/blob/v0.4.0/basic_pitch/saved_models/icassp_2022/nmp.onnx)
+in the same official tagged tree. No separate restrictive model license was
+found; this application's model/notice handling is recorded in the
+[Basic Pitch license evidence](docs/BASIC_PITCH_LICENSE_REVIEW.md).
+
+For academic use, Spotify asks users to cite both the paper and the code version:
+
+> Bittner, Rachel M.; Bosch, Juan José; Rubinstein, David;
+> Meseguer-Brocal, Gabriel; Ewert, Sebastian. “A Lightweight
+> Instrument-Agnostic Model for Polyphonic Note Transcription and Multipitch
+> Estimation.” ICASSP 2022.
+
+- [Basic Pitch GitHub](https://github.com/spotify/basic-pitch)
+- [Paper record](https://arxiv.org/abs/2203.09893)
+
+Historical/reference credits:
+
+- [Bishop-R](https://github.com/Bishop-R) and
+  [Skyro468](https://github.com/Skyro468) for early public BDO-format research;
+  v0.3.0 contains none of their runtime or vendored code.
+- [iDevelopThings / bdo-data-extractor](https://github.com/iDevelopThings/bdo-data-extractor)
+  for a clear read-only PAZ, ICE, and LZ research reference used by the
+  separate local extraction workflow.
+- [OpenAI](https://github.com/openai) for development collaboration; the
+  application has no OpenAI API or cloud-model runtime dependency.
+
+Players from **CN Server · Rainbow Club / 彩虹乐队**, documentation authors,
+testers, and the wider Black Desert music community are thanked for support,
+testing, music exchange, and public discussion of score files, instrument IDs,
+and game UI behavior.
 
 Before public release, inspect the source archive and executable to confirm that
 historical vendor modules and private/generated artifacts are absent.

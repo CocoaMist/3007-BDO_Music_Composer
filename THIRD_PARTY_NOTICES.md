@@ -4,6 +4,56 @@ This project depends on third-party software, including PySide6/Qt, Mido, NumPy,
 
 The root MIT License applies only to original BDO Music Composer code owned by CocoaMist. It does not relicense third-party components.
 
+## Human-readable upstream credits
+
+This table records the direct and release-relevant foundations of the current
+application. Every entry links to its GitHub source. It complements, rather
+than replaces, the exact transitive inventory embedded in each Windows build.
+
+| Project | Role | License / terms | GitHub |
+|---|---|---|---|
+| Spotify Basic Pitch 0.4.0 + `nmp.onnx` | Automatic music transcription | Apache-2.0 | [spotify/basic-pitch](https://github.com/spotify/basic-pitch) |
+| Microsoft ONNX Runtime | Basic Pitch ONNX CPU inference | MIT | [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime) |
+| librosa | Audio/music analysis | ISC | [librosa/librosa](https://github.com/librosa/librosa) |
+| SoundFile | Python audio-file I/O | BSD-3-Clause | [bastibe/python-soundfile](https://github.com/bastibe/python-soundfile) |
+| libsndfile | Native audio-file I/O shipped by SoundFile wheels | LGPL-2.1-or-later | [libsndfile/libsndfile](https://github.com/libsndfile/libsndfile) |
+| python-soxr | Python resampling binding | LGPL-2.1-or-later | [dofuuz/python-soxr](https://github.com/dofuuz/python-soxr) |
+| libsoxr | Native SoX resampler | LGPL-2.1-or-later | [chirlu/soxr](https://github.com/chirlu/soxr) |
+| NumPy | Array/audio computation | BSD-3-Clause plus bundled notices | [numpy/numpy](https://github.com/numpy/numpy) |
+| SciPy | Scientific computation | BSD-3-Clause plus bundled notices | [scipy/scipy](https://github.com/scipy/scipy) |
+| scikit-learn | Basic Pitch scientific stack | BSD-3-Clause | [scikit-learn/scikit-learn](https://github.com/scikit-learn/scikit-learn) |
+| Numba | JIT acceleration used by the audio stack | BSD-2-Clause | [numba/numba](https://github.com/numba/numba) |
+| llvmlite | LLVM binding used by Numba | BSD-2-Clause and Apache-2.0 WITH LLVM-exception | [numba/llvmlite](https://github.com/numba/llvmlite) |
+| mir_eval | Music-information-retrieval evaluation | MIT | [mir-evaluation/mir_eval](https://github.com/mir-evaluation/mir_eval) |
+| pretty_midi | MIDI representation used by Basic Pitch | MIT | [craffel/pretty-midi](https://github.com/craffel/pretty-midi) |
+| resampy | Audio resampling dependency | ISC | [bmcfee/resampy](https://github.com/bmcfee/resampy) |
+| CPython | Python runtime | PSF-2.0 | [python/cpython](https://github.com/python/cpython) |
+| PySide6 / Qt | Desktop UI and multimedia runtime | LGPL-3.0/GPL, module-specific | [Qt official GitHub mirror](https://github.com/qt) |
+| Mido | Standard MIDI parsing and writing | MIT | [mido/mido](https://github.com/mido/mido) |
+| Pillow | Build-time image/icon processing | MIT-CMU | [python-pillow/Pillow](https://github.com/python-pillow/Pillow) |
+| PyInstaller | Windows one-file packaging | GPL-2.0-or-later with special exception | [pyinstaller/pyinstaller](https://github.com/pyinstaller/pyinstaller) |
+| Setuptools | Package metadata/build support | MIT | [pypa/setuptools](https://github.com/pypa/setuptools) |
+| typing_extensions | Python typing compatibility | PSF-2.0 | [python/typing_extensions](https://github.com/python/typing_extensions) |
+
+License labels above are human-readable summaries of the installed metadata.
+Bundled subcomponents retain their own notices and may make a package's exact
+license expression broader than the short label.
+
+## Basic Pitch code and ONNX model
+
+The official Basic Pitch v0.4.0 release places its
+[`LICENSE`](https://github.com/spotify/basic-pitch/blob/v0.4.0/LICENSE),
+[`NOTICE`](https://github.com/spotify/basic-pitch/blob/v0.4.0/NOTICE), and
+packaged
+[`nmp.onnx`](https://github.com/spotify/basic-pitch/blob/v0.4.0/basic_pitch/saved_models/icassp_2022/nmp.onnx)
+in the same tagged repository tree. The installed wheel likewise contains the
+model and both notice files. No separate restrictive model license was found.
+The unmodified model is therefore treated as part of the Apache-2.0 Basic
+Pitch distribution; redistribution must include the license and retain the
+applicable NOTICE material. The evidence and remaining release boundary are
+documented in
+[`docs/BASIC_PITCH_LICENSE_REVIEW.md`](docs/BASIC_PITCH_LICENSE_REVIEW.md).
+
 Earlier repository revisions contained vendored/adapted code attributed to
 Bishop-R's `midi-to-bdo`. That historical material remains subject to its
 original terms. Starting with v0.3.0, the current source tree and release
@@ -24,14 +74,11 @@ Source checkouts install the same runtime through
 `scripts/install_transcription.ps1`. These packages retain their own upstream
 terms and notices.
 
-The bundled stack is expected to include Basic Pitch (Apache-2.0 source
-license), ONNX Runtime (MIT), librosa (ISC), mir_eval (MIT), pretty_midi (MIT),
-resampy (ISC), scikit-learn (BSD-3-Clause), SciPy (BSD-3-Clause), and their
-transitive/native dependencies, including SoundFile (BSD-3-Clause) and
-python-soxr/libsoxr (LGPL-2.1-or-later). These labels are an engineering
-inventory, not a completed legal review. In particular, the Basic Pitch ONNX
-model and native libraries bundled inside scientific Python wheels require an
-exact-artifact notice and redistribution review.
+The Basic Pitch model finding resolves only that model's upstream licensing
+evidence. Native libraries bundled inside scientific Python/Qt wheels still
+require exact-artifact notice review. The checked-in public-release policy
+therefore remains fail-closed until all release artifacts, not just Basic
+Pitch, are approved.
 
 The semantic-block, harmony, deterministic voice-grouping, and BDO Top-3
 features do not add another pretrained model or a separate product edition.
@@ -40,6 +87,17 @@ covered by the generated build inventory. References to Sonic Visualiser, Tony,
 Chordino, MT3, YourMT3, Essentia, and Omnizart describe interaction or research
 context only; no source code, model, or runtime from those projects is copied or
 bundled by this implementation.
+
+Historical/reference acknowledgements also link to their GitHub origin:
+
+- [iDevelopThings / bdo-data-extractor](https://github.com/iDevelopThings/bdo-data-extractor)
+  is a research reference for the separate local extraction workflow; its code
+  is not bundled by the application.
+- [Bishop-R](https://github.com/Bishop-R) and
+  [Skyro468](https://github.com/Skyro468) are credited for historical public
+  BDO-format research; their runtime code is not present in v0.3.0.
+- [OpenAI](https://github.com/openai) is acknowledged for development
+  collaboration. The application contains no OpenAI API or cloud-model runtime.
 
 The development-only transcription benchmark can download BabySlakh from
 Zenodo record 4603844. BabySlakh is licensed CC BY 4.0. Its audio and MIDI are
