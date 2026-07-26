@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- 重做程序内致谢与引用：按自动扒谱/科学计算、应用运行/打包、格式研究/协作
+  分类列出直接及发行关键依赖，每项显示许可证或使用边界并提供可点击 GitHub
+  链接；补充 Basic Pitch ICASSP 2022 论文引用。核对 Basic Pitch 0.4.0 官方
+  tag 与安装 wheel，确认 Apache-2.0 `LICENSE`、Spotify `NOTICE` 和随包
+  `nmp.onnx` 位于同一发行物，单独记录模型再分发证据；完整 EXE 仍须通过其余
+  原生/传递依赖的 fail-closed 通知审查。
 - 多轨时间轴把游戏轨道音量直接放入每一行并统一写入
   `bdo_track_volume`；新编辑范围与游戏一致为 0–100/default 70，实时与
   离线试听共用该增益。输出目录迁入设置，底边栏只保留性能指标。

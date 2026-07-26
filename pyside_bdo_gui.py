@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, replace
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
 from functools import lru_cache
+from html import escape
 import faulthandler
 import hashlib
 import json
@@ -417,6 +418,7 @@ try:
         QSlider,
         QSpinBox,
         QStackedWidget,
+        QTextBrowser,
         QTextEdit,
         QVBoxLayout,
         QWidget,
@@ -625,6 +627,14 @@ from fluent_theme import (  # noqa: E402
     system_uses_dark_theme,
 )
 from version import __version__  # noqa: E402
+from third_party_credits import (  # noqa: E402
+    BASIC_PITCH_LICENSE_URL,
+    BASIC_PITCH_MODEL_URL,
+    BASIC_PITCH_NOTICE_URL,
+    CREDIT_ENTRIES,
+    CREDIT_SECTION_SOURCES,
+    RESEARCH_CITATIONS,
+)
 
 
 TRACK_COLORS = [
@@ -19899,11 +19909,52 @@ class MidiToBdoWindow(QMainWindow):
         text_title.setObjectName("ThanksSectionLabel")
         text_layout.addWidget(text_title)
 
-        thanks_text = QTextEdit()
+        thanks_text = QTextBrowser()
         thanks_text.setObjectName("ThanksText")
         thanks_text.setReadOnly(True)
+        thanks_text.setOpenExternalLinks(True)
         thanks_body_color = "#d8d3cc" if self._system_uses_dark_theme() else "#45413d"
         thanks_heading_color = "#f0c66f" if self._system_uses_dark_theme() else "#8a5a00"
+        section_sources = dict(CREDIT_SECTION_SOURCES)
+        credit_sections: list[str] = []
+        for section_key, _source in CREDIT_SECTION_SOURCES:
+            rows = []
+            for entry in CREDIT_ENTRIES:
+                if entry.section != section_key:
+                    continue
+                rows.append(
+                    "<p class=\"credit\">"
+                    f"<b>{escape(entry.name)}</b><br>"
+                    f"{escape(tr('许可证'))}: "
+                    f"{escape(tr(entry.license_label))}<br>"
+                    f"<a href=\"{escape(entry.github_url)}\">"
+                    f"{escape(entry.github_url)}</a>"
+                    "</p>"
+                )
+            credit_sections.append(
+                f"<h2>{escape(tr(section_sources[section_key]))}</h2>"
+                + "".join(rows)
+            )
+
+        citation_rows = []
+        for citation in RESEARCH_CITATIONS:
+            citation_rows.append(
+                "<p class=\"credit\">"
+                f"<b>{escape(citation.name)}</b><br>"
+                f"{escape(citation.citation)}<br>"
+                f"<a href=\"{escape(citation.github_url)}\">"
+                f"{escape(citation.github_url)}</a><br>"
+                f"<a href=\"{escape(citation.publication_url)}\">"
+                f"{escape(tr('论文'))}: {escape(citation.publication_url)}</a>"
+                "</p>"
+            )
+
+        credits_html = "".join(credit_sections)
+        citations_html = "".join(citation_rows)
+        third_party_url = (
+            "https://github.com/CocoaMist/3007-BDO_Music_Composer/"
+            "blob/master/THIRD_PARTY_NOTICES.md"
+        )
         thanks_text.setHtml(
             f"""
             <style>
@@ -19911,21 +19962,30 @@ class MidiToBdoWindow(QMainWindow):
                 h2 {{ color: {thanks_heading_color}; font-size: 17px; margin-top: 14px; margin-bottom: 6px; }}
                 p {{ margin: 7px 0; line-height: 145%; }}
                 b {{ color: {thanks_heading_color}; }}
+                a {{ color: #70aee8; text-decoration: none; }}
+                .credit {{ margin-bottom: 11px; }}
             </style>
-            <h2>{tr("格式研究与早期启发")}</h2>
-            <p>• <b>Bishop-R / midi-to-bdo</b></p>
-            <p>• <b>Skyro468 / BDO-Music-Composer-Stuff</b></p>
-            <p>• <b>iDevelopThings / bdo-data-extractor</b></p>
+            <h2>{escape(tr("Basic Pitch 代码与模型许可"))}</h2>
+            <p>{escape(tr("Basic Pitch 0.4.0 的代码、随包 nmp.onnx、LICENSE 与 NOTICE 位于同一官方发行树；未发现模型目录中的单独限制性许可证。按 Apache-2.0 再分发时必须附带 LICENSE 并保留 NOTICE。"))}</p>
+            <p>
+              <a href="{escape(BASIC_PITCH_MODEL_URL)}">nmp.onnx · GitHub</a><br>
+              <a href="{escape(BASIC_PITCH_LICENSE_URL)}">LICENSE · GitHub</a><br>
+              <a href="{escape(BASIC_PITCH_NOTICE_URL)}">NOTICE · GitHub</a>
+            </p>
 
-            <h2>{tr("开源基础")}</h2>
-            <p>• <b>mido</b></p>
-            <p>• <b>PySide6 / Qt</b></p>
+            {credits_html}
 
-            <h2>{tr("采样、验证与协作")}</h2>
-            <p>• <b>{tr("BDO 原始采样映射")}</b></p>
+            <h2>{escape(tr("论文引用"))}</h2>
+            {citations_html}
+
+            <h2>{escape(tr("社区、测试与音乐交流"))}</h2>
             <p>• <b>CN Server · Rainbow Club / 彩虹乐队</b></p>
-            <p>• <b>ChatGPT / OpenAI</b></p>
             <p>• <b>{tr("开源维护者、文档作者、测试者与社区玩家")}</b></p>
+            <p>{escape(tr("本程序未内置 OpenAI API 或云端模型；OpenAI 仅列为开发协作致谢。"))}</p>
+
+            <h2>{escape(tr("完整许可清单"))}</h2>
+            <p>{escape(tr("这里是便于阅读的致谢；每次构建仍会生成并随 EXE 嵌入完整的依赖、许可证、NOTICE 与二进制哈希清单。"))}</p>
+            <p><a href="{third_party_url}">{third_party_url}</a></p>
             """
         )
         text_layout.addWidget(thanks_text, stretch=1)

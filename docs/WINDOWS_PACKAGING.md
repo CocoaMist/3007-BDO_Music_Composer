@@ -53,9 +53,18 @@ The generated report is temporary build input and is embedded under
 `licenses/transcription`; it is not committed as a machine-specific artifact.
 Missing metadata stays visible as unresolved instead of being guessed.
 
+Basic Pitch 0.4.0 publishes its Apache-2.0 `LICENSE`, Spotify `NOTICE`, and
+packaged `nmp.onnx` in the same tagged GitHub tree, and the installed wheel
+contains the same three artifacts. The model-specific finding and academic
+citation are recorded in
+[Basic Pitch license evidence](BASIC_PITCH_LICENSE_REVIEW.md). This resolves
+the Basic Pitch model evidence item; it does not approve the notices for every
+native library in the complete executable.
+
 ## Public-release gate
 
-Public distribution is currently blocked. Passing `-PublicRelease` to the same
+Public distribution is currently blocked by the remaining exact-artifact
+review. Passing `-PublicRelease` to the same
 `build.ps1` makes it require all of the following:
 
 - `public_release_cleared` is explicitly true in
