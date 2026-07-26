@@ -38,7 +38,7 @@ class InstrumentEditorAdaptationTests(unittest.TestCase):
         # Game CSS calls instrument_39 클라리넷 and its SoundBank is named
         # midi_instrument_27_proclarinet.  Keep this distinct from the
         # beginner recorder at ID 0x02.
-        self.assertEqual("弗罗凯特拉：单簧管", BDO_INSTRUMENT_NAMES[0x27])
+        self.assertEqual("弗洛凯斯特拉：单簧管", BDO_INSTRUMENT_NAMES[0x27])
         self.assertEqual(
             "wind.clarinet",
             self.adaptations[0x27].visual_key,

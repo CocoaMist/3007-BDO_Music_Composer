@@ -31,13 +31,29 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QSlider,
+    QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
     QWidgetAction,
 )
 
-from i18n import tr, trf
+from i18n import defer_tr, tr, trf, trfv, tr_joinv, trv
+
+
+def _responsive_control_width(
+    widget: QWidget,
+    minimum: int,
+    maximum: int,
+) -> None:
+    """Prefer translated content width but retain the compact two-row rail."""
+
+    widget.setMinimumWidth(int(minimum))
+    widget.setMaximumWidth(int(maximum))
+    widget.setSizePolicy(
+        QSizePolicy.Policy.Preferred,
+        QSizePolicy.Policy.Fixed,
+    )
 
 
 def _value(item: object, name: str, default: object = None) -> object:
@@ -77,19 +93,25 @@ def _pitch_class_name(value: object) -> str:
         return "—"
 
 
+_VOICE_ROLE_SOURCES = {
+    "primary_melody": "主旋律",
+    "secondary_melody": "第二旋律",
+    "harmony": "和声",
+    "bass": "低音",
+    "rhythm": "节奏",
+    "percussion": "打击乐",
+    "pad": "铺底",
+    "ornament": "装饰",
+    "fx": "效果",
+}
+
+
+def voice_role_source_label(value: object) -> str:
+    return _VOICE_ROLE_SOURCES.get(str(value or ""), "声部")
+
+
 def voice_role_label(value: object) -> str:
-    source = {
-        "primary_melody": "主旋律",
-        "secondary_melody": "第二旋律",
-        "harmony": "和声",
-        "bass": "低音",
-        "rhythm": "节奏",
-        "percussion": "打击乐",
-        "pad": "铺底",
-        "ornament": "装饰",
-        "fx": "效果",
-    }.get(str(value or ""), "声部")
-    return tr(source)
+    return tr(voice_role_source_label(value))
 
 
 def _as_percent(value: object) -> int:
@@ -590,6 +612,8 @@ class TranscriptionHarmonySummary(QWidget):
 
         layout.addWidget(QLabel(tr("和弦段"), self))
         self.segment_combo = QComboBox(self)
+        # Chord/time summaries are analysis data, not UI source strings.
+        self.segment_combo.setProperty("i18nSkipItems", True)
         self.segment_combo.setMinimumWidth(190)
         self.segment_combo.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
@@ -650,9 +674,12 @@ class TranscriptionHarmonySummary(QWidget):
                 _value(self._global_key, "alternatives", ())
             )
             self.key_label.setToolTip(
-                tr("备选：") + " · ".join(
-                    self._format_key(item, include_confidence=False)
-                    for item in alternatives[:3]
+                trf(
+                    "备选：{alternatives}",
+                    alternatives=" · ".join(
+                        self._format_key(item, include_confidence=False)
+                        for item in alternatives[:3]
+                    ),
                 )
                 if alternatives
                 else ""
@@ -895,16 +922,18 @@ class _InstrumentMatchCard(QFrame):
             self.hide()
             return
         instrument_id = int(_value(match, "instrument_id", -1))
-        name = str(
-            _value(
-                match,
-                "instrument_name",
-                trf("BDO 乐器 {instrument_id}", instrument_id=instrument_id),
-            )
+        name = _value(
+            match,
+            "instrument_name",
+            trfv("BDO 乐器 {instrument_id}", instrument_id=instrument_id),
         )
         score = _as_percent(_value(match, "total_score"))
         coverage = _as_percent(_value(match, "pitch_coverage"))
-        self.select_button.setText(f"{name}  {score}%")
+        self.select_button.setText(trf(
+            "{instrument}  {score}%",
+            instrument=name,
+            score=score,
+        ))
         self.coverage_label.setText(
             trf("音域覆盖 {coverage}%", coverage=coverage)
         )
@@ -912,18 +941,22 @@ class _InstrumentMatchCard(QFrame):
         warnings = _sequence(
             _value(match, "warnings", _value(match, "limitations", ()))
         )
-        summary = " · ".join(str(reason) for reason in reasons[:2])
-        if not summary:
-            summary = tr("等待匹配理由")
-        self.reason_label.setText(summary)
+        summary = (
+            tr_joinv(reasons[:2], " · ")
+            if reasons
+            else trv("等待匹配理由")
+        )
+        self.reason_label.setText(trf("{summary}", summary=summary))
         self.warning_label.setText(
             trf("可能不适合：{reason}", reason=warnings[0])
             if warnings
             else tr("未发现明显硬性冲突")
         )
-        tooltip_parts = [str(item) for item in reasons]
-        tooltip_parts.extend(str(item) for item in warnings)
-        self.setToolTip("\n".join(tooltip_parts))
+        tooltip_parts = (*reasons, *warnings)
+        self.setToolTip(trf(
+            "{details}",
+            details=tr_joinv(tooltip_parts, "\n"),
+        ))
         self.show()
 
     def set_selected(self, selected: bool) -> None:
@@ -1027,13 +1060,8 @@ class TranscriptionInstrumentMatches(QWidget):
             else int(confirmed_instrument_id)
         )
         group_id = _value(voice_group, "group_id", "")
-        role = voice_role_label(_value(voice_group, "role", ""))
-        self.group_label.setText(
-            trf("声部 {group_id} · {role}", group_id=group_id, role=role)
-            if voice_group is not None
-            else tr("未选择声部组")
-        )
-        if (
+        role = trv(voice_role_source_label(_value(voice_group, "role", "")))
+        confirmed_outside_top_three = (
             voice_group is not None
             and self._confirmed_instrument_id is not None
             and all(
@@ -1041,14 +1069,22 @@ class TranscriptionInstrumentMatches(QWidget):
                 != self._confirmed_instrument_id
                 for match in self._matches
             )
-        ):
-            self.group_label.setText(
-                self.group_label.text()
-                + trf(
-                    " · 已确认 0x{instrument_id:02X}（不在当前 Top-3）",
-                    instrument_id=self._confirmed_instrument_id,
-                )
-            )
+        )
+        if voice_group is None:
+            self.group_label.setText(tr("未选择声部组"))
+        elif confirmed_outside_top_three:
+            self.group_label.setText(trf(
+                "声部 {group_id} · {role} · 已确认 0x{instrument_id:02X}（不在当前 Top-3）",
+                group_id=group_id,
+                role=role,
+                instrument_id=self._confirmed_instrument_id,
+            ))
+        else:
+            self.group_label.setText(trf(
+                "声部 {group_id} · {role}",
+                group_id=group_id,
+                role=role,
+            ))
         for index, card in enumerate(self.cards):
             card.set_match(
                 self._matches[index]
@@ -1346,7 +1382,7 @@ class TranscriptionEditorPanel(QWidget):
         self._assist_available = False
         self._melody_lines_available = False
         self._suspected_fragment_count = 0
-        self._idle_status = tr("载入参考音频后可开始整首分析")
+        self._idle_status = trv("载入参考音频后可开始整首分析")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -1361,7 +1397,7 @@ class TranscriptionEditorPanel(QWidget):
 
         self.audio_button = QPushButton(tr("载入"), self.analysis_bar)
         self.audio_button.setObjectName("TranscriptionAudioButton")
-        self.audio_button.setFixedWidth(64)
+        _responsive_control_width(self.audio_button, 64, 104)
         self.audio_button.clicked.connect(self._audio_button_clicked)
         analysis.addWidget(self.audio_button, 0, 0)
 
@@ -1369,7 +1405,7 @@ class TranscriptionEditorPanel(QWidget):
         self.analyze_button.setObjectName("TranscriptionAnalyzeButton")
         self.analyze_button.setProperty("kind", "primary")
         self.analyze_button.setAccessibleName(tr("分析整首"))
-        self.analyze_button.setFixedWidth(64)
+        _responsive_control_width(self.analyze_button, 64, 104)
         self.analyze_button.clicked.connect(self.analyze_requested)
         analysis.addWidget(self.analyze_button, 0, 1)
 
@@ -1378,7 +1414,7 @@ class TranscriptionEditorPanel(QWidget):
             self.analysis_bar,
         )
         self.redecode_button.setAccessibleName(tr("重新分析区间"))
-        self.redecode_button.setFixedWidth(58)
+        _responsive_control_width(self.redecode_button, 58, 92)
         self.redecode_button.clicked.connect(self.redecode_requested)
         analysis.addWidget(self.redecode_button, 0, 2)
 
@@ -1389,7 +1425,7 @@ class TranscriptionEditorPanel(QWidget):
         for label, value in self.ANALYSIS_MODES:
             self.analysis_mode_combo.addItem(tr(label), value)
         self.analysis_mode_combo.setMinimumContentsLength(7)
-        self.analysis_mode_combo.setFixedWidth(136)
+        _responsive_control_width(self.analysis_mode_combo, 136, 188)
         self.analysis_mode_combo.currentIndexChanged.connect(
             self._analysis_mode_changed,
         )
@@ -1399,7 +1435,7 @@ class TranscriptionEditorPanel(QWidget):
         for label, value in self.SENSITIVITIES:
             self.sensitivity_combo.addItem(tr(label), value)
         self.sensitivity_combo.setMinimumContentsLength(4)
-        self.sensitivity_combo.setFixedWidth(90)
+        _responsive_control_width(self.sensitivity_combo, 90, 124)
         self.sensitivity_combo.setCurrentIndex(1)
         self.sensitivity_combo.currentIndexChanged.connect(
             self._sensitivity_changed,
@@ -1425,7 +1461,7 @@ class TranscriptionEditorPanel(QWidget):
         self.cleanup_profile_caption.setForegroundRole(
             QPalette.ColorRole.Link
         )
-        self.cleanup_profile_caption.setMaximumWidth(60)
+        self.cleanup_profile_caption.setMaximumWidth(96)
         cleanup.addWidget(self.cleanup_profile_caption)
 
         self.cleanup_profile_combo = QComboBox(self.cleanup_profile_group)
@@ -1444,7 +1480,7 @@ class TranscriptionEditorPanel(QWidget):
             self.cleanup_profile_combo.findData("preserve")
         )
         self.cleanup_profile_combo.setMinimumContentsLength(5)
-        self.cleanup_profile_combo.setFixedWidth(96)
+        _responsive_control_width(self.cleanup_profile_combo, 96, 132)
         self.cleanup_profile_combo.setToolTip(
             tr(
                 "独立于灵敏度。已有分析时，切换档位只从缓存证据"
@@ -1475,6 +1511,10 @@ class TranscriptionEditorPanel(QWidget):
         self.confidence_slider.setRange(0, 100)
         self.confidence_slider.setValue(30)
         self.confidence_slider.setFixedWidth(88)
+        self.confidence_slider.setAccessibleName(
+            tr("低置信候选透明度")
+        )
+        self.confidence_slider.setToolTip(confidence_caption.toolTip())
         self.confidence_slider.valueChanged.connect(
             self._confidence_slider_changed,
         )
@@ -1492,7 +1532,7 @@ class TranscriptionEditorPanel(QWidget):
         self.melody_lines_button.setText(tr("旋律线"))
         self.melody_lines_button.setAccessibleName(tr("旋律线辅助"))
         self.melody_lines_button.setToolTip(tr("分析后显示旋律线"))
-        self.melody_lines_button.setFixedWidth(78)
+        _responsive_control_width(self.melody_lines_button, 78, 132)
         self.melody_lines_button.setCheckable(True)
         self.melody_lines_button.setChecked(True)
         self.melody_lines_button.setPopupMode(
@@ -1520,18 +1560,18 @@ class TranscriptionEditorPanel(QWidget):
         self.diagnostic_toggle_button.setText(tr("证据"))
         self.diagnostic_toggle_button.setAccessibleName(tr("诊断证据"))
         self.diagnostic_toggle_button.setToolTip(tr("诊断证据"))
-        self.diagnostic_toggle_button.setFixedWidth(72)
+        _responsive_control_width(self.diagnostic_toggle_button, 72, 104)
         self.diagnostic_toggle_button.setCheckable(True)
         self.diagnostic_toggle_button.setArrowType(Qt.RightArrow)
         self.diagnostic_toggle_button.toggled.connect(
             self.set_diagnostic_evidence_expanded,
         )
         self.frame_checkbox = QCheckBox("Frame", self.analysis_bar)
-        self.frame_checkbox.setFixedWidth(64)
+        _responsive_control_width(self.frame_checkbox, 64, 96)
         self.onset_checkbox = QCheckBox("Onset", self.analysis_bar)
-        self.onset_checkbox.setFixedWidth(68)
+        _responsive_control_width(self.onset_checkbox, 68, 104)
         self.contour_checkbox = QCheckBox("Contour", self.analysis_bar)
-        self.contour_checkbox.setFixedWidth(88)
+        _responsive_control_width(self.contour_checkbox, 88, 128)
         self.contour_checkbox.setToolTip(
             tr("默认关闭细粒度音高轮廓证据")
         )
@@ -1541,7 +1581,7 @@ class TranscriptionEditorPanel(QWidget):
         )
         self.spectrogram_checkbox.setAccessibleName(tr("原始声谱图"))
         self.spectrogram_checkbox.setToolTip(tr("原始声谱图（诊断）"))
-        self.spectrogram_checkbox.setFixedWidth(64)
+        _responsive_control_width(self.spectrogram_checkbox, 64, 104)
         self.spectrogram_checkbox.setChecked(False)
         self.reference_opacity_button = QToolButton(self.analysis_bar)
         self.reference_opacity_button.setObjectName(
@@ -1551,7 +1591,7 @@ class TranscriptionEditorPanel(QWidget):
         self.reference_opacity_button.setToolTip(
             tr("旋律线、Frame、Onset、Contour 与声谱透明度")
         )
-        self.reference_opacity_button.setFixedWidth(64)
+        _responsive_control_width(self.reference_opacity_button, 64, 104)
         self.reference_opacity_button.setPopupMode(
             QToolButton.ToolButtonPopupMode.InstantPopup
         )
@@ -1571,7 +1611,7 @@ class TranscriptionEditorPanel(QWidget):
         self.reference_opacity_caption.setToolTip(
             tr("旋律线、Frame、Onset、Contour 与声谱透明度")
         )
-        self.reference_opacity_caption.setFixedWidth(36)
+        _responsive_control_width(self.reference_opacity_caption, 36, 104)
         self.reference_opacity_slider = QSlider(
             Qt.Horizontal,
             self.reference_opacity_popup,
@@ -1584,6 +1624,9 @@ class TranscriptionEditorPanel(QWidget):
         self.reference_opacity_slider.setFixedWidth(112)
         self.reference_opacity_slider.setToolTip(
             self.reference_opacity_caption.toolTip()
+        )
+        self.reference_opacity_slider.setAccessibleName(
+            tr("参考背景透明度")
         )
         self.reference_opacity_caption.setBuddy(
             self.reference_opacity_slider
@@ -1610,7 +1653,7 @@ class TranscriptionEditorPanel(QWidget):
         )
         self.show_rejected_checkbox.setAccessibleName(tr("仅已拒绝"))
         self.show_rejected_checkbox.setToolTip(tr("仅已拒绝"))
-        self.show_rejected_checkbox.setFixedWidth(92)
+        _responsive_control_width(self.show_rejected_checkbox, 92, 120)
         self.show_suppressed_checkbox = QCheckBox(
             tr("隐藏项"),
             self.analysis_bar,
@@ -1618,7 +1661,7 @@ class TranscriptionEditorPanel(QWidget):
         self.show_suppressed_checkbox.setAccessibleName(
             tr("显示已隐藏碎音")
         )
-        self.show_suppressed_checkbox.setFixedWidth(72)
+        _responsive_control_width(self.show_suppressed_checkbox, 72, 104)
         self.show_suppressed_checkbox.setToolTip(
             tr(
                 "显示干净档自动隐藏的候选供审阅；切换到平衡或保留"
@@ -1651,7 +1694,7 @@ class TranscriptionEditorPanel(QWidget):
         self.align_audio_button.setToolTip(
             tr("音频位置对齐播放头")
         )
-        self.align_audio_button.setFixedWidth(60)
+        _responsive_control_width(self.align_audio_button, 60, 92)
         self.align_audio_button.clicked.connect(self.align_audio_requested)
         guide_tools.addWidget(self.align_audio_button)
         self.beat_origin_button = QPushButton(
@@ -1664,14 +1707,14 @@ class TranscriptionEditorPanel(QWidget):
         self.beat_origin_button.setToolTip(
             tr("将播放头设为第一拍")
         )
-        self.beat_origin_button.setFixedWidth(56)
+        _responsive_control_width(self.beat_origin_button, 56, 88)
         self.beat_origin_button.clicked.connect(self.beat_origin_requested)
         guide_tools.addWidget(self.beat_origin_button)
         self.clear_range_button = QPushButton(
             tr("清除 A–B"),
             self.analysis_bar,
         )
-        self.clear_range_button.setFixedWidth(60)
+        _responsive_control_width(self.clear_range_button, 60, 112)
         self.clear_range_button.clicked.connect(self.clear_range_requested)
         guide_tools.addWidget(self.clear_range_button)
         analysis.addWidget(self.guide_tools_bar, 1, 0, 1, 10)
@@ -1700,10 +1743,10 @@ class TranscriptionEditorPanel(QWidget):
         self.review_redo_button.setToolTip(tr("审阅重做"))
         self.review_redo_button.clicked.connect(self.review_redo_requested)
         self.reject_button = QPushButton(tr("拒绝"), self.review_bar)
-        self.reject_button.setFixedWidth(64)
+        _responsive_control_width(self.reject_button, 64, 96)
         self.reject_button.clicked.connect(self.reject_requested)
         self.restore_button = QPushButton(tr("恢复"), self.review_bar)
-        self.restore_button.setFixedWidth(64)
+        _responsive_control_width(self.restore_button, 64, 104)
         self.restore_button.clicked.connect(self.restore_requested)
         self.select_fragments_button = QPushButton(
             tr("碎音"),
@@ -1718,7 +1761,7 @@ class TranscriptionEditorPanel(QWidget):
         self.select_fragments_button.setToolTip(
             tr("选择疑似碎音")
         )
-        self.select_fragments_button.setFixedWidth(96)
+        _responsive_control_width(self.select_fragments_button, 96, 128)
         self.select_fragments_button.clicked.connect(
             self.select_fragments_requested,
         )
@@ -1745,10 +1788,10 @@ class TranscriptionEditorPanel(QWidget):
         review.addWidget(self.assist_toggle_button)
 
         self.status_label = _ElidedStatusLabel(
-            self._idle_status,
+            str(self._idle_status),
             self.review_bar,
         )
-        self.status_label.setText(self._idle_status)
+        self.status_label.setText(str(self._idle_status))
         self.status_label.setObjectName("Muted")
         self.status_label.setMinimumWidth(96)
         review.addWidget(self.status_label, 1)
@@ -1758,7 +1801,7 @@ class TranscriptionEditorPanel(QWidget):
             self.review_bar,
         )
         self.staging_label.setObjectName("Muted")
-        self.staging_label.setFixedWidth(72)
+        _responsive_control_width(self.staging_label, 72, 120)
         review.addWidget(self.staging_label)
         self.clear_staging_button = QPushButton(
             tr("清空"),
@@ -1768,7 +1811,7 @@ class TranscriptionEditorPanel(QWidget):
             tr("清除暂存")
         )
         self.clear_staging_button.setToolTip(tr("清除暂存"))
-        self.clear_staging_button.setFixedWidth(64)
+        _responsive_control_width(self.clear_staging_button, 64, 96)
         self.clear_staging_button.clicked.connect(
             self.clear_staging_requested,
         )
@@ -1783,7 +1826,7 @@ class TranscriptionEditorPanel(QWidget):
         self.write_current_track_button.setToolTip(
             tr("写入当前轨草稿")
         )
-        self.write_current_track_button.setFixedWidth(96)
+        _responsive_control_width(self.write_current_track_button, 96, 136)
         self.write_current_track_button.setProperty("kind", "primary")
         self.write_current_track_button.clicked.connect(
             self.write_current_track_requested,
@@ -1796,7 +1839,7 @@ class TranscriptionEditorPanel(QWidget):
             tr("复制到其他轨")
         )
         self.copy_to_track_button.setToolTip(tr("复制到其他轨"))
-        self.copy_to_track_button.setFixedWidth(96)
+        _responsive_control_width(self.copy_to_track_button, 96, 136)
         self.copy_to_track_button.setPopupMode(
             QToolButton.ToolButtonPopupMode.InstantPopup,
         )
@@ -2091,6 +2134,7 @@ class TranscriptionEditorPanel(QWidget):
     ) -> None:
         self._audio_loaded = bool(loaded)
         self.audio_button.setText(tr("卸载") if loaded else tr("载入"))
+        self.audio_button.setProperty("i18nSkipToolTip", bool(loaded))
         self.audio_button.setToolTip(display_name if loaded else "")
         self._refresh_analysis_controls()
 
@@ -2216,12 +2260,12 @@ class TranscriptionEditorPanel(QWidget):
     def set_analysis_available(
         self,
         available: bool,
-        reason: str = "",
+        reason: object = "",
     ) -> None:
         self._analysis_available = bool(available)
-        self._analysis_unavailable_reason = tr(reason) if reason else ""
+        self._analysis_unavailable_reason = defer_tr(reason) if reason else ""
         self.analyze_button.setToolTip(
-            "" if available else self._analysis_unavailable_reason
+            "" if available else str(self._analysis_unavailable_reason)
         )
         if not self._analysis_busy:
             self.status_label.setText(self._effective_idle_status())
@@ -2246,8 +2290,8 @@ class TranscriptionEditorPanel(QWidget):
             self.status_label.setText(self._effective_idle_status())
         self._refresh_analysis_controls()
 
-    def set_status(self, text: str) -> None:
-        self._idle_status = tr(str(text))
+    def set_status(self, text: object) -> None:
+        self._idle_status = defer_tr(text)
         if not self._analysis_busy:
             self.status_label.setText(self._effective_idle_status())
 
@@ -2257,8 +2301,25 @@ class TranscriptionEditorPanel(QWidget):
             not self._analysis_available
             and self._analysis_unavailable_reason
         ):
-            return self._analysis_unavailable_reason
-        return self._idle_status
+            return str(self._analysis_unavailable_reason)
+        return str(self._idle_status)
+
+    def retranslate_dynamic_content(self) -> None:
+        """Re-render cached idle/backend messages in the active locale."""
+
+        for index in range(self.cleanup_profile_combo.count()):
+            profile = str(self.cleanup_profile_combo.itemData(index) or "")
+            tooltip_source = self.CLEANUP_PROFILE_TOOLTIPS.get(profile)
+            if tooltip_source is not None:
+                self.cleanup_profile_combo.setItemData(
+                    index,
+                    tr(tooltip_source),
+                    Qt.ItemDataRole.ToolTipRole,
+                )
+        self._refresh_cleanup_profile_cue()
+        if not self._analysis_busy:
+            self.status_label.setText(self._effective_idle_status())
+        self._refresh_analysis_controls()
 
     def set_action_state(
         self,
@@ -2343,6 +2404,9 @@ class TranscriptionEditorPanel(QWidget):
             key=lambda item: (item[1].casefold(), item[0]),
         ):
             action = self.copy_to_track_menu.addAction(label)
+            # Track names are project-owned data.  A name such as "Play" must
+            # not be reverse-mapped to a fixed UI source during live switching.
+            action.setProperty("i18nSkipText", True)
             action.setData(track_id)
             action.triggered.connect(
                 lambda _checked=False, target=track_id: (
@@ -2397,7 +2461,7 @@ class TranscriptionEditorPanel(QWidget):
         self.beat_origin_button.setEnabled(not self._analysis_busy)
         self.clear_range_button.setEnabled(self._range_available)
         if not self._analysis_available:
-            disabled_reason = self._analysis_unavailable_reason
+            disabled_reason = str(self._analysis_unavailable_reason)
         elif self._analysis_busy:
             disabled_reason = tr("正在分析参考音频…")
         elif self._staging_locked:
@@ -2424,4 +2488,5 @@ __all__ = [
     "TranscriptionPhraseReviewControls",
     "TranscriptionWaveformLane",
     "voice_role_label",
+    "voice_role_source_label",
 ]
