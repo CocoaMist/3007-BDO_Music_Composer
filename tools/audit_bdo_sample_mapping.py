@@ -15,17 +15,189 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from bdo_midi import BDO_INSTRUMENT_NAMES, BDO_INSTRUMENTS  # noqa: E402
-from bdo_sample_renderer import BDO_BANK_BY_ID  # noqa: E402
-from bdo_realtime_audio import marnian_synth_matrix  # noqa: E402
+from bdo_instrument_samples import (  # noqa: E402
+    BDO_BANK_BY_ID,
+    bank_for_instrument,
+    banks_for_instrument,
+    marnian_synth_matrix,
+    preview_route_ntype,
+)
 from inspect_bdo import parse_bdo  # noqa: E402
-from pyside_bdo_gui import BDO_ARTICULATIONS  # noqa: E402
+from pyside_bdo_gui import BDO_ARTICULATIONS, BDO_EDITOR_PITCH_RANGES  # noqa: E402
 from project_paths import WWISE_MIDI_MAP_PATH  # noqa: E402
+
+
+def _zone_pitches(rows: list[dict]) -> frozenset[int]:
+    return frozenset(
+        pitch
+        for row in rows
+        if row.get("wav_exists")
+        for pitch in range(int(row["key_min"]), int(row["key_max"]) + 1)
+    )
+
+
+def _range_label(pitches: frozenset[int] | set[int]) -> str:
+    if not pitches:
+        return "-"
+    low, high = min(pitches), max(pitches)
+    missing = high - low + 1 - len(pitches)
+    return f"{low}-{high}" + (f" ({missing} gaps)" if missing else "")
+
+
+def _velocity_hole_count(rows: list[dict], pitches: set[int]) -> int:
+    full_velocity = set(range(128))
+    holes = 0
+    for pitch in pitches:
+        covered: set[int] = set()
+        for row in rows:
+            if (
+                row.get("wav_exists")
+                and int(row["key_min"]) <= pitch <= int(row["key_max"])
+            ):
+                covered.update(
+                    range(
+                        int(row["velocity_min"]),
+                        int(row["velocity_max"]) + 1,
+                    )
+                )
+        if not full_velocity.issubset(covered):
+            holes += 1
+    return holes
+
+
+def audit_sample_root(sample_root: Path, by_bank: dict[str, list[dict]]) -> list[str]:
+    """Compare one private extracted sample tree without copying its paths."""
+    problems: list[str] = []
+    for suffix, extension in (("_WAV", ".wav"), ("_WEM", ".wem")):
+        candidates = [
+            path
+            for path in sample_root.iterdir()
+            if path.is_dir() and path.name.endswith(suffix)
+        ]
+        if len(candidates) != 1:
+            problems.append(
+                f"{suffix}: expected one sample directory, found {len(candidates)}"
+            )
+            continue
+        base = candidates[0]
+        actual_banks = {path.name for path in base.iterdir() if path.is_dir()}
+        missing_banks = sorted(set(by_bank) - actual_banks)
+        extra_banks = sorted(actual_banks - set(by_bank))
+        if missing_banks:
+            problems.append(f"{suffix}: missing banks {missing_banks}")
+        if extra_banks:
+            problems.append(f"{suffix}: extra banks {extra_banks}")
+        missing_files = 0
+        extra_files = 0
+        expected_total = 0
+        for bank, rows in by_bank.items():
+            expected = {str(row["source_id"]) for row in rows}
+            expected_total += len(expected)
+            directory = base / bank
+            actual = (
+                {path.stem for path in directory.glob(f"*{extension}")}
+                if directory.is_dir()
+                else set()
+            )
+            missing_files += len(expected - actual)
+            extra_files += len(actual - expected)
+        top_level = sum(1 for _path in base.glob(f"*{extension}"))
+        print(
+            f"{suffix}: banks={len(actual_banks)} expected_files={expected_total} "
+            f"missing={missing_files} extra_in_banks={extra_files} "
+            f"top_level_unmapped={top_level}"
+        )
+        if missing_files:
+            problems.append(f"{suffix}: {missing_files} mapped files missing")
+        if extra_files:
+            problems.append(f"{suffix}: {extra_files} unmapped files inside banks")
+    return problems
+
+
+def audit_articulation_routes(
+    by_bank: dict[str, list[dict]],
+) -> list[str]:
+    """Report native Event coverage separately from approximate fallbacks."""
+    problems: list[str] = []
+    native_routes = 0
+    full_routes = 0
+    fallback_routes = 0
+    print("Articulation Event / key-zone alignment:")
+    for instrument_id, definitions in sorted(BDO_ARTICULATIONS.items()):
+        bank = bank_for_instrument(instrument_id)
+        rows = by_bank.get(bank or "", [])
+        editor_keys = frozenset(
+            BDO_EDITOR_PITCH_RANGES.get(instrument_id, ())
+        )
+        # Hand drum and cymbals do not yet have a game-verified continuous
+        # editor range.  Their recovered Wwise zones are discrete and remain
+        # the only honest audit boundary until stronger game evidence exists.
+        playable_keys = editor_keys or _zone_pitches(rows)
+        for ntype, label in definitions:
+            route_ntype = preview_route_ntype(instrument_id, ntype)
+            route_rows = [
+                row
+                for row in rows
+                if route_ntype in {
+                    int(value)
+                    for value in row.get("route_ntypes", ())
+                }
+            ]
+            if not route_rows:
+                fallback_routes += 1
+                continue
+            native_routes += 1
+            route_keys = _zone_pitches(route_rows).intersection(playable_keys)
+            velocity_holes = _velocity_hole_count(
+                route_rows,
+                set(route_keys),
+            )
+            if not route_keys:
+                problems.append(
+                    f"0x{instrument_id:02x}/type {ntype}: "
+                    "native Event has no usable editor keys"
+                )
+                status = "empty"
+            elif velocity_holes:
+                problems.append(
+                    f"0x{instrument_id:02x}/type {ntype}: "
+                    f"{velocity_holes} native-route velocity holes"
+                )
+                status = f"{velocity_holes} velocity holes"
+            elif route_keys == playable_keys:
+                full_routes += 1
+                status = "full"
+            else:
+                status = "partial"
+            if status != "full":
+                event_label = (
+                    f" -> Event {route_ntype}"
+                    if route_ntype != int(ntype)
+                    else ""
+                )
+                print(
+                    f"  0x{instrument_id:02x}/type {ntype}{event_label} "
+                    f"{label}: "
+                    f"native={_range_label(route_keys)} "
+                    f"playable={_range_label(playable_keys)} {status}"
+                )
+    print(
+        f"Native articulation routes: {native_routes} "
+        f"(full-range {full_routes}, partial {native_routes - full_routes}); "
+        f"approximate fallbacks: {fallback_routes}"
+    )
+    return problems
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--map", type=Path, default=WWISE_MIDI_MAP_PATH)
     parser.add_argument("--music-dir", type=Path, help="Optional Black Desert Music directory")
+    parser.add_argument(
+        "--sample-root",
+        type=Path,
+        help="Optional private extracted-audio root containing *_WAV and *_WEM",
+    )
     args = parser.parse_args()
 
     active_ids = set(BDO_INSTRUMENTS.values())
@@ -68,6 +240,69 @@ def main() -> int:
     print(f"Mapped banks absent from HIRC JSON: {missing_banks or 'none'}")
     print(f"HIRC rows with missing WAV: {len(missing_wav)}")
     print(f"Marnian synth cells with missing WAV: {len(synth_missing)}")
+
+    range_problems: list[str] = []
+    print("Editor range / Wwise zone alignment:")
+    for instrument_id in sorted(active_ids):
+        banks = banks_for_instrument(instrument_id)
+        zone_sets = [
+            _zone_pitches(by_bank.get(bank, []))
+            for bank in banks
+        ]
+        common_zones = (
+            frozenset.intersection(*zone_sets)
+            if zone_sets
+            else frozenset()
+        )
+        editor_keys = frozenset(
+            BDO_EDITOR_PITCH_RANGES.get(instrument_id, ())
+        )
+        effective = (
+            common_zones.intersection(editor_keys)
+            if editor_keys
+            else common_zones
+        )
+        missing_editor = editor_keys - common_zones
+        velocity_holes = sum(
+            _velocity_hole_count(
+                by_bank.get(bank, []),
+                set(editor_keys or _zone_pitches(by_bank.get(bank, []))),
+            )
+            for bank in banks
+        )
+        status = "ok"
+        if not banks or not common_zones:
+            status = "unmapped"
+            range_problems.append(
+                f"0x{instrument_id:02x}: no Wwise key zones"
+            )
+        elif missing_editor:
+            status = f"{len(missing_editor)} editor keys missing"
+            range_problems.append(
+                f"0x{instrument_id:02x}: editor keys missing from Wwise zones"
+            )
+        elif velocity_holes:
+            status = f"{velocity_holes} velocity holes"
+            range_problems.append(
+                f"0x{instrument_id:02x}: incomplete velocity coverage"
+            )
+        print(
+            f"  0x{instrument_id:02x} "
+            f"{BDO_INSTRUMENT_NAMES[instrument_id]}: "
+            f"editor={_range_label(editor_keys)} "
+            f"wwise={_range_label(common_zones)} "
+            f"effective={_range_label(effective)} "
+            f"banks={len(banks)} {status}"
+        )
+
+    route_problems = audit_articulation_routes(by_bank)
+
+    local_problems: list[str] = []
+    if args.sample_root:
+        if not args.sample_root.is_dir():
+            local_problems.append("sample root does not exist")
+        else:
+            local_problems = audit_sample_root(args.sample_root, by_bank)
 
     if args.music_dir:
         used_ids: Counter[int] = Counter()
@@ -127,7 +362,15 @@ def main() -> int:
         if missing_fx:
             print("Unobserved declared FX ntypes (coverage only):", missing_fx)
 
-    problems = duplicate_banks or missing_banks or missing_wav or synth_missing
+    problems = (
+        duplicate_banks
+        or missing_banks
+        or missing_wav
+        or synth_missing
+        or range_problems
+        or route_problems
+        or local_problems
+    )
     if args.music_dir:
         problems = problems or bool(unknown_fx)
     return 1 if problems else 0

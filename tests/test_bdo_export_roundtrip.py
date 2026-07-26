@@ -11,12 +11,34 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from inspect_bdo import parse_bdo  # noqa: E402
+from bdo_codec import decode_score  # noqa: E402
 from bdo_midi import Note  # noqa: E402
 from bdo_export import channel_groups_to_bdo  # noqa: E402
 from pyside_bdo_gui import BDO_ARTICULATIONS, copy_export_to_game  # noqa: E402
 
 
 class BdoExportRoundTripTests(unittest.TestCase):
+    def test_soft_10k_review_threshold_never_truncates_editor_notes(self) -> None:
+        notes = [
+            Note(60, 90, float(index), 1.0, 0)
+            for index in range(10_001)
+        ]
+
+        data, summary = channel_groups_to_bdo(
+            120,
+            4,
+            [(notes, 0, False)],
+            instrument_map={0: 0x11},
+            preserve_note_types=True,
+        )
+        document = decode_score(data)
+        active_tracks = document.groups[0].tracks[:-1]
+
+        self.assertEqual(10_001, summary["total_notes"])
+        self.assertEqual(0, summary["notes_dropped"])
+        self.assertEqual(10_001, sum(len(track.notes) for track in active_tracks))
+        self.assertTrue(all(len(track.notes) <= 730 for track in active_tracks))
+
     def test_export_is_copied_to_game_folder_and_same_folder_is_safe(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

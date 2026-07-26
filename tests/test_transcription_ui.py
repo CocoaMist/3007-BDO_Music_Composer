@@ -25,11 +25,227 @@ def _run_offscreen(script: str, timeout: int = 30) -> subprocess.CompletedProces
 
 
 class TranscriptionUiTests(unittest.TestCase):
+    def test_reference_layer_controls_restore_and_update_project_state(self) -> None:
+        completed = _run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication
+
+            import pyside_bdo_gui as gui
+            from project_schema import normalize_reference_layer_settings
+
+            app = QApplication([])
+            window = gui.MidiToBdoWindow()
+            window._autosave_project = lambda *_args, **_kwargs: None
+            target = gui.TrackState(
+                1, [gui.Note(60, 90, 0.0, 400.0, 0)],
+                0, False, "target", 0x0B,
+            )
+            other = gui.TrackState(
+                2, [gui.Note(67, 80, 100.0, 300.0, 0)],
+                0, False, "other", 0x0B,
+            )
+            window.tracks = [target, other]
+            window.reference_layer_settings = normalize_reference_layer_settings({
+                "ghost_visible": False,
+                "ghost_opacity_percent": 32,
+                "background_opacity_percent": 44,
+                "melody_lines_visible": False,
+                "frame_visible": True,
+                "onset_visible": False,
+                "contour_visible": True,
+                "spectrogram_visible": True,
+            })
+
+            editor = gui.MidiNoteEditorDialog(window, target, 120, 4)
+            assert not editor.ghost_box.isChecked()
+            assert not editor.ghost_opacity_slider.isEnabled()
+            assert editor.ghost_opacity_slider.value() == 32
+            assert editor.ghost_opacity_label.text() == "32%"
+            assert editor.canvas.ghost_notes == []
+            assert editor.canvas._ghost_opacity == 0.32
+            assert editor.canvas._reference_background_opacity == 0.44
+            assert editor.transcription_panel.reference_background_opacity == 0.44
+            assert editor.transcription_panel.visible_evidence_layers == frozenset(
+                {"frame", "contour"}
+            )
+            assert not editor.transcription_panel.melody_lines_visible
+            assert editor.transcription_panel.spectrogram_visible
+
+            editor.ghost_box.setChecked(True)
+            assert editor.ghost_opacity_slider.isEnabled()
+            editor.ghost_opacity_slider.setValue(58)
+            editor.transcription_panel.reference_opacity_slider.setValue(27)
+            editor.transcription_panel.frame_checkbox.setChecked(False)
+            editor.transcription_panel.melody_lines_button.setChecked(True)
+            editor.transcription_panel.spectrogram_checkbox.setChecked(False)
+            assert len(editor.canvas.ghost_notes) == 1
+            assert window.reference_layer_settings["ghost_visible"]
+            assert window.reference_layer_settings["ghost_opacity_percent"] == 58
+            assert window.reference_layer_settings["background_opacity_percent"] == 27
+            assert not window.reference_layer_settings["frame_visible"]
+            assert window.reference_layer_settings["contour_visible"]
+            assert window.reference_layer_settings["melody_lines_visible"]
+            assert not window.reference_layer_settings["spectrogram_visible"]
+
+            editor.close()
+            restored = gui.MidiNoteEditorDialog(window, target, 120, 4)
+            assert restored.ghost_box.isChecked()
+            assert restored.ghost_opacity_slider.value() == 58
+            assert restored.transcription_panel.reference_opacity_slider.value() == 27
+            assert restored.transcription_panel.visible_evidence_layers == frozenset(
+                {"contour"}
+            )
+            assert restored.transcription_panel.melody_lines_visible
+            assert not restored.transcription_panel.spectrogram_visible
+            restored.close()
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_cache_restore_worker_rehashes_and_cancels_cooperatively(self) -> None:
+        completed = _run_offscreen(
+            """
+            import hashlib
+            import tempfile
+            import threading
+            import time
+            from pathlib import Path
+
+            from PySide6.QtWidgets import QApplication
+            import pyside_bdo_gui as gui
+
+            app = QApplication([])
+            real_fingerprint = gui.transcription_audio_fingerprint
+            with tempfile.TemporaryDirectory() as folder:
+                audio = Path(folder) / "reference.wav"
+                audio.write_bytes(b"first-audio")
+                expected = hashlib.sha256(b"first-audio").hexdigest()
+                load_calls = []
+                marker = object()
+
+                def changing_load(_cache_key, **kwargs):
+                    load_calls.append(kwargs)
+                    audio.write_bytes(b"other-audio")
+                    return marker
+
+                gui.load_cached_transcription_result = changing_load
+                worker = gui.TranscriptionCacheLoadWorker(
+                    "a" * 24,
+                    audio_path=audio,
+                    expected_audio_fingerprint=expected,
+                )
+                restored = []
+                worker.succeeded.connect(restored.append)
+                worker.run()
+                assert restored == [None]
+                assert callable(load_calls[0]["cancelled"])
+                assert worker.current_audio_fingerprint == hashlib.sha256(
+                    b"other-audio"
+                ).hexdigest()
+
+                started = threading.Event()
+
+                def cancellable_fingerprint(_path, *, cancelled=None):
+                    started.set()
+                    while not cancelled():
+                        time.sleep(0.002)
+                    raise gui.TranscriptionCancelled("cancelled")
+
+                gui.transcription_audio_fingerprint = cancellable_fingerprint
+                cancelled_worker = gui.TranscriptionCacheLoadWorker(
+                    "b" * 24,
+                    audio_path=audio,
+                )
+                cancelled_events = []
+                cancelled_worker.cancelled.connect(
+                    lambda: cancelled_events.append(True)
+                )
+                cancelled_worker.start()
+                assert started.wait(2.0)
+                cancelled_worker.cancel()
+                assert cancelled_worker.wait(3_000)
+                app.processEvents()
+                assert cancelled_events == [True]
+
+            gui.transcription_audio_fingerprint = real_fingerprint
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_loading_reference_audio_enables_embedded_analysis(self) -> None:
+        completed = _run_offscreen(
+            """
+            import tempfile
+            import wave
+            from pathlib import Path
+
+            from PySide6.QtWidgets import QApplication
+            import pyside_bdo_gui as gui
+
+            gui.transcription_backend_quick_status = lambda: (True, "")
+            app = QApplication([])
+            window = gui.MidiToBdoWindow()
+            window._autosave_project = lambda *_args, **_kwargs: None
+            track = gui.TrackState(
+                1, [], 0, False, "target", 0x0B,
+            )
+            window.tracks = [track]
+            editor = gui.MidiNoteEditorDialog(
+                window,
+                track,
+                120,
+                4,
+                transcription_mode=True,
+            )
+            window.active_transcription_editor = editor
+            window._refresh_transcription_workspace()
+            assert not editor.transcription_panel.analyze_button.isEnabled()
+
+            with tempfile.TemporaryDirectory() as folder:
+                audio_path = Path(folder) / "reference.wav"
+                with wave.open(str(audio_path), "wb") as audio:
+                    audio.setnchannels(1)
+                    audio.setsampwidth(2)
+                    audio.setframerate(8_000)
+                    audio.writeframes(b"\\0\\0" * 8_000)
+                assert window.reference_audio.set_audio_path(audio_path)
+                app.processEvents()
+                assert editor.transcription_panel._audio_loaded
+                assert editor.transcription_panel.analyze_button.isEnabled()
+                window.reference_audio.set_audio_path(None)
+                app.processEvents()
+
+            editor.close()
+            window.active_transcription_editor = None
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
     def test_candidates_are_sidecar_and_accept_is_one_undoable_edit(self) -> None:
         completed = _run_offscreen(
             """
             from PySide6.QtWidgets import QApplication
             from bdo_transcription import TranscriptionCandidate, TranscriptionResult
+            from bdo_transcription_session import TranscriptionSession
             from pyside_bdo_gui import MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState
 
             app = QApplication([])
@@ -42,20 +258,31 @@ class TranscriptionUiTests(unittest.TestCase):
                 0, False, "ghost", 0x0B,
             )
             window = MidiToBdoWindow()
+            window._autosave_project = lambda *_args, **_kwargs: None
             window.tracks = [target, ghost]
-            editor = MidiNoteEditorDialog(window, target, 120, 4)
-            editor.transcription_mode_toggle.setChecked(True)
-            initial_track_notes = list(target.notes)
-            emitted = []
-            editor.notes_applied.connect(lambda notes: emitted.append(list(notes)))
-
             candidates = (
                 TranscriptionCandidate(60, 70, 0.0, 400.0, 0.77),
                 TranscriptionCandidate(64, 91, 600.0, 320.0, 0.88),
                 TranscriptionCandidate(100, 84, 1000.0, 250.0, 0.66),
             )
             result = TranscriptionResult(candidates, "unit-test")
-            editor._transcription_succeeded(editor.transcription_generation, result)
+            window.transcription_result = result
+            window.transcription_session = TranscriptionSession(
+                candidates,
+                cache_key=result.cache_key,
+            )
+            window.transcription_session.set_selection(
+                window.transcription_session.candidate_id(candidate)
+                for candidate in candidates
+            )
+
+            editor = MidiNoteEditorDialog(window, target, 120, 4)
+            window.active_transcription_editor = editor
+            editor.transcription_mode_toggle.setChecked(True)
+            initial_track_notes = list(target.notes)
+            emitted = []
+            editor.notes_applied.connect(lambda notes: emitted.append(list(notes)))
+            editor._sync_shared_transcription_projection()
 
             # Analysis and overlay updates never touch either source TrackState or
             # the editor's authoritative draft note list.
@@ -64,7 +291,10 @@ class TranscriptionUiTests(unittest.TestCase):
             assert emitted == []
             assert editor.canvas.transcription_candidates_visible
             assert tuple(editor.canvas.transcription_candidates) == candidates
-            assert editor.canvas.ghost_notes == list(ghost.notes)
+            assert [item.note for item in editor.canvas.ghost_notes] == list(ghost.notes)
+            assert editor.canvas.ghost_notes[0].track_id == ghost.track_id
+            assert editor.canvas.ghost_notes[0].instrument_id == ghost.bdo_instrument_id
+            assert editor.canvas.ghost_notes[0].color == ghost.color
 
             # Candidate and ghost layers have independent visibility and storage.
             editor.ghost_box.setChecked(False)
@@ -72,7 +302,7 @@ class TranscriptionUiTests(unittest.TestCase):
             assert tuple(editor.canvas.transcription_candidates) == candidates
             assert len(editor.canvas.visible_transcription_candidates()) == 3
             editor.ghost_box.setChecked(True)
-            assert editor.canvas.ghost_notes == list(ghost.notes)
+            assert [item.note for item in editor.canvas.ghost_notes] == list(ghost.notes)
 
             editor.accept_transcription_candidates()
             assert len(editor.canvas.notes) == 2
@@ -81,6 +311,7 @@ class TranscriptionUiTests(unittest.TestCase):
                 64, 91, 600.0, 320.0, 0,
             )
             assert len(editor.undo_stack) == 1
+            assert len(editor.staged_primary_routes) == 1
             assert list(target.notes) == initial_track_notes
             assert emitted == []
 
@@ -95,6 +326,7 @@ class TranscriptionUiTests(unittest.TestCase):
             # sidecar, so the same candidate can be reviewed and written again.
             editor.undo()
             assert list(editor.canvas.notes) == initial_track_notes
+            assert editor.staged_primary_routes == set()
             assert tuple(editor.canvas.transcription_candidates) == candidates
             assert editor.canvas.transcription_candidates_visible
             editor.accept_transcription_candidates()
@@ -102,15 +334,16 @@ class TranscriptionUiTests(unittest.TestCase):
             assert editor.canvas.notes[1].ntype == 0
             assert len(editor.undo_stack) == 1
 
-            editor.apply_notes()
-            assert len(emitted) == 1
-            assert any(note.pitch == 64 and note.ntype == 0 for note in emitted[0])
-            assert list(target.notes) == initial_track_notes
-
-            editor.clear_transcription_candidates()
-            assert editor.canvas.transcription_candidates == []
+            report = editor.apply_notes()
+            assert report is not None and report.project_changed
+            assert emitted == []
+            assert any(note.pitch == 64 and note.ntype == 0 for note in target.notes)
+            assert editor.staged_primary_routes == set()
+            assert tuple(window.transcription_session.candidates) == candidates
+            assert tuple(editor.canvas.transcription_candidates) == candidates
             assert len(editor.canvas.notes) == 2
             editor.close()
+            window.active_transcription_editor = None
             window.close()
             app.processEvents()
             app.quit()
@@ -123,6 +356,8 @@ class TranscriptionUiTests(unittest.TestCase):
             """
             from types import SimpleNamespace
             from PySide6.QtWidgets import QApplication
+            from bdo_transcription import TranscriptionCandidate
+            from bdo_transcription_session import TranscriptionSession
             from pyside_bdo_gui import MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState
 
             class FakePlayer:
@@ -172,11 +407,15 @@ class TranscriptionUiTests(unittest.TestCase):
                     )
                     self.ready = False
                     self.loaded_from = None
+                    self.loaded_tracks = []
                     self.seek_calls = []
                     self.play_count = 0
                     self.pause_count = 0
+                    self.stop_count = 0
+                    self.clear_count = 0
 
                 def load_project_async(self, _tracks, _mapping, start, *_effects):
+                    self.loaded_tracks = list(_tracks)
                     self.loaded_from = float(start)
                     self.status.state = "loading"
 
@@ -199,6 +438,11 @@ class TranscriptionUiTests(unittest.TestCase):
 
                 def stop(self):
                     self.status.state = "stopped"
+                    self.stop_count += 1
+
+                def clear_playback(self):
+                    self.status.state = "stopped"
+                    self.clear_count += 1
 
                 def seek(self, value):
                     self.status.position_ms = float(value)
@@ -262,6 +506,7 @@ class TranscriptionUiTests(unittest.TestCase):
             # When game samples are available, both engines start from the same
             # position. An already-playing reference is not continuously re-seeked.
             window._realtime_preview_blockers = lambda _tracks: []
+            editor.transcription_audition_source = "combined"
             editor.set_draft_playhead(200.0)
             realtime.ready = True
             editor.play_draft()
@@ -294,7 +539,55 @@ class TranscriptionUiTests(unittest.TestCase):
             editor.poll_draft_playback()
             assert editor.playhead_ms == 1400.0
 
+            # Game-candidate A/B is exclusive: it reuses the same transport
+            # but does not mix or silently substitute the reference stream.
+            clear_count = realtime.clear_count
             editor.stop_draft()
+            assert realtime.clear_count == clear_count + 1
+            assert realtime.stop_count == 0
+            candidate = TranscriptionCandidate(
+                60, 90, 300.0, 400.0, 0.9,
+                candidate_id="voice-note",
+            )
+            window.transcription_session = TranscriptionSession(
+                (candidate,), cache_key="cache",
+            )
+            group = SimpleNamespace(
+                group_id="voice-1",
+                candidate_ids=("voice-note",),
+            )
+            window._active_voice_group = lambda: group
+            window.instrument_match_analysis = SimpleNamespace(
+                matches_for_group=lambda _group_id: (
+                    SimpleNamespace(instrument_id=0x0B),
+                    SimpleNamespace(instrument_id=0x0B),
+                ),
+            )
+            window._realtime_preview_blockers = lambda _tracks: []
+            editor.transcription_audition_source = "candidate_a"
+            editor.transpose = 12
+            reference.positions.clear()
+            reference_play_count = reference.play_count
+            editor.set_draft_playhead(300.0)
+            editor.play_draft()
+            assert editor.draft_playback_state == "loading"
+            assert realtime.loaded_tracks[0].notes[0].pitch == 72
+            editor.poll_draft_playback()
+            assert editor.draft_playback_state == "playing"
+            assert reference.play_count == reference_play_count
+            assert reference.positions == []
+
+            editor.stop_draft()
+            window._realtime_preview_blockers = lambda _tracks: [
+                "missing game sample"
+            ]
+            editor.transcription_audition_source = "candidate_b"
+            reference_play_count = reference.play_count
+            editor.play_draft()
+            assert editor.draft_playback_state == "stopped"
+            assert reference.play_count == reference_play_count
+            assert "没有回退播放原音" in editor.transcription_panel.status_label.text()
+
             editor.close()
             window.reference_audio = original_reference
             window.close()
@@ -304,19 +597,20 @@ class TranscriptionUiTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
-    def test_closing_editor_waits_for_transcription_thread_to_finish(self) -> None:
+    def test_closing_editor_does_not_own_shared_transcription_worker(self) -> None:
         completed = _run_offscreen(
             """
             import threading
             import time
             from pathlib import Path
-            from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication
             import pyside_bdo_gui as gui
 
             started = threading.Event()
 
-            def cancellable_transcription(_path, _progress, cancelled):
+            def cancellable_transcription(
+                _path, _progress, cancelled, **_options
+            ):
                 started.set()
                 while not cancelled():
                     time.sleep(0.005)
@@ -325,7 +619,7 @@ class TranscriptionUiTests(unittest.TestCase):
                 time.sleep(0.12)
                 raise gui.TranscriptionCancelled("cancelled")
 
-            gui.transcription_backend_available = lambda: True
+            gui.transcription_backend_quick_status = lambda: (True, "")
             gui.transcribe_reference_audio = cancellable_transcription
 
             app = QApplication([])
@@ -340,27 +634,215 @@ class TranscriptionUiTests(unittest.TestCase):
             for action in ("close", "reject"):
                 started.clear()
                 editor = gui.MidiNoteEditorDialog(window, track, 120, 4)
+                window.active_transcription_editor = editor
                 editor.show()
                 editor.transcription_mode_toggle.setChecked(True)
                 editor.start_transcription_analysis()
                 assert started.wait(2.0)
-                assert editor.transcription_worker is not None
-                assert editor.transcription_worker.isRunning()
+                worker = window.workspace_transcription_worker
+                assert worker is not None
+                assert worker.isRunning()
+                assert worker.parent() is window
+                assert window.transcription_analysis_busy
+                assert not hasattr(editor, "transcription_worker")
 
                 getattr(editor, action)()
                 app.processEvents()
-                assert editor.transcription_close_pending
-                assert editor.isVisible()
-                QTest.qWait(260)
-                app.processEvents()
-                assert editor.transcription_worker is None
                 assert editor.isHidden()
+                assert window.workspace_transcription_worker is worker
+                assert worker.isRunning()
                 if action == "reject":
                     assert editor.result() == gui.QDialog.Rejected
+                if window.active_transcription_editor is editor:
+                    window.active_transcription_editor = None
+
+                # The main-window session owns analysis independently of the
+                # embedded editor projection. Explicitly cancel and drain that
+                # owner before starting another analysis or closing the window.
+                worker.cancel()
+                assert worker.wait(3_000)
+                app.processEvents()
+                assert window.workspace_transcription_worker is None
+                assert not window.transcription_analysis_busy
 
             window.close()
             app.processEvents()
             app.quit()
+            """
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
+    def test_audio_change_invalidates_queued_shared_worker_result(self) -> None:
+        completed = _run_offscreen(
+            """
+            import threading
+            from pathlib import Path
+
+            from PySide6.QtWidgets import QApplication
+
+            import pyside_bdo_gui as gui
+            from bdo_transcription import TranscriptionCandidate, TranscriptionResult
+
+            finished_in_worker = threading.Event()
+            old_result = TranscriptionResult(
+                (
+                    TranscriptionCandidate(
+                        60,
+                        90,
+                        100.0,
+                        200.0,
+                        0.9,
+                        candidate_id="old-audio-candidate",
+                    ),
+                ),
+                "old-audio-cache",
+            )
+
+            def quick_transcription(
+                _path, _progress, _cancelled, **_options
+            ):
+                finished_in_worker.set()
+                return old_result
+
+            gui.transcription_backend_quick_status = lambda: (True, "")
+            gui.transcribe_reference_audio = quick_transcription
+
+            app = QApplication([])
+            window = gui.MidiToBdoWindow()
+            window._autosave_project = lambda *_args, **_kwargs: None
+            window.reference_audio._audio_path = Path.cwd() / "README.md"
+            window.reference_audio_path = "old-reference.wav"
+            window._start_workspace_transcription_analysis()
+            worker = window.workspace_transcription_worker
+            assert worker is not None
+            assert finished_in_worker.wait(2.0)
+            assert worker.wait(3_000)
+
+            # succeeded/finished are queued to the GUI thread. Confirming an
+            # audio change before processing them invalidates the old token.
+            old_generation = window.workspace_transcription_generation
+            window._reference_audio_changed("new-reference.wav")
+            assert window.workspace_transcription_generation == old_generation + 1
+            assert window.workspace_transcription_worker is worker
+            assert window.transcription_result is None
+            assert window.transcription_session.candidates == ()
+
+            app.processEvents()
+            assert window.workspace_transcription_worker is None
+            assert window.transcription_result is None
+            assert window.transcription_session.candidates == ()
+            assert not window.transcription_session.state.cache_key
+
+            # A late finished callback from any stale worker cannot clear a
+            # replacement currently owned by the window.
+            replacement = object()
+            window.workspace_transcription_worker = replacement
+            window._workspace_transcription_finished(
+                old_generation,
+                object(),
+            )
+            assert window.workspace_transcription_worker is replacement
+            window.workspace_transcription_worker = None
+
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
+    def test_analysis_worker_never_drops_explicit_cleanup_profile(self) -> None:
+        completed = _run_offscreen(
+            """
+            from pathlib import Path
+
+            from PySide6.QtWidgets import QApplication
+
+            import pyside_bdo_gui as gui
+            from bdo_transcription import TranscriptionResult
+
+            app = QApplication([])
+            observed = []
+
+            def strict_transcription(
+                _path,
+                _progress,
+                _cancelled,
+                *,
+                analysis_mode,
+                sensitivity,
+                cleanup_profile,
+            ):
+                observed.append(
+                    (analysis_mode, sensitivity, cleanup_profile)
+                )
+                return TranscriptionResult((), "strict-cache")
+
+            gui.transcribe_reference_audio = strict_transcription
+            worker = gui.TranscriptionAnalysisWorker(
+                Path.cwd() / "README.md",
+                analysis_mode="mixed_enhanced",
+                sensitivity="sensitive",
+                cleanup_profile="clean",
+            )
+            succeeded = []
+            failed = []
+            worker.succeeded.connect(succeeded.append)
+            worker.failed.connect(failed.append)
+            worker.run()
+            assert observed == [
+                ("mixed_enhanced", "sensitive", "clean")
+            ]
+            assert len(succeeded) == 1
+            assert not failed
+
+            legacy_calls = []
+
+            def legacy_adapter(_path, _progress, _cancelled):
+                legacy_calls.append(True)
+                return TranscriptionResult((), "legacy-cache")
+
+            gui.append_crash_log = lambda *_args, **_kwargs: None
+            gui.transcribe_reference_audio = legacy_adapter
+            legacy_worker = gui.TranscriptionAnalysisWorker(
+                Path.cwd() / "README.md",
+                cleanup_profile="balanced",
+            )
+            legacy_succeeded = []
+            legacy_failed = []
+            legacy_worker.succeeded.connect(legacy_succeeded.append)
+            legacy_worker.failed.connect(legacy_failed.append)
+            legacy_worker.run()
+            assert not legacy_calls
+            assert not legacy_succeeded
+            assert len(legacy_failed) == 1
+
+            app.quit()
+            """
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
+    def test_save_config_creates_missing_user_data_directory(self) -> None:
+        completed = _run_offscreen(
+            """
+            from pathlib import Path
+            import tempfile
+            from unittest.mock import patch
+
+            import pyside_bdo_gui as gui
+
+            with tempfile.TemporaryDirectory() as folder_name:
+                config_path = (
+                    Path(folder_name)
+                    / "missing"
+                    / "nested"
+                    / ".pyside_bdo_gui.json"
+                )
+                assert not config_path.parent.exists()
+                with patch.object(gui, "CONFIG_PATH", config_path):
+                    gui.save_config({"language": "en_US"})
+                    assert gui.load_config() == {"language": "en_US"}
+                assert config_path.is_file()
             """
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)

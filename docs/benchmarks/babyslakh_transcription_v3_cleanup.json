@@ -1,0 +1,225 @@
+{
+  "report_schema_version": 3,
+  "report_kind": "babyslakh-fragment-cleanup-holdout",
+  "summary": true,
+  "run_status": "completed",
+  "dataset": {
+    "record": "https://zenodo.org/records/4603844",
+    "license": "CC BY 4.0",
+    "archive_md5": "ea1797fc57689a0e33c759c17a2292f5"
+  },
+  "evidence": {
+    "analysis_mode": "mixed_enhanced",
+    "fusion_version": "hpss-fast-stream-30s-2s-1024-512-k9:v2",
+    "frozen_v2_config": {
+      "frame_harmonic_weight": 0.55,
+      "onset_harmonic_weight": 0.25,
+      "onset_threshold": 0.55,
+      "frame_threshold": 0.25,
+      "min_note_len_frames": 5
+    },
+    "evidence_dtype": "<f2"
+  },
+  "postprocess_version": "fragment-cleanup-v2-annotation-only",
+  "production_release_mode": "annotation_only",
+  "automatic_actions_evaluated": true,
+  "holdout_track_ids": [
+    "Track00013",
+    "Track00014",
+    "Track00015",
+    "Track00016",
+    "Track00017",
+    "Track00018",
+    "Track00019",
+    "Track00020"
+  ],
+  "closed_grid": {
+    "configuration_count": 108,
+    "evaluated_count": 108,
+    "parameter_order": [
+      "max_merge_gap_frames",
+      "nms_min_overlap_ratio",
+      "nms_onset_distance_frames",
+      "max_weak_onset_prominence",
+      "clean_max_confidence"
+    ],
+    "values": {
+      "max_merge_gap_frames": [
+        0,
+        1,
+        2
+      ],
+      "nms_min_overlap_ratio": [
+        0.8,
+        0.85,
+        0.9
+      ],
+      "nms_onset_distance_frames": [
+        1,
+        2
+      ],
+      "max_weak_onset_prominence": [
+        0.05,
+        0.1,
+        0.15
+      ],
+      "clean_max_confidence": [
+        0.25,
+        0.3
+      ]
+    }
+  },
+  "gate_thresholds": {
+    "balanced_release": {
+      "fragmentation_reduction_min": 0.2,
+      "note_precision_gain_min": 0.005,
+      "onset_f1_delta_min": -0.003,
+      "onset_offset_f1_delta_min": -0.002,
+      "note_recall_delta_min": -0.005,
+      "short_le_8_recall_delta_min": -0.01,
+      "false_merge_rate_max": 0.005,
+      "worst_song_onset_f1_delta_min": -0.02,
+      "postprocess_share_max_exclusive": 0.05
+    },
+    "clean_safety": {
+      "onset_f1_delta_min": -0.003,
+      "onset_offset_f1_delta_min": -0.002,
+      "note_recall_delta_min": -0.005,
+      "short_le_8_recall_delta_min": -0.01,
+      "false_merge_rate_max": 0.005,
+      "worst_song_onset_f1_delta_min": -0.02,
+      "candidate_count_must_not_exceed_balanced": true,
+      "postprocess_share_max_exclusive": 0.05
+    }
+  },
+  "balanced_passing_config_count": 0,
+  "clean_safety_passing_config_count": 104,
+  "passing_config_count": 0,
+  "selected_config": null,
+  "selected_metrics": null,
+  "annotation_only": true,
+  "recommendation_only": true,
+  "fixed_v1_config": {
+    "max_merge_gap_frames": 2,
+    "nms_min_overlap_ratio": 0.85,
+    "nms_onset_distance_frames": 2,
+    "max_weak_onset_prominence": 0.1,
+    "clean_max_confidence": 0.3
+  },
+  "fixed_v1_metrics": {
+    "metric_version": "fragment-cleanup-metrics-v2",
+    "track_count": 8,
+    "baseline": {
+      "reference_count": 30289,
+      "candidate_count": 28215
+    },
+    "balanced": {
+      "candidate_count": 28215
+    },
+    "deltas": {
+      "fragmentation_reduction": 0.0,
+      "note_precision_delta": 0.0,
+      "note_recall_delta": 0.0,
+      "onset_f1_delta": 0.0,
+      "onset_offset_f1_delta": 0.0,
+      "short_le_8_recall_delta": 0.0,
+      "candidate_inflation_ratio_delta": 0.0,
+      "candidate_count_change_rate": 0.0
+    },
+    "timing": {
+      "total_decode_seconds": 20.657526400056668,
+      "postprocess_seconds": 0.39931660002912395,
+      "postprocess_share": 0.01933032020852354
+    },
+    "quality_gate": {
+      "passed": false,
+      "checks": {
+        "fragmentation_reduction_at_least_0_20": false,
+        "note_precision_gain_at_least_0_005": false,
+        "onset_f1_drop_at_most_0_003": true,
+        "onset_offset_f1_drop_at_most_0_002": true,
+        "note_recall_drop_at_most_0_005": true,
+        "short_le_8_recall_drop_at_most_0_01": true,
+        "false_merge_rate_at_most_0_005": true,
+        "worst_song_onset_f1_drop_at_most_0_02": true,
+        "postprocess_share_below_0_05": true
+      },
+      "values": {
+        "fragmentation_reduction": 0.0,
+        "note_precision_gain": 0.0,
+        "onset_f1_delta": 0.0,
+        "onset_offset_f1_delta": 0.0,
+        "note_recall_delta": 0.0,
+        "short_le_8_recall_delta": 0.0,
+        "false_merge_rate": 0.0,
+        "worst_song_onset_f1_delta": 0.0,
+        "postprocess_share": 0.01933032020852354
+      }
+    },
+    "clean": {
+      "candidate_count": 28197,
+      "suppressed_candidate_count": 18,
+      "baseline_candidate_count": 28215
+    },
+    "clean_deltas": {
+      "fragmentation_reduction": 0.00024676125848241827,
+      "note_precision_delta": 0.00010135017009060832,
+      "note_recall_delta": 0.0,
+      "onset_f1_delta": 0.00011290366145133568,
+      "onset_offset_f1_delta": 4.770057838054953e-05,
+      "short_le_8_recall_delta": 0.0,
+      "candidate_inflation_ratio_delta": -0.0005942751493941412,
+      "candidate_count_change_rate": -0.0006379585326953748
+    },
+    "clean_timing": {
+      "total_decode_seconds": 20.670724400057225,
+      "postprocess_seconds": 0.4125146000296809,
+      "postprocess_share": 0.01995646558127101
+    },
+    "clean_safety_gate": {
+      "passed": true,
+      "checks": {
+        "onset_f1_drop_at_most_0_003": true,
+        "onset_offset_f1_drop_at_most_0_002": true,
+        "note_recall_drop_at_most_0_005": true,
+        "short_le_8_recall_drop_at_most_0_01": true,
+        "false_merge_rate_at_most_0_005": true,
+        "worst_song_onset_f1_drop_at_most_0_02": true,
+        "candidate_count_not_above_balanced": true,
+        "postprocess_share_below_0_05": true
+      },
+      "values": {
+        "onset_f1_delta": 0.00011290366145133568,
+        "onset_offset_f1_delta": 4.770057838054953e-05,
+        "note_recall_delta": 0.0,
+        "short_le_8_recall_delta": 0.0,
+        "false_merge_rate": 0.0,
+        "worst_song_onset_f1_delta": 0.0,
+        "candidate_count_delta_from_balanced": -18,
+        "postprocess_share": 0.01995646558127101
+      }
+    },
+    "selection_gate": {
+      "passed": false,
+      "balanced_quality_passed": false,
+      "clean_safety_evaluated": true,
+      "clean_safety_passed": true
+    }
+  },
+  "production_conclusion": {
+    "mode": "annotation-only",
+    "automatic_balanced_cleanup_selected": false,
+    "automatic_clean_suppression_enabled": false,
+    "reason": "No closed-grid configuration passed both the balanced release gate and the clean safety gate."
+  },
+  "privacy": {
+    "path_free": true,
+    "contains_audio": false,
+    "contains_dataset_or_cache_paths": false,
+    "omitted_from_full_report": [
+      "grid_results",
+      "per_track_metrics",
+      "runtime_track_timings"
+    ]
+  }
+}

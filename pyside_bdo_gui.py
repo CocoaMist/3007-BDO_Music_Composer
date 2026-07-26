@@ -5,11 +5,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from bisect import bisect_left, bisect_right
+from collections import Counter, defaultdict
 from functools import lru_cache
 import faulthandler
+import hashlib
 import json
+import logging
 import math
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -26,19 +30,36 @@ ROOT = (
     if getattr(sys, "frozen", False)
     else Path(__file__).resolve().parent
 )
-from project_paths import ASSETS_DIR, PROFILES_DIR, SAMPLE_PACK_CACHE_DIR, WWISE_MIDI_MAP_PATH
-DEFAULT_OUTDIR = ROOT / "out" / "bdo"
+from project_paths import (
+    ASSETS_DIR,
+    GAME_ART_CACHE_DIR,
+    PROFILES_DIR,
+    SAMPLE_PACK_CACHE_DIR,
+    USER_DATA_DIR,
+    WWISE_MIDI_MAP_PATH,
+)
+WRITABLE_ROOT = (
+    USER_DATA_DIR
+    if (
+        getattr(sys, "frozen", False)
+        or os.environ.get("BDO_STARTUP_SELF_TEST") == "1"
+    )
+    else ROOT
+)
+DEFAULT_OUTDIR = WRITABLE_ROOT / "out" / "bdo"
 DEFAULT_MIDI_DIR = ROOT / "samples"
-CONFIG_PATH = ROOT / ".pyside_bdo_gui.json"
-AUTO_SAVE_DIR = ROOT / "auto_save"
+CONFIG_PATH = WRITABLE_ROOT / ".pyside_bdo_gui.json"
+AUTO_SAVE_DIR = WRITABLE_ROOT / "auto_save"
+EXAMPLE_PROJECTS_DIR = USER_DATA_DIR / "examples"
 BDO_SAMPLE_MAP_PATH = WWISE_MIDI_MAP_PATH
 AUDIO_VALIDATION_PATH = DEFAULT_OUTDIR / "bdo_audio_validation_matrix.json"
 CRASH_LOG_PATH = DEFAULT_OUTDIR / "crash.log"
 REFERENCE_AUDIO_RESYNC_THRESHOLD_MS = 1250.0
 REFERENCE_AUDIO_RESYNC_COOLDOWN_S = 5.0
-TIMELINE_BACKGROUND_IMAGE = ASSETS_DIR / "ui" / "timeline_background.png"
+TIMELINE_BACKGROUND_IMAGE = ASSETS_DIR / "ui" / "timeline_background_v2.png"
 STARTUP_ART_IMAGE = ASSETS_DIR / "ui" / "loading_conductor_lineart.png"
-TIMELINE_BACKGROUND_OPACITY = 0.24
+TIMELINE_BACKGROUND_OPACITY = 0.42
+TRANSCRIPTION_REVIEW_QUEUE_LIMIT = 240
 DEFAULT_AUDIO_SOURCES = {
     "paz_root": os.environ.get("BDO_PAZ_ROOT", ""),
     "audio_root": os.environ.get("BDO_AUDIO_ROOT", ""),
@@ -46,12 +67,76 @@ DEFAULT_AUDIO_SOURCES = {
 }
 
 
+def _session_candidate_annotations(
+    result: TranscriptionResult | None,
+) -> tuple[CandidateAnnotation, ...]:
+    report = (
+        result.postprocess_report
+        if result is not None
+        else None
+    )
+    if report is None:
+        return ()
+    return tuple(
+        CandidateAnnotation(
+            candidate_id=item.candidate_id,
+            flags=frozenset(item.flags),
+            lineage_ids=frozenset(item.lineage_ids),
+            disposition=item.disposition,
+        )
+        for item in report.annotations
+    )
+
+
+def _transcription_cleanup_ui_labels(
+    profile: str,
+    report: object | None,
+) -> tuple[str, str]:
+    normalized = str(profile)
+    profile_label = tr(
+        {
+            "preserve": "保留（安全默认）",
+            "balanced": "平衡（实验）",
+            "clean": "干净（实验）",
+        }.get(normalized, normalized)
+    )
+    if normalized == "preserve":
+        return profile_label, tr("安全默认")
+    if bool(getattr(report, "automatic_actions_enabled", False)):
+        return profile_label, tr("实验性自动整理，未通过留出集验证")
+    return profile_label, tr("实验性档位，等待缓存重解码")
+
+
+def _redact_log_paths(value: object) -> str:
+    """Remove machine-local absolute paths before text reaches a log file."""
+
+    text = str(value)
+    text = re.sub(
+        r'"(?:(?:[A-Za-z]:[\\/])|(?:\\\\))[^"\r\n]*"',
+        '"<private-path>"',
+        text,
+    )
+    text = re.sub(
+        r"'(?:(?:[A-Za-z]:[\\/])|(?:\\\\))[^'\r\n]*'",
+        "'<private-path>'",
+        text,
+    )
+    return re.sub(
+        r"(?<![A-Za-z0-9_])(?:(?:[A-Za-z]:[\\/])|(?:\\\\))[^\s,;)\]}]+",
+        "<private-path>",
+        text,
+    )
+
+
 def append_crash_log(title: str, detail: str) -> None:
     try:
         CRASH_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with CRASH_LOG_PATH.open("a", encoding="utf-8") as file:
-            file.write(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] {title}\n")
-            file.write(detail.rstrip())
+            file.write(
+                f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                f"{_redact_log_paths(title)}\n"
+            )
+            file.write(_redact_log_paths(detail).rstrip())
             file.write("\n")
     except Exception:
         pass
@@ -59,9 +144,10 @@ def append_crash_log(title: str, detail: str) -> None:
 
 def install_crash_logging() -> None:
     try:
-        CRASH_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        fault_file = CRASH_LOG_PATH.open("a", encoding="utf-8")
-        faulthandler.enable(file=fault_file, all_threads=True)
+        # Native fault dumps contain interpreter source paths and bypass the
+        # redaction boundary, so keep them on the process stderr rather than
+        # persisting them in the user-visible crash log.
+        faulthandler.enable(all_threads=True)
     except Exception:
         pass
 
@@ -78,12 +164,35 @@ def install_crash_logging() -> None:
     if hasattr(threading, "excepthook"):
         threading.excepthook = handle_thread_exception
 
+    class _TranscriptionCrashLogHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            try:
+                detail = self.format(record)
+                append_crash_log("Transcription diagnostic", detail)
+            except Exception:
+                pass
+
+    transcription_logger = logging.getLogger("bdo_transcription")
+    if not any(
+        getattr(handler, "_bdo_transcription_crash_handler", False)
+        for handler in transcription_logger.handlers
+    ):
+        handler = _TranscriptionCrashLogHandler(logging.WARNING)
+        handler._bdo_transcription_crash_handler = True
+        handler.setFormatter(
+            logging.Formatter(
+                "%(levelname)s %(name)s: %(message)s"
+            )
+        )
+        transcription_logger.addHandler(handler)
+
 
 try:
     import mido
     from PySide6.QtCore import (
         QEasingCurve,
         QEvent,
+        QEventLoop,
         QObject,
         QPointF,
         QPropertyAnimation,
@@ -117,6 +226,7 @@ try:
         QMainWindow,
         QMenu,
         QMessageBox,
+        QProgressDialog,
         QPushButton,
         QRadioButton,
         QScrollArea,
@@ -159,11 +269,41 @@ from optimization.plugin_host import (  # noqa: E402
     optimizer_plugin_dir,
 )
 from bdo_profile import load_bdo_profile  # noqa: E402
+from bdo_track_effects import (  # noqa: E402
+    GAME_PERCENT_MAX,
+    MASTER_CHORUS_FEEDBACK_INDEX,
+    MASTER_CHORUS_LFO_DEPTH_INDEX,
+    MASTER_CHORUS_LFO_FREQUENCY_INDEX,
+    MASTER_DELAY_FEEDBACK_INDEX,
+    MASTER_REVERB_TIME_INDEX,
+    MasterEffects,
+    TRACK_CHORUS_SEND_INDEX,
+    TRACK_DELAY_SEND_INDEX,
+    TRACK_REVERB_SEND_INDEX,
+    raw_track_settings,
+)
+from bdo_instrument_adaptation import (  # noqa: E402
+    articulation_pairs_by_instrument,
+    instrument_editor_display_adaptation,
+    instrument_editor_display_adaptations,
+)
+from bdo_instrument_lane_art_qt import (  # noqa: E402
+    InstrumentLaneArtwork,
+    instrument_header_background_rect,
+    paint_instrument_header_background,
+)
 from bdo_audio_research import sample_coverage_for_tracks  # noqa: E402
 from bdo_score import compare_scores, encode_score, read_bdo_score, read_score  # noqa: E402
 from bdo_codec import document_matches_logical_tracks, score_summary  # noqa: E402
 from bdo_validation import ValidationContext, ValidationIssue, issues_report, validate_tracks  # noqa: E402
-from project_schema import CURRENT_PROJECT_SCHEMA, migrate_project  # noqa: E402
+from project_schema import (  # noqa: E402
+    CURRENT_PROJECT_SCHEMA,
+    DEFAULT_REFERENCE_LAYER_SETTINGS,
+    migrate_project,
+    normalize_reference_layer_settings,
+    project_relative_file_reference,
+    resolve_project_file_reference,
+)
 from editor_commands import ProjectCommandStack, ProjectSnapshot  # noqa: E402
 from bdo_sample_renderer import (  # noqa: E402
     sample_map_covers,
@@ -171,14 +311,102 @@ from bdo_sample_renderer import (  # noqa: E402
     sample_map_supports_note,
 )
 from bdo_realtime_audio import AudioEngineError, BdoRealtimeAudioEngine, bank_for_instrument  # noqa: E402
+from process_metrics import ProcessMetricsSampler  # noqa: E402
+from tools.import_bdo_game_art import (  # noqa: E402
+    GameArtImportError,
+    import_game_instrument_art,
+)
 from bdo_transcription import (  # noqa: E402
+    DEFAULT_TRANSCRIPTION_ANALYSIS_MODE,
+    DEFAULT_TRANSCRIPTION_CLEANUP_PROFILE,
+    POSTPROCESS_VERSION,
     TranscriptionCancelled,
     TranscriptionCandidate,
     TranscriptionError,
     TranscriptionResult,
+    load_cached_transcription_result,
+    load_transcription_evidence,
+    load_transcription_frame_times,
+    prune_transcription_workspaces,
+    redecode_transcription_full,
+    redecode_transcription_interval,
+    transcription_audio_fingerprint,
+    transcription_backend_quick_status,
     transcribe_reference_audio,
 )
-from bdo_sample_pack import PACK_SUFFIX, SamplePackError, extract_sample_pack  # noqa: E402
+from bdo_transcription_harmony import (  # noqa: E402
+    ChordSegment,
+    HarmonyAnalysisCancelled,
+    HarmonyAnalysis,
+    KeyEstimate,
+    analyse_harmony,
+    apply_harmony_overrides,
+    harmony_cache_key,
+)
+from bdo_transcription_instruments import (  # noqa: E402
+    BdoInstrumentDescriptor,
+    InstrumentAnalysisCancelled,
+    InstrumentMatchAnalysis,
+    VoiceGroup,
+    group_voice_candidates,
+    match_bdo_instruments,
+    overlay_manual_voice_groups,
+    refine_voice_groups_by_timbre,
+)
+from bdo_transcription_timbre import (  # noqa: E402
+    FramePitchEvidence,
+    TimbreProfileError,
+    extract_group_timbre_profiles,
+    load_or_build_timbre_profile_index,
+    remap_group_timbre_profiles,
+)
+from bdo_transcription_assist import (  # noqa: E402
+    KeyReviewOverride,
+    LockedChordReview,
+    ManualVoiceGroupReview,
+    TranscriptionAssistReviewState,
+    isolate_assist_review_for_audio,
+    recover_assist_review,
+    stable_assist_review_id,
+)
+from bdo_transcription_policy import CANDIDATE_NOTE_POLICY  # noqa: E402
+from bdo_transcription_session import (  # noqa: E402
+    CandidateAnnotation,
+    CandidateRoute,
+    TranscriptionEditorCommit,
+    TranscriptionEditorCommitReport,
+    TranscriptionSession,
+    TranscriptionSessionState,
+)
+from bdo_transcription_evidence_qt import EvidenceTileController  # noqa: E402
+from bdo_spectrogram_qt import SpectrogramTileController  # noqa: E402
+from bdo_transcription_melody_lines import (  # noqa: E402
+    BASS_ROLE as MELODY_LINE_BASS_ROLE,
+    CHORD_SPAN_KIND as MELODY_LINE_CHORD_SPAN_KIND,
+    CONFIDENCE_BUCKETS as MELODY_LINE_CONFIDENCE_BUCKETS,
+    CONNECTOR_KIND as MELODY_LINE_CONNECTOR_KIND,
+    CONTOUR_KIND as MELODY_LINE_CONTOUR_KIND,
+    GUIDE_ROLES as MELODY_LINE_GUIDE_ROLES,
+    HARMONY_ROLE as MELODY_LINE_HARMONY_ROLE,
+    PRIMARY_ROLE as MELODY_LINE_PRIMARY_ROLE,
+    MelodyLineSegment,
+    build_melody_line_segments,
+    melody_line_confidence_bucket,
+    melody_line_kind_visible,
+    melody_line_lod,
+    melody_line_width,
+)
+from transcription_editor_qt import (  # noqa: E402
+    TranscriptionEditorPanel,
+    TranscriptionWaveformLane,
+    voice_role_label,
+)
+from bdo_sample_pack import (  # noqa: E402
+    PACK_SUFFIX,
+    SamplePackCancelled,
+    SamplePackError,
+    extract_sample_pack,
+)
 from velocity_curve import apply_weighted_velocity_delta, velocity_time_points  # noqa: E402
 from i18n import LANGUAGE_CHOICES, install_localizer, localizer, tr, trf  # noqa: E402
 from fluent_theme import (  # noqa: E402
@@ -199,140 +427,8 @@ TRACK_COLORS = [
 ]
 
 BDO_ARTICULATIONS = {
-    0x0a: [
-        (0, "延音"),
-        (3, "向上滑动"),
-        (12, "滑弦下降"),
-        (13, "弱音"),
-        (14, "泛音"),
-        (15, "三连音"),
-    ],
-    0x0e: [
-        (0, "延音"),
-        (3, "向上滑动"),
-        (12, "滑弦下降"),
-        (13, "弱音"),
-        (14, "泛音"),
-        (16, "滑音"),
-        (22, "拍弦"),
-        (23, "滑音上升"),
-        (24, "X-音符"),
-    ],
-    0x0f: [
-        (0, "延音"),
-        (3, "向上滑动"),
-        (12, "滑弦下降"),
-        (13, "弱音"),
-        (14, "泛音"),
-        (23, "滑音上升"),
-    ],
-    0x0b: [
-        (0, "延音"),
-        (1, "标签"),
-        (2, "剪切"),
-        (3, "向上滑动"),
-        (4, "颤音小调"),
-        (15, "三连音"),
-    ],
-    0x10: [
-        (0, "延音"),
-        (9, "大调和弦"),
-        (10, "和弦小调"),
-        (16, "滑音"),
-    ],
-    0x11: [
-        (0, "延音"),
-        (11, "延音踏板"),
-    ],
-    0x12: [
-        (0, "延音"),
-        (1, "标签"),
-        (2, "剪切"),
-        (3, "向上滑动"),
-        (4, "颤音小调"),
-        (5, "颤音大调"),
-        (6, "颤音"),
-        (7, "颤音 2"),
-        (8, "大调颤音"),
-    ],
-    0x14: [
-        (0, "延音"),
-        (1, "标签"),
-        (2, "剪切"),
-        (3, "向上滑动"),
-        (4, "颤音小调"),
-        (5, "颤音大调"),
-        (6, "颤音"),
-        (7, "颤音 2"),
-        (8, "颤音小调 2"),
-        (17, "颤音 3"),
-        (18, "大调颤音"),
-        (19, "颤音 4"),
-        (20, "维持滤波器"),
-        (21, "滤波铜管"),
-    ],
-    0x18: [
-        (0, "延音"),
-        (1, "标签"),
-        (2, "剪切"),
-        (3, "向上滑动"),
-        (4, "颤音小调"),
-        (5, "颤音大调"),
-        (6, "颤音"),
-        (7, "颤音 2"),
-        (8, "颤音小调 2"),
-        (17, "颤音 3"),
-        (18, "大调颤音"),
-        (19, "颤音 4"),
-    ],
-    0x1c: [
-        (0, "延音"),
-        (1, "基本"),
-    ],
-    0x20: [
-        (0, "延音"),
-        (1, "基本"),
-    ],
-    0x27: [
-        (0, "延音"),
-        (4, "颤音小调"),
-        (7, "颤音小调 2"),
-        (8, "大调颤音"),
-        (15, "三连音"),
-        (26, "SusPiano"),
-        (27, "SusMezzoForte"),
-        (28, "SusForte"),
-    ],
-    0x28: [
-        (0, "延音"),
-        (3, "向上滑动"),
-        (4, "颤音小调"),
-        (12, "滑弦下降"),
-        (26, "SusPiano"),
-        (27, "SusMezzoForte"),
-        (28, "SusForte"),
-    ],
-    0x24: [
-        (0, "延音"),
-        (6, "颤音"),
-        (13, "弱音"),
-        (14, "泛音"),
-        (25, "FX(C2~G2)"),
-    ],
-    0x25: [
-        (0, "延音"),
-        (6, "颤音"),
-        (13, "弱音"),
-        (14, "泛音"),
-        (25, "FX(C2~G2)"),
-    ],
-    0x26: [
-        (0, "延音"),
-        (6, "颤音"),
-        (13, "弱音"),
-        (14, "泛音"),
-        (25, "FX(C2~G2)"),
-    ],
+    instrument_id: list(pairs)
+    for instrument_id, pairs in articulation_pairs_by_instrument().items()
 }
 
 BDO_ARTICULATION_USAGE_HINTS = {
@@ -362,9 +458,9 @@ BDO_ARTICULATION_USAGE_HINTS = {
     23: "滑音上升。适合贝斯/低音提琴上行滑入目标音。",
     24: "X-音符。适合贝斯极短鬼音、死音或节奏填充，不保证明确音高。",
     25: "电吉他 FX 触发。只适合 C2-G2 特效触发音，不应自动套到普通旋律。",
-    26: "弱力度持续音。适合竖笛/圆号长音，建议 velocity < 70。",
-    27: "中力度持续音。适合竖笛/圆号长音，建议 velocity 70-99。",
-    28: "强力度持续音。适合竖笛/圆号长音，建议 velocity >= 100。",
+    26: "弱力度持续音。适合单簧管/圆号长音，建议 velocity < 70。",
+    27: "中力度持续音。适合单簧管/圆号长音，建议 velocity 70-99。",
+    28: "强力度持续音。适合单簧管/圆号长音，建议 velocity >= 100。",
 }
 
 BDO_DYNAMIC_ARTICULATION_COLORS = {
@@ -452,6 +548,26 @@ MARNIAN_SYNTH_MODE_OFFSETS = {
     "super": 2,
     "superoct": 3,
 }
+
+
+def track_uses_canonical_drum_lanes(track: "TrackState") -> bool:
+    """Distinguish BDO 48–64/type-99 notes from imported GM drum keys."""
+
+    if int(track.bdo_instrument_id) != 0x0D:
+        return False
+    if track.bdo_source_group_index is not None:
+        return True
+    if not track.notes:
+        # Empty tracks created in this BDO editor start in the game's native
+        # 17-lane representation.  No existing note is rewritten here.
+        return True
+    return all(
+        BDO_DRUM_MIN <= int(note.pitch) <= BDO_DRUM_MAX
+        and int(getattr(note, "ntype", 0)) == 99
+        for note in track.notes
+    )
+
+
 def serialized_bdo_instrument_id(track: "TrackState") -> int:
     """Resolve the actual game track ID, including Marnian source mode."""
     instrument_id = int(track.bdo_instrument_id)
@@ -483,6 +599,7 @@ BDO_EDITOR_PITCH_RANGES = {
     0x08: range(36, 84),
     0x0A: range(36, 89),
     0x0B: range(48, 89),
+    0x0D: range(48, 65),
     0x0E: range(28, 65),
     0x0F: range(28, 65),
     0x10: range(12, 91),
@@ -556,35 +673,6 @@ def add_instrument_submenus(menu: QMenu, current_id: int, instrument_names: dict
             action.setData(inst_id)
 
 
-def gm_to_bdo_instrument_for_ui(program: int, is_percussion: bool) -> int:
-    """Apply editor-specific GM mapping overrides before the shared fallback."""
-    if is_percussion:
-        return 0x0d
-    if program in (24, 25):
-        return 0x0a  # acoustic guitars
-    if program in (26, 27, 28):
-        return 0x24  # clean/jazz/muted electric guitar
-    if program == 29:
-        return 0x25  # overdriven electric guitar
-    if program in (30, 31):
-        return 0x26  # distorted electric guitar / harmonics
-    if program == 32:
-        return 0x0f  # acoustic bass
-    if 33 <= program <= 39:
-        return 0x0e  # electric/fretless/slap/synth bass
-    if program in (46,):
-        return 0x10  # orchestral harp
-    if program == 47:
-        return 0x0d  # timpani/percussion family
-    if 80 <= program <= 87:
-        return 0x0b  # synth lead family, conservative melodic fallback
-    if 88 <= program <= 95:
-        return 0x12  # synth pad family, sustained ensemble fallback
-    if 96 <= program <= 103:
-        return 0x11  # synth FX family, avoid crystal-like Marnian guesses
-    return gm_to_bdo_instrument(program, is_percussion)
-
-
 @dataclass
 class TrackState:
     track_id: int
@@ -625,6 +713,36 @@ class TrackState:
         if not self.notes:
             return "-"
         return f"{note_name(min(n.pitch for n in self.notes))} - {note_name(max(n.pitch for n in self.notes))}"
+
+
+@dataclass(frozen=True, slots=True)
+class GhostNoteProjection:
+    """One formal note projected from another track without losing identity."""
+
+    note: object
+    track_id: int = -1
+    instrument_id: int = -1
+    color: str = "#77787c"
+
+    @property
+    def pitch(self) -> int:
+        return int(self.note.pitch)
+
+    @property
+    def vel(self) -> int:
+        return int(self.note.vel)
+
+    @property
+    def start(self) -> float:
+        return float(self.note.start)
+
+    @property
+    def dur(self) -> float:
+        return float(self.note.dur)
+
+    @property
+    def ntype(self) -> int:
+        return int(self.note.ntype)
 
 
 @dataclass(frozen=True)
@@ -749,6 +867,39 @@ def scan_local_projects(directory: Path, limit: int = 80) -> list[HomeEntry]:
     return entries[:limit]
 
 
+def scan_example_projects(directory: Path, limit: int = 8) -> list[HomeEntry]:
+    """Read small local manifests without loading full example projects."""
+
+    if not directory.is_dir():
+        return []
+    entries: list[HomeEntry] = []
+    for manifest_path in directory.glob("*/example.json"):
+        try:
+            if manifest_path.stat().st_size > 64 * 1024:
+                continue
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            project_name = str(manifest.get("project") or "project.json")
+            if Path(project_name).is_absolute() or Path(project_name).name != project_name:
+                continue
+            project_path = manifest_path.parent / project_name
+            stat = project_path.stat()
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+        if not project_path.is_file():
+            continue
+        title = str(manifest.get("title") or manifest_path.parent.name).strip()
+        source = str(manifest.get("source") or tr("未知来源")).strip()
+        entries.append(HomeEntry(
+            "example",
+            title,
+            project_path,
+            trf("示例 · 来源：{source}", source=source),
+            stat.st_mtime,
+        ))
+    entries.sort(key=lambda item: (item.label.casefold(), str(item.path).casefold()))
+    return entries[:limit]
+
+
 def _home_project_group_key(label: str) -> str:
     """Return a display-oriented key for grouping repeated project snapshots."""
     normalized = unicodedata.normalize("NFKC", str(label)).strip().casefold()
@@ -807,13 +958,17 @@ def note_name(midi_note: int) -> str:
     return f"{names[midi_note % 12]}{octave}"
 
 
-@lru_cache(maxsize=64)
-def game_supported_pitches(instrument_id: int) -> frozenset[int] | None:
+@lru_cache(maxsize=96)
+def game_supported_pitches(
+    instrument_id: int, synth_mode: str = "basic"
+) -> frozenset[int] | None:
     """Exact game-sample keys when decoded, otherwise a verified editor range."""
     editor_range = BDO_EDITOR_PITCH_RANGES.get(instrument_id)
     if BDO_SAMPLE_MAP_PATH.is_file():
         try:
-            pitches = sample_map_supported_pitches(BDO_SAMPLE_MAP_PATH, instrument_id)
+            pitches = sample_map_supported_pitches(
+                BDO_SAMPLE_MAP_PATH, instrument_id, synth_mode
+            )
             if pitches:
                 if editor_range is not None:
                     return pitches.intersection(editor_range)
@@ -834,8 +989,10 @@ BDO_PROFILE = load_bdo_profile(
 )
 
 
-def game_pitch_range_label(instrument_id: int) -> str:
-    pitches = game_supported_pitches(instrument_id)
+def game_pitch_range_label(
+    instrument_id: int, synth_mode: str = "basic"
+) -> str:
+    pitches = game_supported_pitches(instrument_id, synth_mode)
     if not pitches:
         return "游戏音域待验证"
     low, high = min(pitches), max(pitches)
@@ -871,6 +1028,7 @@ def load_config() -> dict:
 
 
 def save_config(config: dict) -> None:
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -878,6 +1036,36 @@ def audio_source_config(config: dict) -> dict[str, str]:
     """Return persistent local source roots without copying game assets."""
     saved = config.get("audio_sources", {})
     return {key: str(saved.get(key) or value) for key, value in DEFAULT_AUDIO_SOURCES.items()}
+
+
+def displayed_audio_source(source_config: dict[str, str]) -> str:
+    """Return the one user-selected preview source without losing raw roots."""
+
+    return str(
+        source_config.get("sample_pack", "")
+        or source_config.get("audio_root", "")
+        or ""
+    )
+
+
+def classify_audio_source(value: str) -> tuple[str, str]:
+    """Split a local preview source into ``(sample_pack, audio_root)``.
+
+    The settings dialog historically displayed only the packed source.  Saving
+    unrelated settings therefore erased a valid raw sample directory.  Keep a
+    single compact field in the UI, but preserve the two runtime source kinds
+    explicitly at this boundary.
+    """
+
+    selected = str(value or "").strip()
+    if not selected:
+        return "", ""
+    if selected.casefold().endswith(PACK_SUFFIX.casefold()):
+        return selected, ""
+    candidate = Path(selected)
+    if candidate.is_dir():
+        return "", str(candidate.resolve())
+    raise ValueError(selected)
 
 
 def safe_filename(value: str, fallback: str = "project") -> str:
@@ -1405,6 +1593,9 @@ class TimelineCanvas(QWidget):
     midi_tools_requested = Signal(object)
     note_editor_requested = Signal(object)
     seek_requested = Signal(float)
+    time_range_changed = Signal(object)
+    playhead_changed = Signal(float)
+    TRACK_NOTE_QUERY_BLOCK_SIZE = 128
 
     def __init__(self) -> None:
         super().__init__()
@@ -1414,24 +1605,58 @@ class TimelineCanvas(QWidget):
         self.zoom_factor = 1.0
         self.view_start_ms = 0.0
         self.playhead_ms = 0.0
+        self.bpm = 120
+        self.time_sig = 4
+        self.beat_origin_ms = 0.0
         self.buffer_progress = 0.0
         self.buffer_visible = False
         self.track_levels: dict[int, float] = {}
         self.grid_rect = QRectF()
         self.dragging_timeline = False
         self.last_drag_x = 0.0
+        self.range_start_ms: float | None = None
+        self.range_end_ms: float | None = None
+        self._range_drag_anchor_ms: float | None = None
+        self._range_drag_mode = ""
+        self._range_drag_moved = False
+        self._volume_drag_track: TrackState | None = None
+        self._volume_drag_rect = QRectF()
+        self._volume_drag_initial = 70
         self.selected_track: TrackState | None = None
         self.conversion_transpose = 0
         self.background_pixmap = QPixmap(str(TIMELINE_BACKGROUND_IMAGE)) if TIMELINE_BACKGROUND_IMAGE.is_file() else QPixmap()
         self._scaled_background = QPixmap()
         self._scaled_background_size = QSize()
+        self._instrument_adaptations = instrument_editor_display_adaptations()
+        self.instrument_lane_art = InstrumentLaneArtwork()
         self.track_scroll = QScrollBar(Qt.Vertical, self)
-        self._track_note_indexes: dict[int, tuple[list[float], list, float, int, int]] = {}
-        self._conversion_problem_cache: dict[tuple[int, int, int], bool] = {}
+        # Entries keep the original first five fields for the pitch/range
+        # helpers, followed by exact ends and a block-max segment tree used by
+        # interval viewport queries.
+        self._track_note_indexes: dict[int, tuple] = {}
+        self._last_track_note_query_inspections = 0
+        self._conversion_problem_cache: dict[
+            tuple[int, str, int, int, bool], bool
+        ] = {}
         self._timeline_end_cache = 1.0
         self.track_scroll.setObjectName("TimelineScroll")
         self.track_scroll.valueChanged.connect(self.update)
+        self.setMouseTracking(True)
         self.setMinimumHeight(380)
+
+    def set_instrument_art_dir(self, directory: str | Path | None) -> int:
+        """Preload optional user artwork; painting remains filesystem-free."""
+
+        loaded = self.instrument_lane_art.reload(
+            directory,
+            {
+                instrument_id: adaptation.visual_key
+                for instrument_id, adaptation
+                in self._instrument_adaptations.items()
+            },
+        )
+        self.update()
+        return loaded
 
     def set_tracks(self, tracks: list[TrackState]) -> None:
         self.tracks = tracks
@@ -1494,33 +1719,109 @@ class TimelineCanvas(QWidget):
         for track in self.tracks:
             ordered = sorted(track.notes, key=lambda note: note.start)
             starts = [float(note.start) for note in ordered]
-            max_duration = max((float(note.dur) * track.duration_scale for note in ordered), default=0.0)
+            scaled_durations = [
+                float(note.dur) * track.duration_scale
+                for note in ordered
+            ]
+            max_duration = max(scaled_durations, default=0.0)
+            ends = [
+                start + duration
+                for start, duration in zip(starts, scaled_durations)
+            ]
+            block_size = self.TRACK_NOTE_QUERY_BLOCK_SIZE
+            block_count = (len(ends) + block_size - 1) // block_size
+            tree_base = 1 << max(0, (block_count - 1).bit_length())
+            block_max_tree = [float("-inf")] * (tree_base * 2)
+            for block_index in range(block_count):
+                block_start = block_index * block_size
+                block_stop = min(len(ends), block_start + block_size)
+                block_max_tree[tree_base + block_index] = max(
+                    ends[block_start:block_stop],
+                    default=float("-inf"),
+                )
+            for node in range(tree_base - 1, 0, -1):
+                block_max_tree[node] = max(
+                    block_max_tree[node * 2],
+                    block_max_tree[node * 2 + 1],
+                )
             pitch_min = min((note.pitch for note in ordered), default=0)
             pitch_max = max((note.pitch for note in ordered), default=0)
-            self._track_note_indexes[id(track)] = (starts, ordered, max_duration, pitch_min, pitch_max)
+            self._track_note_indexes[id(track)] = (
+                starts,
+                ordered,
+                max_duration,
+                pitch_min,
+                pitch_max,
+                ends,
+                block_max_tree,
+                tree_base,
+            )
             timeline_end = max(
                 timeline_end,
-                max((note.start + note.dur * track.duration_scale for note in ordered), default=0.0),
+                max(ends, default=0.0),
             )
         if self.reference_audio is not None:
-            timeline_end = max(timeline_end, self.reference_audio.duration_ms)
+            timeline_end = max(timeline_end, self.reference_audio.project_end_ms)
         self._timeline_end_cache = timeline_end
 
     def _visible_track_notes(self, track: TrackState, start: float, end: float) -> list:
         ordered, lo, hi = self._visible_track_note_window(track, start, end)
+        if lo == 0 and hi == len(ordered):
+            return ordered
         return ordered[lo:hi]
 
     def _visible_track_note_window(
         self, track: TrackState, start: float, end: float,
     ) -> tuple[list, int, int]:
+        self._last_track_note_query_inspections = 0
         index = self._track_note_indexes.get(id(track))
         if index is None:
             self._rebuild_track_indexes()
-            index = self._track_note_indexes.get(id(track), ([], [], 0.0, 0, 0))
-        starts, ordered, max_duration, _pitch_min, _pitch_max = index
-        lo = bisect_left(starts, start - max_duration)
+            index = self._track_note_indexes.get(
+                id(track),
+                ([], [], 0.0, 0, 0, [], [float("-inf"), float("-inf")], 1),
+            )
+        (
+            starts,
+            ordered,
+            _max_duration,
+            _pitch_min,
+            _pitch_max,
+            ends,
+            block_max_tree,
+            tree_base,
+        ) = index
         hi = bisect_right(starts, end)
-        return ordered, lo, hi
+        if hi <= 0:
+            return [], 0, 0
+
+        block_size = self.TRACK_NOTE_QUERY_BLOCK_SIZE
+        last_block = (hi - 1) // block_size
+        matching_blocks: list[int] = []
+        # Prefix-range + maximum-end pruning is a small segment-tree query:
+        # future blocks are discarded by range and old blocks whose notes have
+        # all ended are discarded without inspecting individual notes.
+        stack = [(1, 0, tree_base)]
+        while stack:
+            node, node_start, node_stop = stack.pop()
+            if node_start > last_block or block_max_tree[node] < start:
+                continue
+            if node_stop - node_start == 1:
+                matching_blocks.append(node_start)
+                continue
+            midpoint = (node_start + node_stop) // 2
+            stack.append((node * 2 + 1, midpoint, node_stop))
+            stack.append((node * 2, node_start, midpoint))
+
+        visible: list = []
+        for block_index in matching_blocks:
+            block_start = block_index * block_size
+            block_stop = min(hi, block_start + block_size)
+            self._last_track_note_query_inspections += block_stop - block_start
+            for note_index in range(block_start, block_stop):
+                if ends[note_index] >= start:
+                    visible.append(ordered[note_index])
+        return visible, 0, len(visible)
 
     def _track_pitch_bounds(self, track: TrackState) -> tuple[int, int]:
         index = self._track_note_indexes.get(id(track))
@@ -1541,21 +1842,100 @@ class TimelineCanvas(QWidget):
         self._conversion_problem_cache.clear()
         self.update()
 
+    def set_musical_grid(
+        self,
+        bpm: int,
+        time_sig: int,
+        beat_origin_ms: float,
+    ) -> None:
+        values = (
+            max(1, int(bpm)),
+            max(1, int(time_sig)),
+            float(beat_origin_ms),
+        )
+        if values == (self.bpm, self.time_sig, self.beat_origin_ms):
+            return
+        self.bpm, self.time_sig, self.beat_origin_ms = values
+        self.update()
+
+    def _visible_musical_ticks(
+        self,
+        visible_start: float,
+        visible_duration: float,
+        grid_width: float,
+    ) -> list[tuple[float, bool, str]]:
+        beat_ms = 60000.0 / max(1, self.bpm)
+        measure_ms = beat_ms * max(1, self.time_sig)
+        beat_pixels = grid_width * beat_ms / max(1.0, visible_duration)
+        factor = 1
+        while beat_pixels * factor < 34.0:
+            factor *= 2
+        step_ms = beat_ms * factor
+        first = self.beat_origin_ms + math.floor(
+            (visible_start - self.beat_origin_ms) / step_ms
+        ) * step_ms
+        end = visible_start + visible_duration
+        ticks: list[tuple[float, bool, str]] = []
+        value = first
+        for _index in range(514):
+            if value > end + step_ms:
+                break
+            measure_position = (
+                (value - self.beat_origin_ms) / measure_ms
+            )
+            nearest_measure = round(measure_position)
+            is_major = abs(measure_position - nearest_measure) < 1e-4
+            label = (
+                str(nearest_measure + 1)
+                if is_major
+                else ""
+            )
+            ticks.append((value, is_major, label))
+            value += step_ms
+        return ticks
+
     def _note_has_conversion_problem(self, track: TrackState, pitch: int) -> bool:
-        cache_key = (int(track.bdo_instrument_id), int(pitch), self.conversion_transpose)
+        canonical_drum_lanes = track_uses_canonical_drum_lanes(track)
+        cache_key = (
+            int(track.bdo_instrument_id),
+            str(track.marnian_synth_mode),
+            int(pitch),
+            self.conversion_transpose,
+            canonical_drum_lanes,
+        )
         cached = self._conversion_problem_cache.get(cache_key)
         if cached is not None:
             return cached
         if track.bdo_instrument_id == 0x0d:
-            mapped_pitch = _GM_TO_BDO_DRUM.get(pitch)
-            if mapped_pitch is None or mapped_pitch < BDO_DRUM_MIN or mapped_pitch > BDO_DRUM_MAX:
-                result = True
+            if canonical_drum_lanes:
+                supported = game_supported_pitches(
+                    track.bdo_instrument_id, track.marnian_synth_mode
+                )
+                result = not (
+                    BDO_DRUM_MIN <= int(pitch) <= BDO_DRUM_MAX
+                    and (supported is None or int(pitch) in supported)
+                )
             else:
-                supported = game_supported_pitches(track.bdo_instrument_id)
-                result = supported is not None and mapped_pitch not in supported
+                mapped_pitch = _GM_TO_BDO_DRUM.get(pitch)
+                if (
+                    mapped_pitch is None
+                    or mapped_pitch < BDO_DRUM_MIN
+                    or mapped_pitch > BDO_DRUM_MAX
+                ):
+                    result = True
+                else:
+                    supported = game_supported_pitches(
+                        track.bdo_instrument_id, track.marnian_synth_mode
+                    )
+                    result = (
+                        supported is not None
+                        and mapped_pitch not in supported
+                    )
         else:
             converted_pitch = pitch + self.conversion_transpose
-            supported = game_supported_pitches(track.bdo_instrument_id)
+            supported = game_supported_pitches(
+                track.bdo_instrument_id, track.marnian_synth_mode
+            )
             if supported is not None:
                 result = converted_pitch not in supported
             else:
@@ -1630,6 +2010,7 @@ class TimelineCanvas(QWidget):
     def set_playhead(self, ms: float, follow: bool = False) -> None:
         old_rect = self._playhead_update_rect(self.playhead_ms)
         old_view_start = self.view_start_ms
+        old_playhead = self.playhead_ms
         self.playhead_ms = max(0.0, min(float(ms), self._timeline_end_ms()))
         if follow:
             visible_duration = self._visible_duration_ms()
@@ -1638,12 +2019,47 @@ class TimelineCanvas(QWidget):
                 self._clamp_view()
         if self.view_start_ms != old_view_start:
             self.update()
+            if not math.isclose(old_playhead, self.playhead_ms, abs_tol=0.25):
+                self.playhead_changed.emit(self.playhead_ms)
             return
         new_rect = self._playhead_update_rect(self.playhead_ms)
         if old_rect is not None:
             self.update(old_rect)
         if new_rect is not None:
             self.update(new_rect)
+        if not math.isclose(old_playhead, self.playhead_ms, abs_tol=0.25):
+            self.playhead_changed.emit(self.playhead_ms)
+
+    @property
+    def time_range(self) -> tuple[float, float] | None:
+        if self.range_start_ms is None or self.range_end_ms is None:
+            return None
+        return (
+            min(self.range_start_ms, self.range_end_ms),
+            max(self.range_start_ms, self.range_end_ms),
+        )
+
+    def set_time_range(
+        self,
+        start_ms: float | None,
+        end_ms: float | None,
+        *,
+        notify: bool = False,
+    ) -> None:
+        if start_ms is None or end_ms is None:
+            changed = self.time_range is not None
+            self.range_start_ms = None
+            self.range_end_ms = None
+        else:
+            start = max(0.0, min(float(start_ms), self._timeline_end_ms()))
+            end = max(0.0, min(float(end_ms), self._timeline_end_ms()))
+            changed = self.time_range != (min(start, end), max(start, end))
+            self.range_start_ms = min(start, end)
+            self.range_end_ms = max(start, end)
+        if changed:
+            self.update()
+            if notify:
+                self.time_range_changed.emit(self.time_range)
 
     def _playhead_update_rect(self, position_ms: float):
         visible_duration = self._visible_duration_ms()
@@ -1715,7 +2131,7 @@ class TimelineCanvas(QWidget):
         painter.setOpacity(TIMELINE_BACKGROUND_OPACITY)
         painter.drawPixmap(int(x), int(y), self._scaled_background)
         painter.restore()
-        painter.fillRect(target, QColor(12, 14, 13, 116))
+        painter.fillRect(target, QColor(12, 14, 13, 72))
 
     def _paint_timeline_shell(
         self,
@@ -1751,26 +2167,58 @@ class TimelineCanvas(QWidget):
         visible_start: float,
         visible_duration: float,
     ) -> int:
-        total_seconds = visible_duration / 1000.0
-        beat_seconds = 60.0 / max(1, 120)
-        bar_seconds = beat_seconds * 4
-        bars = max(4, min(24, math.ceil(total_seconds / bar_seconds) if total_seconds else 4))
-        for i in range(bars + 1):
-            x = grid_left + grid_w * i / bars
-            if i < bars:
-                shade = QColor(25, 25, 25, 80) if i % 2 else QColor(17, 17, 17, 64)
-                painter.fillRect(QRectF(x, grid_top, grid_w / bars, grid_h), shade)
-            is_major = i % 4 == 0
+        measure_ms = (
+            60000.0 / max(1, self.bpm) * max(1, self.time_sig)
+        )
+        first_measure = self.beat_origin_ms + math.floor(
+            (visible_start - self.beat_origin_ms) / measure_ms
+        ) * measure_ms
+        measure = first_measure
+        measure_index = math.floor(
+            (measure - self.beat_origin_ms) / measure_ms
+        )
+        visible_end = visible_start + visible_duration
+        while measure <= visible_end + measure_ms:
+            next_measure = measure + measure_ms
+            left_x = grid_left + (
+                (measure - visible_start) / visible_duration
+            ) * grid_w
+            right_x = grid_left + (
+                (next_measure - visible_start) / visible_duration
+            ) * grid_w
+            shade = (
+                QColor(25, 25, 25, 80)
+                if measure_index % 2
+                else QColor(17, 17, 17, 64)
+            )
+            painter.fillRect(
+                QRectF(
+                    left_x,
+                    grid_top,
+                    right_x - left_x,
+                    grid_h,
+                ),
+                shade,
+            )
+            measure = next_measure
+            measure_index += 1
+        ticks = self._visible_musical_ticks(
+            visible_start,
+            visible_duration,
+            grid_w,
+        )
+        for value, is_major, label in ticks:
+            x = grid_left + (
+                (value - visible_start) / visible_duration
+            ) * grid_w
             painter.setPen(QPen(QColor("#3a3a3a" if is_major else "#292929"), 1))
             painter.drawLine(int(x), grid_top, int(x), grid_top + grid_h)
-            if i < bars:
+            if label:
                 painter.setPen(QColor("#8e8982" if is_major else "#5f5a54"))
-                seconds = int((visible_start / 1000.0) + total_seconds * i / bars)
-                label = str(i + 1) if bars <= 12 else f"{seconds // 60}:{seconds % 60:02d}"
                 painter.drawText(int(x + 6), top + 22, label)
         painter.setPen(QColor("#a8a29e"))
         painter.drawText(left + 10, top + 22, "Tracks")
-        return bars
+        return len(ticks)
 
     def _paint_playhead(
         self,
@@ -1796,6 +2244,46 @@ class TimelineCanvas(QWidget):
             painter.fillPath(marker, QColor("#f5a524"))
             return play_x
         return None
+
+    def _paint_time_range(
+        self,
+        painter: QPainter,
+        top: float,
+        grid_left: float,
+        grid_top: float,
+        grid_w: float,
+        grid_h: float,
+        visible_start: float,
+        visible_duration: float,
+        visible_end: float,
+    ) -> None:
+        selected = self.time_range
+        if selected is None:
+            return
+        start, end = selected
+        if end < visible_start or start > visible_end:
+            return
+        left_ms = max(start, visible_start)
+        right_ms = min(end, visible_end)
+        left_x = grid_left + (
+            (left_ms - visible_start) / visible_duration
+        ) * grid_w
+        right_x = grid_left + (
+            (right_ms - visible_start) / visible_duration
+        ) * grid_w
+        painter.fillRect(
+            QRectF(left_x, grid_top, max(1.0, right_x - left_x), grid_h),
+            QColor(85, 196, 186, 22),
+        )
+        for value in (start, end):
+            if visible_start <= value <= visible_end:
+                x = grid_left + (
+                    (value - visible_start) / visible_duration
+                ) * grid_w
+                painter.fillRect(
+                    QRectF(x - 1.0, top, 2.0, grid_h + (grid_top - top)),
+                    QColor("#55c4ba"),
+                )
 
     def _paint_track_rows(
         self,
@@ -1849,14 +2337,34 @@ class TimelineCanvas(QWidget):
             row_rect = QRectF(left, y, header_w, lane_h)
             self.hit_regions.append((row_rect, "select", track))
 
-            controls = [("M", "mute", 26), ("S", "solo", 26)]
-            if track.bdo_instrument_id in MARNIAN_SYNTH_INSTRUMENT_IDS:
-                controls.append(("FX", "fx", 28))
+            adaptation = self._instrument_adaptations.get(
+                int(track.bdo_instrument_id)
+            )
+            header_background_rect = instrument_header_background_rect(
+                row_rect
+            )
+            if adaptation is not None and not header_background_rect.isEmpty():
+                paint_instrument_header_background(
+                    painter,
+                    header_background_rect,
+                    visual_key=adaptation.visual_key,
+                    accent=QColor(track.color),
+                    pixmap=self.instrument_lane_art.pixmap_for(
+                        int(track.bdo_instrument_id)
+                    ),
+                    active=active,
+                )
+
+            controls = [
+                ("M", "mute", 26),
+                ("S", "solo", 26),
+                ("FX", "fx", 28),
+            ]
             control_gap = 4.0
             controls_width = sum(width for _label, _action, width in controls)
             controls_width += control_gap * max(0, len(controls) - 1)
             control_x = left + header_w - 20.0 - controls_width
-            control_y = y + (lane_h - 22.0) / 2.0
+            control_y = y + 5.0
             for label, action, width in controls:
                 rect = QRectF(control_x, control_y, width, 22)
                 checked = (action == "mute" and track.muted) or (action == "solo" and track.solo)
@@ -1867,6 +2375,54 @@ class TimelineCanvas(QWidget):
                 painter.drawText(rect, Qt.AlignCenter, label)
                 self.hit_regions.append((rect, action, track))
                 control_x += width + control_gap
+
+            # This is the game's track-volume field, not the separate note-
+            # velocity scale.  The official authoring UI clamps edits to
+            # 0..100 (default 70), although imported score bytes may be above
+            # 100.  Such raw values remain visible and untouched until the
+            # user deliberately edits this slider.
+            volume_label_rect = QRectF(left + header_w - 129, y + 34, 25, 16)
+            volume_rect = QRectF(left + header_w - 101, y + 34, 50, 16)
+            volume_value_rect = QRectF(left + header_w - 48, y + 34, 26, 16)
+            painter.setPen(QColor("#8f8981" if active else "#625e59"))
+            painter.drawText(volume_label_rect, Qt.AlignCenter, tr("音量"))
+            painter.fillRect(volume_rect, QColor("#252525"))
+            painter.setPen(QPen(QColor("#4b4945"), 1))
+            painter.drawRect(volume_rect)
+            raw_track_volume = int(track.bdo_track_volume)
+            fill_width = max(
+                0.0,
+                (volume_rect.width() - 4.0)
+                * max(0, min(100, raw_track_volume))
+                / 100.0,
+            )
+            painter.fillRect(
+                QRectF(
+                    volume_rect.left() + 2.0,
+                    volume_rect.top() + 5.0,
+                    fill_width,
+                    6.0,
+                ),
+                QColor("#d49a34" if active else "#665437"),
+            )
+            handle_x = volume_rect.left() + 2.0 + fill_width
+            painter.fillRect(
+                QRectF(handle_x - 1.0, volume_rect.top() + 3.0, 2.0, 10.0),
+                QColor("#f5c158" if active else "#81735d"),
+            )
+            painter.setPen(
+                QColor(
+                    "#ef7772"
+                    if not 0 <= raw_track_volume <= 100
+                    else ("#d7c6a5" if active else "#77716a")
+                )
+            )
+            painter.drawText(
+                volume_value_rect,
+                Qt.AlignRight | Qt.AlignVCenter,
+                str(raw_track_volume),
+            )
+            self.hit_regions.append((volume_rect, "track_volume", track))
 
             meter_level = self.track_levels.get(int(track.track_id), 0.0) if active else 0.0
             meter_rect = QRectF(left + header_w - 14, y + 7, 7, lane_h - 14)
@@ -1946,10 +2502,17 @@ class TimelineCanvas(QWidget):
             metadata_font.setPointSize(max(7, metadata_font.pointSize() - 1))
             painter.save()
             painter.setFont(metadata_font)
+            metadata_left = left + 12.0
+            metadata_right = left + header_w - 135.0
+            metadata_width = max(0.0, metadata_right - metadata_left)
             painter.drawText(
-                QRectF(left + 12, y + 31, header_w - 130, 20),
+                QRectF(metadata_left, y + 31, metadata_width, 20),
                 Qt.AlignLeft | Qt.AlignVCenter,
-                painter.fontMetrics().elidedText(metadata, Qt.ElideRight, header_w - 136),
+                painter.fontMetrics().elidedText(
+                    metadata,
+                    Qt.ElideRight,
+                    max(0, int(metadata_width - 4.0)),
+                ),
             )
             painter.restore()
         painter.restore()
@@ -1967,6 +2530,26 @@ class TimelineCanvas(QWidget):
                 visible_duration,
                 visible_end,
             )
+
+    @staticmethod
+    def _track_volume_from_position(rect: QRectF, x: float) -> int:
+        if rect.width() <= 0:
+            return 0
+        ratio = max(0.0, min(1.0, (float(x) - rect.left()) / rect.width()))
+        return max(0, min(100, round(ratio * 100.0)))
+
+    def _set_track_volume_from_position(
+        self,
+        track: TrackState,
+        rect: QRectF,
+        x: float,
+    ) -> bool:
+        value = self._track_volume_from_position(rect, x)
+        if int(track.bdo_track_volume) == value:
+            return False
+        track.bdo_track_volume = value
+        self.update(rect.adjusted(-4.0, -3.0, 32.0, 3.0).toAlignedRect())
+        return True
 
     def _paint_reference_audio_row(
         self,
@@ -2060,18 +2643,26 @@ class TimelineCanvas(QWidget):
         self.hit_regions.append((waveform_rect, "audio_waveform", controller))
 
         if controller.waveform:
-            first = max(0, bisect_left(controller.waveform_starts, visible_start) - 1)
-            last = bisect_right(controller.waveform_starts, visible_end)
+            audio_visible_start = controller.project_to_audio(visible_start)
+            audio_visible_end = controller.project_to_audio(visible_end)
+            first = max(
+                0,
+                bisect_left(controller.waveform_starts, audio_visible_start) - 1,
+            )
+            last = bisect_right(controller.waveform_starts, audio_visible_end)
             center_y = waveform_rect.center().y()
             max_half_height = max(1.0, waveform_rect.height() / 2.0 - 3.0)
             bars: list[QRectF] = []
             for bucket_start, bucket_end, peak in controller.waveform[first:last]:
+                project_start = controller.audio_to_project(bucket_start)
+                project_end = controller.audio_to_project(bucket_end)
                 x = waveform_rect.left() + (
-                    (bucket_start - visible_start) / visible_duration
+                    (project_start - visible_start) / visible_duration
                 ) * waveform_rect.width()
                 width = max(
                     1.0,
-                    ((bucket_end - bucket_start) / visible_duration) * waveform_rect.width(),
+                    ((project_end - project_start) / visible_duration)
+                    * waveform_rect.width(),
                 )
                 half_height = max(1.0, min(1.0, peak) * max_half_height)
                 bars.append(QRectF(x, center_y - half_height, width, half_height * 2.0))
@@ -2084,7 +2675,7 @@ class TimelineCanvas(QWidget):
             placeholder = tr("正在分析波形…") if controller.waveform_loading else tr("载入 MP3/WAV 后显示波形")
             painter.drawText(waveform_rect, Qt.AlignCenter, placeholder)
 
-        position = float(controller.player.position())
+        position = controller.project_position_ms
         if controller.audio_path and visible_start <= position <= visible_end:
             position_x = waveform_rect.left() + (
                 (position - visible_start) / visible_duration
@@ -2113,15 +2704,18 @@ class TimelineCanvas(QWidget):
         painter.fillRect(QRectF(left, top, area.width(), ruler_h), QColor(32, 32, 32, 224))
         painter.setPen(QColor("#a8a29e"))
         painter.drawText(left + 10, top + 22, f"TRACKS · {self._timeline_row_count()}")
-        total_seconds = visible_duration / 1000.0
-        for i in range(bars + 1):
-            x = grid_left + grid_w * i / bars
-            painter.setPen(QPen(QColor("#3a3a3a" if i % 4 == 0 else "#292929"), 1))
+        for value, is_major, label in self._visible_musical_ticks(
+            visible_start,
+            visible_duration,
+            grid_w,
+        ):
+            x = grid_left + (
+                (value - visible_start) / visible_duration
+            ) * grid_w
+            painter.setPen(QPen(QColor("#3a3a3a" if is_major else "#292929"), 1))
             painter.drawLine(int(x), top + 8, int(x), grid_top)
-            if i < bars:
-                painter.setPen(QColor("#8e8982" if i % 4 == 0 else "#5f5a54"))
-                seconds = int((visible_start / 1000.0) + total_seconds * i / bars)
-                label = str(i + 1) if bars <= 12 else f"{seconds // 60}:{seconds % 60:02d}"
+            if label:
+                painter.setPen(QColor("#8e8982" if is_major else "#5f5a54"))
                 painter.drawText(int(x + 6), top + 22, label)
         if play_x is not None:
             painter.fillRect(QRectF(play_x, top, 2, ruler_h), QColor("#f5a524"))
@@ -2166,6 +2760,17 @@ class TimelineCanvas(QWidget):
         self._paint_track_rows(
             painter, left, grid_left, grid_top, header_w, grid_w, grid_h,
             lane_h, visible_start, visible_duration, visible_end
+        )
+        self._paint_time_range(
+            painter,
+            top,
+            grid_left,
+            grid_top,
+            grid_w,
+            grid_h,
+            visible_start,
+            visible_duration,
+            visible_end,
         )
         self._paint_ruler_overlay(
             painter, area, left, top, grid_left, grid_top, grid_w, grid_h,
@@ -2224,7 +2829,12 @@ class TimelineCanvas(QWidget):
                     continue
                 self.selected_track = track
                 self.selected.emit(track)
-                if action == "mute":
+                if action == "track_volume":
+                    self._volume_drag_track = track
+                    self._volume_drag_rect = QRectF(rect)
+                    self._volume_drag_initial = int(track.bdo_track_volume)
+                    self._set_track_volume_from_position(track, rect, pos.x())
+                elif action == "mute":
                     track.muted = not track.muted
                     self.changed.emit()
                     self.track_state_changed.emit()
@@ -2236,6 +2846,41 @@ class TimelineCanvas(QWidget):
                     self.effects_requested.emit(track)
                 self.update()
                 return
+        area, header_w, ruler_h, _lane_h = self._timeline_layout_metrics()
+        ruler_rect = QRectF(
+            area.left() + header_w,
+            area.top(),
+            max(0.0, area.width() - header_w),
+            ruler_h,
+        )
+        if event.button() == Qt.LeftButton and ruler_rect.contains(pos):
+            rel = max(
+                0.0,
+                min(
+                    1.0,
+                    (pos.x() - ruler_rect.left())
+                    / max(1.0, ruler_rect.width()),
+                ),
+            )
+            target = self.view_start_ms + rel * self._visible_duration_ms()
+            selected = self.time_range
+            handle_tolerance = self._visible_duration_ms() * 7.0 / max(
+                1.0,
+                ruler_rect.width(),
+            )
+            if selected and abs(target - selected[0]) <= handle_tolerance:
+                self._range_drag_mode = "start"
+                self._range_drag_anchor_ms = selected[1]
+            elif selected and abs(target - selected[1]) <= handle_tolerance:
+                self._range_drag_mode = "end"
+                self._range_drag_anchor_ms = selected[0]
+            else:
+                self._range_drag_mode = "new"
+                self._range_drag_anchor_ms = target
+                self.set_time_range(target, target)
+            self._range_drag_moved = False
+            self.set_playhead(target)
+            return
         if self.grid_rect.contains(pos):
             rel = max(0.0, min(1.0, (pos.x() - self.grid_rect.left()) / max(1.0, self.grid_rect.width())))
             target = self.view_start_ms + rel * self._visible_duration_ms()
@@ -2298,6 +2943,28 @@ class TimelineCanvas(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
+        if self._volume_drag_track is not None:
+            self._set_track_volume_from_position(
+                self._volume_drag_track,
+                self._volume_drag_rect,
+                pos.x(),
+            )
+            return
+        if self._range_drag_anchor_ms is not None:
+            area, header_w, _ruler_h, _lane_h = self._timeline_layout_metrics()
+            grid_width = max(1.0, area.width() - header_w)
+            rel = max(
+                0.0,
+                min(1.0, (pos.x() - (area.left() + header_w)) / grid_width),
+            )
+            target = self.view_start_ms + rel * self._visible_duration_ms()
+            self._range_drag_moved = (
+                self._range_drag_moved
+                or abs(target - self._range_drag_anchor_ms)
+                > self._visible_duration_ms() * 3.0 / grid_width
+            )
+            self.set_time_range(self._range_drag_anchor_ms, target)
+            return
         if self.dragging_timeline:
             dx = pos.x() - self.last_drag_x
             self.last_drag_x = pos.x()
@@ -2310,6 +2977,29 @@ class TimelineCanvas(QWidget):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._volume_drag_track is not None:
+            changed = (
+                int(self._volume_drag_track.bdo_track_volume)
+                != self._volume_drag_initial
+            )
+            self._volume_drag_track = None
+            self._volume_drag_rect = QRectF()
+            if changed:
+                self.changed.emit()
+                self.track_state_changed.emit()
+            return
+        if self._range_drag_anchor_ms is not None:
+            if not self._range_drag_moved:
+                target = self._range_drag_anchor_ms
+                self.set_time_range(None, None)
+                self.set_playhead(target)
+                self.seek_requested.emit(self.playhead_ms)
+            else:
+                self.time_range_changed.emit(self.time_range)
+            self._range_drag_anchor_ms = None
+            self._range_drag_mode = ""
+            self._range_drag_moved = False
+            return
         self.dragging_timeline = False
         super().mouseReleaseEvent(event)
 
@@ -2441,7 +3131,10 @@ class TrackCard(QWidget):
 
     def _instrument_label_text(self) -> str:
         name = self.instrument_names.get(self.track.bdo_instrument_id, "未知 BDO 乐器")
-        return f"{name} · {game_pitch_range_label(self.track.bdo_instrument_id)}"
+        return (
+            f"{name} · "
+            f"{game_pitch_range_label(self.track.bdo_instrument_id, self.track.marnian_synth_mode)}"
+        )
 
     def _update_mute(self) -> None:
         self.track.muted = self.mute_btn.isChecked()
@@ -2595,22 +3288,100 @@ class PianoRollCanvas(QWidget):
     notes_changed = Signal()
     hover_changed = Signal(float, int)
     ruler_seek_requested = Signal(float)
+    candidate_selection_changed = Signal(object)
+    time_range_changed = Signal(object)
+    chord_segment_clicked = Signal(str)
+    voice_group_split_requested = Signal(str, float)
+    voice_group_merge_requested = Signal(str, str)
+    voice_group_color_requested = Signal(str, str)
+    voice_group_role_requested = Signal(str, str)
 
     KEY_W = 86
     BLACK_KEY_X = 8
     BLACK_KEY_W = 48
-    RULER_H = 31
+    TIME_RULER_H = 31
+    CHORD_H = 26
+    RULER_H = TIME_RULER_H + CHORD_H
     ROW_H = 20
     MIN_PITCH = 0
     MAX_PITCH = 127
+    # Start-sorted interval blocks keep viewport queries bounded even when one
+    # sustained candidate spans most of the song.  A single global maximum
+    # duration would otherwise pull every later candidate into the scan.
+    CANDIDATE_QUERY_BLOCK_SIZE = 128
 
     def __init__(self, editor) -> None:
         super().__init__(editor)
         self.editor = editor
         self.notes: list = []
         self.ghost_notes: list = []
+        self._ghost_opacity = 0.70
         self.transcription_candidates: list[TranscriptionCandidate] = []
         self.transcription_candidates_visible = False
+        self._transcription_candidate_ids: list[str] = []
+        self._transcription_candidate_id_to_index: dict[str, int] = {}
+        self._folded_candidate_primary: dict[str, str] = {}
+        self._fold_alternative_counts: dict[str, int] = {}
+        self._fold_alternative_rank: dict[str, int] = {}
+        self._selected_candidate_ids: set[str] = set()
+        self._rejected_candidate_ids: set[str] = set()
+        self._pending_candidate_ids: set[str] = set()
+        self._applied_candidate_ids: set[str] = set()
+        self._invalid_candidate_ids: set[str] = set()
+        self._duplicate_candidate_ids: set[str] = set()
+        self._staged_candidate_ids: set[str] = set()
+        self._fragment_candidate_ids: set[str] = set()
+        self._suppressed_candidate_ids: set[str] = set()
+        self._confidence_floor = 0.30
+        self._show_rejected_only = False
+        self._audio_offset_ms = 0.0
+        self._evidence_descriptor = None
+        self._show_contour_evidence = False
+        # Clean review is the default.  Dense posterior layers remain
+        # available as explicit diagnostic evidence instead of competing with
+        # editable semantic note blocks.
+        self._show_frame_evidence = False
+        self._show_onset_evidence = False
+        self._evidence = EvidenceTileController(self)
+        self._evidence.tile_ready.connect(self._evidence_tile_ready)
+        self._show_spectrogram = False
+        self._reference_background_opacity = 0.60
+        self._spectrogram_audio_path = ""
+        self._spectrogram = SpectrogramTileController(self)
+        self._spectrogram.tile_ready.connect(self._evidence_tile_ready)
+        self._show_melody_lines = True
+        self._melody_line_roles_visible = frozenset(
+            MELODY_LINE_GUIDE_ROLES
+        )
+        self._melody_line_segments: tuple[MelodyLineSegment, ...] = ()
+        self._melody_line_starts: list[float] = []
+        self._melody_line_ends: list[float] = []
+        self._melody_line_block_max_ends: list[float] = []
+        self._melody_line_projection_key: tuple[object, ...] | None = None
+        self._last_melody_line_query_inspections = 0
+        self._candidate_group_colors: dict[str, str] = {}
+        self._candidate_group_ids: dict[str, str] = {}
+        self._candidate_chord_roles: dict[str, str] = {}
+        self._voice_groups: tuple[object, ...] = ()
+        self._assist_candidate_source_object: object | None = None
+        self._assist_group_color_key: tuple[tuple[str, str], ...] = ()
+        self._voice_group_outlines: tuple[
+            tuple[str, float, float, int, int, str, str, float, int],
+            ...,
+        ] = ()
+        self._voice_group_outline_starts: list[float] = []
+        self._max_voice_group_duration = 0.0
+        self._harmony_analysis: object | None = None
+        self._harmony_segment_starts: list[float] = []
+        self._max_harmony_segment_duration = 0.0
+        self._hovered_candidate_id = ""
+        self._candidate_marquee_origin: QPointF | None = None
+        self._candidate_marquee_additive = False
+        self._candidate_press_selected: set[str] = set()
+        self._ruler_range_anchor: float | None = None
+        self._ruler_range_endpoint = ""
+        self._ruler_range_moved = False
+        self._drag_time_range: tuple[float, float] | None = None
         self.selected: set[int] = set()
         self.anchor_index: int | None = None
         self.px_per_beat = 92.0
@@ -2636,15 +3407,28 @@ class PianoRollCanvas(QWidget):
         self.dragging_playhead = False
         self._note_order: list[int] = []
         self._note_starts: list[float] = []
+        self._note_ends: list[float] = []
+        self._note_block_max_ends: list[float] = []
         self._max_note_duration = 0.0
+        self._note_end_ms = 0.0
         self.content_end_ms = 0.0
         self._note_index_revision = 0
         self._visible_note_cache_key: tuple | None = None
         self._visible_note_cache: list[int] = []
         self._ghost_starts: list[float] = []
+        self._ghost_ends: list[float] = []
+        self._ghost_block_max_ends: list[float] = []
         self._ghost_max_duration = 0.0
         self._candidate_starts: list[float] = []
-        self._candidate_max_duration = 0.0
+        self._candidate_ends: list[float] = []
+        self._candidate_block_max_ends: list[float] = []
+        self._last_candidate_query_inspections = 0
+        self._candidate_end_audio_ms = 0.0
+        self._candidate_id_set: frozenset[str] = frozenset()
+        self._candidate_source_object: tuple[object, ...] | None = None
+        self._review_projection_key: tuple | None = None
+        self._background_cache_key: tuple | None = None
+        self._background_cache = QPixmap()
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         self.setMinimumSize(480, 300)
@@ -2657,6 +3441,16 @@ class PianoRollCanvas(QWidget):
     def px_per_ms(self) -> float:
         return self.px_per_beat / self.beat_ms
 
+    @property
+    def transcription_time_range(self) -> tuple[float, float] | None:
+        if not self.editor.transcription_mode_enabled:
+            return None
+        if self._ruler_range_anchor is not None and self._drag_time_range is not None:
+            return self._drag_time_range
+        session = getattr(self.editor.parent(), "transcription_session", None)
+        state = getattr(session, "state", None)
+        return getattr(state, "region", None)
+
     def set_notes(self, notes: list, preserve_selection: bool = False) -> None:
         self.notes = list(notes)
         self.rebuild_note_index()
@@ -2667,43 +3461,727 @@ class PianoRollCanvas(QWidget):
         self.update()
 
     def set_ghost_notes(self, notes: list) -> None:
-        self.ghost_notes = sorted(list(notes), key=lambda note: float(note.start))
+        projected = [
+            note
+            if isinstance(note, GhostNoteProjection)
+            else GhostNoteProjection(note)
+            for note in notes
+        ]
+        self.ghost_notes = sorted(
+            projected,
+            key=lambda note: (
+                float(note.start),
+                int(note.pitch),
+                int(note.track_id),
+            ),
+        )
         self._ghost_starts = [float(note.start) for note in self.ghost_notes]
+        self._ghost_ends = [
+            float(note.start) + float(note.dur)
+            for note in self.ghost_notes
+        ]
+        block_size = self.CANDIDATE_QUERY_BLOCK_SIZE
+        self._ghost_block_max_ends = [
+            max(self._ghost_ends[start : start + block_size])
+            for start in range(0, len(self._ghost_ends), block_size)
+        ]
         self._ghost_max_duration = max((float(note.dur) for note in self.ghost_notes), default=0.0)
         self.update()
+
+    def set_ghost_opacity(self, opacity: float) -> None:
+        try:
+            normalized = max(0.0, min(1.0, float(opacity)))
+        except (TypeError, ValueError, OverflowError):
+            normalized = 0.70
+        if not math.isfinite(normalized):
+            normalized = 0.70
+        if math.isclose(normalized, self._ghost_opacity, abs_tol=0.001):
+            return
+        self._ghost_opacity = normalized
+        self.update()
+
+    @staticmethod
+    def _group_palette_color(group_id: str) -> str:
+        if not group_id:
+            return "#5baaa4"
+        checksum = sum(
+            (index + 1) * ord(character)
+            for index, character in enumerate(str(group_id))
+        )
+        return TRACK_COLORS[checksum % len(TRACK_COLORS)]
+
+    @staticmethod
+    def _chord_intervals(quality: str) -> tuple[int, ...]:
+        return {
+            "major": (0, 4, 7),
+            "minor": (0, 3, 7),
+            "dim": (0, 3, 6),
+            "diminished": (0, 3, 6),
+            "sus2": (0, 2, 7),
+            "sus4": (0, 5, 7),
+            "maj7": (0, 4, 7, 11),
+            "major7": (0, 4, 7, 11),
+            "7": (0, 4, 7, 10),
+            "dominant7": (0, 4, 7, 10),
+            "min7": (0, 3, 7, 10),
+            "minor7": (0, 3, 7, 10),
+            "half_diminished7": (0, 3, 6, 10),
+            "half-diminished7": (0, 3, 6, 10),
+        }.get(str(quality), ())
+
+    def set_transcription_assist_projection(
+        self,
+        *,
+        voice_groups=(),
+        harmony_analysis=None,
+        group_colors: dict[str, str] | None = None,
+    ) -> None:
+        """Project Qt-free harmony/group sidecars into visible block styling."""
+
+        groups = tuple(voice_groups or ())
+        explicit_colors = dict(group_colors or {})
+        color_key = tuple(
+            sorted(
+                (str(group_id), str(color))
+                for group_id, color in explicit_colors.items()
+            )
+        )
+        if (
+            groups is self._voice_groups
+            and harmony_analysis is self._harmony_analysis
+            and self._candidate_source_object
+            is self._assist_candidate_source_object
+            and color_key == self._assist_group_color_key
+        ):
+            return
+        candidate_groups: dict[str, str] = {}
+        candidate_colors: dict[str, str] = {}
+        for group in groups:
+            group_id = str(getattr(group, "group_id", "") or "")
+            color = str(
+                explicit_colors.get(group_id)
+                or getattr(group, "color", "")
+                or self._group_palette_color(group_id)
+            )
+            for candidate_id in getattr(group, "candidate_ids", ()) or ():
+                normalized = str(candidate_id)
+                candidate_groups[normalized] = group_id
+                candidate_colors[normalized] = color
+        # Voice analysis intentionally receives only the primary of a folded
+        # same-pitch hypothesis cluster.  Its alternatives remain reviewable
+        # and inherit the primary block's phrase colour without becoming
+        # artificial voices or additional timbre evidence.
+        for alternative_id, primary_id in self._folded_candidate_primary.items():
+            if primary_id in candidate_groups:
+                candidate_groups.setdefault(
+                    alternative_id,
+                    candidate_groups[primary_id],
+                )
+                candidate_colors.setdefault(
+                    alternative_id,
+                    candidate_colors[primary_id],
+                )
+
+        chord_roles: dict[str, str] = {}
+        segments = tuple(
+            sorted(
+                (
+                    getattr(harmony_analysis, "chord_segments", ())
+                    or getattr(harmony_analysis, "segments", ())
+                    or ()
+                ),
+                key=lambda item: (
+                    float(getattr(item, "start_audio_ms", 0.0)),
+                    float(getattr(item, "end_audio_ms", 0.0)),
+                    str(getattr(item, "segment_id", "")),
+                ),
+            )
+        )
+        if segments:
+            segment_starts = [
+                float(getattr(item, "start_audio_ms", 0.0))
+                for item in segments
+            ]
+            for candidate_id, candidate in zip(
+                self._transcription_candidate_ids,
+                self.transcription_candidates,
+            ):
+                midpoint = (
+                    float(candidate.start_ms)
+                    + float(candidate.duration_ms) * 0.5
+                )
+                segment_index = bisect_right(segment_starts, midpoint) - 1
+                segment = (
+                    segments[segment_index]
+                    if segment_index >= 0
+                    and midpoint
+                    < float(
+                        getattr(
+                            segments[segment_index],
+                            "end_audio_ms",
+                            0.0,
+                        )
+                    )
+                    else None
+                )
+                root = getattr(segment, "root_pc", None)
+                if segment is None or root is None:
+                    continue
+                intervals = self._chord_intervals(
+                    str(getattr(segment, "quality", ""))
+                )
+                relative = (int(candidate.pitch) - int(root)) % 12
+                role_names = ("root", "third", "fifth", "seventh")
+                for index, interval in enumerate(intervals):
+                    if relative == interval:
+                        chord_roles[candidate_id] = role_names[
+                            min(index, len(role_names) - 1)
+                        ]
+                        break
+
+        projection = (
+            groups,
+            harmony_analysis,
+            candidate_groups,
+            candidate_colors,
+            chord_roles,
+        )
+        current = (
+            self._voice_groups,
+            self._harmony_analysis,
+            self._candidate_group_ids,
+            self._candidate_group_colors,
+            self._candidate_chord_roles,
+        )
+        if projection == current:
+            return
+        (
+            self._voice_groups,
+            self._harmony_analysis,
+            self._candidate_group_ids,
+            self._candidate_group_colors,
+            self._candidate_chord_roles,
+        ) = projection
+        candidates_by_id = {
+            candidate_id: candidate
+            for candidate_id, candidate in zip(
+                self._transcription_candidate_ids,
+                self.transcription_candidates,
+            )
+        }
+        outlines = []
+        for group in groups:
+            group_id = str(getattr(group, "group_id", "") or "")
+            member_ids = tuple(
+                str(candidate_id)
+                for candidate_id in (
+                    getattr(group, "candidate_ids", ()) or ()
+                )
+            )
+            members = [
+                candidates_by_id[candidate_id]
+                for candidate_id in member_ids
+                if candidate_id in candidates_by_id
+            ]
+            if not members:
+                continue
+            outlines.append(
+                (
+                    group_id,
+                    float(getattr(group, "start_audio_ms", 0.0)),
+                    float(getattr(group, "end_audio_ms", 0.0)),
+                    min(int(candidate.pitch) for candidate in members),
+                    max(int(candidate.pitch) for candidate in members),
+                    str(getattr(group, "role", "") or ""),
+                    candidate_colors.get(
+                        member_ids[0],
+                        self._group_palette_color(group_id),
+                    ),
+                    float(getattr(group, "confidence", 0.0)),
+                    len(members),
+                )
+            )
+        self._voice_group_outlines = tuple(
+            sorted(outlines, key=lambda item: (item[1], item[2], item[0]))
+        )
+        self._voice_group_outline_starts = [
+            item[1] for item in self._voice_group_outlines
+        ]
+        self._max_voice_group_duration = max(
+            (item[2] - item[1] for item in self._voice_group_outlines),
+            default=0.0,
+        )
+        self._harmony_segment_starts = [
+            float(getattr(segment, "start_audio_ms", 0.0))
+            for segment in segments
+        ]
+        self._max_harmony_segment_duration = max(
+            (
+                float(getattr(segment, "end_audio_ms", 0.0))
+                - float(getattr(segment, "start_audio_ms", 0.0))
+                for segment in segments
+            ),
+            default=0.0,
+        )
+        self._assist_candidate_source_object = self._candidate_source_object
+        self._assist_group_color_key = color_key
+        self._rebuild_melody_line_projection()
+        self.update()
+
+    def _rebuild_melody_line_projection(self) -> None:
+        """Rebuild advisory paths outside ``paintEvent`` and audio callbacks."""
+
+        candidate_values = tuple(self.transcription_candidates)
+        candidate_ids = tuple(self._transcription_candidate_ids)
+        try:
+            group_revision: object = hash(self._voice_groups)
+        except TypeError:
+            group_revision = tuple(
+                (
+                    str(getattr(group, "group_id", "")),
+                    tuple(getattr(group, "candidate_ids", ()) or ()),
+                    str(getattr(group, "role", "")),
+                    float(getattr(group, "confidence", 0.0)),
+                )
+                for group in self._voice_groups
+            )
+        projection_key = (
+            len(candidate_values),
+            hash(candidate_values),
+            hash(candidate_ids),
+            group_revision,
+            id(self._harmony_analysis),
+            round(self.beat_ms, 6),
+        )
+        if projection_key == self._melody_line_projection_key:
+            return
+        segments = build_melody_line_segments(
+            candidate_values,
+            candidate_ids,
+            voice_groups=self._voice_groups,
+            harmony_analysis=self._harmony_analysis,
+            beat_ms=self.beat_ms,
+        )
+        self._melody_line_projection_key = projection_key
+        self._melody_line_segments = segments
+        self._melody_line_starts = [
+            segment.start_audio_ms for segment in segments
+        ]
+        self._melody_line_ends = [
+            segment.end_audio_ms for segment in segments
+        ]
+        block_size = self.CANDIDATE_QUERY_BLOCK_SIZE
+        self._melody_line_block_max_ends = [
+            max(self._melody_line_ends[start : start + block_size])
+            for start in range(0, len(self._melody_line_ends), block_size)
+        ]
 
     def set_transcription_candidates(
         self,
         candidates: list[TranscriptionCandidate] | tuple[TranscriptionCandidate, ...],
         *,
         visible: bool = True,
+        candidate_id_resolver=None,
     ) -> None:
-        self.transcription_candidates = sorted(
-            list(candidates),
-            key=lambda candidate: (
-                float(candidate.start_ms),
-                int(candidate.pitch),
-                float(candidate.duration_ms),
-            ),
+        parent = self.editor.parent()
+        session = getattr(parent, "transcription_session", None)
+        pairs = [
+            (
+                (
+                    str(candidate_id_resolver(candidate))
+                    if callable(candidate_id_resolver)
+                    else (
+                        session.candidate_id(candidate)
+                        if session is not None
+                        else str(
+                            getattr(candidate, "candidate_id", "") or ""
+                        )
+                    )
+                ),
+                candidate,
+            )
+            for candidate in candidates
+        ]
+        pairs.sort(
+            key=lambda pair: (
+                float(pair[1].start_ms),
+                int(pair[1].pitch),
+                float(pair[1].duration_ms),
+                pair[0],
+            )
         )
+        self._transcription_candidate_ids = [pair[0] for pair in pairs]
+        self.transcription_candidates = [pair[1] for pair in pairs]
+        self._transcription_candidate_id_to_index = {
+            candidate_id: index
+            for index, candidate_id in enumerate(
+                self._transcription_candidate_ids
+            )
+        }
+        by_pitch: dict[
+            int, list[tuple[str, TranscriptionCandidate]]
+        ] = defaultdict(list)
+        for candidate_id, candidate in pairs:
+            by_pitch[int(candidate.pitch)].append(
+                (candidate_id, candidate)
+            )
+        folded_primary: dict[str, str] = {}
+        alternative_counts: dict[str, int] = {}
+        alternative_rank: dict[str, int] = {}
+        for pitch_pairs in by_pitch.values():
+            clusters: list[
+                list[tuple[str, TranscriptionCandidate]]
+            ] = []
+            cluster_start = 0.0
+            cluster_end = 0.0
+            cluster_max_duration = 0.0
+            for candidate_id, candidate in pitch_pairs:
+                candidate_start = float(candidate.start_ms)
+                candidate_duration = float(candidate.duration_ms)
+                candidate_end = candidate_start + candidate_duration
+                if not clusters:
+                    clusters.append([(candidate_id, candidate)])
+                    cluster_start = candidate_start
+                    cluster_end = candidate_end
+                    cluster_max_duration = candidate_duration
+                    continue
+                previous_cluster = clusters[-1]
+                overlap_ms = max(
+                    0.0,
+                    min(cluster_end, candidate_end)
+                    - max(cluster_start, candidate_start),
+                )
+                minimum_duration = min(
+                    candidate_duration,
+                    cluster_max_duration,
+                )
+                if (
+                    minimum_duration > 0.0
+                    and overlap_ms / minimum_duration >= 0.75
+                    and abs(
+                        candidate_start
+                        - float(previous_cluster[0][1].start_ms)
+                    )
+                    <= 80.0
+                ):
+                    previous_cluster.append((candidate_id, candidate))
+                    cluster_start = min(cluster_start, candidate_start)
+                    cluster_end = max(cluster_end, candidate_end)
+                    cluster_max_duration = max(
+                        cluster_max_duration,
+                        candidate_duration,
+                    )
+                else:
+                    clusters.append([(candidate_id, candidate)])
+                    cluster_start = candidate_start
+                    cluster_end = candidate_end
+                    cluster_max_duration = candidate_duration
+            for cluster in clusters:
+                if len(cluster) <= 1:
+                    continue
+                primary_id, _primary = max(
+                    cluster,
+                    key=lambda item: (
+                        float(item[1].confidence),
+                        float(item[1].duration_ms),
+                        -float(item[1].start_ms),
+                        item[0],
+                    ),
+                )
+                alternative_counts[primary_id] = len(cluster) - 1
+                ordered_alternatives = sorted(
+                    (
+                        (candidate_id, candidate)
+                        for candidate_id, candidate in cluster
+                        if candidate_id != primary_id
+                    ),
+                    key=lambda item: (
+                        -float(item[1].confidence),
+                        float(item[1].start_ms),
+                        item[0],
+                    ),
+                )
+                for rank, (candidate_id, _candidate) in enumerate(
+                    ordered_alternatives,
+                    start=1,
+                ):
+                    folded_primary[candidate_id] = primary_id
+                    alternative_rank[candidate_id] = rank
+        self._folded_candidate_primary = folded_primary
+        self._fold_alternative_counts = alternative_counts
+        self._fold_alternative_rank = alternative_rank
+        self._candidate_source_object = None
         self._candidate_starts = [
             float(candidate.start_ms)
             for candidate in self.transcription_candidates
         ]
-        self._candidate_max_duration = max(
-            (
-                float(candidate.duration_ms)
-                for candidate in self.transcription_candidates
-            ),
+        self._candidate_ends = [
+            float(candidate.start_ms) + float(candidate.duration_ms)
+            for candidate in self.transcription_candidates
+        ]
+        block_size = self.CANDIDATE_QUERY_BLOCK_SIZE
+        self._candidate_block_max_ends = [
+            max(self._candidate_ends[start : start + block_size])
+            for start in range(0, len(self._candidate_ends), block_size)
+        ]
+        self._candidate_end_audio_ms = max(
+            self._candidate_ends,
             default=0.0,
         )
+        self._candidate_id_set = frozenset(
+            self._transcription_candidate_ids
+        )
         self.transcription_candidates_visible = bool(visible)
-        self.rebuild_note_index()
+        self._rebuild_melody_line_projection()
+        self._recalculate_content_end()
         self.update()
 
-    def set_transcription_candidates_visible(self, visible: bool) -> None:
+    def set_transcription_review(
+        self,
+        candidates,
+        candidate_id,
+        *,
+        selected_ids=(),
+        rejected_ids=(),
+        pending_routes=(),
+        applied_routes=(),
+        invalid_ids=(),
+        duplicate_ids=(),
+        staged_ids=(),
+        fragment_ids=(),
+        suppressed_ids=(),
+        confidence_floor: float = 0.30,
+        show_rejected_only: bool = False,
+        audio_offset_ms: float = 0.0,
+        visible: bool = True,
+    ) -> None:
+        candidate_values = tuple(candidates)
+        source_changed = (
+            candidate_values is not self._candidate_source_object
+        )
+        if source_changed:
+            self.set_transcription_candidates(
+                candidate_values,
+                visible=visible,
+                candidate_id_resolver=candidate_id,
+            )
+            self._candidate_source_object = candidate_values
+        selected_values = frozenset(str(value) for value in selected_ids)
+        rejected_values = frozenset(str(value) for value in rejected_ids)
+        pending_values = frozenset(
+            str(getattr(route, "candidate_id", ""))
+            for route in pending_routes
+            if int(getattr(route, "track_id", -1)) == int(self.editor.track.track_id)
+        )
+        applied_values = frozenset(
+            str(getattr(route, "candidate_id", "")) for route in applied_routes
+        )
+        invalid_values = frozenset(str(value) for value in invalid_ids)
+        duplicate_values = frozenset(
+            str(value) for value in duplicate_ids
+        )
+        staged_values = frozenset(str(value) for value in staged_ids)
+        fragment_values = frozenset(
+            str(value) for value in fragment_ids
+        )
+        suppressed_values = frozenset(
+            str(value) for value in suppressed_ids
+        )
+        normalized_confidence = max(
+            0.0,
+            min(1.0, float(confidence_floor)),
+        )
+        normalized_offset = float(audio_offset_ms)
+        projection_key = (
+            id(candidate_values),
+            selected_values,
+            rejected_values,
+            pending_values,
+            applied_values,
+            invalid_values,
+            duplicate_values,
+            staged_values,
+            fragment_values,
+            suppressed_values,
+            normalized_confidence,
+            bool(show_rejected_only),
+            round(normalized_offset, 6),
+            bool(visible),
+        )
+        if (
+            not source_changed
+            and projection_key == self._review_projection_key
+        ):
+            return
+        self._review_projection_key = projection_key
+        self._selected_candidate_ids = set(
+            selected_values.intersection(self._candidate_id_set)
+        )
+        self._rejected_candidate_ids = set(rejected_values)
+        self._pending_candidate_ids = set(pending_values)
+        self._applied_candidate_ids = set(applied_values)
+        self._invalid_candidate_ids = set(invalid_values)
+        self._duplicate_candidate_ids = set(duplicate_values)
+        self._staged_candidate_ids = set(staged_values)
+        self._fragment_candidate_ids = set(fragment_values)
+        self._suppressed_candidate_ids = set(suppressed_values)
+        self._confidence_floor = normalized_confidence
+        self._show_rejected_only = bool(show_rejected_only)
+        self._audio_offset_ms = normalized_offset
         self.transcription_candidates_visible = bool(visible)
-        self.rebuild_note_index()
+        self._recalculate_content_end()
+        self.update()
+
+    @property
+    def selected_candidate_ids(self) -> frozenset[str]:
+        return frozenset(self._selected_candidate_ids)
+
+    def set_evidence_descriptor(self, descriptor, *, audio_offset_ms: float = 0.0) -> None:
+        self._evidence.close()
+        self._evidence_descriptor = descriptor
+        self._audio_offset_ms = float(audio_offset_ms)
+        if descriptor is not None:
+            self._evidence.begin_source(descriptor)
+        self.update()
+
+    def set_evidence_layers(
+        self,
+        *,
+        frame: bool = True,
+        onset: bool = True,
+        contour: bool = False,
+    ) -> None:
+        normalized = (bool(frame), bool(onset), bool(contour))
+        current = (
+            self._show_frame_evidence,
+            self._show_onset_evidence,
+            self._show_contour_evidence,
+        )
+        if normalized == current:
+            return
+        (
+            self._show_frame_evidence,
+            self._show_onset_evidence,
+            self._show_contour_evidence,
+        ) = normalized
+        self.update()
+
+    def set_spectrogram_source(
+        self,
+        audio_path: str | Path | None,
+        *,
+        duration_ms: float = 0.0,
+        audio_offset_ms: float = 0.0,
+    ) -> None:
+        """Attach an ephemeral reference source without changing project data."""
+
+        previous_offset = self._audio_offset_ms
+        self._audio_offset_ms = float(audio_offset_ms)
+        normalized_path = str(audio_path or "")
+        if not normalized_path:
+            if self._spectrogram_audio_path:
+                self._spectrogram.close()
+                self._spectrogram_audio_path = ""
+                self.update()
+            return
+        candidate = Path(normalized_path).expanduser().resolve(strict=False)
+        source = self._spectrogram.source
+        if source is not None and source.path == candidate:
+            self._spectrogram.set_duration_ms(duration_ms)
+            refreshed_source = self._spectrogram.source
+            if (
+                not math.isclose(
+                    previous_offset,
+                    self._audio_offset_ms,
+                    abs_tol=0.001,
+                )
+                or refreshed_source != source
+            ):
+                # Duration discovery may cancel obsolete end tiles, while an
+                # alignment edit repositions every ready tile.  Request a new
+                # paint immediately instead of waiting for incidental input.
+                self.update()
+            return
+        self._spectrogram.close()
+        self._spectrogram_audio_path = ""
+        try:
+            self._spectrogram.begin_source(
+                candidate,
+                duration_ms=duration_ms,
+            )
+        except OSError:
+            return
+        self._spectrogram_audio_path = str(candidate)
+        self.update()
+
+    def set_spectrogram_visible(self, visible: bool) -> None:
+        normalized = bool(visible)
+        if normalized == self._show_spectrogram:
+            return
+        self._show_spectrogram = normalized
+        if not normalized:
+            self._spectrogram.cancel_pending()
+        self.update()
+
+    def set_reference_background_opacity(self, opacity: float) -> None:
+        try:
+            normalized = max(0.0, min(1.0, float(opacity)))
+        except (TypeError, ValueError, OverflowError):
+            normalized = 0.60
+        if not math.isfinite(normalized):
+            normalized = 0.60
+        if math.isclose(
+            normalized,
+            self._reference_background_opacity,
+            abs_tol=0.001,
+        ):
+            return
+        self._reference_background_opacity = normalized
+        self.update()
+
+    def set_melody_lines_visible(self, visible: bool) -> None:
+        normalized = bool(visible)
+        if normalized == self._show_melody_lines:
+            return
+        self._show_melody_lines = normalized
+        self.update()
+
+    def set_melody_line_roles_visible(
+        self,
+        roles: Iterable[str],
+    ) -> None:
+        normalized = frozenset(
+            str(role)
+            for role in roles
+            if str(role) in MELODY_LINE_GUIDE_ROLES
+        )
+        if not normalized:
+            normalized = frozenset({MELODY_LINE_PRIMARY_ROLE})
+        if normalized == self._melody_line_roles_visible:
+            return
+        self._melody_line_roles_visible = normalized
+        self.update()
+
+    @property
+    def melody_lines_available(self) -> bool:
+        return bool(self._melody_line_segments)
+
+    @property
+    def melody_line_roles_visible(self) -> frozenset[str]:
+        return self._melody_line_roles_visible
+
+    def release_transcription_evidence(self) -> None:
+        self._evidence.close()
+        self._evidence_descriptor = None
+        self._spectrogram.close()
+        self._spectrogram_audio_path = ""
+
+    def set_transcription_candidates_visible(self, visible: bool) -> None:
+        normalized = bool(visible)
+        if normalized == self.transcription_candidates_visible:
+            return
+        self.transcription_candidates_visible = normalized
+        self._recalculate_content_end()
         self.update()
 
     def set_preload_progress(self, progress: float, state: str = "loading") -> None:
@@ -2714,61 +4192,526 @@ class PianoRollCanvas(QWidget):
     def rebuild_note_index(self) -> None:
         self._note_order = sorted(range(len(self.notes)), key=lambda index: self.notes[index].start)
         self._note_starts = [float(self.notes[index].start) for index in self._note_order]
+        self._note_ends = [
+            float(self.notes[index].start) + float(self.notes[index].dur)
+            for index in self._note_order
+        ]
+        block_size = self.CANDIDATE_QUERY_BLOCK_SIZE
+        self._note_block_max_ends = [
+            max(self._note_ends[start : start + block_size])
+            for start in range(0, len(self._note_ends), block_size)
+        ]
         self._max_note_duration = max((float(note.dur) for note in self.notes), default=0.0)
-        note_end = max(
+        self._note_end_ms = max(
             (float(note.start + note.dur) for note in self.notes),
             default=0.0,
         )
-        candidate_end = (
-            max(
-                (
-                    float(candidate.start_ms + candidate.duration_ms)
-                    for candidate in self.transcription_candidates
-                ),
-                default=0.0,
-            )
-            if self.transcription_candidates_visible
-            else 0.0
-        )
-        self.content_end_ms = max(note_end, candidate_end)
+        self._recalculate_content_end()
         self._note_index_revision += 1
         self._visible_note_cache_key = None
         self._visible_note_cache = []
 
-    def visible_note_indices(self) -> list[int]:
-        left = self.scroll_ms
-        right = self.time_at(self.width())
+    def _recalculate_content_end(self) -> None:
+        candidate_end = (
+            self._candidate_end_audio_ms + self._audio_offset_ms
+            if self.transcription_candidates_visible
+            else 0.0
+        )
+        self.content_end_ms = max(self._note_end_ms, candidate_end)
+
+    def visible_note_indices(
+        self,
+        left_ms: float | None = None,
+        right_ms: float | None = None,
+    ) -> list[int]:
+        left = self.scroll_ms if left_ms is None else float(left_ms)
+        right = (
+            self.time_at(self.width())
+            if right_ms is None
+            else float(right_ms)
+        )
+        explicit_range = left_ms is not None or right_ms is not None
         cache_key = (
             self._note_index_revision,
             round(left, 3),
             round(right, 3),
         )
-        if cache_key == self._visible_note_cache_key:
+        if not explicit_range and cache_key == self._visible_note_cache_key:
             return self._visible_note_cache
-        lo = bisect_left(self._note_starts, left - self._max_note_duration)
         hi = bisect_right(self._note_starts, right)
+        # A single song-long note must not widen every later viewport to the
+        # beginning of the track.  Block maximum ends retain that long note
+        # while pruning blocks whose notes have all finished.
+        query_left = left - 4.0 / max(1e-9, self.px_per_ms)
+        visible: list[int] = []
+        block_size = self.CANDIDATE_QUERY_BLOCK_SIZE
+        last_block = (hi + block_size - 1) // block_size
+        for block_index in range(last_block):
+            if self._note_block_max_ends[block_index] < query_left:
+                continue
+            start = block_index * block_size
+            stop = min(hi, start + block_size)
+            for ordered_index in range(start, stop):
+                if self._note_ends[ordered_index] >= query_left:
+                    visible.append(self._note_order[ordered_index])
+        if explicit_range:
+            return visible
         self._visible_note_cache_key = cache_key
-        self._visible_note_cache = self._note_order[lo:hi]
-        return self._visible_note_cache
+        self._visible_note_cache = visible
+        return visible
 
-    def visible_ghost_notes(self) -> list:
-        left = self.scroll_ms
-        right = self.time_at(self.width())
-        lo = bisect_left(self._ghost_starts, left - self._ghost_max_duration)
+    def visible_ghost_notes(
+        self,
+        left_ms: float | None = None,
+        right_ms: float | None = None,
+    ) -> list:
+        left = self.scroll_ms if left_ms is None else float(left_ms)
+        right = (
+            self.time_at(self.width())
+            if right_ms is None
+            else float(right_ms)
+        )
         hi = bisect_right(self._ghost_starts, right)
-        return self.ghost_notes[lo:hi]
+        query_left = left - 4.0 / max(1e-9, self.px_per_ms)
+        values: list = []
+        block_size = self.CANDIDATE_QUERY_BLOCK_SIZE
+        last_block = (hi + block_size - 1) // block_size
+        for block_index in range(last_block):
+            if self._ghost_block_max_ends[block_index] < query_left:
+                continue
+            start = block_index * block_size
+            stop = min(hi, start + block_size)
+            values.extend(
+                self.ghost_notes[index]
+                for index in range(start, stop)
+                if self._ghost_ends[index] >= query_left
+            )
+        return values
 
     def visible_transcription_candidates(self) -> list[TranscriptionCandidate]:
+        return [candidate for _candidate_id, candidate in self._visible_candidate_pairs()]
+
+    def visible_melody_line_segments(
+        self,
+        left_ms: float | None = None,
+        right_ms: float | None = None,
+    ) -> list[MelodyLineSegment]:
+        """Query only path blocks intersecting the project-time viewport."""
+
+        self._last_melody_line_query_inspections = 0
+        if not self._show_melody_lines or not self.transcription_candidates_visible:
+            return []
+        left = self.scroll_ms if left_ms is None else float(left_ms)
+        right = (
+            self.time_at(self.width())
+            if right_ms is None
+            else float(right_ms)
+        )
+        audio_left = left - self._audio_offset_ms
+        audio_right = right - self._audio_offset_ms
+        hi = bisect_right(self._melody_line_starts, audio_right)
+        query_left = audio_left - 2.0 / max(1e-9, self.px_per_ms)
+        values: list[MelodyLineSegment] = []
+        inspected = 0
+        lod = melody_line_lod(self.px_per_beat)
+        block_size = self.CANDIDATE_QUERY_BLOCK_SIZE
+        last_block = (hi + block_size - 1) // block_size
+        for block_index in range(last_block):
+            if self._melody_line_block_max_ends[block_index] < query_left:
+                continue
+            start = block_index * block_size
+            stop = min(hi, start + block_size)
+            inspected += stop - start
+            for index in range(start, stop):
+                segment = self._melody_line_segments[index]
+                source_visible = any(
+                    (
+                        candidate_index :=
+                        self._transcription_candidate_id_to_index.get(
+                            candidate_id
+                        )
+                    )
+                    is not None
+                    and self._candidate_is_visible(
+                        candidate_id,
+                        self.transcription_candidates[candidate_index],
+                    )
+                    for candidate_id in segment.source_candidate_ids
+                )
+                if (
+                    self._melody_line_ends[index] >= query_left
+                    and segment.role in self._melody_line_roles_visible
+                    and source_visible
+                    and melody_line_kind_visible(
+                        segment.kind,
+                        branch=segment.branch,
+                        lod=lod,
+                    )
+                ):
+                    values.append(segment)
+        self._last_melody_line_query_inspections = inspected
+        return values
+
+    def _melody_line_points(
+        self,
+        segment: MelodyLineSegment,
+    ) -> tuple[QPointF, QPointF]:
+        return (
+            QPointF(
+                self.x_at_time(
+                    segment.start_audio_ms + self._audio_offset_ms
+                ),
+                self.RULER_H
+                + (self.pitch_top - segment.start_pitch + 0.5)
+                * self.ROW_H,
+            ),
+            QPointF(
+                self.x_at_time(
+                    segment.end_audio_ms + self._audio_offset_ms
+                ),
+                self.RULER_H
+                + (self.pitch_top - segment.end_pitch + 0.5)
+                * self.ROW_H,
+            ),
+        )
+
+    def melody_guide_at(
+        self,
+        position: QPointF,
+    ) -> MelodyLineSegment | None:
+        """Hit-test visible guides without changing any formal editor note."""
+
+        if (
+            not self.editor.transcription_mode_enabled
+            or position.x() < self.KEY_W
+            or position.y() < self.RULER_H
+        ):
+            return None
+        tolerance = 5.5
+        center_ms = self.time_at(position.x())
+        half_window_ms = tolerance / max(1e-9, self.px_per_ms)
+        candidates = self.visible_melody_line_segments(
+            center_ms - half_window_ms,
+            center_ms + half_window_ms,
+        )
+        hits: list[tuple[float, float, bool, str, MelodyLineSegment]] = []
+        for segment in candidates:
+            if not segment.source_candidate_ids:
+                continue
+            start, end = self._melody_line_points(segment)
+            dx = end.x() - start.x()
+            dy = end.y() - start.y()
+            length_squared = dx * dx + dy * dy
+            if length_squared <= 1e-9:
+                distance = math.hypot(
+                    position.x() - start.x(),
+                    position.y() - start.y(),
+                )
+            else:
+                ratio = max(
+                    0.0,
+                    min(
+                        1.0,
+                        (
+                            (position.x() - start.x()) * dx
+                            + (position.y() - start.y()) * dy
+                        )
+                        / length_squared,
+                    ),
+                )
+                distance = math.hypot(
+                    position.x() - (start.x() + ratio * dx),
+                    position.y() - (start.y() + ratio * dy),
+                )
+            hit_radius = max(
+                tolerance,
+                melody_line_width(segment.confidence) + 2.0,
+            )
+            if distance <= hit_radius:
+                hits.append(
+                    (
+                        distance,
+                        -segment.confidence,
+                        segment.branch,
+                        segment.group_id,
+                        segment,
+                    )
+                )
+        if not hits:
+            return None
+        return min(hits, key=lambda item: item[:4])[-1]
+
+    def _candidate_is_visible(
+        self, candidate_id: str, candidate: TranscriptionCandidate
+    ) -> bool:
+        rejected = candidate_id in self._rejected_candidate_ids
+        if rejected != self._show_rejected_only:
+            return False
+        if candidate_id in self._applied_candidate_ids:
+            return False
+        if candidate_id in self._staged_candidate_ids:
+            return False
+        return True
+
+    def _visible_candidate_pairs(
+        self,
+        left_ms: float | None = None,
+        right_ms: float | None = None,
+    ) -> list[tuple[str, TranscriptionCandidate]]:
+        self._last_candidate_query_inspections = 0
         if not self.transcription_candidates_visible:
             return []
-        left = self.scroll_ms
-        right = self.time_at(self.width())
-        lo = bisect_left(
-            self._candidate_starts,
-            left - self._candidate_max_duration,
+        left = self.scroll_ms if left_ms is None else float(left_ms)
+        right = (
+            self.time_at(self.width())
+            if right_ms is None
+            else float(right_ms)
         )
-        hi = bisect_right(self._candidate_starts, right)
-        return self.transcription_candidates[lo:hi]
+        audio_left = left - self._audio_offset_ms
+        audio_right = right - self._audio_offset_ms
+        hi = bisect_right(self._candidate_starts, audio_right)
+        # Candidate rectangles have a four-pixel minimum width.  Expand the
+        # logical left boundary by that amount so exact interval filtering
+        # preserves the existing edge-paint and hit-test semantics.
+        query_left = audio_left - 4.0 / max(1e-9, self.px_per_ms)
+        values: list[tuple[str, TranscriptionCandidate]] = []
+        inspected = 0
+        block_size = self.CANDIDATE_QUERY_BLOCK_SIZE
+        last_block = (hi + block_size - 1) // block_size
+        for block_index in range(last_block):
+            if (
+                self._candidate_block_max_ends[block_index]
+                < query_left
+            ):
+                continue
+            start = block_index * block_size
+            stop = min(hi, start + block_size)
+            inspected += stop - start
+            for index in range(start, stop):
+                if self._candidate_ends[index] < query_left:
+                    continue
+                candidate_id = self._transcription_candidate_ids[index]
+                candidate = self.transcription_candidates[index]
+                if self._candidate_is_visible(candidate_id, candidate):
+                    values.append((candidate_id, candidate))
+        self._last_candidate_query_inspections = inspected
+        return values
+
+    def candidate_rect(self, candidate: TranscriptionCandidate) -> QRectF:
+        x = self.x_at_time(
+            CANDIDATE_NOTE_POLICY.project_start_ms(
+                candidate,
+                self._audio_offset_ms,
+            )
+        )
+        y = self.RULER_H + (self.pitch_top - int(candidate.pitch)) * self.ROW_H
+        return QRectF(
+            x,
+            y + 1,
+            max(4.0, float(candidate.duration_ms) * self.px_per_ms),
+            self.ROW_H - 2,
+        )
+
+    def _expanded_fold_primaries(self) -> set[str]:
+        expanded = {
+            self._folded_candidate_primary.get(candidate_id, candidate_id)
+            for candidate_id in self._selected_candidate_ids
+        }
+        if self._hovered_candidate_id:
+            expanded.add(
+                self._folded_candidate_primary.get(
+                    self._hovered_candidate_id,
+                    self._hovered_candidate_id,
+                )
+            )
+        return expanded
+
+    def _candidate_display_rect(
+        self,
+        candidate_id: str,
+        candidate: TranscriptionCandidate,
+        *,
+        expanded_primaries: set[str] | None = None,
+    ) -> QRectF:
+        """Fan a hovered/selected fold into individually inspectable lanes."""
+
+        rect = self.candidate_rect(candidate)
+        primary_id = self._folded_candidate_primary.get(
+            candidate_id,
+            candidate_id,
+        )
+        alternatives = self._fold_alternative_counts.get(primary_id, 0)
+        expanded = (
+            self._expanded_fold_primaries()
+            if expanded_primaries is None
+            else expanded_primaries
+        )
+        if alternatives <= 0 or primary_id not in expanded:
+            return rect
+        rank = (
+            0
+            if candidate_id == primary_id
+            else self._fold_alternative_rank.get(candidate_id, 1)
+        )
+        lane_count = min(4, alternatives + 1)
+        lane = min(rank, lane_count - 1)
+        lane_height = max(4.0, rect.height() / lane_count)
+        overflow_rank = max(0, rank - (lane_count - 1))
+        return QRectF(
+            rect.left() + overflow_rank * 4.0,
+            rect.top() + lane * lane_height,
+            max(4.0, rect.width() - overflow_rank * 4.0),
+            max(3.0, lane_height - 1.0),
+        )
+
+    def candidate_at(self, pos: QPointF) -> str | None:
+        if pos.x() < self.KEY_W or pos.y() < self.RULER_H:
+            return None
+        left_ms = self.time_at(pos.x() - 3.0)
+        right_ms = self.time_at(pos.x() + 3.0)
+        expanded_primaries = self._expanded_fold_primaries()
+        for candidate_id, candidate in reversed(
+            self._visible_candidate_pairs(left_ms, right_ms)
+        ):
+            if self._candidate_display_rect(
+                candidate_id,
+                candidate,
+                expanded_primaries=expanded_primaries,
+            ).adjusted(
+                -2.0,
+                -2.0,
+                2.0,
+                2.0,
+            ).contains(pos):
+                primary_id = self._folded_candidate_primary.get(candidate_id)
+                if primary_id is not None and primary_id not in expanded_primaries:
+                    return primary_id
+                return candidate_id
+        return None
+
+    def _voice_group_for_candidate(
+        self, candidate_id: str
+    ) -> object | None:
+        group_id = self._candidate_group_ids.get(str(candidate_id), "")
+        if not group_id:
+            return None
+        return next(
+            (
+                group
+                for group in self._voice_groups
+                if str(getattr(group, "group_id", "")) == group_id
+            ),
+            None,
+        )
+
+    def _adjacent_voice_groups(
+        self, group_id: str
+    ) -> tuple[object, ...]:
+        groups = tuple(
+            sorted(
+                self._voice_groups,
+                key=lambda group: (
+                    float(getattr(group, "start_audio_ms", 0.0)),
+                    float(getattr(group, "end_audio_ms", 0.0)),
+                    str(getattr(group, "group_id", "")),
+                ),
+            )
+        )
+        index = next(
+            (
+                index
+                for index, group in enumerate(groups)
+                if str(getattr(group, "group_id", "")) == str(group_id)
+            ),
+            None,
+        )
+        if index is None:
+            return ()
+        adjacent: list[object] = []
+        if index > 0:
+            adjacent.append(groups[index - 1])
+        if index + 1 < len(groups):
+            adjacent.append(groups[index + 1])
+        return tuple(adjacent)
+
+    def _show_voice_group_context_menu(
+        self,
+        event,
+        candidate_id: str,
+    ) -> bool:
+        group = self._voice_group_for_candidate(candidate_id)
+        if group is None:
+            return False
+        group_id = str(getattr(group, "group_id", "") or "")
+        if not group_id:
+            return False
+        menu = QMenu(self)
+        split_action = menu.addAction(tr("在播放头处分割声部"))
+        split_audio_ms = (
+            float(self.playhead_ms) - float(self._audio_offset_ms)
+        )
+        split_action.setEnabled(
+            float(getattr(group, "start_audio_ms", 0.0))
+            < split_audio_ms
+            < float(getattr(group, "end_audio_ms", 0.0))
+        )
+        adjacent = self._adjacent_voice_groups(group_id)
+        merge_menu = menu.addMenu(tr("与相邻声部合并"))
+        for other in adjacent:
+            other_id = str(getattr(other, "group_id", "") or "")
+            role = voice_role_label(getattr(other, "role", ""))
+            start_s = (
+                float(getattr(other, "start_audio_ms", 0.0)) / 1000.0
+            )
+            action = merge_menu.addAction(
+                trf("{role} · {time:.1f}s", role=role, time=start_s)
+            )
+            action.setData(other_id)
+        merge_menu.setEnabled(bool(adjacent))
+        role_menu = menu.addMenu(tr("修改声部角色"))
+        role_actions: dict[object, str] = {}
+        for role_name in (
+            "primary_melody",
+            "secondary_melody",
+            "harmony",
+            "bass",
+            "rhythm",
+            "pad",
+            "ornament",
+            "fx",
+        ):
+            action = role_menu.addAction(voice_role_label(role_name))
+            action.setData(role_name)
+            role_actions[action] = role_name
+        color_menu = menu.addMenu(tr("声部颜色"))
+        color_actions: dict[object, str] = {}
+        for color in TRACK_COLORS:
+            action = color_menu.addAction("■")
+            action.setForeground(QColor(color))
+            action.setData(str(color))
+            color_actions[action] = str(color)
+        chosen = menu.exec(event.globalPosition().toPoint())
+        if chosen is None:
+            return True
+        if chosen is split_action:
+            self.voice_group_split_requested.emit(
+                group_id, float(self.playhead_ms)
+            )
+            return True
+        parent_menu = chosen.parent()
+        if parent_menu is merge_menu:
+            other_id = str(chosen.data() or "")
+            if other_id:
+                self.voice_group_merge_requested.emit(group_id, other_id)
+            return True
+        color = color_actions.get(chosen)
+        if color:
+            self.voice_group_color_requested.emit(group_id, color)
+            return True
+        role_name = role_actions.get(chosen)
+        if role_name:
+            self.voice_group_role_requested.emit(group_id, role_name)
+        return True
 
     def set_playhead(self, ms: float) -> None:
         old_x = self.x_at_time(self.playhead_ms)
@@ -2828,15 +4771,52 @@ class PianoRollCanvas(QWidget):
     def pitch_at(self, y: float) -> int:
         return max(0, min(127, self.pitch_top - int((y - self.RULER_H) // self.ROW_H)))
 
-    def paintEvent(self, _event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    def _roll_background(self) -> QPixmap:
+        """Cache the time-independent piano bed and keyboard rendering."""
+
+        canonical_drum_lanes = bool(
+            getattr(self.editor, "canonical_drum_lanes", False)
+        )
+        instrument_adaptation = getattr(
+            self.editor,
+            "instrument_adaptation",
+            None,
+        )
+        cache_key = (
+            self.width(),
+            self.height(),
+            int(self.pitch_top),
+            self.piano_pressed_pitch,
+            self.piano_hover_pitch,
+            canonical_drum_lanes,
+            self.font().toString(),
+            round(self.devicePixelRatioF(), 3),
+        )
+        if (
+            cache_key == self._background_cache_key
+            and not self._background_cache.isNull()
+        ):
+            return self._background_cache
+
+        dpr = max(1.0, float(self.devicePixelRatioF()))
+        background = QPixmap(
+            QSize(
+                max(1, round(self.width() * dpr)),
+                max(1, round(self.height() * dpr)),
+            )
+        )
+        background.setDevicePixelRatio(dpr)
+        painter = QPainter(background)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         backdrop = QLinearGradient(0, 0, 0, self.height())
         backdrop.setColorAt(0.0, QColor("#1d1e21"))
         backdrop.setColorAt(1.0, QColor("#151619"))
         painter.fillRect(self.rect(), backdrop)
         grid = self.grid_rect()
-        grid_backdrop = QLinearGradient(grid.topLeft(), grid.bottomLeft())
+        grid_backdrop = QLinearGradient(
+            grid.topLeft(),
+            grid.bottomLeft(),
+        )
         grid_backdrop.setColorAt(0.0, QColor("#202125"))
         grid_backdrop.setColorAt(1.0, QColor("#1a1b1e"))
         painter.fillRect(grid, grid_backdrop)
@@ -2844,15 +4824,46 @@ class PianoRollCanvas(QWidget):
         for row in range(visible_rows + 1):
             pitch = self.pitch_top - row
             y = self.RULER_H + row * self.ROW_H
-            black = pitch % 12 in (1, 3, 6, 8, 10)
+            drum_label = (
+                instrument_adaptation.drum_lane_label(pitch)
+                if (
+                    canonical_drum_lanes
+                    and instrument_adaptation is not None
+                )
+                else None
+            )
+            black = (
+                False
+                if canonical_drum_lanes
+                else pitch % 12 in (1, 3, 6, 8, 10)
+            )
             pressed = pitch == self.piano_pressed_pitch
             hovered = pitch == self.piano_hover_pitch
-            painter.fillRect(QRectF(self.KEY_W, y, grid.width(), self.ROW_H), QColor(0, 0, 0, 11 if black else 2))
+            painter.fillRect(
+                QRectF(
+                    self.KEY_W,
+                    y,
+                    grid.width(),
+                    self.ROW_H,
+                ),
+                QColor(0, 0, 0, 11 if black else 2),
+            )
             if pitch % 12 == 0:
-                painter.fillRect(QRectF(self.KEY_W, y, grid.width(), self.ROW_H), QColor(255, 255, 255, 5))
+                painter.fillRect(
+                    QRectF(
+                        self.KEY_W,
+                        y,
+                        grid.width(),
+                        self.ROW_H,
+                    ),
+                    QColor(255, 255, 255, 5),
+                )
             painter.save()
             key_rect = QRectF(0, y, self.KEY_W, self.ROW_H)
-            natural_gradient = QLinearGradient(key_rect.topLeft(), key_rect.topRight())
+            natural_gradient = QLinearGradient(
+                key_rect.topLeft(),
+                key_rect.topRight(),
+            )
             if pressed and not black:
                 natural_gradient.setColorAt(0.0, QColor("#4a381e"))
                 natural_gradient.setColorAt(0.72, QColor("#705326"))
@@ -2869,13 +4880,25 @@ class PianoRollCanvas(QWidget):
                 natural_gradient.setColorAt(1.0, QColor("#3a3934"))
             painter.fillRect(key_rect, natural_gradient)
             painter.setPen(QColor("#3b3d39"))
-            painter.drawLine(1, y + 1, self.KEY_W - 2, y + 1)
+            painter.drawLine(
+                1,
+                y + 1,
+                self.KEY_W - 2,
+                y + 1,
+            )
             painter.setPen(QColor("#111311"))
-            painter.drawLine(0, y + self.ROW_H - 1, self.KEY_W - 1, y + self.ROW_H - 1)
+            painter.drawLine(
+                0,
+                y + self.ROW_H - 1,
+                self.KEY_W - 1,
+                y + self.ROW_H - 1,
+            )
 
             key_font = painter.font()
-            key_font.setPointSize(max(7, key_font.pointSize() - 2))
-            key_font.setBold(black)
+            key_font.setPointSize(
+                max(7, key_font.pointSize() - 2)
+            )
+            key_font.setBold(black or drum_label is not None)
             painter.setFont(key_font)
             if black:
                 black_rect = QRectF(
@@ -2884,41 +4907,1026 @@ class PianoRollCanvas(QWidget):
                     self.BLACK_KEY_W,
                     self.ROW_H - 6,
                 )
-                black_gradient = QLinearGradient(black_rect.topLeft(), black_rect.topRight())
+                black_gradient = QLinearGradient(
+                    black_rect.topLeft(),
+                    black_rect.topRight(),
+                )
                 if pressed:
-                    black_gradient.setColorAt(0.0, QColor("#3b2810"))
-                    black_gradient.setColorAt(0.76, QColor("#65471d"))
-                    black_gradient.setColorAt(1.0, QColor("#9b7030"))
+                    black_gradient.setColorAt(
+                        0.0,
+                        QColor("#3b2810"),
+                    )
+                    black_gradient.setColorAt(
+                        0.76,
+                        QColor("#65471d"),
+                    )
+                    black_gradient.setColorAt(
+                        1.0,
+                        QColor("#9b7030"),
+                    )
                 elif hovered:
-                    black_gradient.setColorAt(0.0, QColor("#101311"))
-                    black_gradient.setColorAt(0.76, QColor("#1d211e"))
-                    black_gradient.setColorAt(1.0, QColor("#3a3d39"))
+                    black_gradient.setColorAt(
+                        0.0,
+                        QColor("#101311"),
+                    )
+                    black_gradient.setColorAt(
+                        0.76,
+                        QColor("#1d211e"),
+                    )
+                    black_gradient.setColorAt(
+                        1.0,
+                        QColor("#3a3d39"),
+                    )
                 else:
-                    black_gradient.setColorAt(0.0, QColor("#090b0a"))
-                    black_gradient.setColorAt(0.76, QColor("#111412"))
-                    black_gradient.setColorAt(1.0, QColor("#292c29"))
+                    black_gradient.setColorAt(
+                        0.0,
+                        QColor("#090b0a"),
+                    )
+                    black_gradient.setColorAt(
+                        0.76,
+                        QColor("#111412"),
+                    )
+                    black_gradient.setColorAt(
+                        1.0,
+                        QColor("#292c29"),
+                    )
                 painter.fillRect(black_rect, black_gradient)
                 painter.setPen(QColor("#050605"))
                 painter.drawRect(black_rect)
-                painter.setPen(QColor("#fff0ca" if pressed else "#d5d0c7"))
+                painter.setPen(
+                    QColor(
+                        "#fff0ca" if pressed else "#d5d0c7"
+                    )
+                )
                 painter.drawText(
                     black_rect.adjusted(4, 0, -4, 0),
                     Qt.AlignRight | Qt.AlignVCenter,
-                    note_name(pitch),
+                    drum_label or note_name(pitch),
                 )
             else:
-                painter.setPen(QColor("#fff0ca" if pressed else ("#d8d3ca" if pitch % 12 else "#f0d8a2")))
+                painter.setPen(
+                    QColor(
+                        "#fff0ca"
+                        if pressed
+                        else (
+                            "#d8d3ca"
+                            if pitch % 12
+                            else "#f0d8a2"
+                        )
+                    )
+                )
                 painter.drawText(
                     key_rect.adjusted(4, 0, -6, 0),
                     Qt.AlignRight | Qt.AlignVCenter,
-                    note_name(pitch),
+                    drum_label or note_name(pitch),
                 )
             painter.restore()
-            painter.setPen(QColor("#17181a" if black else "#303135"))
+            painter.setPen(
+                QColor("#17181a" if black else "#303135")
+            )
+            painter.drawLine(
+                self.KEY_W,
+                y,
+                self.width(),
+                y,
+            )
+            if pitch % 12 == 0:
+                painter.setPen(QColor(108, 109, 113, 70))
+                painter.drawLine(
+                    self.KEY_W,
+                    y + self.ROW_H - 1,
+                    self.width(),
+                    y + self.ROW_H - 1,
+                )
+        painter.end()
+        self._background_cache_key = cache_key
+        self._background_cache = background
+        return background
+
+    def _evidence_tile_rect(self, tile) -> QRectF:
+        project_tile_start = (
+            float(tile.time_start_ms) + self._audio_offset_ms
+        )
+        project_tile_end = (
+            float(tile.time_end_ms) + self._audio_offset_ms
+        )
+        highest_pitch = float(tile.pitch_max_exclusive) - 1.0
+        top = self.RULER_H + (
+            float(self.pitch_top) - highest_pitch
+        ) * self.ROW_H
+        bottom = self.RULER_H + (
+            float(self.pitch_top) - float(tile.pitch_min) + 1.0
+        ) * self.ROW_H
+        return QRectF(
+            self.x_at_time(project_tile_start),
+            top,
+            max(
+                1.0,
+                self.x_at_time(project_tile_end)
+                - self.x_at_time(project_tile_start),
+            ),
+            max(1.0, bottom - top),
+        )
+
+    def _evidence_tile_ready(self, tile) -> None:
+        """Repaint only the completed tile instead of the full piano roll."""
+
+        try:
+            dirty = self._evidence_tile_rect(tile).intersected(
+                self.grid_rect()
+            )
+        except (AttributeError, TypeError, ValueError):
+            return
+        if not dirty.isEmpty():
+            self.update(dirty.adjusted(-1, -1, 1, 1).toAlignedRect())
+
+    def _paint_transcription_evidence(
+        self,
+        painter: QPainter,
+        grid: QRectF,
+        paint_left_ms: float,
+        paint_right_ms: float,
+    ) -> None:
+        descriptor = self._evidence_descriptor
+        if (
+            descriptor is None
+            or not self.transcription_candidates_visible
+            or self._reference_background_opacity <= 0.0
+            or not (
+                self._show_frame_evidence
+                or self._show_onset_evidence
+                or self._show_contour_evidence
+            )
+        ):
+            return
+        project_start = max(self.scroll_ms, float(paint_left_ms))
+        project_end = min(
+            self.time_at(self.width()),
+            float(paint_right_ms),
+        )
+        if project_end <= project_start:
+            return
+        audio_start = project_start - self._audio_offset_ms
+        audio_end = project_end - self._audio_offset_ms
+        if audio_end <= 0.0:
+            return
+        visible_rows = max(
+            1, math.ceil(max(0.0, grid.height()) / self.ROW_H)
+        )
+        pitch_max = max(
+            self.MIN_PITCH, min(self.MAX_PITCH, int(self.pitch_top))
+        )
+        pitch_min = max(
+            self.MIN_PITCH,
+            min(pitch_max, pitch_max - visible_rows + 1),
+        )
+        layers = tuple(
+            layer
+            for layer, enabled in (
+                ("frame", self._show_frame_evidence),
+                ("onset", self._show_onset_evidence),
+            )
+            if enabled
+        )
+        tiles = self._evidence.request_visible(
+            descriptor,
+            start_ms=max(0.0, audio_start),
+            end_ms=max(0.0, audio_end),
+            pitch_min=pitch_min,
+            pitch_max=pitch_max,
+            pixels_per_ms=self.px_per_ms,
+            layers=layers,
+            include_contour=self._show_contour_evidence,
+            update_viewport=(
+                project_end - project_start
+                >= (
+                    self.time_at(self.width()) - self.scroll_ms
+                )
+                * 0.75
+            ),
+        )
+        painter.save()
+        painter.setClipRect(grid)
+        painter.setOpacity(self._reference_background_opacity)
+        for tile in tiles:
+            target = self._evidence_tile_rect(tile)
+            if target.intersects(grid):
+                painter.drawImage(target, tile.image)
+        painter.restore()
+
+    def _paint_spectrogram_background(
+        self,
+        painter: QPainter,
+        grid: QRectF,
+        paint_left_ms: float,
+        paint_right_ms: float,
+    ) -> None:
+        if (
+            not self._show_spectrogram
+            or not self._spectrogram_audio_path
+            or not self.transcription_candidates_visible
+            or self._reference_background_opacity <= 0.0
+        ):
+            return
+        project_start = max(self.scroll_ms, float(paint_left_ms))
+        project_end = min(
+            self.time_at(self.width()),
+            float(paint_right_ms),
+        )
+        if project_end <= project_start:
+            return
+        audio_start = project_start - self._audio_offset_ms
+        audio_end = project_end - self._audio_offset_ms
+        if audio_end <= 0.0:
+            return
+        visible_rows = max(
+            1,
+            math.ceil(max(0.0, grid.height()) / self.ROW_H),
+        )
+        pitch_max = max(
+            self.MIN_PITCH,
+            min(self.MAX_PITCH, int(self.pitch_top)),
+        )
+        pitch_min = max(
+            self.MIN_PITCH,
+            min(pitch_max, pitch_max - visible_rows + 1),
+        )
+        tiles = self._spectrogram.request_visible(
+            start_ms=max(0.0, audio_start),
+            end_ms=max(0.0, audio_end),
+            pitch_min=pitch_min,
+            pitch_max=pitch_max,
+            pixels_per_ms=self.px_per_ms,
+            update_viewport=(
+                project_end - project_start
+                >= (
+                    self.time_at(self.width()) - self.scroll_ms
+                )
+                * 0.75
+            ),
+        )
+        painter.save()
+        painter.setClipRect(grid)
+        painter.setOpacity(self._reference_background_opacity)
+        for tile in tiles:
+            target = self._evidence_tile_rect(tile)
+            if target.intersects(grid):
+                painter.drawImage(target, tile.image)
+        painter.restore()
+
+    def _paint_melody_lines(
+        self,
+        painter: QPainter,
+        grid: QRectF,
+        paint_left_ms: float,
+        paint_right_ms: float,
+    ) -> None:
+        """Batch ready semantic paths; analysis never runs in this method."""
+
+        if self._reference_background_opacity <= 0.0:
+            return
+        segments = self.visible_melody_line_segments(
+            paint_left_ms,
+            paint_right_ms,
+        )
+        if not segments:
+            return
+        paths: dict[tuple[str, int, bool, str], QPainterPath] = {}
+        role_anchors: dict[str, tuple[QPointF, str]] = {}
+        chord_labels: list[tuple[str, QPointF, float]] = []
+        for segment in segments:
+            confidence_bucket = melody_line_confidence_bucket(
+                segment.confidence
+            )
+            key = (
+                segment.role,
+                confidence_bucket,
+                bool(segment.branch),
+                segment.kind,
+            )
+            path = paths.setdefault(key, QPainterPath())
+            start, end = self._melody_line_points(segment)
+            path.moveTo(start)
+            path.lineTo(max(start.x() + 0.5, end.x()), end.y())
+            if not segment.branch and (
+                segment.role not in role_anchors
+                or (
+                    segment.kind == MELODY_LINE_CONNECTOR_KIND
+                    and role_anchors[segment.role][1]
+                    != MELODY_LINE_CONNECTOR_KIND
+                )
+            ):
+                role_anchors[segment.role] = (start, segment.kind)
+            if (
+                segment.kind == MELODY_LINE_CHORD_SPAN_KIND
+                and segment.label
+                and end.x() - start.x() >= 34.0
+            ):
+                chord_labels.append(
+                    (segment.label, start, segment.confidence)
+                )
+
+        colors = {
+            MELODY_LINE_PRIMARY_ROLE: QColor("#f0b54d"),
+            MELODY_LINE_BASS_ROLE: QColor("#54c3b9"),
+            MELODY_LINE_HARMONY_ROLE: QColor("#a58bd5"),
+        }
+        painter.save()
+        painter.setClipRect(grid)
+        painter.setOpacity(self._reference_background_opacity)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        kind_order = {
+            MELODY_LINE_CHORD_SPAN_KIND: 0,
+            MELODY_LINE_CONTOUR_KIND: 1,
+            MELODY_LINE_CONNECTOR_KIND: 2,
+        }
+        for (role, confidence_bucket, branch, kind), path in sorted(
+            paths.items(),
+            key=lambda item: (
+                kind_order.get(item[0][3], 3),
+                item[0][2],
+                item[0][1],
+                item[0][0],
+            ),
+        ):
+            confidence = (
+                confidence_bucket / MELODY_LINE_CONFIDENCE_BUCKETS
+            )
+            color = QColor(colors.get(role, QColor("#a9a49c")))
+            if kind == MELODY_LINE_CHORD_SPAN_KIND:
+                color.setAlpha(max(34, min(105, 40 + round(confidence * 65))))
+                width = max(3.0, melody_line_width(confidence) * 1.55)
+            else:
+                color.setAlpha(
+                    max(
+                        45,
+                        min(
+                            220,
+                            70
+                            + round(confidence * 150)
+                            - (18 if branch else 0),
+                        ),
+                    )
+                )
+                width = melody_line_width(confidence)
+            pen = QPen(
+                color,
+                width,
+                Qt.DashLine if branch else Qt.SolidLine,
+            )
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
+
+        # Compact M/B/H badges make the three semantic layers identifiable
+        # without adding another explanatory tile or permanent legend.
+        badge_text = {
+            MELODY_LINE_PRIMARY_ROLE: "M",
+            MELODY_LINE_BASS_ROLE: "B",
+            MELODY_LINE_HARMONY_ROLE: "H",
+        }
+        for role, (anchor, _kind) in sorted(role_anchors.items()):
+            if not grid.top() <= anchor.y() <= grid.bottom():
+                continue
+            left = max(
+                grid.left() + 3.0,
+                min(grid.right() - 18.0, anchor.x() + 3.0),
+            )
+            rect = QRectF(left, anchor.y() - 8.0, 16.0, 16.0)
+            color = QColor(colors.get(role, QColor("#a9a49c")))
+            color.setAlpha(205)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(color)
+            painter.drawRoundedRect(rect, 3.0, 3.0)
+            painter.setPen(QColor("#171716"))
+            painter.drawText(rect, Qt.AlignCenter, badge_text.get(role, "V"))
+
+        if melody_line_lod(self.px_per_beat) <= 1:
+            painter.setPen(QColor(224, 214, 239, 165))
+            for label, anchor, confidence in chord_labels:
+                if not grid.top() <= anchor.y() <= grid.bottom():
+                    continue
+                text_x = max(grid.left() + 22.0, anchor.x() + 5.0)
+                painter.drawText(
+                    QPointF(text_x, anchor.y() - 5.0),
+                    f"{label} {round(confidence * 100)}%",
+                )
+        painter.restore()
+
+    def _paint_unsupported_evidence_rows(
+        self, painter: QPainter, grid: QRectF
+    ) -> None:
+        if not self.transcription_candidates_visible:
+            return
+        visible_rows = math.ceil(grid.height() / self.ROW_H)
+        painter.save()
+        painter.setClipRect(
+            QRectF(self.KEY_W - 4, grid.top(), 8, grid.height())
+        )
+        for row in range(visible_rows + 1):
+            pitch = self.pitch_top - row
+            if self.MIN_PITCH <= pitch <= self.MAX_PITCH and self.editor.note_invalid(pitch):
+                y = self.RULER_H + row * self.ROW_H
+                painter.fillRect(
+                    QRectF(self.KEY_W - 3, y + 2, 3, self.ROW_H - 4),
+                    QColor(216, 100, 90, 138),
+                )
+        painter.restore()
+
+    def _visible_harmony_segments(
+        self, project_start_ms: float, project_end_ms: float
+    ) -> tuple[object, ...]:
+        analysis = self._harmony_analysis
+        segments = tuple(
+            getattr(analysis, "chord_segments", ()) or ()
+        )
+        if not segments or not self._harmony_segment_starts:
+            return ()
+        audio_start = float(project_start_ms) - self._audio_offset_ms
+        audio_end = float(project_end_ms) - self._audio_offset_ms
+        first = max(
+            0,
+            bisect_left(
+                self._harmony_segment_starts,
+                audio_start - self._max_harmony_segment_duration,
+            ),
+        )
+        last = bisect_right(self._harmony_segment_starts, audio_end)
+        return tuple(
+            segment
+            for segment in segments[first:last]
+            if float(getattr(segment, "end_audio_ms", 0.0))
+            > audio_start
+            and float(getattr(segment, "start_audio_ms", 0.0))
+            < audio_end
+        )
+
+    def _chord_segment_at(self, position: QPointF) -> object | None:
+        if (
+            position.x() < self.KEY_W
+            or position.y() < self.TIME_RULER_H
+            or position.y() >= self.RULER_H
+        ):
+            return None
+        project_ms = self.time_at(position.x())
+        for segment in self._visible_harmony_segments(
+            project_ms - 1.0, project_ms + 1.0
+        ):
+            start_ms = (
+                float(getattr(segment, "start_audio_ms", 0.0))
+                + self._audio_offset_ms
+            )
+            end_ms = (
+                float(getattr(segment, "end_audio_ms", 0.0))
+                + self._audio_offset_ms
+            )
+            if start_ms <= project_ms < end_ms:
+                return segment
+        return None
+
+    @staticmethod
+    def _roman_degree(
+        root_pc: int | None,
+        key: object | None,
+        quality: str = "",
+    ) -> str:
+        if root_pc is None or key is None:
+            return ""
+        key_root = getattr(key, "root_pc", None)
+        mode = str(getattr(key, "mode", "") or "")
+        if key_root is None or mode not in {"major", "minor"}:
+            return ""
+        interval = (int(root_pc) - int(key_root)) % 12
+        table = (
+            {0: "I", 2: "II", 4: "III", 5: "IV", 7: "V", 9: "VI", 11: "VII"}
+            if mode == "major"
+            else {
+                0: "I",
+                2: "II",
+                3: "III",
+                5: "IV",
+                7: "V",
+                8: "VI",
+                10: "VII",
+            }
+        )
+        roman = table.get(interval, "·")
+        if roman == "·":
+            return roman
+        if quality in {"minor", "min7", "dim", "half_diminished7"}:
+            roman = roman.lower()
+        if quality == "dim":
+            roman += "°"
+        elif quality == "half_diminished7":
+            roman += "ø"
+        return roman
+
+    def _chord_display_label(
+        self,
+        root_pc: int | None,
+        quality: str,
+        bass_pc: int | None = None,
+    ) -> str:
+        if root_pc is None or quality == "N":
+            return "N"
+        suffix = {
+            "major": "",
+            "minor": "m",
+            "dim": "°",
+            "sus2": "sus2",
+            "sus4": "sus4",
+            "maj7": "maj7",
+            "7": "7",
+            "min7": "m7",
+            "half_diminished7": "ø7",
+        }.get(quality, quality)
+        label = f"{self.editor._pitch_class_label(int(root_pc))}{suffix}"
+        if bass_pc is not None and int(bass_pc) != int(root_pc):
+            label += f"/{self.editor._pitch_class_label(int(bass_pc))}"
+        return label
+
+    def _paint_harmony_lane(
+        self,
+        painter: QPainter,
+        paint_left_ms: float,
+        paint_right_ms: float,
+    ) -> None:
+        lane = QRectF(
+            self.KEY_W,
+            self.TIME_RULER_H,
+            max(0.0, self.width() - self.KEY_W),
+            self.CHORD_H,
+        )
+        painter.fillRect(lane, QColor("#202124"))
+        painter.setPen(QPen(QColor(83, 76, 63, 150), 1))
+        painter.drawLine(
+            lane.left(), lane.top(), lane.right(), lane.top()
+        )
+        painter.drawLine(
+            lane.left(), lane.bottom(), lane.right(), lane.bottom()
+        )
+        analysis = self._harmony_analysis
+        if analysis is None:
+            return
+        conflict_ids = {
+            str(getattr(conflict, "segment_id", ""))
+            for conflict in getattr(analysis, "conflicts", ())
+        }
+        global_key = getattr(analysis, "global_key", None)
+        for segment in self._visible_harmony_segments(
+            paint_left_ms, paint_right_ms
+        ):
+            start_project_ms = (
+                float(getattr(segment, "start_audio_ms", 0.0))
+                + self._audio_offset_ms
+            )
+            end_project_ms = (
+                float(getattr(segment, "end_audio_ms", 0.0))
+                + self._audio_offset_ms
+            )
+            left = self.x_at_time(start_project_ms)
+            right = self.x_at_time(end_project_ms)
+            rect = QRectF(
+                left + 1,
+                self.TIME_RULER_H + 2,
+                max(1.0, right - left - 2),
+                self.CHORD_H - 4,
+            ).intersected(lane)
+            confidence = max(
+                0.0,
+                min(1.0, float(getattr(segment, "confidence", 0.0))),
+            )
+            quality = str(getattr(segment, "quality", "N") or "N")
+            root_pc = getattr(segment, "root_pc", None)
+            fill = QColor(
+                "#61533c" if quality != "N" else "#35363a"
+            )
+            fill.setAlpha(64 + round(confidence * 80))
+            painter.fillRect(rect, fill)
+            segment_id = str(getattr(segment, "segment_id", ""))
+            border = (
+                QColor("#df9b54")
+                if segment_id in conflict_ids
+                else QColor("#7d725f")
+            )
+            painter.setPen(
+                QPen(
+                    border,
+                    1.5
+                    if bool(getattr(segment, "locked", False))
+                    else 1.0,
+                )
+            )
+            painter.drawRect(rect)
+            if rect.width() < 24:
+                continue
+            chord = self._chord_display_label(
+                root_pc,
+                quality,
+                getattr(segment, "bass_pc", None),
+            )
+            roman = self._roman_degree(root_pc, global_key, quality)
+            label = chord + (f" · {roman}" if roman else "")
+            if segment_id in conflict_ids:
+                label += " ?"
+            if bool(getattr(segment, "locked", False)):
+                label = "◆ " + label
+            painter.setPen(
+                QColor("#e8dfcf" if confidence >= 0.45 else "#b8ab98")
+            )
+            painter.drawText(
+                rect.adjusted(5, 0, -3, 0),
+                Qt.AlignLeft | Qt.AlignVCenter,
+                label,
+            )
+
+    def _paint_transcription_candidates(
+        self,
+        painter: QPainter,
+        grid: QRectF,
+        paint_left_ms: float,
+        paint_right_ms: float,
+    ) -> None:
+        """Paint clean semantic blocks using orthogonal visual channels."""
+
+        if self.px_per_beat < 40.0:
+            self._paint_voice_group_outlines(
+                painter,
+                grid,
+                paint_left_ms,
+                paint_right_ms,
+            )
+
+        groups: dict[
+            tuple[bool, str, int, str, int, float, object],
+            list[QRectF],
+        ] = defaultdict(list)
+        invalid_lines: list[tuple[QPointF, QPointF]] = []
+        rejected_lines: list[tuple[QPointF, QPointF]] = []
+        onset_caps: list[QRectF] = []
+        pending_markers: list[QRectF] = []
+        fragment_markers: list[QRectF] = []
+        role_markers: dict[str, list[QRectF]] = defaultdict(list)
+        labels: list[tuple[QRectF, int, float, str]] = []
+        beat_width = float(self.px_per_beat)
+        show_detail = beat_width > 160.0
+        show_onsets = show_detail
+        expanded_fold_primaries = self._expanded_fold_primaries()
+        for candidate_id, candidate in self._visible_candidate_pairs(
+            paint_left_ms,
+            paint_right_ms,
+        ):
+            folded_primary = self._folded_candidate_primary.get(
+                candidate_id
+            )
+            if (
+                folded_primary is not None
+                and folded_primary not in expanded_fold_primaries
+                and candidate_id not in self._selected_candidate_ids
+                and candidate_id not in self._rejected_candidate_ids
+                and candidate_id not in self._pending_candidate_ids
+                and candidate_id not in self._applied_candidate_ids
+                and candidate_id not in self._invalid_candidate_ids
+                and candidate_id not in self._duplicate_candidate_ids
+                and candidate_id not in self._staged_candidate_ids
+                and candidate_id not in self._fragment_candidate_ids
+                and candidate_id not in self._suppressed_candidate_ids
+            ):
+                continue
+            rect = self._candidate_display_rect(
+                candidate_id,
+                candidate,
+                expanded_primaries=expanded_fold_primaries,
+            )
+            if not rect.intersects(grid):
+                continue
+            invalid = (
+                candidate_id in self._invalid_candidate_ids
+                or self.editor._candidate_invalid_for_current_track(candidate)
+            )
+            duplicate = candidate_id in self._duplicate_candidate_ids
+            rejected = candidate_id in self._rejected_candidate_ids
+            pending = candidate_id in self._pending_candidate_ids
+            fragment = candidate_id in self._fragment_candidate_ids
+            suppressed = candidate_id in self._suppressed_candidate_ids
+            selected = candidate_id in self._selected_candidate_ids
+            hovered = candidate_id == self._hovered_candidate_id
+            confidence = max(
+                0.0,
+                min(1.0, float(candidate.confidence)),
+            )
+            color_name = self._candidate_group_colors.get(
+                candidate_id,
+                "#5baaa4",
+            )
+            opacity_confidence = round(confidence * 7.0) / 7.0
+            # Confidence is an opacity channel only.  The slider controls how
+            # strongly weak evidence remains visible; it never filters it.
+            visible_confidence = (
+                self._confidence_floor
+                + opacity_confidence * (1.0 - self._confidence_floor)
+            )
+            fill_alpha = 34 + round(visible_confidence * 138)
+            if rejected:
+                fill_alpha = min(fill_alpha, 54)
+            elif suppressed:
+                fill_alpha = min(fill_alpha, 42)
+            elif beat_width < 40.0:
+                fill_alpha = min(fill_alpha, 104)
+
+            if selected:
+                outline_name = "#fff1c8"
+            elif invalid:
+                outline_name = "#e88479"
+            elif duplicate:
+                outline_name = "#99958e"
+            elif pending:
+                outline_name = "#8ae1d4"
+            elif fragment:
+                outline_name = "#e0a341"
+            else:
+                outline_name = color_name
+            outline_alpha = 255 if selected else 118 + round(
+                opacity_confidence * 108
+            )
+            line_style = (
+                Qt.DashLine
+                if rejected or fragment or suppressed
+                else Qt.SolidLine
+            )
+            groups[
+                (
+                    selected,
+                    color_name,
+                    fill_alpha,
+                    outline_name,
+                    outline_alpha,
+                    2.0 if selected or invalid else 1.2,
+                    line_style,
+                )
+            ].append(rect)
+            if invalid:
+                invalid_lines.append(
+                    (rect.topLeft(), rect.bottomRight())
+                )
+            if rejected:
+                rejected_lines.append(
+                    (
+                        QPointF(rect.left(), rect.center().y()),
+                        QPointF(rect.right(), rect.center().y()),
+                    )
+                )
+            if show_onsets:
+                onset_caps.append(
+                    QRectF(
+                        rect.left(),
+                        rect.top() + 1,
+                        min(2.0, rect.width()),
+                        max(1.0, rect.height() - 2),
+                    )
+                )
+            if pending:
+                pending_markers.append(
+                    QRectF(
+                        max(rect.left(), rect.right() - 4),
+                        rect.top() + 2,
+                        3,
+                        3,
+                    )
+                )
+            if fragment:
+                fragment_markers.append(
+                    QRectF(
+                        max(rect.left(), rect.right() - 4),
+                        rect.top() + 1,
+                        3,
+                        3,
+                    )
+                )
+            role = self._candidate_chord_roles.get(candidate_id, "")
+            if show_detail and role and rect.width() >= 5:
+                role_markers[role].append(
+                    QRectF(
+                        rect.left() + (2.0 if show_onsets else 0.0),
+                        rect.top() + 2,
+                        2,
+                        max(1.0, rect.height() - 4),
+                    )
+                )
+            if (
+                rect.width() >= 42
+                and (show_detail or selected or hovered)
+            ):
+                labels.append(
+                    (rect, int(candidate.pitch), confidence, candidate_id)
+                )
+
+        # Selected blocks paint last so their neutral outline remains legible
+        # without repurposing the instrument hue.
+        for style, rects in sorted(
+            groups.items(),
+            key=lambda item: item[0][0],
+        ):
+            (
+                _selected,
+                color_name,
+                fill_alpha,
+                outline_name,
+                outline_alpha,
+                width,
+                line_style,
+            ) = style
+            fill = QColor(color_name)
+            fill.setAlpha(fill_alpha)
+            outline = QColor(outline_name)
+            outline.setAlpha(outline_alpha)
+            painter.setBrush(fill)
+            painter.setPen(QPen(outline, width, line_style))
+            painter.drawRects(rects)
+
+        if onset_caps:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(224, 170, 90, 210))
+            painter.drawRects(onset_caps)
+        role_colors = {
+            "root": QColor("#e1b45b"),
+            "third": QColor("#82a9d8"),
+            "fifth": QColor("#79bcb0"),
+            "seventh": QColor("#aa8bd2"),
+        }
+        painter.setPen(Qt.NoPen)
+        for role, rects in role_markers.items():
+            painter.setBrush(role_colors.get(role, QColor("#aaa59d")))
+            painter.drawRects(rects)
+        if pending_markers:
+            painter.setBrush(QColor("#b9f0e7"))
+            painter.drawRects(pending_markers)
+        if fragment_markers:
+            painter.setBrush(QColor("#f0ae42"))
+            painter.drawRects(fragment_markers)
+        if invalid_lines:
+            painter.setPen(QPen(QColor("#e88479"), 1))
+            for start, end in invalid_lines:
+                painter.drawLine(start, end)
+        if rejected_lines:
+            painter.setPen(QPen(QColor(180, 138, 132, 190), 1))
+            for start, end in rejected_lines:
+                painter.drawLine(start, end)
+        for rect, pitch, confidence, _candidate_id in labels:
+            painter.setPen(QColor("#f0eee8"))
+            alternatives = self._fold_alternative_counts.get(
+                _candidate_id, 0
+            )
+            painter.drawText(
+                rect.adjusted(6, 0, -3, 0),
+                Qt.AlignLeft | Qt.AlignVCenter,
+                (
+                    f"{note_name(pitch)} · {confidence:.0%}"
+                    + (f" · +{alternatives}" if alternatives else "")
+                ),
+            )
+
+    def _paint_voice_group_outlines(
+        self,
+        painter: QPainter,
+        grid: QRectF,
+        project_start_ms: float,
+        project_end_ms: float,
+    ) -> None:
+        if not self._voice_group_outlines:
+            return
+        audio_start = float(project_start_ms) - self._audio_offset_ms
+        audio_end = float(project_end_ms) - self._audio_offset_ms
+        first = max(
+            0,
+            bisect_left(
+                self._voice_group_outline_starts,
+                audio_start - self._max_voice_group_duration,
+            ),
+        )
+        last = bisect_right(
+            self._voice_group_outline_starts, audio_end
+        )
+        selected_group_ids = {
+            group_id
+            for candidate_id in self._selected_candidate_ids
+            if (
+                group_id := self._candidate_group_ids.get(candidate_id)
+            )
+        }
+        for (
+            group_id,
+            start_audio_ms,
+            end_audio_ms,
+            pitch_min,
+            pitch_max,
+            role,
+            color_name,
+            confidence,
+            note_count,
+        ) in self._voice_group_outlines[first:last]:
+            if end_audio_ms <= audio_start or start_audio_ms >= audio_end:
+                continue
+            left = self.x_at_time(
+                start_audio_ms + self._audio_offset_ms
+            )
+            right = self.x_at_time(
+                end_audio_ms + self._audio_offset_ms
+            )
+            top = (
+                self.RULER_H
+                + (self.pitch_top - pitch_max) * self.ROW_H
+                + 3
+            )
+            bottom = (
+                self.RULER_H
+                + (self.pitch_top - pitch_min + 1) * self.ROW_H
+                - 3
+            )
+            rect = QRectF(
+                left,
+                top,
+                max(2.0, right - left),
+                max(4.0, bottom - top),
+            ).intersected(grid)
+            if rect.isEmpty():
+                continue
+            color = QColor(color_name)
+            span_beats = max(
+                0.25,
+                (end_audio_ms - start_audio_ms)
+                / max(1.0, self.beat_ms),
+            )
+            density = min(1.0, note_count / (span_beats * 4.0))
+            color.setAlpha(
+                30 + round(55 * max(0.0, min(1.0, confidence)))
+                + round(28 * density)
+            )
+            painter.fillRect(rect, color)
+            group_selected = group_id in selected_group_ids
+            outline = QColor("#fff1c8" if group_selected else color_name)
+            outline.setAlpha(235 if group_selected else 155)
+            painter.setPen(QPen(outline, 2.0 if group_selected else 1.0))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(rect)
+            if rect.width() >= 54:
+                painter.setPen(QColor("#d4cdc1"))
+                painter.drawText(
+                    rect.adjusted(5, 1, -4, -1),
+                    Qt.AlignLeft | Qt.AlignTop,
+                    trf(
+                        "{role} · {count} 音",
+                        role=voice_role_label(role),
+                        count=note_count,
+                    ),
+                )
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        # The roll is dominated by axis-aligned rectangles and one-pixel grid
+        # lines.  Disabling antialiasing keeps dense 12k-note views within the
+        # realtime repaint budget without changing their visual geometry.
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.drawPixmap(0, 0, self._roll_background())
+        grid = self.grid_rect()
+        paint_rect = _event.rect()
+        paint_left_ms = self.time_at(
+            max(float(self.KEY_W), float(paint_rect.left()))
+        )
+        paint_right_ms = self.time_at(
+            max(float(self.KEY_W), float(paint_rect.right()))
+        )
+        visible_rows = math.ceil(grid.height() / self.ROW_H)
+        self._paint_spectrogram_background(
+            painter,
+            grid,
+            paint_left_ms,
+            paint_right_ms,
+        )
+        self._paint_transcription_evidence(
+            painter,
+            grid,
+            paint_left_ms,
+            paint_right_ms,
+        )
+        self._paint_unsupported_evidence_rows(painter, grid)
+        # Evidence sits below the editing grid.  Redraw horizontal guides after
+        # the ready QImages so pitch rows remain legible at high intensity.
+        for row in range(visible_rows + 1):
+            pitch = self.pitch_top - row
+            y = self.RULER_H + row * self.ROW_H
+            painter.setPen(QColor("#17181a" if pitch % 12 in (1, 3, 6, 8, 10) else "#303135"))
             painter.drawLine(self.KEY_W, y, self.width(), y)
             if pitch % 12 == 0:
                 painter.setPen(QColor(108, 109, 113, 70))
-                painter.drawLine(self.KEY_W, y + self.ROW_H - 1, self.width(), y + self.ROW_H - 1)
+                painter.drawLine(
+                    self.KEY_W,
+                    y + self.ROW_H - 1,
+                    self.width(),
+                    y + self.ROW_H - 1,
+                )
         painter.fillRect(QRectF(0, 0, self.width(), self.RULER_H), QColor("#242427"))
         painter.fillRect(QRectF(0, 0, self.KEY_W, self.RULER_H), QColor("#1c1c1e"))
         painter.fillRect(QRectF(self.KEY_W - 1, self.RULER_H, 1, grid.height()), QColor("#6f5227"))
@@ -2932,8 +5940,11 @@ class PianoRollCanvas(QWidget):
         ))
         step_ms = self.editor.quantize_ms()
         measure_ms = self.beat_ms * max(1, self.editor.time_sig)
-        measure = math.floor(self.scroll_ms / measure_ms) * measure_ms
-        measure_index = max(0, math.floor(measure / measure_ms))
+        beat_origin = float(getattr(self.editor, "beat_origin_ms", 0.0))
+        measure = beat_origin + math.floor(
+            (self.scroll_ms - beat_origin) / measure_ms
+        ) * measure_ms
+        measure_index = math.floor((measure - beat_origin) / measure_ms)
         right_ms = self.time_at(self.width())
         while measure <= right_ms + measure_ms:
             if measure_index % 2:
@@ -2945,49 +5956,97 @@ class PianoRollCanvas(QWidget):
                 )
             measure += measure_ms
             measure_index += 1
-        first = math.floor(self.scroll_ms / step_ms) * step_ms
+        first = beat_origin + math.floor(
+            (self.scroll_ms - beat_origin) / step_ms
+        ) * step_ms
         t = first
         while t <= right_ms + step_ms:
             x = self.x_at_time(t)
-            beat_index = round(t / self.beat_ms)
-            major = beat_index % max(1, self.editor.time_sig) == 0 and abs(t / self.beat_ms - beat_index) < .02
+            beat_position = (t - beat_origin) / self.beat_ms
+            beat_index = round(beat_position)
+            major = (
+                beat_index % max(1, self.editor.time_sig) == 0
+                and abs(beat_position - beat_index) < .02
+            )
             painter.setPen(QPen(QColor("#45464a" if major else "#2d2e32"), 1))
             painter.drawLine(x, 0 if major else self.RULER_H, x, self.height())
-            painter.drawLine(x, self.RULER_H - (8 if major else 5), x, self.RULER_H - 3)
+            painter.drawLine(
+                x,
+                self.TIME_RULER_H - (8 if major else 5),
+                x,
+                self.TIME_RULER_H - 3,
+            )
             if major:
                 painter.setPen(QColor("#c1b9ab"))
-                painter.drawText(int(x + 4), 19, str(beat_index // max(1, self.editor.time_sig) + 1))
+                painter.drawText(
+                    int(x + 4),
+                    19,
+                    str(beat_index // max(1, self.editor.time_sig) + 1),
+                )
             t += step_ms
-        if self.ghost_notes:
-            for note in self.visible_ghost_notes():
-                rect = self.note_rect(note)
+        self._paint_harmony_lane(
+            painter,
+            paint_left_ms,
+            paint_right_ms,
+        )
+        self._paint_melody_lines(
+            painter,
+            grid,
+            paint_left_ms,
+            paint_right_ms,
+        )
+        transcription_range = self.transcription_time_range
+        if transcription_range is not None:
+            range_left = self.x_at_time(transcription_range[0])
+            range_right = self.x_at_time(transcription_range[1])
+            selection_rect = QRectF(
+                min(range_left, range_right),
+                self.RULER_H,
+                abs(range_right - range_left),
+                grid.height(),
+            ).intersected(grid)
+            painter.fillRect(selection_rect, QColor(245, 165, 36, 18))
+            painter.setPen(QPen(QColor("#d69a3b"), 1))
+            painter.drawLine(
+                range_left,
+                self.RULER_H,
+                range_left,
+                self.height(),
+            )
+            painter.drawLine(
+                range_right,
+                self.RULER_H,
+                range_right,
+                self.height(),
+            )
+        if self.ghost_notes and self._ghost_opacity > 0.0:
+            painter.save()
+            painter.setOpacity(self._ghost_opacity)
+            for ghost in self.visible_ghost_notes(
+                paint_left_ms,
+                paint_right_ms,
+            ):
+                rect = self.note_rect(ghost)
                 if not rect.intersects(grid):
                     continue
-                painter.setBrush(QColor(118, 119, 124, 34))
-                painter.setPen(QPen(QColor(151, 152, 157, 66), 1))
+                fill = QColor(str(ghost.color))
+                fill.setAlpha(30)
+                outline = QColor(str(ghost.color))
+                outline.setAlpha(62)
+                painter.setBrush(fill)
+                painter.setPen(QPen(outline, 1))
                 painter.drawRect(rect)
-        for candidate in self.visible_transcription_candidates():
-            rect = self.note_rect(candidate)
-            if not rect.intersects(grid):
-                continue
-            invalid = self.editor.note_invalid(candidate.pitch)
-            confidence = max(0.0, min(1.0, float(candidate.confidence)))
-            color = QColor("#d8645a" if invalid else "#55c4ba")
-            fill = QColor(color)
-            fill.setAlpha(28 + round(confidence * 92))
-            outline = QColor(color)
-            outline.setAlpha(115 + round(confidence * 120))
-            painter.fillRect(rect, fill)
-            painter.setPen(QPen(outline, 1.2, Qt.DashLine))
-            painter.drawRect(rect)
-            if rect.width() >= 42:
-                painter.setPen(QColor("#f0eee8"))
-                painter.drawText(
-                    rect.adjusted(4, 0, -3, 0),
-                    Qt.AlignLeft | Qt.AlignVCenter,
-                    f"{note_name(candidate.pitch)} · {confidence:.0%}",
-                )
-        for index in self.visible_note_indices():
+            painter.restore()
+        self._paint_transcription_candidates(
+            painter,
+            grid,
+            paint_left_ms,
+            paint_right_ms,
+        )
+        for index in self.visible_note_indices(
+            paint_left_ms,
+            paint_right_ms,
+        ):
             note = self.notes[index]
             rect = self.note_rect(note)
             if not rect.intersects(grid):
@@ -3016,19 +6075,26 @@ class PianoRollCanvas(QWidget):
                     technique_color = QColor(color)
                     technique_color.setAlpha(220)
                     painter.fillRect(QRectF(rect.left() + 1, rect.top() + 1, 3, rect.height() - 2), technique_color)
-            painter.save()
-            painter.setClipRect(rect.adjusted(2, 1, -2, -1))
-            label_font = painter.font()
-            label_font.setPointSize(max(6, label_font.pointSize() - (2 if rect.width() < 34 else 1)))
-            label_font.setBold(index in self.selected)
-            painter.setFont(label_font)
-            painter.setPen(QColor("#f3efe7"))
-            painter.drawText(
-                rect.adjusted(5, 0, -2, 0),
-                Qt.AlignLeft | Qt.AlignVCenter,
-                note_name(note.pitch),
-            )
-            painter.restore()
+            if rect.width() >= 28:
+                painter.save()
+                painter.setClipRect(rect.adjusted(2, 1, -2, -1))
+                label_font = painter.font()
+                label_font.setPointSize(
+                    max(
+                        6,
+                        label_font.pointSize()
+                        - (2 if rect.width() < 34 else 1),
+                    )
+                )
+                label_font.setBold(index in self.selected)
+                painter.setFont(label_font)
+                painter.setPen(QColor("#f3efe7"))
+                painter.drawText(
+                    rect.adjusted(5, 0, -2, 0),
+                    Qt.AlignLeft | Qt.AlignVCenter,
+                    note_name(note.pitch),
+                )
+                painter.restore()
             if index in self.selected and rect.width() >= 12:
                 handle = QColor("#fff4cf")
                 painter.fillRect(QRectF(rect.left() + 1, rect.top() + 3, 3, max(4, rect.height() - 6)), handle)
@@ -3116,9 +6182,59 @@ class PianoRollCanvas(QWidget):
                 self.editor.delete_note_at(index)
                 event.accept()
                 return
+            if self.editor.transcription_mode_enabled:
+                candidate_id = self.candidate_at(event.position())
+                if (
+                    candidate_id is not None
+                    and self._show_voice_group_context_menu(
+                        event, candidate_id
+                    )
+                ):
+                    event.accept()
+                    return
             event.accept()
             return
-        if event.button() == Qt.LeftButton and event.position().x() >= self.KEY_W and event.position().y() < self.RULER_H:
+        if (
+            event.button() == Qt.LeftButton
+            and event.position().x() >= self.KEY_W
+            and self.TIME_RULER_H
+            <= event.position().y()
+            < self.RULER_H
+        ):
+            segment = self._chord_segment_at(event.position())
+            if segment is not None:
+                segment_id = str(
+                    getattr(segment, "segment_id", "") or ""
+                )
+                if segment_id:
+                    self.chord_segment_clicked.emit(segment_id)
+            else:
+                self.ruler_seek_requested.emit(
+                    self.time_at(event.position().x())
+                )
+            event.accept()
+            return
+        if (
+            event.button() == Qt.LeftButton
+            and event.position().x() >= self.KEY_W
+            and event.position().y() < self.TIME_RULER_H
+            and self.editor.transcription_mode_enabled
+        ):
+            anchor = self.time_at(event.position().x())
+            self._ruler_range_anchor = anchor
+            self._ruler_range_moved = False
+            self._drag_time_range = self.transcription_time_range
+            self._ruler_range_endpoint = ""
+            current_range = self._drag_time_range
+            if current_range is not None:
+                threshold = 7.0
+                if abs(event.position().x() - self.x_at_time(current_range[0])) <= threshold:
+                    self._ruler_range_endpoint = "start"
+                elif abs(event.position().x() - self.x_at_time(current_range[1])) <= threshold:
+                    self._ruler_range_endpoint = "end"
+            event.accept()
+            return
+        if event.button() == Qt.LeftButton and event.position().x() >= self.KEY_W and event.position().y() < self.TIME_RULER_H:
             self.dragging_playhead = True
             seek_ms = self.time_at(event.position().x())
             self.set_edit_cursor(seek_ms)
@@ -3145,6 +6261,9 @@ class PianoRollCanvas(QWidget):
         index, mode = self.note_at(event.position())
         mods = event.modifiers()
         if index is not None:
+            if self._selected_candidate_ids:
+                self._selected_candidate_ids.clear()
+                self.candidate_selection_changed.emit(frozenset())
             touched = self.notes[index]
             self.editor.default_note_velocity = int(touched.vel)
             self.editor.last_note_duration_ms = float(touched.dur)
@@ -3165,13 +6284,85 @@ class PianoRollCanvas(QWidget):
             self.anchor_index = index
             self.selection_changed.emit()
             self.update()
-            self.editor.audition_note(self.notes[index])
+            self.ruler_seek_requested.emit(
+                self.time_at(event.position().x())
+            )
+            if self.editor.draft_playback_state == "stopped":
+                self.editor.audition_note(self.notes[index])
+            return
+        if self.editor.transcription_mode_enabled and not self.editor.draw_mode_button.isChecked():
+            candidate_id = self.candidate_at(event.position())
+            additive = bool(mods & Qt.ControlModifier)
+            if candidate_id is not None:
+                selected = set(self._selected_candidate_ids) if additive else set()
+                if additive and candidate_id in selected:
+                    selected.remove(candidate_id)
+                else:
+                    selected.add(candidate_id)
+                self._selected_candidate_ids = selected
+                self.selected.clear()
+                self.anchor_index = None
+                self.candidate_selection_changed.emit(frozenset(selected))
+                self.selection_changed.emit()
+                self.update()
+                self.ruler_seek_requested.emit(
+                    self.time_at(event.position().x())
+                )
+                event.accept()
+                return
+            guide = self.melody_guide_at(event.position())
+            if guide is not None:
+                guide_ids = {
+                    candidate_id
+                    for candidate_id in guide.source_candidate_ids
+                    if candidate_id in self._candidate_id_set
+                }
+                selected = (
+                    set(self._selected_candidate_ids) if additive else set()
+                )
+                if additive and guide_ids and guide_ids.issubset(selected):
+                    selected.difference_update(guide_ids)
+                else:
+                    selected.update(guide_ids)
+                self._selected_candidate_ids = selected
+                self.selected.clear()
+                self.anchor_index = None
+                self.candidate_selection_changed.emit(frozenset(selected))
+                self.selection_changed.emit()
+                raw_start = self.time_at(event.position().x())
+                self.set_edit_cursor(raw_start)
+                self.ruler_seek_requested.emit(raw_start)
+                self.update()
+                event.accept()
+                return
+            self._candidate_marquee_origin = event.position()
+            self._candidate_marquee_additive = additive
+            self._candidate_press_selected = set(self._selected_candidate_ids)
+            self.marquee = QRectF(event.position(), event.position())
+            self.drag_mode = "candidate_marquee_pending"
+            if not additive:
+                self._selected_candidate_ids.clear()
+                self.candidate_selection_changed.emit(frozenset())
+            self.selected.clear()
+            self.anchor_index = None
+            raw_start = self.time_at(event.position().x())
+            cursor_start = (
+                raw_start
+                if mods & Qt.AltModifier or not self.editor.snap_box.isChecked()
+                else self.editor.snap_time(raw_start)
+            )
+            self.set_edit_cursor(cursor_start)
+            self.ruler_seek_requested.emit(raw_start)
+            self.selection_changed.emit()
+            self.update()
+            event.accept()
             return
         if not (mods & Qt.ControlModifier):
             self.selected.clear()
         raw_start = self.time_at(event.position().x())
         cursor_start = raw_start if mods & Qt.AltModifier or not self.editor.snap_box.isChecked() else self.editor.snap_time(raw_start)
         self.set_edit_cursor(cursor_start)
+        self.ruler_seek_requested.emit(raw_start)
         if self.editor.draw_mode_button.isChecked():
             self.creation_anchor_ms = cursor_start
             self.creation_anchor_pitch = self.pitch_at(event.position().y())
@@ -3190,6 +6381,27 @@ class PianoRollCanvas(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
+        if self._ruler_range_anchor is not None and event.buttons() & Qt.LeftButton:
+            target = self.time_at(pos.x())
+            self._ruler_range_moved = self._ruler_range_moved or abs(
+                self.x_at_time(target) - self.x_at_time(self._ruler_range_anchor)
+            ) >= 3.0
+            current_range = self._drag_time_range
+            if self._ruler_range_endpoint and current_range is not None:
+                start_ms, end_ms = current_range
+                if self._ruler_range_endpoint == "start":
+                    start_ms = target
+                else:
+                    end_ms = target
+                start_ms, end_ms = sorted((start_ms, end_ms))
+            else:
+                start_ms, end_ms = sorted((self._ruler_range_anchor, target))
+            self._drag_time_range = (
+                (start_ms, end_ms) if end_ms > start_ms else None
+            )
+            self.update()
+            event.accept()
+            return
         if self.dragging_playhead and event.buttons() & Qt.LeftButton:
             self.ruler_seek_requested.emit(self.time_at(pos.x()))
             event.accept()
@@ -3208,9 +6420,59 @@ class PianoRollCanvas(QWidget):
             return
         self.hover_changed.emit(self.time_at(pos.x()), self.pitch_at(pos.y()))
         if not (event.buttons() & Qt.LeftButton):
+            hovered_candidate_id = ""
+            candidate_hit = None
+            if (
+                self.editor.transcription_mode_enabled
+                and pos.x() >= self.KEY_W
+                and pos.y() >= self.RULER_H
+            ):
+                candidate_hit = self.candidate_at(pos)
+                if candidate_hit is not None:
+                    hovered_candidate_id = candidate_hit
+            guide_hit = (
+                self.melody_guide_at(pos)
+                if candidate_hit is None
+                and not self.editor.draw_mode_button.isChecked()
+                else None
+            )
+            if guide_hit is not None:
+                branch_label = f" · {tr('分支')}" if guide_hit.branch else ""
+                self.setToolTip(
+                    f"{voice_role_label(guide_hit.role)}{branch_label} · "
+                    f"{round(guide_hit.confidence * 100)}% · "
+                    f"{tr('点击定位候选')}"
+                )
+            else:
+                self.setToolTip("")
+            if hovered_candidate_id != self._hovered_candidate_id:
+                previous_id = self._hovered_candidate_id
+                self._hovered_candidate_id = hovered_candidate_id
+                for candidate_id in (previous_id, hovered_candidate_id):
+                    candidate_index = self._transcription_candidate_id_to_index.get(
+                        candidate_id
+                    )
+                    if candidate_index is not None:
+                        self.update(
+                            self.candidate_rect(
+                                self.transcription_candidates[candidate_index]
+                            )
+                            .adjusted(-8.0, -4.0, 112.0, 4.0)
+                            .toAlignedRect()
+                        )
             if pos.x() < self.KEY_W:
                 self.setCursor(Qt.PointingHandCursor)
-            elif pos.y() < self.RULER_H:
+            elif (
+                self.TIME_RULER_H
+                <= pos.y()
+                < self.RULER_H
+            ):
+                self.setCursor(
+                    Qt.PointingHandCursor
+                    if self._chord_segment_at(pos) is not None
+                    else Qt.ArrowCursor
+                )
+            elif pos.y() < self.TIME_RULER_H:
                 self.setCursor(Qt.SizeHorCursor)
             else:
                 _index, mode = self.note_at(pos)
@@ -3218,10 +6480,49 @@ class PianoRollCanvas(QWidget):
                     self.setCursor(Qt.SizeHorCursor)
                 elif mode == "move":
                     self.setCursor(Qt.SizeAllCursor)
+                elif guide_hit is not None:
+                    self.setCursor(Qt.PointingHandCursor)
                 else:
                     self.setCursor(Qt.CrossCursor if self.editor.draw_mode_button.isChecked() else Qt.ArrowCursor)
             return
         dx, dy = pos.x() - self.press_pos.x(), pos.y() - self.press_pos.y()
+        if self.drag_mode in {"candidate_marquee_pending", "candidate_marquee"}:
+            if (
+                self._candidate_marquee_origin is not None
+                and math.hypot(dx, dy) > 4
+            ):
+                self.drag_mode = "candidate_marquee"
+            if (
+                self.drag_mode == "candidate_marquee"
+                and self._candidate_marquee_origin is not None
+            ):
+                self.marquee = QRectF(
+                    self._candidate_marquee_origin, pos
+                ).normalized()
+                selected = (
+                    set(self._candidate_press_selected)
+                    if self._candidate_marquee_additive
+                    else set()
+                )
+                marquee_left_ms = self.time_at(
+                    max(float(self.KEY_W), self.marquee.left())
+                )
+                marquee_right_ms = self.time_at(
+                    max(float(self.KEY_W), self.marquee.right())
+                )
+                for candidate_id, candidate in self._visible_candidate_pairs(
+                    marquee_left_ms,
+                    marquee_right_ms,
+                ):
+                    if self.candidate_rect(candidate).intersects(
+                        self.marquee
+                    ):
+                        selected.add(candidate_id)
+                if selected != self._selected_candidate_ids:
+                    self._selected_candidate_ids = selected
+                    self.candidate_selection_changed.emit(frozenset(selected))
+                self.update()
+            return
         if self.drag_mode == "draw_create" and self.creation_preview is not None:
             current = self.time_at(pos.x())
             snap = self.editor.snap_box.isChecked() and not (event.modifiers() & Qt.AltModifier)
@@ -3309,6 +6610,19 @@ class PianoRollCanvas(QWidget):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() != Qt.LeftButton:
             return
+        if self._ruler_range_anchor is not None:
+            anchor = self._ruler_range_anchor
+            if self._ruler_range_moved and self._drag_time_range is not None:
+                self.time_range_changed.emit(self._drag_time_range)
+            else:
+                self.ruler_seek_requested.emit(anchor)
+            self._ruler_range_anchor = None
+            self._ruler_range_endpoint = ""
+            self._ruler_range_moved = False
+            self._drag_time_range = None
+            self.update()
+            event.accept()
+            return
         if self.piano_key_dragging:
             self.piano_key_dragging = False
             self.piano_pressed_pitch = None
@@ -3317,6 +6631,15 @@ class PianoRollCanvas(QWidget):
             return
         if self.dragging_playhead:
             self.dragging_playhead = False
+            event.accept()
+            return
+        if self.drag_mode in {"candidate_marquee_pending", "candidate_marquee"}:
+            self._candidate_marquee_origin = None
+            self._candidate_marquee_additive = False
+            self._candidate_press_selected.clear()
+            self.marquee = QRectF()
+            self.drag_mode = ""
+            self.update()
             event.accept()
             return
         if self.drag_mode == "draw_create" and self.creation_preview is not None:
@@ -3357,12 +6680,33 @@ class PianoRollCanvas(QWidget):
         self.update()
 
     def leaveEvent(self, event) -> None:
+        self.setToolTip("")
+        if self._hovered_candidate_id:
+            candidate_index = self._transcription_candidate_id_to_index.get(
+                self._hovered_candidate_id
+            )
+            self._hovered_candidate_id = ""
+            if candidate_index is not None:
+                self.update(
+                    self.candidate_rect(
+                        self.transcription_candidates[candidate_index]
+                    )
+                    .adjusted(-8.0, -4.0, 112.0, 4.0)
+                    .toAlignedRect()
+                )
         if not self.piano_key_dragging and self.piano_hover_pitch is not None:
             self.piano_hover_pitch = None
             self.update(QRectF(0, self.RULER_H, self.KEY_W, self.height() - self.RULER_H).toAlignedRect())
         super().leaveEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
+        if (
+            self.editor.transcription_mode_enabled
+            and event.button() == Qt.LeftButton
+            and self.candidate_at(event.position()) is not None
+        ):
+            event.accept()
+            return
         if (
             event.button() == Qt.LeftButton
             and not self.editor.draw_mode_button.isChecked()
@@ -3429,6 +6773,12 @@ class PianoRollCanvas(QWidget):
 
     def keyPressEvent(self, event) -> None:
         mods, key = event.modifiers(), event.key()
+        if key == Qt.Key_Escape and self._selected_candidate_ids:
+            self._selected_candidate_ids.clear()
+            self.candidate_selection_changed.emit(frozenset())
+            self.update()
+            event.accept()
+            return
         if key == Qt.Key_B and not (mods & (Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier)):
             self.editor.draw_mode_button.toggle()
             return
@@ -3475,8 +6825,9 @@ class PianoRollCanvas(QWidget):
             self.selection_changed.emit()
             return
         if mods & Qt.ControlModifier and key == Qt.Key_A:
-            self.selected = set(range(len(self.notes)))
-            self.selection_changed.emit(); self.update(); return
+            self.editor.select_all_notes()
+            event.accept()
+            return
         if (mods & Qt.ControlModifier and key == Qt.Key_Y) or (mods & Qt.ControlModifier and mods & Qt.ShiftModifier and key == Qt.Key_Z):
             self.editor.redo(); return
         if mods & Qt.ControlModifier and key == Qt.Key_Z:
@@ -3718,7 +7069,16 @@ class VelocityLaneCanvas(QWidget):
 class MidiNoteEditorDialog(QDialog):
     notes_applied = Signal(object)
 
-    def __init__(self, parent, track: TrackState, bpm: int, time_sig: int, transpose: int = 0) -> None:
+    def __init__(
+        self,
+        parent,
+        track: TrackState,
+        bpm: int,
+        time_sig: int,
+        transpose: int = 0,
+        *,
+        transcription_mode: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("MidiNoteEditorDialog")
         self.setWindowFlags(
@@ -3727,10 +7087,43 @@ class MidiNoteEditorDialog(QDialog):
             | Qt.WindowMaximizeButtonHint
         )
         self.track, self.bpm, self.time_sig, self.transpose = track, int(bpm or 120), int(time_sig or 4), int(transpose)
-        self.undo_stack: list[tuple[list, set[int]]] = []
-        self.redo_stack: list[tuple[list, set[int]]] = []
+        self.instrument_adaptation = instrument_editor_display_adaptation(
+            int(track.bdo_instrument_id)
+        )
+        self.canonical_drum_lanes = track_uses_canonical_drum_lanes(track)
+        self._initial_pitch_focus_pending = True
+        self.beat_origin_ms = float(getattr(parent, "beat_origin_ms", 0.0))
+        self.undo_stack: list[
+            tuple[
+                list,
+                set[int],
+                set[CandidateRoute],
+                set[CandidateRoute],
+                dict[int, int],
+                str,
+                str,
+            ]
+        ] = []
+        self.redo_stack: list[
+            tuple[
+                list,
+                set[int],
+                set[CandidateRoute],
+                set[CandidateRoute],
+                dict[int, int],
+                str,
+                str,
+            ]
+        ] = []
         self.clipboard: list = []
         self.last_applied = list(track.notes)
+        self.staged_primary_routes: set[CandidateRoute] = set()
+        self.staged_copy_routes: set[CandidateRoute] = set()
+        self.staged_new_track_specs: dict[int, int] = {}
+        self.staged_analysis_cache_key = ""
+        self.staged_analysis_fingerprint = ""
+        self._transcription_mode_requested = bool(transcription_mode)
+        self._velocity_visible_before_transcription = False
         self.updating_fields = False
         self.draft_playback_state = "stopped"
         self.playhead_ms = 0.0
@@ -3748,10 +7141,14 @@ class MidiNoteEditorDialog(QDialog):
         self.transcription_mode_enabled = False
         self.transcription_candidates: tuple[TranscriptionCandidate, ...] = ()
         self.transcription_result: TranscriptionResult | None = None
-        self.transcription_worker: TranscriptionAnalysisWorker | None = None
-        self.transcription_generation = 0
-        self.transcription_close_pending = False
-        self.transcription_dialog_result_pending: int | None = None
+        self.transcription_audition_source = "combined"
+        self._spectrogram_reference_audio: object | None = None
+        self._transcription_annotation_projection_cache = None
+        self._transcription_display_projection_cache = None
+        self._eligible_candidate_cache: tuple[
+            tuple,
+            tuple[str, ...],
+        ] | None = None
         self.draft_reference_only = False
         self.default_note_velocity = 100
         self.last_note_duration_ms = 0.0
@@ -3759,7 +7156,7 @@ class MidiNoteEditorDialog(QDialog):
         self._invalid_note_count = 0
         self._hover_status_key: tuple[int, int] | None = None
         self.setWindowTitle(f"编辑音符 · {track.display_name}")
-        self.setMinimumSize(920, 580)
+        self.setMinimumSize(920, 680)
         available = QApplication.primaryScreen().availableGeometry() if QApplication.primaryScreen() else None
         if available is None:
             self.resize(1440, 860)
@@ -3769,14 +7166,14 @@ class MidiNoteEditorDialog(QDialog):
                 max(self.minimumHeight(), min(960, available.height() - 72)),
             )
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 12, 0, 10)
-        root.setSpacing(8)
+        root.setContentsMargins(0, 4, 0, 6)
+        root.setSpacing(4)
 
         def add_inset(widget: QWidget, object_name: str) -> None:
             shell = QWidget()
             shell.setObjectName(object_name)
             shell_layout = QHBoxLayout(shell)
-            shell_layout.setContentsMargins(12, 0, 12, 0)
+            shell_layout.setContentsMargins(8, 0, 8, 0)
             shell_layout.setSpacing(0)
             shell_layout.addWidget(widget)
             root.addWidget(shell)
@@ -3784,19 +7181,17 @@ class MidiNoteEditorDialog(QDialog):
         toolbar_frame = QFrame()
         toolbar_frame.setObjectName("EditorToolbar")
         toolbar = QHBoxLayout(toolbar_frame)
-        toolbar.setContentsMargins(15, 9, 12, 9)
-        toolbar.setSpacing(9)
+        toolbar.setContentsMargins(10, 3, 8, 3)
+        toolbar.setSpacing(6)
         title_block = QWidget()
         title_layout = QVBoxLayout(title_block)
         title_layout.setContentsMargins(0, 0, 0, 0)
-        title_layout.setSpacing(1)
+        title_layout.setSpacing(0)
         instrument_name = BDO_INSTRUMENT_NAMES.get(track.bdo_instrument_id, "未知乐器")
-        eyebrow_text = "音块编辑器" if instrument_name in track.display_name else instrument_name
-        eyebrow = QLabel(eyebrow_text)
-        eyebrow.setObjectName("EditorEyebrow")
-        title_layout.addWidget(eyebrow)
         title = QLabel(track.display_name)
         title.setObjectName("EditorTrackTitle")
+        title.setToolTip(instrument_name)
+        title.setAccessibleDescription(instrument_name)
         title_layout.addWidget(title)
         self.track_meta = QLabel()
         self.track_meta.setObjectName("EditorTrackMeta")
@@ -3806,8 +7201,8 @@ class MidiNoteEditorDialog(QDialog):
         transport_frame = QFrame()
         transport_frame.setObjectName("EditorTransport")
         transport = QHBoxLayout(transport_frame)
-        transport.setContentsMargins(6, 4, 7, 4)
-        transport.setSpacing(5)
+        transport.setContentsMargins(4, 1, 5, 1)
+        transport.setSpacing(4)
         self.draft_play_button = PillButton("播放", "primary", FluentSymbol.PLAY)
         self.draft_play_button.clicked.connect(self.toggle_draft_playback)
         transport.addWidget(self.draft_play_button)
@@ -3844,39 +7239,39 @@ class MidiNoteEditorDialog(QDialog):
 
         inspector = QFrame()
         inspector.setObjectName("NoteInspectorTop")
-        inspector.setFixedHeight(48)
+        inspector.setFixedHeight(38)
         inspector_layout = QHBoxLayout(inspector)
-        inspector_layout.setContentsMargins(8, 6, 8, 6)
-        inspector_layout.setSpacing(7)
+        inspector_layout.setContentsMargins(6, 4, 6, 4)
+        inspector_layout.setSpacing(5)
         self.draw_mode_button = PillButton("绘制 B", "ghost")
         self.draw_mode_button.setObjectName("DrawMode")
         self.draw_mode_button.setCheckable(True)
-        self.draw_mode_button.setFixedHeight(30)
+        self.draw_mode_button.setFixedHeight(28)
         self.draw_mode_button.setToolTip("绘制模式：拖动可同时设置音符长度与力度（B）")
         self.draw_mode_button.toggled.connect(self._toggle_draw_mode)
         inspector_layout.addWidget(self.draw_mode_button)
         self.note_mode_button = PillButton("音符属性", "ghost")
         self.note_mode_button.setObjectName("InspectorMode")
-        self.note_mode_button.setFixedHeight(30)
+        self.note_mode_button.setFixedHeight(28)
         self.note_mode_button.setCheckable(True)
         self.note_mode_button.clicked.connect(lambda: self._set_top_inspector_mode("note"))
         inspector_layout.addWidget(self.note_mode_button)
         self.articulation_mode_button = PillButton("奏法", "ghost")
         self.articulation_mode_button.setObjectName("InspectorMode")
-        self.articulation_mode_button.setFixedHeight(30)
+        self.articulation_mode_button.setFixedHeight(28)
         self.articulation_mode_button.setCheckable(True)
         self.articulation_mode_button.clicked.connect(lambda: self._set_top_inspector_mode("articulation"))
         inspector_layout.addWidget(self.articulation_mode_button)
         self.grid_mode_button = PillButton("网格", "ghost")
         self.grid_mode_button.setObjectName("InspectorMode")
-        self.grid_mode_button.setFixedHeight(30)
+        self.grid_mode_button.setFixedHeight(28)
         self.grid_mode_button.setCheckable(True)
         self.grid_mode_button.clicked.connect(lambda: self._set_top_inspector_mode("grid"))
         inspector_layout.addWidget(self.grid_mode_button)
         self.velocity_toggle = PillButton("力度", "ghost", FluentSymbol.CURVE)
         self.velocity_toggle.setObjectName("VelocityToggle")
         self.velocity_toggle.setCheckable(True)
-        self.velocity_toggle.setFixedHeight(30)
+        self.velocity_toggle.setFixedHeight(28)
         self.velocity_toggle.setToolTip("显示力度曲线；拖动时间点会按距离影响周边点")
         self.velocity_toggle.toggled.connect(self._toggle_velocity_lane)
         inspector_layout.addWidget(self.velocity_toggle)
@@ -3917,6 +7312,12 @@ class MidiNoteEditorDialog(QDialog):
             self.articulation_combo.addItem(f"未知奏法 type {ntype}", ntype)
         if self.articulation_combo.count() == 0:
             self.articulation_combo.addItem("普通", 0)
+        if not track.notes and self.instrument_adaptation is not None:
+            default_index = self.articulation_combo.findData(
+                int(self.instrument_adaptation.default_ntype)
+            )
+            if default_index >= 0:
+                self.articulation_combo.setCurrentIndex(default_index)
         self.articulation_combo.currentIndexChanged.connect(self.apply_articulation)
         note_layout.addStretch(1)
         inspector_layout.addWidget(self.note_controls, 1)
@@ -3951,13 +7352,33 @@ class MidiNoteEditorDialog(QDialog):
         self.note_preview_box = QCheckBox("点击试听")
         self.note_preview_box.setChecked(True)
         grid_layout.addWidget(self.note_preview_box)
-        self.ghost_box = QCheckBox("其他轨道参考")
+        self.ghost_box = QCheckBox(tr("幽灵"))
+        self.ghost_box.setAccessibleName(tr("其他轨道参考"))
         self.ghost_box.setChecked(True)
         self.ghost_box.toggled.connect(self._toggle_ghost_notes)
         grid_layout.addWidget(self.ghost_box)
+        self.ghost_opacity_slider = QSlider(Qt.Horizontal)
+        self.ghost_opacity_slider.setObjectName("GhostNoteOpacitySlider")
+        self.ghost_opacity_slider.setRange(0, 100)
+        self.ghost_opacity_slider.setValue(70)
+        self.ghost_opacity_slider.setFixedWidth(72)
+        self.ghost_opacity_slider.setToolTip(tr("幽灵音块透明度"))
+        self.ghost_opacity_slider.valueChanged.connect(
+            self._ghost_opacity_changed
+        )
+        grid_layout.addWidget(self.ghost_opacity_slider)
+        self.ghost_opacity_label = QLabel("70%")
+        self.ghost_opacity_label.setFixedWidth(38)
+        grid_layout.addWidget(self.ghost_opacity_label)
         grid_layout.addWidget(QLabel("量化"))
         self.quantize_combo = QComboBox()
-        for label, divisor in (("1/4", 1), ("1/8", 2), ("1/16", 4), ("1/32", 8)):
+        for label, divisor in (
+            ("1/4", 1),
+            ("1/8", 2),
+            ("1/16", 4),
+            ("1/32", 8),
+            ("1/64", 16),
+        ):
             self.quantize_combo.addItem(label, divisor)
         self.quantize_combo.setCurrentIndex(2)
         self.quantize_combo.setFixedWidth(76)
@@ -3974,6 +7395,201 @@ class MidiNoteEditorDialog(QDialog):
         add_inset(inspector, "EditorInspectorInset")
         self._set_top_inspector_mode("note")
 
+        self.transcription_panel = TranscriptionEditorPanel(self)
+        self.transcription_panel.setVisible(False)
+        # Compatibility aliases keep the analysis-worker adapter small while
+        # all visible controls now live in the embedded panel.
+        self.transcription_hint = self.transcription_panel.status_label
+        self.transcription_progress = self.transcription_panel.status_label
+        self.transcription_analyze_button = self.transcription_panel.analyze_button
+        self.transcription_accept_button = (
+            self.transcription_panel.write_current_track_button
+        )
+        self.transcription_clear_button = (
+            self.transcription_panel.clear_staging_button
+        )
+        self.transcription_panel.load_audio_requested.connect(
+            self._load_reference_audio_from_editor
+        )
+        self.transcription_panel.unload_audio_requested.connect(
+            self._unload_reference_audio_from_editor
+        )
+        self.transcription_panel.analyze_requested.connect(
+            self.start_transcription_analysis
+        )
+        self.transcription_panel.redecode_requested.connect(
+            self._redecode_transcription_range
+        )
+        self.transcription_panel.analysis_mode_changed.connect(
+            self._transcription_analysis_mode_changed
+        )
+        self.transcription_panel.sensitivity_changed.connect(
+            self._transcription_sensitivity_changed
+        )
+        self.transcription_panel.cleanup_profile_changed.connect(
+            self._transcription_cleanup_profile_changed
+        )
+        self.transcription_panel.confidence_changed.connect(
+            lambda _value: self._sync_shared_transcription_projection()
+        )
+        self.transcription_panel.show_rejected_changed.connect(
+            lambda _value: self._sync_shared_transcription_projection()
+        )
+        self.transcription_panel.show_suppressed_changed.connect(
+            lambda _value: self._sync_shared_transcription_projection()
+        )
+        self.transcription_panel.select_fragments_requested.connect(
+            self._select_suspected_transcription_fragments
+        )
+        self.transcription_panel.evidence_layers_changed.connect(
+            self._transcription_evidence_layers_changed
+        )
+        self.transcription_panel.melody_lines_visibility_changed.connect(
+            self._transcription_melody_lines_visibility_changed
+        )
+        self.transcription_panel.melody_line_roles_changed.connect(
+            self._transcription_melody_line_roles_changed
+        )
+        self.transcription_panel.spectrogram_visibility_changed.connect(
+            self._transcription_spectrogram_visibility_changed
+        )
+        self.transcription_panel.reference_background_opacity_changed.connect(
+            self._transcription_reference_background_opacity_changed
+        )
+        self.transcription_panel.align_audio_requested.connect(
+            self._align_reference_audio_to_playhead
+        )
+        self.transcription_panel.beat_origin_requested.connect(
+            self._set_playhead_as_beat_origin
+        )
+        self.transcription_panel.clear_range_requested.connect(
+            self._clear_transcription_range
+        )
+        self.transcription_panel.review_undo_requested.connect(
+            self._undo_transcription_review
+        )
+        self.transcription_panel.review_redo_requested.connect(
+            self._redo_transcription_review
+        )
+        self.transcription_panel.reject_requested.connect(
+            self._reject_transcription_candidates
+        )
+        self.transcription_panel.restore_requested.connect(
+            self._restore_transcription_candidates
+        )
+        self.transcription_panel.write_current_track_requested.connect(
+            self.accept_transcription_candidates
+        )
+        self.transcription_panel.copy_to_track_requested.connect(
+            self._stage_transcription_copy
+        )
+        self.transcription_panel.clear_staging_requested.connect(
+            self._clear_transcription_staging
+        )
+        self.transcription_panel.diagnostic_evidence_expanded_changed.connect(
+            self._transcription_diagnostic_visibility_changed
+        )
+        self.transcription_panel.key_edit_requested.connect(
+            self._edit_transcription_key
+        )
+        self.transcription_panel.key_lock_requested.connect(
+            self._lock_transcription_key
+        )
+        self.transcription_panel.chord_edit_requested.connect(
+            self._edit_transcription_chord
+        )
+        self.transcription_panel.chord_lock_requested.connect(
+            self._lock_transcription_chord
+        )
+        self.transcription_panel.chord_split_requested.connect(
+            self._split_transcription_chord
+        )
+        self.transcription_panel.chord_merge_next_requested.connect(
+            self._merge_transcription_chord_with_next
+        )
+        self.transcription_panel.previous_phrase_requested.connect(
+            lambda: self._navigate_transcription_phrase(-1)
+        )
+        self.transcription_panel.next_phrase_requested.connect(
+            lambda: self._navigate_transcription_phrase(1)
+        )
+        self.transcription_panel.loop_phrase_requested.connect(
+            self._loop_transcription_phrase
+        )
+        self.transcription_panel.review_queue_requested.connect(
+            self._open_transcription_review_queue
+        )
+        self.transcription_panel.confirm_match_requested.connect(
+            self._confirm_transcription_instrument_match
+        )
+        self.transcription_panel.stage_existing_track_requested.connect(
+            self._stage_transcription_group_to_existing_track
+        )
+        self.transcription_panel.new_track_requested.connect(
+            self._stage_transcription_group_to_new_track
+        )
+        self.transcription_panel.audition_source_changed.connect(
+            self._set_transcription_audition_source
+        )
+        root.addWidget(self.transcription_panel)
+        parent_config = getattr(parent, "config", {})
+        if not isinstance(parent_config, dict):
+            parent_config = {}
+        reference_layer_settings = normalize_reference_layer_settings(
+            getattr(parent, "reference_layer_settings", None)
+        )
+        if parent is not None:
+            parent.reference_layer_settings = reference_layer_settings
+        blocked = self.ghost_box.blockSignals(True)
+        self.ghost_box.setChecked(
+            bool(reference_layer_settings["ghost_visible"])
+        )
+        self.ghost_box.blockSignals(blocked)
+        ghost_opacity_percent = int(
+            reference_layer_settings["ghost_opacity_percent"]
+        )
+        blocked = self.ghost_opacity_slider.blockSignals(True)
+        self.ghost_opacity_slider.setValue(ghost_opacity_percent)
+        self.ghost_opacity_slider.blockSignals(blocked)
+        self.ghost_opacity_label.setText(f"{ghost_opacity_percent}%")
+        transcription_ui_config = (
+            parent_config.get("transcription_ui", {})
+            if isinstance(parent_config.get("transcription_ui", {}), dict)
+            else {}
+        )
+        configured_layers = {
+            layer
+            for layer in ("frame", "onset", "contour")
+            if bool(reference_layer_settings[f"{layer}_visible"])
+        }
+        self.transcription_panel.set_evidence_layers(configured_layers)
+        self.transcription_panel.set_melody_lines_visible(
+            bool(reference_layer_settings["melody_lines_visible"])
+        )
+        self.transcription_panel.set_spectrogram_visible(
+            bool(reference_layer_settings["spectrogram_visible"])
+        )
+        self.transcription_panel.set_reference_background_opacity(
+            int(reference_layer_settings["background_opacity_percent"])
+            / 100.0
+        )
+        configured_guide_roles = transcription_ui_config.get(
+            "melody_line_roles",
+            tuple(MELODY_LINE_GUIDE_ROLES),
+        )
+        if isinstance(configured_guide_roles, (list, tuple, set)):
+            self.transcription_panel.set_melody_line_roles(
+                str(role) for role in configured_guide_roles
+            )
+        self.transcription_panel.set_diagnostic_evidence_expanded(
+            bool(
+                transcription_ui_config.get(
+                    "diagnostic_evidence_expanded",
+                    bool(configured_layers),
+                )
+            )
+        )
+
         workspace = QFrame()
         workspace.setObjectName("EditorWorkspace")
         workspace_layout = QVBoxLayout(workspace)
@@ -3983,11 +7599,40 @@ class MidiNoteEditorDialog(QDialog):
         roll.setContentsMargins(0, 0, 0, 0)
         roll.setSpacing(0)
         self.canvas = PianoRollCanvas(self)
+        self.canvas.set_ghost_opacity(ghost_opacity_percent / 100.0)
+        self.canvas.set_reference_background_opacity(
+            int(reference_layer_settings["background_opacity_percent"])
+            / 100.0
+        )
+        self.canvas.set_melody_line_roles_visible(
+            self.transcription_panel.melody_line_roles
+        )
         self.canvas.set_notes(list(track.notes))
         self.canvas.selection_changed.connect(self.refresh_fields)
         self.canvas.notes_changed.connect(self._notes_changed)
         self.canvas.hover_changed.connect(self._hover_changed)
         self.canvas.ruler_seek_requested.connect(self.seek_draft)
+        self.canvas.candidate_selection_changed.connect(
+            self._transcription_selection_changed
+        )
+        self.canvas.time_range_changed.connect(
+            self._transcription_range_changed
+        )
+        self.canvas.chord_segment_clicked.connect(
+            self._transcription_chord_segment_clicked
+        )
+        self.canvas.voice_group_split_requested.connect(
+            self._split_transcription_voice_group
+        )
+        self.canvas.voice_group_merge_requested.connect(
+            self._merge_transcription_voice_groups
+        )
+        self.canvas.voice_group_color_requested.connect(
+            self._set_transcription_voice_group_color
+        )
+        self.canvas.voice_group_role_requested.connect(
+            self._set_transcription_voice_group_role
+        )
         self.pitch_scroll = QScrollBar(Qt.Vertical)
         self.pitch_scroll.setObjectName("PianoPitchScroll")
         self.pitch_scroll.setRange(0, 0)
@@ -3997,61 +7642,26 @@ class MidiNoteEditorDialog(QDialog):
         self.time_scroll.valueChanged.connect(self.set_time_scroll)
         roll.addWidget(self.canvas, 0, 0)
         roll.addWidget(self.pitch_scroll, 0, 1)
-        roll.addWidget(self.time_scroll, 1, 0)
-        scroll_corner = QWidget()
-        scroll_corner.setObjectName("PianoScrollCorner")
-        scroll_corner.setFixedSize(12, 12)
-        roll.addWidget(scroll_corner, 1, 1)
         workspace_layout.addLayout(roll, 1)
+        self.transcription_waveform = TranscriptionWaveformLane(
+            self.canvas, workspace
+        )
+        self.transcription_waveform.setVisible(False)
+        self.transcription_waveform.seek_requested.connect(self.seek_draft)
+        workspace_layout.addWidget(self.transcription_waveform)
         self.velocity_lane = VelocityLaneCanvas(self)
         self.velocity_lane.setVisible(False)
         workspace_layout.addWidget(self.velocity_lane)
+        scroll_row = QHBoxLayout()
+        scroll_row.setContentsMargins(0, 0, 0, 0)
+        scroll_row.setSpacing(0)
+        scroll_row.addWidget(self.time_scroll, 1)
+        scroll_corner = QWidget()
+        scroll_corner.setObjectName("PianoScrollCorner")
+        scroll_corner.setFixedSize(12, 12)
+        scroll_row.addWidget(scroll_corner)
+        workspace_layout.addLayout(scroll_row)
         root.addWidget(workspace, 1)
-
-        self.transcription_panel = QFrame()
-        self.transcription_panel.setObjectName("TranscriptionPanel")
-        self.transcription_panel.setFixedHeight(42)
-        transcription_layout = QHBoxLayout(self.transcription_panel)
-        transcription_layout.setContentsMargins(12, 5, 12, 5)
-        transcription_layout.setSpacing(8)
-        self.transcription_hint = QLabel(
-            tr("识别结果仅作为候选，不会自动写入当前轨道")
-        )
-        self.transcription_hint.setObjectName("Muted")
-        transcription_layout.addWidget(self.transcription_hint, 1)
-        self.transcription_progress = QLabel(tr("尚未分析"))
-        self.transcription_progress.setObjectName("Muted")
-        self.transcription_progress.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.transcription_progress.setMinimumWidth(90)
-        transcription_layout.addWidget(self.transcription_progress)
-        self.transcription_analyze_button = PillButton(
-            tr("分析参考音频"),
-            "secondary",
-        )
-        self.transcription_analyze_button.setFixedHeight(28)
-        self.transcription_analyze_button.clicked.connect(
-            self._toggle_transcription_analysis
-        )
-        transcription_layout.addWidget(self.transcription_analyze_button)
-        self.transcription_accept_button = PillButton(
-            tr("写入草稿"),
-            "primary",
-        )
-        self.transcription_accept_button.setFixedHeight(28)
-        self.transcription_accept_button.setEnabled(False)
-        self.transcription_accept_button.clicked.connect(
-            self.accept_transcription_candidates
-        )
-        transcription_layout.addWidget(self.transcription_accept_button)
-        self.transcription_clear_button = PillButton(tr("清除候选"), "ghost")
-        self.transcription_clear_button.setFixedHeight(28)
-        self.transcription_clear_button.setEnabled(False)
-        self.transcription_clear_button.clicked.connect(
-            self.clear_transcription_candidates
-        )
-        transcription_layout.addWidget(self.transcription_clear_button)
-        self.transcription_panel.setVisible(False)
-        add_inset(self.transcription_panel, "TranscriptionPanelInset")
 
         footer = QFrame()
         footer.setObjectName("EditorFooter")
@@ -4085,18 +7695,31 @@ class MidiNoteEditorDialog(QDialog):
         self.transcription_mode_toggle = QCheckBox(tr("扒谱模式"))
         self.transcription_mode_toggle.setObjectName("TranscriptionModeToggle")
         self.transcription_mode_toggle.setToolTip(
-            tr("开启参考音频分析与候选音符审阅")
+            tr("在当前音符编辑器中显示分析证据、候选和参考波形")
         )
         self.transcription_mode_toggle.toggled.connect(
             self._set_transcription_mode_enabled
         )
         footer_layout.addWidget(self.transcription_mode_toggle)
         add_inset(footer, "EditorFooterInset")
-        self._toggle_ghost_notes(True)
+        self._toggle_ghost_notes(self.ghost_box.isChecked())
         self.finished.connect(lambda _result: self.stop_draft())
+        self.select_all_shortcut = QShortcut(QKeySequence.SelectAll, self)
+        self.select_all_shortcut.setContext(Qt.WindowShortcut)
+        self.select_all_shortcut.setAutoRepeat(False)
+        self.select_all_shortcut.activated.connect(self.select_all_notes)
         self.space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
         self.space_shortcut.setContext(Qt.WindowShortcut)
+        self.space_shortcut.setAutoRepeat(False)
         self.space_shortcut.activated.connect(self.toggle_draft_playback)
+        self._editor_event_filter_installed = False
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+            self._editor_event_filter_installed = True
+        self.finished.connect(
+            lambda _result: self._remove_editor_event_filter()
+        )
         self._recalculate_invalid_note_count()
         self._update_track_meta()
         self.refresh_fields()
@@ -4108,9 +7731,51 @@ class MidiNoteEditorDialog(QDialog):
                 "双击网格新建音符；按 B 切换绘制模式。",
             ),
         )
+        if self._transcription_mode_requested:
+            QTimer.singleShot(
+                0, lambda: self.transcription_mode_toggle.setChecked(True)
+            )
 
     def quantize_ms(self) -> float:
         return self.canvas.beat_ms / int(self.quantize_combo.currentData() or 4)
+
+    def select_all_notes(self) -> None:
+        """Select every editable draft note regardless of the focused control."""
+
+        self.canvas.selected = set(range(len(self.canvas.notes)))
+        self.canvas.anchor_index = 0 if self.canvas.notes else None
+        self.canvas.selection_changed.emit()
+        self.canvas.update()
+
+    def eventFilter(self, watched, event) -> bool:
+        if (
+            event.type() == QEvent.KeyPress
+            and self.isActiveWindow()
+            and event.modifiers() == Qt.ControlModifier
+            and event.key() == Qt.Key_A
+        ):
+            self.select_all_notes()
+            event.accept()
+            return True
+        if (
+            event.type() == QEvent.KeyPress
+            and self.isActiveWindow()
+            and event.modifiers() == Qt.NoModifier
+            and event.key() == Qt.Key_Space
+        ):
+            if not event.isAutoRepeat():
+                self.toggle_draft_playback()
+            event.accept()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _remove_editor_event_filter(self) -> None:
+        if not self._editor_event_filter_installed:
+            return
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+        self._editor_event_filter_installed = False
 
     def _set_editor_music_volume(self, value: int) -> None:
         normalized = max(0, min(100, int(value)))
@@ -4130,40 +7795,194 @@ class MidiNoteEditorDialog(QDialog):
             self.stop_draft()
         self.transcription_mode_enabled = bool(enabled)
         self.transcription_panel.setVisible(self.transcription_mode_enabled)
+        self.transcription_waveform.setVisible(self.transcription_mode_enabled)
         self.canvas.set_transcription_candidates_visible(
             self.transcription_mode_enabled
         )
-        if not self.transcription_mode_enabled:
-            self._cancel_transcription_analysis()
+        if self.transcription_mode_enabled:
+            self._velocity_visible_before_transcription = (
+                self.velocity_toggle.isChecked()
+            )
+            if self.velocity_toggle.isChecked():
+                self.velocity_toggle.setChecked(False)
+            self.velocity_toggle.setEnabled(False)
+            self._sync_shared_transcription_projection()
         else:
-            reference_audio = getattr(self.parent(), "reference_audio", None)
-            if reference_audio is None or not reference_audio.audio_path:
-                self.transcription_hint.setText(
-                    tr("请先在主时间轴最下方载入 MP3/WAV 参考音频")
-                )
-            else:
-                self.transcription_hint.setText(
-                    tr("识别结果仅作为候选，不会自动写入当前轨道")
-                )
+            self.canvas.release_transcription_evidence()
+            self.transcription_waveform.release_reference_audio()
+            self.velocity_toggle.setEnabled(True)
+            if self._velocity_visible_before_transcription:
+                self.velocity_toggle.setChecked(True)
+            self._velocity_visible_before_transcription = False
         self.update_scrollbars()
 
     def _toggle_transcription_analysis(self) -> None:
-        if self.transcription_worker is not None and self.transcription_worker.isRunning():
+        parent_worker = getattr(
+            self.parent(),
+            "workspace_transcription_worker",
+            None,
+        )
+        if parent_worker is not None and parent_worker.isRunning():
             self._cancel_transcription_analysis()
             return
         self.start_transcription_analysis()
 
+    def _has_transcription_staging(self) -> bool:
+        return bool(
+            self.staged_primary_routes
+            or self.staged_copy_routes
+            or self.staged_new_track_specs
+        )
+
+    def _capture_staging_identity(self) -> None:
+        if self.staged_analysis_cache_key or self.staged_analysis_fingerprint:
+            return
+        session = getattr(self.parent(), "transcription_session", None)
+        state = getattr(session, "state", None)
+        self.staged_analysis_cache_key = str(
+            getattr(state, "cache_key", "") or ""
+        )
+        self.staged_analysis_fingerprint = str(
+            getattr(state, "analysis_fingerprint", "") or ""
+        )
+
+    def _clear_staging_identity_if_empty(self) -> None:
+        if self._has_transcription_staging():
+            return
+        self.staged_analysis_cache_key = ""
+        self.staged_analysis_fingerprint = ""
+
+    def _warn_staging_blocks_analysis(self) -> bool:
+        if not self._has_transcription_staging():
+            return False
+        QMessageBox.warning(
+            self,
+            tr("存在未提交候选草稿"),
+            tr("请先应用、撤销或清除本次暂存，再更换音频或重新分析。"),
+        )
+        return True
+
+    # Public host-facing facade.  The main window must not reach through the
+    # dialog into its panel/canvas implementation details.
+    def has_transcription_staging(self) -> bool:
+        return self._has_transcription_staging()
+
+    def warn_transcription_staging_blocked(self) -> bool:
+        return self._warn_staging_blocks_analysis()
+
+    def eligible_transcription_candidate_ids(
+        self,
+        *,
+        include_routed: bool = False,
+    ) -> tuple[str, ...]:
+        return self._eligible_transcription_candidate_ids(
+            include_routed=include_routed
+        )
+
+    def refresh_transcription_projection(self) -> None:
+        self._sync_shared_transcription_projection()
+
+    def release_transcription_resources(self) -> None:
+        self._bind_spectrogram_reference_audio(None)
+        self.canvas.release_transcription_evidence()
+        self.transcription_waveform.release_reference_audio()
+
+    def _bind_spectrogram_reference_audio(self, controller: object | None) -> None:
+        previous = self._spectrogram_reference_audio
+        if previous is controller:
+            return
+        if previous is not None:
+            signal = getattr(previous, "timeline_changed", None)
+            if signal is not None:
+                try:
+                    signal.disconnect(self._refresh_canvas_spectrogram)
+                except (RuntimeError, TypeError):
+                    pass
+        self._spectrogram_reference_audio = controller
+        if controller is not None:
+            signal = getattr(controller, "timeline_changed", None)
+            if signal is not None:
+                signal.connect(self._refresh_canvas_spectrogram)
+
+    def _refresh_canvas_spectrogram(self, *_args) -> None:
+        reference_audio = self._spectrogram_reference_audio
+        has_audio = bool(
+            reference_audio is not None
+            and getattr(reference_audio, "audio_path", None)
+        )
+        self.canvas.set_spectrogram_source(
+            reference_audio.audio_path if has_audio else None,
+            duration_ms=(
+                float(getattr(reference_audio, "duration_ms", 0.0) or 0.0)
+                if has_audio
+                else 0.0
+            ),
+            audio_offset_ms=(
+                float(
+                    getattr(
+                        self.parent(),
+                        "reference_audio_offset_ms",
+                        getattr(reference_audio, "project_offset_ms", 0.0),
+                    )
+                    or 0.0
+                )
+                if reference_audio is not None
+                else 0.0
+            ),
+        )
+
+    def set_transcription_status(self, status: str) -> None:
+        self.transcription_panel.set_status(status)
+
+    def set_transcription_analysis_ui(
+        self,
+        busy: bool,
+        progress: int | None = None,
+        *,
+        status: str | None = None,
+        available: bool | None = None,
+        unavailable_reason: str = "",
+    ) -> None:
+        if available is not None:
+            self.transcription_panel.set_analysis_available(
+                bool(available),
+                unavailable_reason,
+            )
+        if status is not None:
+            self.transcription_panel.set_status(status)
+        self.transcription_panel.set_analysis_busy(busy, progress)
+        self.draft_play_button.setEnabled(not bool(busy))
+
+    def _load_reference_audio_from_editor(self) -> None:
+        if self._warn_staging_blocks_analysis():
+            return
+        reference_audio = getattr(self.parent(), "reference_audio", None)
+        if reference_audio is not None:
+            reference_audio.choose_audio(self)
+
+    def _unload_reference_audio_from_editor(self) -> None:
+        if self._warn_staging_blocks_analysis():
+            return
+        reference_audio = getattr(self.parent(), "reference_audio", None)
+        if reference_audio is not None:
+            reference_audio.set_audio_path(None)
+
     def start_transcription_analysis(self) -> None:
+        if self._warn_staging_blocks_analysis():
+            return
         reference_audio = getattr(self.parent(), "reference_audio", None)
         audio_path = str(getattr(reference_audio, "audio_path", "") or "")
         if not audio_path:
             QMessageBox.warning(
                 self,
                 tr("无法开始扒谱"),
-                tr("请先在主时间轴最下方载入 MP3/WAV 参考音频"),
+                tr("请先载入 MP3/WAV 参考音频"),
             )
             return
-        if self.track.is_percussion:
+        if (
+            self.track.is_percussion
+            or int(self.track.bdo_instrument_id) == 0x0D
+        ):
             QMessageBox.warning(
                 self,
                 tr("当前轨道不适合自动扒谱"),
@@ -4173,185 +7992,815 @@ class MidiNoteEditorDialog(QDialog):
         retained_playhead = self.playhead_ms
         self.stop_draft()
         self.set_draft_playhead(retained_playhead)
-        self.transcription_generation += 1
-        generation = self.transcription_generation
-        worker = TranscriptionAnalysisWorker(audio_path, self)
-        self.transcription_worker = worker
-        worker.progress_changed.connect(
-            lambda value, token=generation: self._transcription_progress_changed(
-                token, value
+        parent = self.parent()
+        start_shared = getattr(
+            parent,
+            "_start_workspace_transcription_analysis",
+            None,
+        )
+        if not callable(start_shared):
+            QMessageBox.warning(
+                self,
+                tr("扒谱分析失败"),
+                tr("主窗口扒谱会话不可用"),
             )
-        )
-        worker.succeeded.connect(
-            lambda result, token=generation: self._transcription_succeeded(
-                token, result
-            )
-        )
-        worker.failed.connect(
-            lambda message, token=generation: self._transcription_failed(
-                token, message
-            )
-        )
-        worker.cancelled.connect(
-            lambda token=generation: self._transcription_cancelled(token)
-        )
-        worker.finished.connect(
-            lambda token=generation, current=worker:
-            self._transcription_thread_finished(token, current)
-        )
-        worker.finished.connect(worker.deleteLater)
-        self.transcription_progress.setText("0%")
+            return
         self.transcription_hint.setText(
-            tr("正在分析参考音频；为保证播放稳定，分析期间已停止试听")
+            tr("正在使用主窗口扒谱会话分析；正式音符不会自动改变")
         )
-        self.transcription_analyze_button.setText(tr("取消分析"))
-        self.transcription_accept_button.setEnabled(False)
-        self.transcription_clear_button.setEnabled(
-            bool(self.transcription_candidates)
+        start_shared()
+
+    def _transcription_annotation_projection(
+        self,
+        session,
+        postprocess_report,
+    ) -> tuple[dict[str, object], frozenset[str]]:
+        """Return stable annotation/fragment projections for one evidence set."""
+
+        session_annotations = session.annotations
+        report_annotations = (
+            tuple(postprocess_report.annotations)
+            if postprocess_report is not None
+            else ()
         )
-        self.draft_play_button.setEnabled(False)
-        worker.start()
+        cached = self._transcription_annotation_projection_cache
+        if (
+            cached is not None
+            and cached[0] is session
+            and cached[1] is session_annotations
+            and cached[2] is report_annotations
+        ):
+            return cached[3], cached[4]
+
+        annotation_by_id = {
+            item.candidate_id: item
+            for item in session_annotations
+        }
+        annotation_by_id.update(
+            {
+                item.candidate_id: item
+                for item in report_annotations
+            }
+        )
+        fragment_ids = frozenset(
+            candidate_id
+            for candidate_id, annotation in annotation_by_id.items()
+            if {
+                "review_fragment",
+                "pitch_flicker",
+            }.intersection(annotation.flags)
+        )
+        self._transcription_annotation_projection_cache = (
+            session,
+            session_annotations,
+            report_annotations,
+            annotation_by_id,
+            fragment_ids,
+        )
+        return annotation_by_id, fragment_ids
+
+    def _transcription_display_projection(
+        self,
+        candidates: tuple[TranscriptionCandidate, ...],
+        postprocess_report,
+        *,
+        show_suppressed: bool,
+    ) -> tuple[
+        tuple[TranscriptionCandidate, ...],
+        frozenset[str],
+    ]:
+        """Return one identity-stable active/suppressed candidate projection."""
+
+        suppressed_candidates = (
+            tuple(postprocess_report.suppressed_candidates)
+            if postprocess_report is not None and show_suppressed
+            else ()
+        )
+        cached = self._transcription_display_projection_cache
+        if (
+            cached is not None
+            and cached[0] is candidates
+            and cached[1] is suppressed_candidates
+            and cached[2] is bool(show_suppressed)
+        ):
+            return cached[3], cached[4]
+
+        display_candidates = candidates + suppressed_candidates
+        suppressed_ids = frozenset(
+            candidate.candidate_id
+            for candidate in suppressed_candidates
+        )
+        self._transcription_display_projection_cache = (
+            candidates,
+            suppressed_candidates,
+            bool(show_suppressed),
+            display_candidates,
+            suppressed_ids,
+        )
+        return display_candidates, suppressed_ids
+
+    def _sync_shared_transcription_projection(self) -> None:
+        parent = self.parent()
+        session = getattr(parent, "transcription_session", None)
+        if session is None:
+            return
+        offset_ms = float(getattr(parent, "reference_audio_offset_ms", 0.0))
+        self.transcription_candidates = tuple(session.candidates)
+        self.transcription_result = getattr(
+            parent,
+            "transcription_result",
+            None,
+        )
+        postprocess_report = (
+            self.transcription_result.postprocess_report
+            if self.transcription_result is not None
+            else None
+        )
+        (
+            display_candidates,
+            suppressed_ids,
+        ) = self._transcription_display_projection(
+            self.transcription_candidates,
+            postprocess_report,
+            show_suppressed=(
+                self.transcription_panel.show_suppressed_checkbox.isChecked()
+            ),
+        )
+        _annotation_by_id, fragment_ids = (
+            self._transcription_annotation_projection(
+                session,
+                postprocess_report,
+            )
+        )
+        state = session.state
+        tolerance = CANDIDATE_NOTE_POLICY.onset_tolerance_ms
+        flag_cache_key = (
+            id(session),
+            id(self.transcription_candidates),
+            int(self.canvas._note_index_revision),
+            round(offset_ms, 6),
+            int(self.track.bdo_instrument_id),
+            int(self.transpose),
+            round(tolerance, 6),
+        )
+        cached_flags = getattr(
+            self,
+            "_transcription_candidate_flag_cache",
+            None,
+        )
+        if (
+            cached_flags is not None
+            and cached_flags[0] == flag_cache_key
+        ):
+            invalid_ids = cached_flags[1]
+            duplicate_ids = cached_flags[2]
+        else:
+            invalid_values: set[str] = set()
+            duplicate_values: set[str] = set()
+            notes_by_pitch: dict[
+                int,
+                tuple[list[float], list[Note]],
+            ] = {}
+            grouped_notes: dict[int, list[Note]] = defaultdict(list)
+            for note in self.canvas.notes:
+                grouped_notes[int(note.pitch)].append(note)
+            for pitch, notes in grouped_notes.items():
+                ordered = sorted(notes, key=lambda note: float(note.start))
+                notes_by_pitch[pitch] = (
+                    [float(note.start) for note in ordered],
+                    ordered,
+                )
+            for candidate in self.transcription_candidates:
+                candidate_id = session.candidate_id(candidate)
+                if self._candidate_invalid_for_current_track(candidate):
+                    invalid_values.add(candidate_id)
+                    continue
+                starts, notes = notes_by_pitch.get(
+                    int(candidate.pitch),
+                    ([], []),
+                )
+                window_start, window_end = (
+                    CANDIDATE_NOTE_POLICY.match_window(
+                        candidate,
+                        offset_ms,
+                    )
+                )
+                first = bisect_left(starts, window_start)
+                last = bisect_right(starts, window_end)
+                if any(
+                    CANDIDATE_NOTE_POLICY.matches_note(
+                        candidate,
+                        note,
+                        offset_ms,
+                    )
+                    for note in notes[first:last]
+                ):
+                    duplicate_values.add(candidate_id)
+            invalid_ids = frozenset(invalid_values)
+            duplicate_ids = frozenset(duplicate_values)
+            self._transcription_candidate_flag_cache = (
+                flag_cache_key,
+                invalid_ids,
+                duplicate_ids,
+            )
+
+        staged_ids = {
+            route.candidate_id
+            for route in (*self.staged_primary_routes, *self.staged_copy_routes)
+        }
+        confidence_floor = self.transcription_panel.confidence_floor
+        self.canvas.set_transcription_review(
+            display_candidates,
+            session.candidate_id,
+            selected_ids=state.selected_candidate_ids,
+            rejected_ids=state.rejected_candidate_ids,
+            pending_routes=state.pending_routes,
+            applied_routes=state.applied_routes,
+            invalid_ids=invalid_ids,
+            duplicate_ids=duplicate_ids,
+            staged_ids=staged_ids,
+            fragment_ids=fragment_ids,
+            suppressed_ids=suppressed_ids,
+            confidence_floor=confidence_floor,
+            show_rejected_only=(
+                self.transcription_panel.show_rejected_checkbox.isChecked()
+            ),
+            audio_offset_ms=offset_ms,
+            visible=self.transcription_mode_enabled,
+        )
+        descriptor = (
+            self.transcription_result.evidence_descriptor
+            if self.transcription_result is not None
+            else None
+        )
+        descriptor_key = str(getattr(descriptor, "cache_key", "") or "")
+        if descriptor_key != getattr(self, "_canvas_evidence_cache_key", ""):
+            self.canvas.set_evidence_descriptor(
+                descriptor,
+                audio_offset_ms=offset_ms,
+            )
+            self._canvas_evidence_cache_key = descriptor_key
+        self._transcription_evidence_layers_changed(
+            self.transcription_panel.visible_evidence_layers
+        )
+
+        reference_audio = getattr(parent, "reference_audio", None)
+        has_audio = bool(
+            reference_audio is not None and reference_audio.audio_path
+        )
+        self._bind_spectrogram_reference_audio(reference_audio)
+        self._refresh_canvas_spectrogram()
+        self.canvas.set_spectrogram_visible(
+            self.transcription_panel.spectrogram_visible
+        )
+        self.canvas.set_melody_lines_visible(
+            self.transcription_panel.melody_lines_visible
+        )
+        self.transcription_panel.set_audio_loaded(
+            has_audio,
+            display_name=(
+                str(
+                    getattr(
+                        reference_audio,
+                        "display_name",
+                        Path(str(reference_audio.audio_path)).name,
+                    )
+                )
+                if has_audio
+                else ""
+            ),
+        )
+        self.transcription_panel.set_melody_lines_available(
+            self.canvas.melody_lines_available
+        )
+        self.transcription_panel.set_sensitivity(state.sensitivity)
+        self.transcription_panel.set_analysis_mode(state.analysis_mode)
+        self.transcription_panel.set_cleanup_profile(
+            state.cleanup_profile
+        )
+        self.transcription_panel.set_range_available(state.region is not None)
+        self.transcription_panel.set_staging_locked(
+            self._has_transcription_staging()
+        )
+        available, reason = transcription_backend_quick_status()
+        self.transcription_panel.set_analysis_available(available, reason)
+        action_ids = set(self._eligible_transcription_candidate_ids())
+        current_track_id = int(self.track.track_id)
+        applied_elsewhere_ids = {
+            route.candidate_id
+            for route in state.applied_routes
+            if int(route.track_id) != current_track_id
+        }
+        current_route_ids = {
+            route.candidate_id
+            for route in (*state.pending_routes, *state.applied_routes)
+            if int(route.track_id) == current_track_id
+        }
+        include_current_copy = bool(
+            action_ids.intersection(
+                applied_elsewhere_ids.difference(current_route_ids)
+            )
+        )
+        self.transcription_panel.set_copy_targets(
+            getattr(parent, "tracks", ()),
+            current_track_id=current_track_id,
+            include_current=include_current_copy,
+        )
+        self.transcription_waveform.set_reference_audio(reference_audio)
+        self.transcription_waveform.set_audio_offset_ms(offset_ms)
+        self.transcription_waveform.set_time_range(state.region)
+        self.transcription_waveform.set_playhead_ms(self.playhead_ms)
+        harmony = getattr(parent, "harmony_analysis", None)
+        instrument_analysis = getattr(
+            parent, "instrument_match_analysis", None
+        )
+        groups = (
+            tuple(instrument_analysis.groups)
+            if instrument_analysis is not None
+            else ()
+        )
+        matches_by_group = (
+            dict(instrument_analysis.matches)
+            if instrument_analysis is not None
+            else {}
+        )
+        parent_config = getattr(parent, "config", {})
+        transcription_ui_config = (
+            parent_config.get("transcription_ui", {})
+            if isinstance(parent_config, dict)
+            and isinstance(
+                parent_config.get("transcription_ui", {}), dict
+            )
+            else {}
+        )
+        voice_group_colors = transcription_ui_config.get(
+            "voice_group_colors", {}
+        )
+        if not isinstance(voice_group_colors, dict):
+            voice_group_colors = {}
+        self.canvas.set_transcription_assist_projection(
+            voice_groups=groups,
+            harmony_analysis=harmony,
+            group_colors=voice_group_colors,
+        )
+        assist_review = getattr(
+            parent, "transcription_assist_review", None
+        )
+        confirmed_by_group = {
+            str(item.group_id): int(item.confirmed_instrument_id)
+            for item in (
+                assist_review.active_voice_groups
+                if assist_review is not None
+                else ()
+            )
+            if item.confirmed_instrument_id is not None
+        }
+        key_review = (
+            getattr(assist_review, "active_key_override", None)
+            if assist_review is not None
+            else None
+        )
+        harmony_panel_view = (
+            {
+                "global_key": harmony.global_key,
+                "chord_segments": harmony.chord_segments,
+                "conflicts": harmony.conflicts,
+                "key_locked": bool(
+                    key_review is not None and key_review.locked
+                ),
+            }
+            if harmony is not None
+            else None
+        )
+        self.transcription_panel.set_harmony_analysis(
+            harmony_panel_view
+        )
+        active_group = (
+            parent._active_voice_group()
+            if instrument_analysis is not None
+            and hasattr(parent, "_active_voice_group")
+            else None
+        )
+        if active_group is not None:
+            parent.active_voice_group_id = active_group.group_id
+            matches = matches_by_group.get(active_group.group_id, ())
+            match_views = []
+            for match in matches:
+                reasons = [
+                    trf(
+                        "音域覆盖 {coverage}%",
+                        coverage=round(match.pitch_coverage * 100),
+                    ),
+                    trf(
+                        "角色适配 {score}%",
+                        score=round(match.role_score * 100),
+                    ),
+                ]
+                warnings = []
+                if match.pitch_coverage < 0.999:
+                    warnings.append(
+                        trf(
+                            "有 {percent}% 的候选超出该乐器可用音域",
+                            percent=round(
+                                (1.0 - match.pitch_coverage) * 100
+                            ),
+                        )
+                    )
+                if match.role_score < 0.50:
+                    warnings.append(tr("该乐器与当前声部角色适配较弱"))
+                if match.timbre_score is None:
+                    warnings.append(tr("无本地音色证据"))
+                    reasons.append(tr("按音域、角色和奏法排序"))
+                else:
+                    reasons.append(
+                        trf(
+                            "本地音色相似 {score}%",
+                            score=round(match.timbre_score * 100),
+                        )
+                    )
+                match_views.append(
+                    {
+                        "instrument_id": match.instrument_id,
+                        "instrument_name": BDO_INSTRUMENT_NAMES.get(
+                            match.instrument_id,
+                            f"0x{match.instrument_id:02X}",
+                        ),
+                        "total_score": match.total_score,
+                        "pitch_coverage": match.pitch_coverage,
+                        "reasons": tuple(reasons),
+                        "warnings": tuple(warnings),
+                    }
+                )
+            self.transcription_panel.set_voice_group_matches(
+                active_group,
+                match_views,
+                confirmed_instrument_id=confirmed_by_group.get(
+                    active_group.group_id
+                ),
+            )
+            group_index = next(
+                (
+                    index
+                    for index, group in enumerate(groups)
+                    if group.group_id == active_group.group_id
+                ),
+                -1,
+            )
+        else:
+            self.transcription_panel.clear_voice_group_matches()
+            group_index = -1
+        low_harmony_count = (
+            sum(
+                segment.quality != "N"
+                and float(segment.confidence) < 0.55
+                for segment in harmony.chord_segments
+            )
+            + len(harmony.conflicts)
+            if harmony is not None
+            else 0
+        )
+        uncertain_instrument_count = (
+            sum(
+                (
+                    group.group_id not in confirmed_by_group
+                    or confirmed_by_group[group.group_id]
+                    not in {
+                        match.instrument_id
+                        for match in matches_by_group.get(
+                            group.group_id, ()
+                        )
+                    }
+                )
+                and (
+                    not matches_by_group.get(group.group_id)
+                    or matches_by_group[
+                        group.group_id
+                    ][0].timbre_score is None
+                )
+                for group in groups
+            )
+            if instrument_analysis is not None
+            else 0
+        )
+        track_lookup = {
+            int(track.track_id): track
+            for track in getattr(parent, "tracks", ())
+        }
+        pending_problem_count = 0
+        for route in state.pending_routes:
+            candidate = session.candidate_for_id(route.candidate_id)
+            target = track_lookup.get(int(route.track_id))
+            if (
+                candidate is None
+                or target is None
+                or parent._candidate_invalid_for_track(candidate, target)
+            ):
+                pending_problem_count += 1
+        folded_duplicate_count = len(
+            self.canvas._folded_candidate_primary
+        )
+        active_fragment_ids = {
+            candidate_id
+            for candidate_id in fragment_ids
+            if session.candidate_for_id(candidate_id) is not None
+        }
+        review_count = (
+            pending_problem_count
+            + len(invalid_ids)
+            + len(duplicate_ids)
+            + folded_duplicate_count
+            + len(active_fragment_ids)
+            + low_harmony_count
+            + uncertain_instrument_count
+        )
+        self.transcription_panel.set_phrase_state(
+            index=group_index,
+            total=len(groups),
+            loop_enabled=bool(
+                getattr(parent, "loop_current_voice_group", False)
+            ),
+            review_count=review_count,
+        )
+        self.transcription_panel.set_assist_available(
+            harmony is not None or bool(groups)
+        )
+        self.transcription_panel.set_fragment_state(
+            suspected_count=len(active_fragment_ids),
+        )
+
+        routable_ids = action_ids.difference(invalid_ids, duplicate_ids)
+        applied_ids = {
+            route.candidate_id for route in state.applied_routes
+        }
+        primary_ids = routable_ids.difference(applied_ids)
+        copy_targets = [
+            track
+            for track in getattr(parent, "tracks", ())
+            if (
+                int(track.track_id) != current_track_id
+                or include_current_copy
+            )
+            and not track.is_percussion
+            and int(track.bdo_instrument_id) != 0x0D
+        ]
+        self.transcription_panel.set_action_state(
+            write_enabled=bool(primary_ids)
+            and not bool(
+                getattr(parent, "transcription_analysis_busy", False)
+            ),
+            copy_enabled=bool(routable_ids and copy_targets)
+            and not bool(
+                getattr(parent, "transcription_analysis_busy", False)
+            ),
+            reject_enabled=bool(action_ids)
+            and not bool(
+                getattr(parent, "transcription_analysis_busy", False)
+            ),
+            rejected_count=len(state.rejected_candidate_ids),
+            can_undo=bool(
+                getattr(
+                    parent,
+                    "_can_undo_transcription_review",
+                    lambda: session.commands.can_undo,
+                )()
+            ),
+            can_redo=bool(
+                getattr(
+                    parent,
+                    "_can_redo_transcription_review",
+                    lambda: session.commands.can_redo,
+                )()
+            ),
+            staging_count=len(
+                set((*self.staged_primary_routes, *self.staged_copy_routes))
+            ),
+        )
+        if self.transcription_candidates:
+            merged_count = (
+                postprocess_report.automatic_merge_count
+                if postprocess_report is not None
+                else 0
+            )
+            suppressed_count = (
+                postprocess_report.suppressed_count
+                if postprocess_report is not None
+                else 0
+            )
+            profile_label, profile_state = (
+                _transcription_cleanup_ui_labels(
+                    state.cleanup_profile,
+                    postprocess_report,
+                )
+            )
+            self.transcription_panel.set_status(
+                trf(
+                    "{profile} · {profile_state} · "
+                    "{count} 个候选 · 自动合并 {merged} · "
+                    "疑似碎音 {suspected} · 已隐藏 {suppressed}",
+                    profile=profile_label,
+                    profile_state=profile_state,
+                    count=len(self.transcription_candidates),
+                    merged=merged_count,
+                    suspected=len(active_fragment_ids),
+                    suppressed=suppressed_count,
+                )
+            )
+        elif has_audio:
+            self.transcription_panel.set_status(tr("尚未分析"))
+            self.transcription_panel.set_fragment_state()
+        else:
+            self.transcription_panel.set_status(
+                tr("载入参考音频后可开始整首分析")
+            )
+            self.transcription_panel.set_fragment_state()
+        self.update_scrollbars()
+
+    def _eligible_transcription_candidate_ids(
+        self, *, include_routed: bool = False
+    ) -> tuple[str, ...]:
+        parent = self.parent()
+        session = getattr(parent, "transcription_session", None)
+        if session is None:
+            return ()
+        state = session.state
+        offset_ms = float(
+            getattr(parent, "reference_audio_offset_ms", 0.0)
+        )
+        cache_key = (
+            id(session),
+            id(session.candidates),
+            state.selected_candidate_ids,
+            state.rejected_candidate_ids,
+            state.region,
+            () if include_routed else state.pending_routes,
+            () if include_routed else state.applied_routes,
+            round(offset_ms, 6),
+            bool(include_routed),
+        )
+        cached = self._eligible_candidate_cache
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
+        if state.selected_candidate_ids:
+            requested = state.selected_candidate_ids.difference(
+                state.rejected_candidate_ids
+            )
+            selected: list[
+                tuple[float, int, float, str]
+            ] = []
+            for candidate_id in requested:
+                candidate = session.candidate_for_id(candidate_id)
+                if candidate is None:
+                    continue
+                selected.append(
+                    (
+                        float(candidate.start_ms),
+                        int(candidate.pitch),
+                        float(candidate.duration_ms),
+                        str(candidate_id),
+                    )
+                )
+            selected.sort()
+            result = tuple(item[3] for item in selected)
+            self._eligible_candidate_cache = (cache_key, result)
+            return result
+        if state.region is None:
+            self._eligible_candidate_cache = (cache_key, ())
+            return ()
+        routed = {
+            route.candidate_id
+            for route in (*state.pending_routes, *state.applied_routes)
+        }
+        start_ms, end_ms = state.region
+        values: list[str] = []
+        audio_start = float(start_ms) - offset_ms
+        audio_end = float(end_ms) - offset_ms
+        first = bisect_left(
+            self.canvas._candidate_starts,
+            audio_start,
+        )
+        last = bisect_left(
+            self.canvas._candidate_starts,
+            audio_end,
+        )
+        for index in range(first, last):
+            candidate = self.canvas.transcription_candidates[index]
+            candidate_id = self.canvas._transcription_candidate_ids[index]
+            if candidate_id in state.rejected_candidate_ids:
+                continue
+            if not include_routed and candidate_id in routed:
+                continue
+            values.append(candidate_id)
+        result = tuple(values)
+        self._eligible_candidate_cache = (cache_key, result)
+        return result
 
     def _cancel_transcription_analysis(self) -> None:
-        worker = self.transcription_worker
+        worker = getattr(
+            self.parent(),
+            "workspace_transcription_worker",
+            None,
+        )
         if worker is None or not worker.isRunning():
             return
-        worker.cancel()
-        self.transcription_progress.setText(tr("正在取消…"))
-        self.transcription_analyze_button.setEnabled(False)
+        cancel = getattr(worker, "cancel", None)
+        if callable(cancel):
+            cancel()
+        self.transcription_panel.set_status(tr("正在取消…"))
+        self.transcription_panel.set_analysis_busy(True)
 
-    def _transcription_progress_changed(self, generation: int, value: int) -> None:
-        if generation != self.transcription_generation:
-            return
-        self.transcription_progress.setText(f"{max(0, min(100, int(value)))}%")
-
-    def _finish_transcription_worker(self, generation: int) -> bool:
-        if generation != self.transcription_generation:
-            return False
-        self.transcription_analyze_button.setEnabled(True)
-        self.transcription_analyze_button.setText(tr("分析参考音频"))
-        self.draft_play_button.setEnabled(True)
-        return True
-
-    def _transcription_thread_finished(
+    def _candidate_invalid_for_current_track(
         self,
-        generation: int,
-        worker: "TranscriptionAnalysisWorker",
-    ) -> None:
-        if (
-            generation == self.transcription_generation
-            and self.transcription_worker is worker
-        ):
-            self.transcription_worker = None
-            self.transcription_analyze_button.setEnabled(True)
-            self.transcription_analyze_button.setText(tr("分析参考音频"))
-            self.draft_play_button.setEnabled(True)
-        if self.transcription_close_pending and self.transcription_worker is None:
-            self.transcription_close_pending = False
-            pending_result = self.transcription_dialog_result_pending
-            self.transcription_dialog_result_pending = None
-            if pending_result == QDialog.Accepted:
-                QTimer.singleShot(0, lambda: QDialog.accept(self))
-            elif pending_result == QDialog.Rejected:
-                QTimer.singleShot(0, lambda: QDialog.reject(self))
-            else:
-                QTimer.singleShot(0, self.close)
-
-    def _transcription_succeeded(
-        self,
-        generation: int,
-        result: TranscriptionResult,
-    ) -> None:
-        if not self._finish_transcription_worker(generation):
-            return
-        self.transcription_result = result
-        self.transcription_candidates = tuple(result.candidates)
-        self.canvas.set_transcription_candidates(
-            self.transcription_candidates,
-            visible=self.transcription_mode_enabled,
-        )
-        count = len(self.transcription_candidates)
-        self.transcription_progress.setText(
-            trf("{count} 个候选", count=count)
-        )
-        self.transcription_hint.setText(
-            tr("缓存结果已载入") if result.cache_hit
-            else tr("分析完成；候选仍需手动写入草稿")
-        )
-        self.transcription_accept_button.setEnabled(count > 0)
-        self.transcription_clear_button.setEnabled(count > 0)
-        self.update_scrollbars()
-
-    def _transcription_failed(self, generation: int, message: str) -> None:
-        if not self._finish_transcription_worker(generation):
-            return
-        self.transcription_progress.setText(tr("分析失败"))
-        self.transcription_hint.setText(tr("扒谱分析未改变任何正式音符"))
-        QMessageBox.warning(self, tr("扒谱分析失败"), message)
-
-    def _transcription_cancelled(self, generation: int) -> None:
-        if not self._finish_transcription_worker(generation):
-            return
-        self.transcription_progress.setText(tr("已取消"))
-        self.transcription_hint.setText(
-            tr("识别结果仅作为候选，不会自动写入当前轨道")
-        )
-
-    def clear_transcription_candidates(self) -> None:
-        self.transcription_candidates = ()
-        self.transcription_result = None
-        self.canvas.set_transcription_candidates(
-            (),
-            visible=self.transcription_mode_enabled,
-        )
-        self.transcription_progress.setText(tr("尚未分析"))
-        self.transcription_accept_button.setEnabled(False)
-        self.transcription_clear_button.setEnabled(False)
-        self.transcription_hint.setText(
-            tr("识别结果仅作为候选，不会自动写入当前轨道")
-        )
-        self.update_scrollbars()
-
-    @staticmethod
-    def _candidate_matches_note(
         candidate: TranscriptionCandidate,
-        note,
-        tolerance_ms: float,
     ) -> bool:
-        return (
-            int(candidate.pitch) == int(note.pitch)
-            and abs(float(candidate.start_ms) - float(note.start)) <= tolerance_ms
-            and abs(
-                float(candidate.duration_ms) - float(note.dur)
-            ) <= max(tolerance_ms, float(candidate.duration_ms) * 0.18)
+        parent = self.parent()
+        if not CANDIDATE_NOTE_POLICY.project_timing_is_valid(
+            candidate,
+            float(getattr(parent, "reference_audio_offset_ms", 0.0)),
+        ):
+            return True
+        supported = game_supported_pitches(
+            int(self.track.bdo_instrument_id),
+            self.track.marnian_synth_mode,
+        )
+        return not CANDIDATE_NOTE_POLICY.pitch_is_valid_for_melodic_track(
+            candidate.pitch,
+            is_percussion=self.track.is_percussion,
+            instrument_id=self.track.bdo_instrument_id,
+            transpose=self.transpose,
+            supported_pitches=supported,
         )
 
     def accept_transcription_candidates(self) -> None:
         if not self.transcription_candidates:
             return
-        tolerance = max(35.0, self.quantize_ms() * 0.2)
-        existing = list(self.canvas.notes)
+        parent = self.parent()
+        shared_session = getattr(parent, "transcription_session", None)
+        if shared_session is None:
+            return
+        eligible_ids = set(self._eligible_transcription_candidate_ids())
+        if not eligible_ids:
+            self.transcription_hint.setText(
+                tr("请先选择候选或设置 A–B 区间")
+            )
+            return
         accepted: list = []
+        accepted_routes: set[CandidateRoute] = set()
         invalid = 0
         duplicates = 0
+        notes_by_pitch: dict[int, tuple[list[float], list[Note]]] = {}
+        grouped_notes: dict[int, list[Note]] = defaultdict(list)
+        for note in self.canvas.notes:
+            grouped_notes[int(note.pitch)].append(note)
+        for pitch, notes in grouped_notes.items():
+            ordered = sorted(notes, key=lambda note: float(note.start))
+            notes_by_pitch[pitch] = (
+                [float(note.start) for note in ordered],
+                ordered,
+            )
+        already_applied = {
+            route.candidate_id
+            for route in shared_session.state.applied_routes
+        }
+        offset_ms = float(getattr(parent, "reference_audio_offset_ms", 0.0))
         for candidate in self.transcription_candidates:
-            if self.note_invalid(candidate.pitch):
+            candidate_id = shared_session.candidate_id(candidate)
+            if candidate_id not in eligible_ids:
+                continue
+            if candidate_id in already_applied:
+                continue
+            if self._candidate_invalid_for_current_track(candidate):
                 invalid += 1
                 continue
+            starts, indexed_notes = notes_by_pitch.setdefault(
+                int(candidate.pitch),
+                ([], []),
+            )
+            window_start, window_end = CANDIDATE_NOTE_POLICY.match_window(
+                candidate,
+                offset_ms,
+            )
+            first = bisect_left(starts, window_start)
+            last = bisect_right(starts, window_end)
             if any(
-                self._candidate_matches_note(candidate, note, tolerance)
-                for note in (*existing, *accepted)
+                CANDIDATE_NOTE_POLICY.matches_note(
+                    candidate,
+                    note,
+                    offset_ms,
+                )
+                for note in indexed_notes[first:last]
             ):
                 duplicates += 1
                 continue
-            accepted.append(
-                Note(
-                    max(0, min(127, int(candidate.pitch))),
-                    max(1, min(127, int(candidate.velocity))),
-                    max(0.0, float(candidate.start_ms)),
-                    max(1.0, float(candidate.duration_ms)),
-                    0,
-                )
+            accepted_note = CANDIDATE_NOTE_POLICY.to_note(
+                candidate,
+                offset_ms,
+            )
+            accepted.append(accepted_note)
+            insertion = bisect_right(starts, float(accepted_note.start))
+            starts.insert(insertion, float(accepted_note.start))
+            indexed_notes.insert(insertion, accepted_note)
+            accepted_routes.add(
+                CandidateRoute(candidate_id, int(self.track.track_id))
             )
         if not accepted:
             self.transcription_hint.setText(trf(
@@ -4363,6 +8812,8 @@ class MidiNoteEditorDialog(QDialog):
         self.push_snapshot()
         first = len(self.canvas.notes)
         self.canvas.notes.extend(accepted)
+        self.staged_primary_routes.update(accepted_routes)
+        self._capture_staging_identity()
         self.canvas.selected = set(range(first, len(self.canvas.notes)))
         self.canvas.anchor_index = first
         self._notes_changed()
@@ -4373,21 +8824,997 @@ class MidiNoteEditorDialog(QDialog):
             duplicates=duplicates,
             invalid=invalid,
         ))
+        self._sync_shared_transcription_projection()
+
+    def _stage_transcription_copy(
+        self,
+        track_id: int,
+        candidate_ids_override: Iterable[str] | None = None,
+    ) -> None:
+        parent = self.parent()
+        session = getattr(parent, "transcription_session", None)
+        if session is None:
+            return
+        target = next(
+            (
+                track
+                for track in getattr(parent, "tracks", ())
+                if int(track.track_id) == int(track_id)
+            ),
+            None,
+        )
+        if (
+            target is None
+            or target.is_percussion
+            or int(target.bdo_instrument_id) == 0x0D
+        ):
+            self.transcription_panel.set_status(tr("目标轨道不可用"))
+            return
+        candidate_ids = (
+            {
+                str(candidate_id)
+                for candidate_id in candidate_ids_override
+            }
+            if candidate_ids_override is not None
+            else set(
+                self._eligible_transcription_candidate_ids(
+                    include_routed=True
+                )
+            )
+        )
+        # Voice-group/Top-3 actions pass an explicit candidate override and
+        # therefore do not travel through the selected/A-B eligibility helper.
+        # Keep rejection as an independent hard gate at the staging boundary.
+        candidate_ids.difference_update(
+            session.state.rejected_candidate_ids
+        )
+        if not candidate_ids:
+            self.transcription_panel.set_status(
+                tr("请先选择候选或设置 A–B 区间")
+            )
+            return
+        supported = game_supported_pitches(
+            int(target.bdo_instrument_id), target.marnian_synth_mode
+        )
+        routes: set[CandidateRoute] = set()
+        candidates_by_id: dict[str, TranscriptionCandidate] = {}
+        already_routed = set(
+            (*session.state.pending_routes, *session.state.applied_routes)
+        )
+        for candidate in session.candidates:
+            candidate_id = session.candidate_id(candidate)
+            if candidate_id not in candidate_ids:
+                continue
+            invalid = (
+                not CANDIDATE_NOTE_POLICY.project_timing_is_valid(
+                    candidate,
+                    float(
+                        getattr(
+                            parent,
+                            "reference_audio_offset_ms",
+                            0.0,
+                        )
+                    ),
+                )
+                or not CANDIDATE_NOTE_POLICY.pitch_is_valid_for_melodic_track(
+                    candidate.pitch,
+                    is_percussion=target.is_percussion,
+                    instrument_id=target.bdo_instrument_id,
+                    transpose=self.transpose,
+                    supported_pitches=supported,
+                )
+            )
+            if not invalid:
+                route = CandidateRoute(candidate_id, int(track_id))
+                if route not in already_routed:
+                    routes.add(route)
+                    candidates_by_id[candidate_id] = candidate
+        routes.difference_update(self.staged_copy_routes)
+        if not routes:
+            self.transcription_panel.set_status(tr("没有可复制的候选"))
+            return
+        self.push_snapshot()
+        first = len(self.canvas.notes)
+        if int(track_id) == int(self.track.track_id):
+            offset_ms = float(
+                getattr(parent, "reference_audio_offset_ms", 0.0)
+            )
+            additions: list[Note] = []
+            notes_by_pitch: dict[
+                int,
+                tuple[list[float], list[Note]],
+            ] = {}
+            grouped_notes: dict[int, list[Note]] = defaultdict(list)
+            for note in self.canvas.notes:
+                grouped_notes[int(note.pitch)].append(note)
+            for pitch, notes in grouped_notes.items():
+                ordered = sorted(
+                    notes,
+                    key=lambda note: float(note.start),
+                )
+                notes_by_pitch[pitch] = (
+                    [float(note.start) for note in ordered],
+                    ordered,
+                )
+            for route in sorted(routes):
+                candidate = candidates_by_id[route.candidate_id]
+                starts, indexed_notes = notes_by_pitch.setdefault(
+                    int(candidate.pitch),
+                    ([], []),
+                )
+                window_start, window_end = (
+                    CANDIDATE_NOTE_POLICY.match_window(
+                        candidate,
+                        offset_ms,
+                    )
+                )
+                first = bisect_left(starts, window_start)
+                last = bisect_right(starts, window_end)
+                if any(
+                    CANDIDATE_NOTE_POLICY.matches_note(
+                        candidate,
+                        note,
+                        offset_ms,
+                    )
+                    for note in indexed_notes[first:last]
+                ):
+                    continue
+                addition = CANDIDATE_NOTE_POLICY.to_note(
+                    candidate,
+                    offset_ms,
+                )
+                additions.append(addition)
+                insertion = bisect_right(
+                    starts,
+                    float(addition.start),
+                )
+                starts.insert(insertion, float(addition.start))
+                indexed_notes.insert(insertion, addition)
+            self.canvas.notes.extend(additions)
+        self.staged_copy_routes.update(routes)
+        self._capture_staging_identity()
+        if len(self.canvas.notes) > first:
+            self.canvas.selected = set(range(first, len(self.canvas.notes)))
+            self.canvas.anchor_index = first
+            self._notes_changed()
+        self.transcription_panel.set_status(
+            trf("已暂存 {count} 个候选", count=len(routes))
+        )
+        self._sync_shared_transcription_projection()
+
+    def _voice_group_candidate_ids(
+        self, group_id: str
+    ) -> tuple[str, ...]:
+        analysis = getattr(
+            self.parent(), "instrument_match_analysis", None
+        )
+        if analysis is None:
+            return ()
+        group = next(
+            (
+                item
+                for item in analysis.groups
+                if item.group_id == str(group_id)
+            ),
+            None,
+        )
+        return () if group is None else tuple(group.candidate_ids)
+
+    def _stage_voice_group_routes(
+        self, group_id: str, track_id: int
+    ) -> None:
+        candidate_ids = self._voice_group_candidate_ids(group_id)
+        if not candidate_ids:
+            self.transcription_panel.set_status(tr("声部已失效"))
+            return
+        self._stage_transcription_copy(
+            int(track_id),
+            candidate_ids_override=candidate_ids,
+        )
+
+    def _stage_new_voice_group_track(
+        self, group_id: str, instrument_id: int
+    ) -> None:
+        parent = self.parent()
+        session = getattr(parent, "transcription_session", None)
+        candidate_ids = set(self._voice_group_candidate_ids(group_id))
+        if session is None or not candidate_ids:
+            self.transcription_panel.set_status(tr("声部已失效"))
+            return
+        candidate_ids.difference_update(
+            session.state.rejected_candidate_ids
+        )
+        if not candidate_ids:
+            self.transcription_panel.set_status(tr("没有可复制的候选"))
+            return
+        if (
+            int(instrument_id) not in BDO_INSTRUMENT_NAMES
+            or int(instrument_id) in {0x04, 0x05, 0x0D}
+        ):
+            self.transcription_panel.set_status(tr("目标轨道不可用"))
+            return
+        reserved_ids = {
+            int(track.track_id) for track in getattr(parent, "tracks", ())
+        }.union(
+            int(route.track_id)
+            for route in (
+                *session.state.pending_routes,
+                *session.state.applied_routes,
+                *self.staged_primary_routes,
+                *self.staged_copy_routes,
+            )
+        ).union(self.staged_new_track_specs)
+        new_track_id = max(reserved_ids, default=-1) + 1
+        supported = game_supported_pitches(int(instrument_id))
+        routes = {
+            CandidateRoute(session.candidate_id(candidate), new_track_id)
+            for candidate in session.candidates
+            if session.candidate_id(candidate) in candidate_ids
+            and CANDIDATE_NOTE_POLICY.project_timing_is_valid(
+                candidate,
+                float(
+                    getattr(
+                        parent,
+                        "reference_audio_offset_ms",
+                        0.0,
+                    )
+                ),
+            )
+            and CANDIDATE_NOTE_POLICY.pitch_is_valid_for_melodic_track(
+                candidate.pitch,
+                is_percussion=False,
+                instrument_id=int(instrument_id),
+                transpose=self.transpose,
+                supported_pitches=supported,
+            )
+        }
+        if not routes:
+            self.transcription_panel.set_status(
+                tr("该乐器音域内没有可暂存候选")
+            )
+            return
+        self.push_snapshot()
+        self.staged_new_track_specs[new_track_id] = int(instrument_id)
+        self.staged_copy_routes.update(routes)
+        self._capture_staging_identity()
+        self.transcription_panel.set_status(
+            trf(
+                "已暂存新轨 · {instrument} · {count} 个候选",
+                instrument=BDO_INSTRUMENT_NAMES.get(
+                    int(instrument_id),
+                    f"0x{int(instrument_id):02X}",
+                ),
+                count=len(routes),
+            )
+        )
+        self._sync_shared_transcription_projection()
+
+    def _clear_transcription_staging(self) -> None:
+        if not self._has_transcription_staging():
+            return
+        self.push_snapshot()
+        self.staged_primary_routes.clear()
+        self.staged_copy_routes.clear()
+        self.staged_new_track_specs.clear()
+        self._clear_staging_identity_if_empty()
+        self.transcription_panel.set_status(
+            tr("已清除本次暂存；草稿音符保留为手工编辑")
+        )
+        self._sync_shared_transcription_projection()
+
+    def _transcription_selection_changed(self, candidate_ids) -> None:
+        parent = self.parent()
+        session = getattr(parent, "transcription_session", None)
+        if session is None:
+            return
+        session.set_selection(candidate_ids)
+        activate = getattr(
+            parent, "_activate_voice_group_for_candidates", None
+        )
+        if callable(activate):
+            activate(candidate_ids)
+        autosave = getattr(parent, "_autosave_project", None)
+        if callable(autosave):
+            autosave("transcription selection")
+        self._sync_shared_transcription_projection()
+
+    def _transcription_range_changed(self, value) -> None:
+        parent = self.parent()
+        setter = getattr(parent, "_set_transcription_region", None)
+        if callable(setter):
+            setter(value)
+        self._sync_shared_transcription_projection()
+
+    def _clear_transcription_range(self) -> None:
+        self._transcription_range_changed(None)
+
+    def _update_reference_layer_settings(self, **updates: object) -> None:
+        parent = self.parent()
+        if parent is None:
+            return
+        previous = normalize_reference_layer_settings(
+            getattr(parent, "reference_layer_settings", None)
+        )
+        merged = dict(previous)
+        merged.update(updates)
+        normalized = normalize_reference_layer_settings(merged)
+        if normalized == previous:
+            return
+        parent.reference_layer_settings = normalized
+        autosave = getattr(parent, "_autosave_project", None)
+        if callable(autosave) and not bool(
+            getattr(parent, "loading_project", False)
+        ):
+            autosave("reference layers")
+
+    def _transcription_evidence_layers_changed(self, layers) -> None:
+        visible = {str(layer) for layer in layers}
+        self.canvas.set_evidence_layers(
+            frame="frame" in visible,
+            onset="onset" in visible,
+            contour="contour" in visible,
+        )
+        self._update_reference_layer_settings(
+            frame_visible="frame" in visible,
+            onset_visible="onset" in visible,
+            contour_visible="contour" in visible,
+        )
+        parent = self.parent()
+        parent_config = getattr(parent, "config", None)
+        if isinstance(parent_config, dict):
+            ui_config = parent_config.setdefault("transcription_ui", {})
+            if isinstance(ui_config, dict):
+                ui_config["diagnostic_evidence_layers"] = sorted(visible)
+                save_config(parent_config)
+
+    def _transcription_spectrogram_visibility_changed(
+        self,
+        visible: bool,
+    ) -> None:
+        self.canvas.set_spectrogram_visible(bool(visible))
+        self._update_reference_layer_settings(
+            spectrogram_visible=bool(visible)
+        )
+
+    def _transcription_melody_lines_visibility_changed(
+        self,
+        visible: bool,
+    ) -> None:
+        self.canvas.set_melody_lines_visible(bool(visible))
+        self._update_reference_layer_settings(
+            melody_lines_visible=bool(visible)
+        )
+
+    def _transcription_reference_background_opacity_changed(
+        self,
+        opacity: float,
+    ) -> None:
+        normalized = max(0.0, min(1.0, float(opacity)))
+        self.canvas.set_reference_background_opacity(normalized)
+        self._update_reference_layer_settings(
+            background_opacity_percent=round(normalized * 100.0)
+        )
+
+    def _transcription_melody_line_roles_changed(
+        self,
+        roles: object,
+    ) -> None:
+        normalized = (
+            frozenset(str(role) for role in roles)
+            if isinstance(roles, (set, frozenset, list, tuple))
+            else frozenset()
+        )
+        self.canvas.set_melody_line_roles_visible(normalized)
+        parent = self.parent()
+        parent_config = getattr(parent, "config", None)
+        if not isinstance(parent_config, dict):
+            return
+        ui_config = parent_config.setdefault("transcription_ui", {})
+        if isinstance(ui_config, dict):
+            ui_config["melody_line_roles"] = sorted(
+                self.canvas.melody_line_roles_visible
+            )
+            save_config(parent_config)
+
+    def _transcription_diagnostic_visibility_changed(
+        self, expanded: bool
+    ) -> None:
+        parent = self.parent()
+        parent_config = getattr(parent, "config", None)
+        if not isinstance(parent_config, dict):
+            return
+        ui_config = parent_config.setdefault("transcription_ui", {})
+        if isinstance(ui_config, dict):
+            ui_config["diagnostic_evidence_expanded"] = bool(expanded)
+            save_config(parent_config)
+
+    @staticmethod
+    def _pitch_class_label(root_pc: int | None) -> str:
+        if root_pc is None:
+            return "N"
+        return (
+            "C",
+            "C♯",
+            "D",
+            "D♯",
+            "E",
+            "F",
+            "F♯",
+            "G",
+            "G♯",
+            "A",
+            "A♯",
+            "B",
+        )[int(root_pc) % 12]
+
+    def _edit_transcription_key(self, _current: object) -> None:
+        parent = self.parent()
+        harmony = getattr(parent, "harmony_analysis", None)
+        if harmony is None:
+            return
+        options: list[tuple[str, int, str]] = []
+        candidates = (
+            harmony.global_key,
+            *tuple(harmony.global_key.alternatives),
+        )
+        seen: set[tuple[int, str]] = set()
+        for item in candidates:
+            if item.root_pc is None or item.mode is None:
+                continue
+            identity = (int(item.root_pc), str(item.mode))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            options.append(
+                (
+                    f"{self._pitch_class_label(identity[0])} {identity[1]}",
+                    identity[0],
+                    identity[1],
+                )
+            )
+        for mode in ("major", "minor"):
+            for root_pc in range(12):
+                identity = (root_pc, mode)
+                if identity not in seen:
+                    options.append(
+                        (
+                            f"{self._pitch_class_label(root_pc)} {mode}",
+                            root_pc,
+                            mode,
+                        )
+                    )
+        selected, accepted = QInputDialog.getItem(
+            self,
+            tr("编辑主调"),
+            tr("选择或输入主调："),
+            [item[0] for item in options],
+            0,
+            True,
+        )
+        if not accepted:
+            return
+        normalized = str(selected).strip().replace("#", "♯")
+        match = next(
+            (item for item in options if item[0] == normalized),
+            None,
+        )
+        if match is None:
+            parts = normalized.split()
+            roots = {
+                self._pitch_class_label(root_pc).casefold(): root_pc
+                for root_pc in range(12)
+            }
+            if len(parts) != 2 or parts[0].casefold() not in roots:
+                QMessageBox.warning(
+                    self,
+                    tr("无法识别主调"),
+                    tr("请输入例如 C major 或 A minor。"),
+                )
+                return
+            mode = parts[1].casefold()
+            if mode not in {"major", "minor"}:
+                QMessageBox.warning(
+                    self,
+                    tr("无法识别主调"),
+                    tr("仅支持 major 或 minor。"),
+                )
+                return
+            match = (normalized, roots[parts[0].casefold()], mode)
+        parent._set_assist_key_override(
+            match[1],
+            match[2],
+            manual=True,
+            locked=self.transcription_panel.assist_panel.harmony_summary.key_lock_checkbox.isChecked(),
+        )
+
+    def _lock_transcription_key(self, locked: bool) -> None:
+        parent = self.parent()
+        harmony = getattr(parent, "harmony_analysis", None)
+        if harmony is None or harmony.global_key.root_pc is None:
+            return
+        current_review = parent.transcription_assist_review.key_override
+        if not locked and (
+            current_review is None or not current_review.manual
+        ):
+            parent._clear_assist_key_override()
+            return
+        parent._set_assist_key_override(
+            harmony.global_key.root_pc,
+            harmony.global_key.mode,
+            manual=bool(
+                current_review is not None and current_review.manual
+            ),
+            locked=bool(locked),
+        )
+
+    def _harmony_segment(self, segment_id: str) -> ChordSegment | None:
+        harmony = getattr(self.parent(), "harmony_analysis", None)
+        if harmony is None:
+            return None
+        return next(
+            (
+                segment
+                for segment in harmony.chord_segments
+                if segment.segment_id == str(segment_id)
+            ),
+            None,
+        )
+
+    def _review_for_harmony_segment(
+        self, segment: ChordSegment
+    ) -> LockedChordReview | None:
+        return next(
+            (
+                item
+                for item in self.parent().transcription_assist_review.locked_chord_segments
+                if item.segment_id == segment.segment_id
+                or (
+                    math.isclose(
+                        item.start_audio_ms,
+                        segment.start_audio_ms,
+                        abs_tol=0.5,
+                    )
+                    and math.isclose(
+                        item.end_audio_ms,
+                        segment.end_audio_ms,
+                        abs_tol=0.5,
+                    )
+                )
+            ),
+            None,
+        )
+
+    def _transcription_chord_segment_clicked(
+        self, segment_id: str
+    ) -> None:
+        self.transcription_panel.set_assist_expanded(True)
+        self.transcription_panel.assist_panel.harmony_summary.set_current_segment(
+            segment_id
+        )
+
+    def _split_transcription_voice_group(
+        self, group_id: str, project_ms: float
+    ) -> None:
+        callback = getattr(
+            self.parent(), "_split_transcription_voice_group", None
+        )
+        if callable(callback):
+            callback(str(group_id), float(project_ms))
+
+    def _merge_transcription_voice_groups(
+        self, first_group_id: str, second_group_id: str
+    ) -> None:
+        callback = getattr(
+            self.parent(), "_merge_transcription_voice_groups", None
+        )
+        if callable(callback):
+            callback(str(first_group_id), str(second_group_id))
+
+    def _set_transcription_voice_group_color(
+        self, group_id: str, color: str
+    ) -> None:
+        callback = getattr(
+            self.parent(), "_set_transcription_voice_group_color", None
+        )
+        if callable(callback):
+            callback(str(group_id), str(color))
+
+    def _set_transcription_voice_group_role(
+        self, group_id: str, role: str
+    ) -> None:
+        callback = getattr(
+            self.parent(), "_set_transcription_voice_group_role", None
+        )
+        if callable(callback):
+            callback(str(group_id), str(role))
+
+    def _edit_transcription_chord(self, segment_id: str) -> None:
+        segment = self._harmony_segment(segment_id)
+        if segment is None:
+            return
+        qualities = (
+            "major",
+            "minor",
+            "dim",
+            "sus2",
+            "sus4",
+            "maj7",
+            "7",
+            "min7",
+            "half_diminished7",
+        )
+        options = ["N"] + [
+            f"{self._pitch_class_label(root_pc)} {quality}"
+            for root_pc in range(12)
+            for quality in qualities
+        ]
+        current = (
+            "N"
+            if segment.quality == "N" or segment.root_pc is None
+            else (
+                f"{self._pitch_class_label(segment.root_pc)} "
+                f"{segment.quality}"
+            )
+        )
+        selected, accepted = QInputDialog.getItem(
+            self,
+            tr("编辑和弦段"),
+            tr("选择和弦；不会自动改动音符："),
+            options,
+            max(0, options.index(current) if current in options else 0),
+            False,
+        )
+        if not accepted:
+            return
+        if selected == "N":
+            root_pc, quality, bass_pc = None, "N", None
+        else:
+            root_label, quality = str(selected).split(" ", 1)
+            root_pc = next(
+                index
+                for index in range(12)
+                if self._pitch_class_label(index) == root_label
+            )
+            bass_labels = [
+                self._pitch_class_label(index) for index in range(12)
+            ]
+            bass_label, bass_ok = QInputDialog.getItem(
+                self,
+                tr("选择低音"),
+                tr("选择转位低音："),
+                bass_labels,
+                root_pc,
+                False,
+            )
+            if not bass_ok:
+                return
+            bass_pc = bass_labels.index(str(bass_label))
+        self.parent()._set_assist_chord_review(
+            segment,
+            root_pc=root_pc,
+            quality=quality,
+            bass_pc=bass_pc,
+            manual=True,
+            locked=self.transcription_panel.assist_panel.harmony_summary.chord_lock_checkbox.isChecked(),
+        )
+
+    def _lock_transcription_chord(
+        self, segment_id: str, locked: bool
+    ) -> None:
+        segment = self._harmony_segment(segment_id)
+        if segment is None:
+            return
+        current_review = self._review_for_harmony_segment(segment)
+        if not locked and (
+            current_review is None or not current_review.manual
+        ):
+            self.parent()._remove_assist_chord_review(segment.segment_id)
+            return
+        self.parent()._set_assist_chord_review(
+            segment,
+            manual=bool(
+                current_review is not None and current_review.manual
+            ),
+            locked=bool(locked),
+        )
+
+    def _split_transcription_chord(self, segment_id: str) -> None:
+        segment = self._harmony_segment(segment_id)
+        if segment is None:
+            return
+        callback = getattr(
+            self.parent(), "_split_transcription_chord_segment", None
+        )
+        if callable(callback):
+            callback(segment.segment_id, float(self.playhead_ms))
+
+    def _merge_transcription_chord_with_next(
+        self, segment_id: str
+    ) -> None:
+        harmony = getattr(self.parent(), "harmony_analysis", None)
+        if harmony is None:
+            return
+        segments = tuple(harmony.chord_segments)
+        index = next(
+            (
+                index
+                for index, segment in enumerate(segments)
+                if segment.segment_id == str(segment_id)
+            ),
+            -1,
+        )
+        if index < 0 or index + 1 >= len(segments):
+            return
+        first = segments[index]
+        second = segments[index + 1]
+
+        def label(segment: ChordSegment) -> str:
+            if segment.root_pc is None or segment.quality == "N":
+                return "N"
+            return (
+                f"{self._pitch_class_label(segment.root_pc)} "
+                f"{segment.quality}"
+            )
+
+        options = (
+            trf("保留当前段 · {chord}", chord=label(first)),
+            trf("保留下一段 · {chord}", chord=label(second)),
+        )
+        selected, accepted = QInputDialog.getItem(
+            self,
+            tr("合并和弦段"),
+            tr("选择合并后保留的和弦；不会自动改动音符："),
+            options,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        retained = first if str(selected) == options[0] else second
+        callback = getattr(
+            self.parent(), "_merge_transcription_chord_segments", None
+        )
+        if callable(callback):
+            callback(
+                first.segment_id,
+                second.segment_id,
+                retained.segment_id,
+            )
+
+    def _navigate_transcription_phrase(self, direction: int) -> None:
+        callback = getattr(self.parent(), "_navigate_voice_group", None)
+        if callable(callback):
+            callback(int(direction))
+
+    def _loop_transcription_phrase(self, enabled: bool) -> None:
+        callback = getattr(self.parent(), "_set_voice_group_loop", None)
+        if callable(callback):
+            callback(bool(enabled))
+
+    def _open_transcription_review_queue(self) -> None:
+        callback = getattr(
+            self.parent(), "_open_transcription_review_queue", None
+        )
+        if callable(callback):
+            callback()
+
+    def _confirm_transcription_instrument_match(
+        self, group_id: object, instrument_id: int
+    ) -> None:
+        callback = getattr(
+            self.parent(), "_confirm_assist_instrument_match", None
+        )
+        if callable(callback):
+            callback(str(group_id), int(instrument_id))
+
+    def _stage_transcription_group_to_existing_track(
+        self, group_id: object, instrument_id: int
+    ) -> None:
+        tracks = [
+            track
+            for track in getattr(self.parent(), "tracks", ())
+            if not track.is_percussion
+            and int(track.bdo_instrument_id) == int(instrument_id)
+        ]
+        if not tracks:
+            QMessageBox.information(
+                self,
+                tr("没有匹配的现有轨"),
+                tr("请使用“新建该乐器轨”，或先在主时间轴新建对应乐器。"),
+            )
+            return
+        labels = [
+            f"{track.display_name} · {BDO_INSTRUMENT_NAMES.get(track.bdo_instrument_id, track.bdo_instrument_id)}"
+            for track in tracks
+        ]
+        label, accepted = QInputDialog.getItem(
+            self,
+            tr("暂存到现有轨"),
+            tr("选择目标轨；Apply 前不会修改工程："),
+            labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        target = tracks[labels.index(str(label))]
+        self._stage_voice_group_routes(
+            str(group_id),
+            int(target.track_id),
+        )
+
+    def _stage_transcription_group_to_new_track(
+        self, group_id: object, instrument_id: int
+    ) -> None:
+        QMessageBox.information(
+            self,
+            tr("新建乐器轨"),
+            tr("该声部会在 Apply 时与音符一起原子新建轨道。"),
+        )
+        self._stage_new_voice_group_track(
+            str(group_id),
+            int(instrument_id),
+        )
+
+    def _set_transcription_audition_source(self, source: str) -> None:
+        previous_state = self.draft_playback_state
+        retained_playhead = float(self.playhead_ms)
+        self.transcription_audition_source = str(source)
+        if previous_state in {"playing", "paused", "loading"}:
+            self.stop_draft()
+            self.set_draft_playhead(retained_playhead, follow=True)
+            if previous_state in {"playing", "loading"}:
+                QTimer.singleShot(0, self.play_draft)
+        labels = {
+            "combined": tr("工程 + 原音"),
+            "original": tr("原音"),
+            "candidate_a": tr("游戏候选 A"),
+            "candidate_b": tr("游戏候选 B"),
+        }
+        self.transcription_panel.set_status(
+            trf(
+                "试听源：{source}；继续使用上方唯一播放控制。",
+                source=labels.get(str(source), str(source)),
+            )
+        )
+
+    def _redecode_transcription_range(self) -> None:
+        if self._warn_staging_blocks_analysis():
+            return
+        callback = getattr(
+            self.parent(), "_redecode_transcription_range", None
+        )
+        if callable(callback):
+            callback()
+
+    def _transcription_sensitivity_changed(self, sensitivity: str) -> None:
+        callback = getattr(
+            self.parent(), "_transcription_sensitivity_changed", None
+        )
+        if callable(callback):
+            callback(sensitivity)
+
+    def _transcription_cleanup_profile_changed(
+        self,
+        cleanup_profile: str,
+    ) -> None:
+        callback = getattr(
+            self.parent(),
+            "_transcription_cleanup_profile_changed",
+            None,
+        )
+        if callable(callback):
+            callback(cleanup_profile)
+
+    def _transcription_analysis_mode_changed(
+        self, analysis_mode: str,
+    ) -> None:
+        if self._warn_staging_blocks_analysis():
+            self.transcription_panel.set_analysis_mode(
+                self.transcription_session.state.analysis_mode
+            )
+            return
+        callback = getattr(
+            self.parent(), "_transcription_analysis_mode_changed", None
+        )
+        if callable(callback):
+            callback(analysis_mode)
+
+    def _reject_transcription_candidates(self) -> None:
+        callback = getattr(
+            self.parent(), "_reject_transcription_candidates", None
+        )
+        if callable(callback):
+            callback()
+
+    def _restore_transcription_candidates(self) -> None:
+        callback = getattr(
+            self.parent(), "_restore_transcription_candidates", None
+        )
+        if callable(callback):
+            callback()
+
+    def _select_suspected_transcription_fragments(self) -> None:
+        callback = getattr(
+            self.parent(),
+            "_select_suspected_transcription_fragments",
+            None,
+        )
+        if callable(callback):
+            callback()
+
+    def _undo_transcription_review(self) -> None:
+        callback = getattr(self.parent(), "_undo_transcription_review", None)
+        if callable(callback):
+            callback()
+
+    def _redo_transcription_review(self) -> None:
+        callback = getattr(self.parent(), "_redo_transcription_review", None)
+        if callable(callback):
+            callback()
+
+    def _align_reference_audio_to_playhead(self) -> None:
+        if self._warn_staging_blocks_analysis():
+            return
+        parent = self.parent()
+        reference_audio = getattr(parent, "reference_audio", None)
+        if reference_audio is None or not reference_audio.audio_path:
+            self.transcription_panel.set_status(tr("请先载入参考音频。"))
+            return
+        audio_position = float(reference_audio.player.position())
+        parent._set_reference_alignment(
+            float(self.playhead_ms) - audio_position,
+            float(getattr(parent, "beat_origin_ms", 0.0)),
+            autosave=True,
+        )
+        self.beat_origin_ms = float(getattr(parent, "beat_origin_ms", 0.0))
+        self._sync_shared_transcription_projection()
+
+    def _set_playhead_as_beat_origin(self) -> None:
+        parent = self.parent()
+        parent._set_reference_alignment(
+            float(getattr(parent, "reference_audio_offset_ms", 0.0)),
+            float(self.playhead_ms),
+            autosave=True,
+        )
+        self.beat_origin_ms = float(self.playhead_ms)
+        self.canvas.update()
+        self.transcription_panel.set_status(
+            tr("第一拍锚点已更新；正式音符位置未移动。")
+        )
 
     def _toggle_ghost_notes(self, enabled: bool) -> None:
+        self.ghost_opacity_slider.setEnabled(bool(enabled))
+        self._update_reference_layer_settings(
+            ghost_visible=bool(enabled)
+        )
         parent = self.parent()
         if not enabled or not parent or not hasattr(parent, "tracks"):
             if hasattr(self, "canvas"):
                 self.canvas.set_ghost_notes([])
             return
         notes = [
-            note
+            GhostNoteProjection(
+                note=note,
+                track_id=int(item.track_id),
+                instrument_id=int(item.bdo_instrument_id),
+                color=str(item.color),
+            )
             for item in parent.tracks
             if int(item.track_id) != int(self.track.track_id) and not item.muted
             for note in item.notes
         ]
         if hasattr(self, "canvas"):
             self.canvas.set_ghost_notes(notes)
+
+    def _ghost_opacity_changed(self, value: int) -> None:
+        normalized = max(0, min(100, int(value)))
+        self.ghost_opacity_label.setText(f"{normalized}%")
+        if hasattr(self, "canvas"):
+            self.canvas.set_ghost_opacity(normalized / 100.0)
+        self._update_reference_layer_settings(
+            ghost_opacity_percent=normalized
+        )
 
     def _set_top_inspector_mode(self, mode: str) -> None:
         show_notes = mode == "note"
@@ -4431,7 +9858,16 @@ class MidiNoteEditorDialog(QDialog):
         if self.transcription_mode_enabled:
             reference_audio = getattr(self.parent(), "reference_audio", None)
             if reference_audio is not None:
-                end = max(end, float(reference_audio.duration_ms))
+                end = max(
+                    end,
+                    float(
+                        getattr(
+                            reference_audio,
+                            "project_end_ms",
+                            reference_audio.duration_ms,
+                        )
+                    ),
+                )
         return max(self.canvas.beat_ms if hasattr(self, "canvas") else 60000.0 / max(1, self.bpm), end + 60000.0 / max(1, self.bpm))
 
     @staticmethod
@@ -4446,6 +9882,8 @@ class MidiNoteEditorDialog(QDialog):
         self.playhead_ms = max(0.0, min(float(ms), duration))
         if hasattr(self, "canvas"):
             self.canvas.set_playhead(self.playhead_ms)
+        if hasattr(self, "transcription_waveform"):
+            self.transcription_waveform.set_playhead_ms(self.playhead_ms)
         if hasattr(self, "playback_time_label"):
             self.playback_time_label.setText(
                 f"{self.format_playback_time(self.playhead_ms)} / {self.format_playback_time(duration)}"
@@ -4473,10 +9911,94 @@ class MidiNoteEditorDialog(QDialog):
             reference_audio = getattr(parent, "reference_audio", None)
             if (
                 self.transcription_mode_enabled
+                and self.transcription_audition_source
+                in {"original", "combined"}
                 and reference_audio is not None
                 and reference_audio.audio_path
             ):
-                reference_audio.set_position(self.playhead_ms)
+                self._sync_draft_reference_audio(
+                    self.playhead_ms,
+                    play=self.draft_playback_state == "playing",
+                    force=True,
+                )
+
+    def _sync_draft_reference_audio(
+        self,
+        project_ms: float,
+        *,
+        play: bool,
+        force: bool = False,
+    ) -> bool:
+        """Keep the editor reference stream on the shared project clock."""
+
+        reference_audio = getattr(self.parent(), "reference_audio", None)
+        if reference_audio is None or not reference_audio.audio_path:
+            return False
+        converter = getattr(reference_audio, "project_to_audio", None)
+        duration_ms = float(getattr(reference_audio, "duration_ms", 0.0))
+        inside_reference = True
+        if callable(converter):
+            audio_ms = float(converter(project_ms))
+            inside_reference = (
+                math.isfinite(audio_ms)
+                and audio_ms >= 0.0
+                and (duration_ms <= 0.0 or audio_ms < duration_ms)
+            )
+        is_playing = bool(reference_audio.is_playing)
+        if not inside_reference:
+            if is_playing:
+                reference_audio.pause()
+            return False
+        if force:
+            reference_audio.set_position(project_ms)
+        if not play:
+            if is_playing:
+                reference_audio.pause()
+            return False
+        if not force and not is_playing:
+            reference_audio.set_position(project_ms)
+        if not is_playing:
+            reference_audio.play()
+        return True
+
+    def _start_draft_reference_only(
+        self,
+        reference_audio: object,
+        *,
+        status_text: str,
+    ) -> bool:
+        """Start the shared reference transport without a zero-event clock."""
+
+        if not getattr(reference_audio, "audio_path", ""):
+            return False
+        reference_start = max(
+            0.0,
+            float(getattr(reference_audio, "project_start_ms", 0.0)),
+        )
+        start_ms = max(float(self.playhead_ms), reference_start)
+        duration_ms = float(getattr(reference_audio, "duration_ms", 0.0))
+        reference_end = float(
+            getattr(
+                reference_audio,
+                "project_end_ms",
+                reference_start + duration_ms,
+            )
+        )
+        if duration_ms > 0.0 and start_ms >= reference_end:
+            start_ms = reference_start
+        self.parent()._stop_preview(reset_playhead=False)
+        self.set_draft_playhead(start_ms, follow=True)
+        if not self._sync_draft_reference_audio(
+            start_ms,
+            play=True,
+            force=True,
+        ):
+            return False
+        self.draft_reference_only = True
+        self._set_draft_playback_state("playing")
+        self.playback_timer.start()
+        self.status.setText(tr(status_text))
+        return True
 
     def poll_draft_playback(self) -> None:
         parent = self.parent()
@@ -4484,13 +10006,45 @@ class MidiNoteEditorDialog(QDialog):
             self.playback_timer.stop()
             return
         reference_audio = getattr(parent, "reference_audio", None)
+        shared_range = (
+            getattr(
+                getattr(parent, "transcription_session", None),
+                "state",
+                None,
+            ).region
+            if (
+                self.transcription_mode_enabled
+                and self.loop_box.isChecked()
+                and getattr(
+                    getattr(parent, "transcription_session", None),
+                    "state",
+                    None,
+                )
+                is not None
+            )
+            else None
+        )
         if self.draft_reference_only:
             if reference_audio is None or not reference_audio.audio_path:
                 self.stop_draft()
                 return
-            position = float(reference_audio.player.position())
+            position = float(
+                getattr(
+                    reference_audio,
+                    "project_position_ms",
+                    reference_audio.player.position(),
+                )
+            )
             self.set_draft_playhead(position, follow=True)
             if self.draft_playback_state == "paused":
+                return
+            if shared_range is not None and position >= shared_range[1]:
+                self._sync_draft_reference_audio(
+                    shared_range[0],
+                    play=True,
+                    force=True,
+                )
+                self.set_draft_playhead(shared_range[0], follow=True)
                 return
             duration = self.draft_duration_ms()
             if (
@@ -4498,8 +10052,11 @@ class MidiNoteEditorDialog(QDialog):
                 or (duration > 0 and position >= duration - 1)
             ):
                 if self.loop_box.isChecked():
-                    reference_audio.set_position(0.0)
-                    reference_audio.play()
+                    self._sync_draft_reference_audio(
+                        0.0,
+                        play=True,
+                        force=True,
+                    )
                 else:
                     self.stop_draft()
             return
@@ -4521,28 +10078,60 @@ class MidiNoteEditorDialog(QDialog):
                 self.status.setText(tr("游戏音源已缓存 · 开始试听"))
                 if (
                     self.transcription_mode_enabled
+                    and self.transcription_audition_source == "combined"
                     and reference_audio is not None
                     and reference_audio.audio_path
                 ):
-                    reference_audio.set_position(self.playhead_ms)
-                    reference_audio.play()
+                    self._sync_draft_reference_audio(
+                        self.playhead_ms,
+                        play=True,
+                        force=True,
+                    )
             status = parent.realtime_audio.get_status()
             self.set_draft_playhead(status.position_ms, follow=self.draft_playback_state == "playing")
             if (
+                shared_range is not None
+                and status.state == "playing"
+                and status.position_ms >= shared_range[1]
+            ):
+                self.seek_draft(shared_range[0])
+                parent.realtime_audio.play()
+                if (
+                    self.transcription_audition_source == "combined"
+                    and
+                    reference_audio is not None
+                    and reference_audio.audio_path
+                ):
+                    self._sync_draft_reference_audio(
+                        shared_range[0],
+                        play=True,
+                        force=True,
+                    )
+                return
+            if (
                 self.transcription_mode_enabled
+                and self.transcription_audition_source == "combined"
                 and reference_audio is not None
                 and reference_audio.audio_path
                 and status.state == "playing"
-                and not reference_audio.is_playing
             ):
-                reference_audio.set_position(status.position_ms)
-                reference_audio.play()
+                self._sync_draft_reference_audio(
+                    status.position_ms,
+                    play=True,
+                )
             if status.position_ms >= status.duration_ms - 1 and status.duration_ms > 0:
                 if (
                     self.transcription_mode_enabled
+                    and self.transcription_audition_source == "combined"
                     and reference_audio is not None
                     and reference_audio.is_playing
-                    and reference_audio.player.position()
+                    and float(
+                        getattr(
+                            reference_audio,
+                            "project_position_ms",
+                            reference_audio.player.position(),
+                        )
+                    )
                     < self.draft_duration_ms() - 1
                 ):
                     self.draft_reference_only = True
@@ -4551,11 +10140,15 @@ class MidiNoteEditorDialog(QDialog):
                     parent.realtime_audio.play()
                     if (
                         self.transcription_mode_enabled
+                        and self.transcription_audition_source == "combined"
                         and reference_audio is not None
                         and reference_audio.audio_path
                     ):
-                        reference_audio.set_position(0.0)
-                        reference_audio.play()
+                        self._sync_draft_reference_audio(
+                            0.0,
+                            play=True,
+                            force=True,
+                        )
                 else:
                     self.stop_draft()
             elif status.state == "paused" and self.draft_playback_state == "playing":
@@ -4573,7 +10166,38 @@ class MidiNoteEditorDialog(QDialog):
         self.canvas.px_per_beat = float(value)
         self.canvas.update()
         self.velocity_lane.update()
+        self.transcription_waveform.refresh()
         self.update_scrollbars()
+
+    def focus_transcription_time_range(
+        self, start_ms: float, end_ms: float
+    ) -> None:
+        start_ms, end_ms = sorted((float(start_ms), float(end_ms)))
+        duration_ms = max(self.canvas.beat_ms * 0.5, end_ms - start_ms)
+        viewport_width = max(
+            120.0, float(self.canvas.width() - self.canvas.KEY_W)
+        )
+        target_px_per_beat = max(
+            30,
+            min(
+                320,
+                round(
+                    viewport_width
+                    * self.canvas.beat_ms
+                    / (duration_ms * 1.25)
+                ),
+            ),
+        )
+        self.editor_zoom.setValue(target_px_per_beat)
+        visible_ms = viewport_width / max(
+            1e-9, self.canvas.px_per_ms
+        )
+        centered_start = max(
+            0.0,
+            (start_ms + end_ms - visible_ms) * 0.5,
+        )
+        self.update_scrollbars()
+        self.set_time_scroll(round(centered_start))
 
     def update_scrollbars(self) -> None:
         if not hasattr(self, "time_scroll"):
@@ -4591,6 +10215,9 @@ class MidiNoteEditorDialog(QDialog):
         self.time_scroll.setValue(round(scroll_ms))
         self.time_scroll.blockSignals(False)
 
+        if self._initial_pitch_focus_pending:
+            self.canvas.pitch_top = self._recommended_initial_pitch_top()
+            self._initial_pitch_focus_pending = False
         pitch_min, pitch_max = self.pitch_top_bounds()
         pitch_top = max(pitch_min, min(pitch_max, int(self.canvas.pitch_top)))
         pitch_changed = pitch_top != self.canvas.pitch_top
@@ -4604,6 +10231,7 @@ class MidiNoteEditorDialog(QDialog):
         self.pitch_scroll.blockSignals(False)
         if time_changed:
             self.velocity_lane.update()
+            self.transcription_waveform.refresh()
         if time_changed or pitch_changed:
             self.canvas.update()
         self.set_draft_playhead(self.playhead_ms)
@@ -4611,6 +10239,31 @@ class MidiNoteEditorDialog(QDialog):
     def visible_pitch_rows(self) -> int:
         grid_height = max(0, self.canvas.height() - self.canvas.RULER_H)
         return max(1, math.ceil(grid_height / self.canvas.ROW_H))
+
+    def _recommended_initial_pitch_top(self) -> int:
+        """Focus the first view without hiding or rewriting any pitch row."""
+
+        visible_rows = min(
+            self.canvas.MAX_PITCH - self.canvas.MIN_PITCH + 1,
+            self.visible_pitch_rows(),
+        )
+        if self.canvas.notes:
+            low = min(int(note.pitch) for note in self.canvas.notes)
+            high = max(int(note.pitch) for note in self.canvas.notes)
+            if high - low + 1 > max(1, visible_rows - 3):
+                target = high + 1
+            else:
+                target = round((low + high + visible_rows - 1) / 2.0)
+        elif self.instrument_adaptation is not None:
+            low, high = self.instrument_adaptation.recommended_visible_range
+            target = round((low + high + visible_rows - 1) / 2.0)
+        else:
+            target = 84
+        minimum_top = self.canvas.MIN_PITCH + visible_rows - 1
+        return max(
+            minimum_top,
+            min(self.canvas.MAX_PITCH, int(target)),
+        )
 
     def pitch_top_bounds(self) -> tuple[int, int]:
         pitch_max = self.canvas.MAX_PITCH
@@ -4632,6 +10285,7 @@ class MidiNoteEditorDialog(QDialog):
         self.canvas.scroll_ms = value
         self.canvas.update()
         self.velocity_lane.update()
+        self.transcription_waveform.refresh()
 
     def set_pitch_scroll(self, value: int) -> None:
         pitch_min, pitch_max = self.pitch_top_bounds()
@@ -4695,22 +10349,159 @@ class MidiNoteEditorDialog(QDialog):
         self.audition_timer.stop()
         self.audition_stop_timer.stop()
         self.audition_pending = False
-        draft_track = replace(self.track, notes=self.edited_notes(), muted=False, solo=False)
-        blockers = parent._realtime_preview_blockers([draft_track])
-        if blockers:
-            reference_audio = getattr(parent, "reference_audio", None)
+        shared_range = (
+            getattr(
+                getattr(parent, "transcription_session", None),
+                "state",
+                None,
+            ).region
             if (
                 self.transcription_mode_enabled
+                and self.loop_box.isChecked()
+                and getattr(
+                    getattr(parent, "transcription_session", None),
+                    "state",
+                    None,
+                )
+                is not None
+            )
+            else None
+        )
+        if (
+            shared_range is not None
+            and not shared_range[0] <= self.playhead_ms < shared_range[1]
+        ):
+            self.set_draft_playhead(shared_range[0], follow=True)
+        reference_audio = getattr(parent, "reference_audio", None)
+        if (
+            self.transcription_mode_enabled
+            and self.transcription_audition_source == "original"
+            and reference_audio is not None
+            and reference_audio.audio_path
+        ):
+            self._start_draft_reference_only(
+                reference_audio,
+                status_text="正在播放参考原音",
+            )
+            return
+        draft_track = replace(
+            self.track,
+            notes=self.edited_notes(),
+            muted=False,
+            solo=False,
+        )
+        if (
+            self.transcription_mode_enabled
+            and self.transcription_audition_source
+            in {"candidate_a", "candidate_b"}
+        ):
+            active_group = parent._active_voice_group()
+            analysis = parent.instrument_match_analysis
+            match_index = (
+                0
+                if self.transcription_audition_source == "candidate_a"
+                else 1
+            )
+            matches = (
+                analysis.matches_for_group(active_group.group_id)
+                if analysis is not None and active_group is not None
+                else ()
+            )
+            if active_group is None or match_index >= len(matches):
+                self.transcription_panel.set_status(
+                    tr("当前声部没有可试听的该候选")
+                )
+                return
+            wanted_ids = set(active_group.candidate_ids)
+            selected_instrument_id = int(
+                matches[match_index].instrument_id
+            )
+            supported_pitches = game_supported_pitches(
+                selected_instrument_id
+            )
+            audition_candidates = [
+                candidate
+                for candidate in parent.transcription_session.candidates
+                if parent.transcription_session.candidate_id(candidate)
+                in wanted_ids
+            ]
+            if (
+                not audition_candidates
+                or any(
+                    (
+                        not CANDIDATE_NOTE_POLICY.project_timing_is_valid(
+                            candidate,
+                            float(parent.reference_audio_offset_ms),
+                        )
+                        or not CANDIDATE_NOTE_POLICY.pitch_is_valid_for_melodic_track(
+                            candidate.pitch,
+                            is_percussion=False,
+                            instrument_id=selected_instrument_id,
+                            transpose=self.transpose,
+                            supported_pitches=supported_pitches,
+                        )
+                    )
+                    for candidate in audition_candidates
+                )
+            ):
+                self.transcription_panel.set_status(
+                    tr("游戏候选含移调后不可用的音高，已停止试听。")
+                )
+                return
+            audition_notes = [
+                CANDIDATE_NOTE_POLICY.to_note(
+                    candidate,
+                    float(parent.reference_audio_offset_ms),
+                )._replace(
+                    pitch=int(candidate.pitch) + int(self.transpose)
+                )
+                for candidate in audition_candidates
+            ]
+            draft_track = replace(
+                self.track,
+                notes=audition_notes,
+                bdo_instrument_id=selected_instrument_id,
+                display_name=BDO_INSTRUMENT_NAMES.get(
+                    selected_instrument_id,
+                    self.track.display_name,
+                ),
+                muted=False,
+                solo=False,
+            )
+        if (
+            self.transcription_mode_enabled
+            and self.transcription_audition_source == "combined"
+            and not draft_track.notes
+            and reference_audio is not None
+            and reference_audio.audio_path
+        ):
+            self._start_draft_reference_only(
+                reference_audio,
+                status_text="仅播放参考音频",
+            )
+            return
+        blockers = parent._realtime_preview_blockers([draft_track])
+        if blockers:
+            if (
+                self.transcription_mode_enabled
+                and self.transcription_audition_source
+                in {"candidate_a", "candidate_b"}
+            ):
+                self.transcription_panel.set_status(
+                    tr("游戏候选音源不可用；没有回退播放原音。")
+                )
+                return
+            if (
+                self.transcription_mode_enabled
+                and self.transcription_audition_source
+                in {"original", "combined"}
                 and reference_audio is not None
                 and reference_audio.audio_path
             ):
-                parent._stop_preview(reset_playhead=False)
-                reference_audio.set_position(self.playhead_ms)
-                reference_audio.play()
-                self.draft_reference_only = True
-                self._set_draft_playback_state("playing")
-                self.playback_timer.start()
-                self.status.setText(tr("仅播放参考音频"))
+                self._start_draft_reference_only(
+                    reference_audio,
+                    status_text="仅播放参考音频",
+                )
                 return
             QMessageBox.warning(self, "无法试听", "当前轨道缺少可用的实时游戏音源：\n- " + "\n- ".join(blockers[:6]))
             return
@@ -4785,7 +10576,8 @@ class MidiNoteEditorDialog(QDialog):
                 return
             self.audition_pending = False
             self.audition_timer.stop()
-            self.audition_stop_timer.start(700)
+            audible_ms = max(1.0, float(result.get("duration_ms", 1.0)))
+            self.audition_stop_timer.start(max(1, math.ceil(audible_ms + 30.0)))
             self.status.setText(trf("试听 {note}", note=self.audition_note_name))
         except AudioEngineError as exc:
             self.audition_pending = False
@@ -4807,7 +10599,12 @@ class MidiNoteEditorDialog(QDialog):
             if not self.draft_reference_only:
                 parent.realtime_audio.pause()
             reference_audio = getattr(parent, "reference_audio", None)
-            if self.transcription_mode_enabled and reference_audio is not None:
+            if (
+                self.transcription_mode_enabled
+                and self.transcription_audition_source
+                in {"original", "combined"}
+                and reference_audio is not None
+            ):
                 reference_audio.pause()
             self._set_draft_playback_state("paused")
             self.playback_timer.start()
@@ -4826,11 +10623,16 @@ class MidiNoteEditorDialog(QDialog):
             reference_audio = getattr(parent, "reference_audio", None)
             if (
                 self.transcription_mode_enabled
+                and self.transcription_audition_source
+                in {"original", "combined"}
                 and reference_audio is not None
                 and reference_audio.audio_path
             ):
-                reference_audio.set_position(self.playhead_ms)
-                reference_audio.play()
+                self._sync_draft_reference_audio(
+                    self.playhead_ms,
+                    play=True,
+                    force=True,
+                )
             self._set_draft_playback_state("playing")
             self.playback_timer.start()
         except AudioEngineError as exc:
@@ -4846,7 +10648,11 @@ class MidiNoteEditorDialog(QDialog):
         parent = self.parent()
         if parent and hasattr(parent, "realtime_audio"):
             try:
-                parent.realtime_audio.stop()
+                # The editor shares the main-window audio engine.  Transport
+                # Stop must discard queued PCM without tearing down the output
+                # thread and decode pools; application shutdown owns the full
+                # engine stop.
+                parent.realtime_audio.clear_playback()
             except AudioEngineError:
                 pass
         reference_audio = getattr(parent, "reference_audio", None)
@@ -4860,41 +10666,19 @@ class MidiNoteEditorDialog(QDialog):
             self.set_draft_playhead(0.0)
 
     def closeEvent(self, event) -> None:
-        worker = self.transcription_worker
-        if worker is not None and worker.isRunning():
-            self.transcription_close_pending = True
-            worker.cancel()
-            self.transcription_progress.setText(tr("正在取消…"))
-            self.transcription_analyze_button.setEnabled(False)
-            self.draft_play_button.setEnabled(False)
-            event.ignore()
-            return
         self.audition_timer.stop()
         self.audition_stop_timer.stop()
         self.audition_pending = False
         self.stop_draft()
+        self.canvas.release_transcription_evidence()
+        self.transcription_waveform.release_reference_audio()
+        self._remove_editor_event_filter()
         super().closeEvent(event)
 
-    def _defer_dialog_result_for_transcription(self, result: int) -> bool:
-        worker = self.transcription_worker
-        if worker is None or not worker.isRunning():
-            return False
-        self.transcription_close_pending = True
-        self.transcription_dialog_result_pending = int(result)
-        worker.cancel()
-        self.transcription_progress.setText(tr("正在取消…"))
-        self.transcription_analyze_button.setEnabled(False)
-        self.draft_play_button.setEnabled(False)
-        return True
-
     def reject(self) -> None:
-        if self._defer_dialog_result_for_transcription(QDialog.Rejected):
-            return
         super().reject()
 
     def accept(self) -> None:
-        if self._defer_dialog_result_for_transcription(QDialog.Accepted):
-            return
         super().accept()
 
     def minimum_duration_ms(self) -> float:
@@ -4907,7 +10691,11 @@ class MidiNoteEditorDialog(QDialog):
         if not self.snap_box.isChecked():
             return max(0.0, value)
         q = self.quantize_ms()
-        return max(0.0, round(value / q) * q)
+        return max(
+            0.0,
+            self.beat_origin_ms
+            + round((value - self.beat_origin_ms) / q) * q,
+        )
 
     def current_articulation(self) -> int:
         return int(self.articulation_combo.currentData() or 0)
@@ -4918,10 +10706,24 @@ class MidiNoteEditorDialog(QDialog):
         if cached is not None:
             return cached
         if self.track.bdo_instrument_id == 0x0d:
-            mapped = _GM_TO_BDO_DRUM.get(pitch)
-            result = mapped is None or mapped < BDO_DRUM_MIN or mapped > BDO_DRUM_MAX
+            if self.canonical_drum_lanes:
+                legal = (
+                    self.instrument_adaptation.legal_pitches
+                    if self.instrument_adaptation is not None
+                    else frozenset(range(BDO_DRUM_MIN, BDO_DRUM_MAX + 1))
+                )
+                result = pitch not in legal
+            else:
+                mapped = _GM_TO_BDO_DRUM.get(pitch)
+                result = (
+                    mapped is None
+                    or mapped < BDO_DRUM_MIN
+                    or mapped > BDO_DRUM_MAX
+                )
         else:
-            supported = game_supported_pitches(self.track.bdo_instrument_id)
+            supported = game_supported_pitches(
+                self.track.bdo_instrument_id, self.track.marnian_synth_mode
+            )
             converted = pitch + self.transpose
             result = converted not in supported if supported is not None else not (BDO_NOTE_MIN <= converted <= BDO_NOTE_MAX)
         self._invalid_pitch_cache[pitch] = result
@@ -4930,11 +10732,39 @@ class MidiNoteEditorDialog(QDialog):
     def _recalculate_invalid_note_count(self) -> None:
         self._invalid_note_count = sum(1 for note in self.canvas.notes if self.note_invalid(note.pitch))
 
-    def snapshot(self) -> tuple[list, set[int]]:
-        return list(self.canvas.notes), set(self.canvas.selected)
+    def snapshot(
+        self,
+    ) -> tuple[
+        list,
+        set[int],
+        set[CandidateRoute],
+        set[CandidateRoute],
+        dict[int, int],
+        str,
+        str,
+    ]:
+        return (
+            list(self.canvas.notes),
+            set(self.canvas.selected),
+            set(self.staged_primary_routes),
+            set(self.staged_copy_routes),
+            dict(self.staged_new_track_specs),
+            self.staged_analysis_cache_key,
+            self.staged_analysis_fingerprint,
+        )
 
     def push_snapshot(self, notes=None, selected=None) -> None:
-        self.undo_stack.append((list(self.canvas.notes if notes is None else notes), set(self.canvas.selected if selected is None else selected)))
+        self.undo_stack.append(
+            (
+                list(self.canvas.notes if notes is None else notes),
+                set(self.canvas.selected if selected is None else selected),
+                set(self.staged_primary_routes),
+                set(self.staged_copy_routes),
+                dict(self.staged_new_track_specs),
+                self.staged_analysis_cache_key,
+                self.staged_analysis_fingerprint,
+            )
+        )
         if len(self.undo_stack) > 200: self.undo_stack.pop(0)
         self.redo_stack.clear()
 
@@ -4942,10 +10772,28 @@ class MidiNoteEditorDialog(QDialog):
         if self.draft_playback_state != "stopped":
             self.stop_draft()
         self.canvas.notes, self.canvas.selected = list(state[0]), set(state[1])
+        self.staged_primary_routes = set(state[2]) if len(state) > 2 else set()
+        self.staged_copy_routes = set(state[3]) if len(state) > 3 else set()
+        has_track_specs = len(state) > 4 and isinstance(state[4], dict)
+        self.staged_new_track_specs = (
+            dict(state[4]) if has_track_specs else {}
+        )
+        cache_index = 5 if has_track_specs else 4
+        fingerprint_index = 6 if has_track_specs else 5
+        self.staged_analysis_cache_key = (
+            str(state[cache_index]) if len(state) > cache_index else ""
+        )
+        self.staged_analysis_fingerprint = (
+            str(state[fingerprint_index])
+            if len(state) > fingerprint_index
+            else ""
+        )
+        self._clear_staging_identity_if_empty()
         self.canvas.rebuild_note_index()
         self._recalculate_invalid_note_count()
         self._update_track_meta()
         self.canvas.update(); self.refresh_fields()
+        self._sync_shared_transcription_projection()
 
     def undo(self) -> None:
         if self.undo_stack:
@@ -5096,10 +10944,115 @@ class MidiNoteEditorDialog(QDialog):
     def _notes_changed(self) -> None:
         if self.draft_playback_state != "stopped":
             self.stop_draft()
+        self._reconcile_staged_primary_routes()
         self.canvas.rebuild_note_index()
         self._recalculate_invalid_note_count()
         self._update_track_meta()
         self.canvas.update(); self.velocity_lane.update(); self._update_status(); self.update_scrollbars()
+        if self.transcription_mode_enabled:
+            self._sync_shared_transcription_projection()
+            schedule = getattr(
+                self.parent(),
+                "_schedule_transcription_assist_refresh",
+                None,
+            )
+            if callable(schedule):
+                schedule()
+
+    def _reconcile_staged_primary_routes(self) -> None:
+        current_track_id = int(self.track.track_id)
+        current_copy_routes = {
+            route
+            for route in self.staged_copy_routes
+            if int(route.track_id) == current_track_id
+        }
+        current_routes = set(self.staged_primary_routes).union(
+            current_copy_routes
+        )
+        if not current_routes:
+            return
+        session = getattr(self.parent(), "transcription_session", None)
+        if session is None:
+            self.staged_primary_routes.clear()
+            self.staged_copy_routes.difference_update(current_copy_routes)
+            self._clear_staging_identity_if_empty()
+            return
+        offset_ms = float(
+            getattr(self.parent(), "reference_audio_offset_ms", 0.0)
+        )
+        unused_note_indices = set(range(len(self.canvas.notes)))
+        notes_by_pitch: dict[
+            int,
+            tuple[list[float], list[int]],
+        ] = {}
+        grouped_indices: dict[int, list[int]] = defaultdict(list)
+        for index, note in enumerate(self.canvas.notes):
+            grouped_indices[int(note.pitch)].append(index)
+        for pitch, indices in grouped_indices.items():
+            ordered = sorted(
+                indices,
+                key=lambda index: float(
+                    self.canvas.notes[index].start
+                ),
+            )
+            notes_by_pitch[pitch] = (
+                [
+                    float(self.canvas.notes[index].start)
+                    for index in ordered
+                ],
+                ordered,
+            )
+        survivors: set[CandidateRoute] = set()
+        for route in sorted(current_routes):
+            candidate = session.candidate_for_id(route.candidate_id)
+            if candidate is None:
+                continue
+            starts, indices = notes_by_pitch.get(
+                int(candidate.pitch),
+                ([], []),
+            )
+            project_start = CANDIDATE_NOTE_POLICY.project_start_ms(
+                candidate,
+                offset_ms,
+            )
+            window_start, window_end = CANDIDATE_NOTE_POLICY.match_window(
+                candidate,
+                offset_ms,
+            )
+            first = bisect_left(starts, window_start)
+            last = bisect_right(starts, window_end)
+            matches = [
+                index
+                for index in indices[first:last]
+                if index in unused_note_indices
+                if CANDIDATE_NOTE_POLICY.matches_note(
+                    candidate,
+                    self.canvas.notes[index],
+                    offset_ms,
+                )
+            ]
+            if not matches:
+                continue
+            chosen = min(
+                matches,
+                key=lambda index: (
+                    abs(
+                        float(self.canvas.notes[index].start)
+                        - project_start
+                    ),
+                    index,
+                ),
+            )
+            unused_note_indices.remove(chosen)
+            survivors.add(route)
+        self.staged_primary_routes.intersection_update(survivors)
+        self.staged_copy_routes.difference_update(current_copy_routes)
+        self.staged_copy_routes.update(
+            route
+            for route in current_copy_routes
+            if route in survivors
+        )
+        self._clear_staging_identity_if_empty()
 
     def _update_track_meta(self) -> None:
         if hasattr(self, "track_meta"):
@@ -5111,22 +11064,87 @@ class MidiNoteEditorDialog(QDialog):
     def edited_notes(self) -> list:
         return sorted(self.canvas.notes, key=lambda n: (n.start, n.pitch, n.dur))
 
-    def apply_notes(self) -> None:
+    def apply_notes(self) -> TranscriptionEditorCommitReport | None:
         notes = self.edited_notes()
+        parent = self.parent()
+        commit = getattr(parent, "_commit_note_editor", None)
+        if callable(commit):
+            state = getattr(
+                getattr(parent, "transcription_session", None),
+                "state",
+                TranscriptionSessionState(),
+            )
+            request = TranscriptionEditorCommit(
+                int(self.track.track_id),
+                tuple(notes),
+                tuple(self.staged_primary_routes),
+                tuple(self.staged_copy_routes),
+                (
+                    self.staged_analysis_cache_key
+                    if self._has_transcription_staging()
+                    else str(getattr(state, "cache_key", "") or "")
+                ),
+                (
+                    self.staged_analysis_fingerprint
+                    if self._has_transcription_staging()
+                    else str(
+                        getattr(state, "analysis_fingerprint", "") or ""
+                    )
+                ),
+                tuple(sorted(self.staged_new_track_specs.items())),
+            )
+            report = commit(request)
+            if report is None:
+                return None
+            successful = set(report.applied_routes)
+            self.staged_primary_routes.difference_update(successful)
+            self.staged_copy_routes.difference_update(successful)
+            staged_target_ids = {
+                route.track_id for route in self.staged_copy_routes
+            }
+            self.staged_new_track_specs = {
+                track_id: instrument_id
+                for track_id, instrument_id
+                in self.staged_new_track_specs.items()
+                if track_id in staged_target_ids
+            }
+            self._clear_staging_identity_if_empty()
+            self.last_applied = list(notes)
+            self._sync_shared_transcription_projection()
+            if report.unresolved_routes:
+                self.transcription_panel.set_status(
+                    trf(
+                        "部分候选未提交 · 失效 {invalid} · 孤立 {orphaned}",
+                        invalid=report.invalid_count,
+                        orphaned=report.orphaned_count,
+                    )
+                )
+            return report
         self.last_applied = list(notes)
         self.notes_applied.emit(notes)
+        return TranscriptionEditorCommitReport(project_changed=True)
 
     def accept_with_apply(self) -> None:
-        self.apply_notes(); self.accept()
+        report = self.apply_notes()
+        if report is not None and not report.unresolved_routes:
+            self.accept()
 
 
 class TrackFxDialog(QDialog):
     def __init__(self, parent: QWidget, track: TrackState) -> None:
         super().__init__(parent)
-        self.setWindowTitle("玛勒尼斯音源")
+        self.setWindowTitle("轨道 FX")
         self.setModal(True)
-        self.setMinimumWidth(360)
+        self.setMinimumWidth(380)
         self.track = track
+        try:
+            self._original_track_settings = raw_track_settings(
+                track.bdo_track_settings
+            )
+        except ValueError:
+            self._original_track_settings = (0,) * 8
+        self._effect_dirty: set[int] = set()
+        self._effect_fields: dict[int, QSpinBox] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
@@ -5140,6 +11158,31 @@ class TrackFxDialog(QDialog):
         form.setLabelAlignment(Qt.AlignRight)
         layout.addLayout(form)
 
+        for label, index, object_name in (
+            ("混响发送", TRACK_REVERB_SEND_INDEX, "TrackReverbSend"),
+            ("延迟发送", TRACK_DELAY_SEND_INDEX, "TrackDelaySend"),
+            ("合唱发送", TRACK_CHORUS_SEND_INDEX, "TrackChorusSend"),
+        ):
+            field = QSpinBox()
+            field.setObjectName(object_name)
+            field.setRange(0, GAME_PERCENT_MAX)
+            raw_value = int(self._original_track_settings[index])
+            field.setValue(max(0, min(GAME_PERCENT_MAX, raw_value)))
+            if raw_value > GAME_PERCENT_MAX:
+                field.setToolTip(
+                    trf(
+                        "导入原值 {value}；修改后按 0–100 写入。",
+                        value=raw_value,
+                    )
+                )
+            field.valueChanged.connect(
+                lambda _value, effect_index=index: self._effect_dirty.add(
+                    effect_index
+                )
+            )
+            self._effect_fields[index] = field
+            form.addRow(label, field)
+
         is_marnian = track.bdo_instrument_id in MARNIAN_SYNTH_INSTRUMENT_IDS
         self.marnian_mode: QComboBox | None = None
         if is_marnian:
@@ -5148,16 +11191,16 @@ class TrackFxDialog(QDialog):
                 self.marnian_mode.addItem(label, value)
             mode_index = self.marnian_mode.findData(track.marnian_synth_mode)
             self.marnian_mode.setCurrentIndex(mode_index if mode_index >= 0 else 0)
-            form.addRow("玛勒尼斯音源", self.marnian_mode)
+            form.addRow("音源模式", self.marnian_mode)
 
         if is_marnian:
-            mode_hint = QLabel(
-                "游戏轨道下拉框的默认值为 Basic。当前工程会保存此选择，"
-                "非 Basic 的 BDO 序列化位置仍待游戏存档差分确认。"
-            )
+            mode_hint = QLabel("Basic 默认；其他模式待验证")
             mode_hint.setWordWrap(True)
             mode_hint.setObjectName("Muted")
             layout.addWidget(mode_hint)
+        preview_hint = QLabel("游戏参数 · 本地试听不模拟 FX")
+        preview_hint.setObjectName("Muted")
+        layout.addWidget(preview_hint)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -5168,29 +11211,43 @@ class TrackFxDialog(QDialog):
             return "basic"
         return str(self.marnian_mode.currentData() or "basic")
 
+    def selected_track_settings(self) -> tuple[int, ...]:
+        """Return edited Aux sends while preserving untouched wire bytes."""
+
+        settings = list(self._original_track_settings)
+        for index in self._effect_dirty:
+            settings[index] = self._effect_fields[index].value()
+        return tuple(settings)
+
+    def track_effects_changed(self) -> bool:
+        return bool(self._effect_dirty)
+
 
 class ReferenceAudioController(QObject):
     """Local MP3/WAV playback plus bounded waveform-envelope extraction."""
 
     file_changed = Signal(str)
     volume_changed = Signal(int)
+    offset_changed = Signal(float)
     changed = Signal()
     timeline_changed = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._audio_path: Path | None = None
+        self._project_offset_ms = 0.0
         self.waveform: list[tuple[float, float, float]] = []
         self.waveform_starts: list[float] = []
         self.waveform_loading = False
         self._waveform_deferred_for_playback = False
+        self._pending_project_position_ms: float | None = None
 
         self.audio_output = QAudioOutput(self)
         self.audio_output.setVolume(0.5)
         self.player = QMediaPlayer(self)
         self.player.setAudioOutput(self.audio_output)
         self.player.positionChanged.connect(lambda _position: self.changed.emit())
-        self.player.durationChanged.connect(lambda _duration: self.timeline_changed.emit())
+        self.player.durationChanged.connect(self._duration_changed)
         self.player.playbackStateChanged.connect(self._playback_state_changed)
         self.player.errorOccurred.connect(self._playback_error)
 
@@ -5211,6 +11268,23 @@ class ReferenceAudioController(QObject):
     def duration_ms(self) -> float:
         waveform_end = self.waveform[-1][1] if self.waveform else 0.0
         return max(float(self.player.duration()), waveform_end)
+
+    @property
+    def project_offset_ms(self) -> float:
+        """Project time occupied by audio frame zero."""
+        return self._project_offset_ms
+
+    @property
+    def project_start_ms(self) -> float:
+        return self._project_offset_ms
+
+    @property
+    def project_end_ms(self) -> float:
+        return self._project_offset_ms + self.duration_ms
+
+    @property
+    def project_position_ms(self) -> float:
+        return self.audio_to_project(float(self.player.position()))
 
     @property
     def is_playing(self) -> bool:
@@ -5241,6 +11315,7 @@ class ReferenceAudioController(QObject):
             self.decoder.setSource(QUrl())
             self.player.setSource(QUrl())
             self._audio_path = None
+            self._pending_project_position_ms = None
             self.waveform = []
             self.waveform_starts = []
             self.waveform_loading = False
@@ -5254,6 +11329,7 @@ class ReferenceAudioController(QObject):
         self.stop()
         self.decoder.stop()
         self._audio_path = candidate.resolve()
+        self._pending_project_position_ms = None
         source = QUrl.fromLocalFile(str(self._audio_path))
         self.player.setSource(source)
         self.waveform = []
@@ -5284,10 +11360,63 @@ class ReferenceAudioController(QObject):
         self.player.pause()
 
     def stop(self) -> None:
+        self._pending_project_position_ms = None
         self.player.stop()
 
+    def project_to_audio(self, project_ms: float) -> float:
+        return float(project_ms) - self._project_offset_ms
+
+    def audio_to_project(self, audio_ms: float) -> float:
+        return float(audio_ms) + self._project_offset_ms
+
+    def set_project_offset_ms(self, milliseconds: float, *, notify: bool = True) -> None:
+        normalized = float(milliseconds)
+        if not math.isfinite(normalized):
+            return
+        if math.isclose(normalized, self._project_offset_ms, abs_tol=0.001):
+            return
+        self._project_offset_ms = normalized
+        if notify:
+            self.offset_changed.emit(normalized)
+        self.timeline_changed.emit()
+        self.changed.emit()
+
     def set_position(self, milliseconds: float) -> None:
-        self.player.setPosition(max(0, min(round(milliseconds), round(self.duration_ms))))
+        """Seek with a project-time position.
+
+        All UI callers operate on the shared project timeline. The underlying
+        media player remains in source-audio time.
+        """
+        project_ms = float(milliseconds)
+        if not math.isfinite(project_ms):
+            return
+        audio_ms = self.project_to_audio(project_ms)
+        if not math.isfinite(audio_ms) or audio_ms < 0.0:
+            self._pending_project_position_ms = None
+            self.player.setPosition(0)
+            return
+        media_duration_ms = float(self.player.duration())
+        if media_duration_ms <= 0.0:
+            # QMediaPlayer may ignore seeks issued before metadata arrives.
+            # Retain the project-clock request and reapply it on durationChanged.
+            self._pending_project_position_ms = project_ms
+            self.player.setPosition(max(0, round(audio_ms)))
+            return
+        self._pending_project_position_ms = None
+        self.player.setPosition(
+            max(0, min(round(audio_ms), round(media_duration_ms)))
+        )
+
+    def _apply_pending_position(self) -> None:
+        pending = self._pending_project_position_ms
+        if pending is None or float(self.player.duration()) <= 0.0:
+            return
+        self._pending_project_position_ms = None
+        self.set_position(pending)
+
+    def _duration_changed(self, _duration: int) -> None:
+        self._apply_pending_position()
+        self.timeline_changed.emit()
 
     def set_volume_percent(self, percent: int, *, notify: bool = True) -> None:
         normalized = max(0, min(100, int(percent)))
@@ -5347,6 +11476,7 @@ class ReferenceAudioController(QObject):
         self.waveform.sort(key=lambda item: item[0])
         self.waveform_starts = [item[0] for item in self.waveform]
         self.waveform_loading = False
+        self._apply_pending_position()
         self.timeline_changed.emit()
         self.changed.emit()
 
@@ -5380,17 +11510,463 @@ class ReferenceAudioController(QObject):
             )
 
 
+@dataclass(frozen=True, slots=True)
+class TranscriptionAssistAnalysisBundle:
+    harmony: HarmonyAnalysis
+    instrument_matches: InstrumentMatchAnalysis
+    recovered_review: TranscriptionAssistReviewState | None = None
+    timbre_profile_index: object | None = None
+    group_timbre_profiles: object | None = None
+    group_timbre_revision: str = ""
+
+
+def _semantic_revision(values: tuple[object, ...], fields: tuple[str, ...]) -> str:
+    digest = hashlib.sha256()
+    for value in values:
+        for field_name in fields:
+            field_value = getattr(value, field_name, "")
+            if isinstance(field_value, float):
+                field_value = round(field_value, 6)
+            digest.update(str(field_value).encode("utf-8"))
+            digest.update(b"\x1f")
+        digest.update(b"\n")
+    return digest.hexdigest()[:24]
+
+
+def _close_mapped_array(value: object | None) -> None:
+    mmap = getattr(value, "_mmap", None)
+    if mmap is not None:
+        try:
+            mmap.close()
+        except (OSError, ValueError):
+            pass
+
+
+def _instrument_preferred_roles(instrument_id: int) -> frozenset[str]:
+    if instrument_id in {0x0E, 0x0F}:
+        return frozenset({"bass", "rhythm"})
+    if instrument_id in {0x06, 0x10, 0x07, 0x11}:
+        return frozenset({"harmony", "pad", "primary_melody"})
+    if instrument_id in {0x08, 0x12, 0x01, 0x02, 0x0B, 0x27, 0x28}:
+        return frozenset({"primary_melody", "secondary_melody", "harmony"})
+    if instrument_id in {0x00, 0x0A, 0x24, 0x25, 0x26}:
+        return frozenset({"primary_melody", "harmony", "rhythm"})
+    if instrument_id == 0x13:
+        return frozenset({"harmony", "rhythm", "ornament"})
+    if instrument_id in {0x14, 0x18, 0x1C, 0x20}:
+        return frozenset({"pad", "fx", "ornament"})
+    return frozenset({"harmony"})
+
+
+def _instrument_articulation_profile(instrument_id: int) -> str:
+    if instrument_id in {0x01, 0x02, 0x08, 0x0B, 0x0F, 0x10, 0x12, 0x27, 0x28}:
+        return "sustain"
+    if instrument_id in {0x04, 0x05, 0x0D, 0x13}:
+        return "short"
+    return "versatile"
+
+
+@lru_cache(maxsize=1)
+def bdo_transcription_instrument_descriptors() -> tuple[BdoInstrumentDescriptor, ...]:
+    """Build advisory descriptors from the same verified profile as export."""
+
+    descriptors: list[BdoInstrumentDescriptor] = []
+    for instrument_id, rule in sorted(BDO_PROFILE.instruments.items()):
+        is_percussion = instrument_id in {0x04, 0x05, 0x0D}
+        descriptors.append(
+            BdoInstrumentDescriptor(
+                instrument_id=instrument_id,
+                pitch_min=rule.pitch_min,
+                pitch_max=rule.pitch_max,
+                available_pitches=rule.allowed_pitches,
+                preferred_roles=_instrument_preferred_roles(instrument_id),
+                articulation_profile=_instrument_articulation_profile(
+                    instrument_id
+                ),
+                is_percussion=is_percussion,
+                # Program-generated Marnian families remain range/role-only
+                # until an explicit in-game A/B evidence profile exists.
+                timbre_evidence_approved=instrument_id
+                not in {0x14, 0x18, 0x1C, 0x20},
+            )
+        )
+    return tuple(descriptors)
+
+
+class TranscriptionAssistAnalysisWorker(QThread):
+    """Derive harmony and voice/instrument suggestions off the GUI thread."""
+
+    succeeded = Signal(object)
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(
+        self,
+        *,
+        cache_key: str,
+        candidates: tuple[object, ...],
+        audio_time_notes: tuple[object, ...],
+        descriptors: tuple[BdoInstrumentDescriptor, ...],
+        bpm: float,
+        time_signature: int,
+        beat_origin_audio_ms: float,
+        duration_ms: float | None,
+        midi_min: int,
+        reference_audio_path: str = "",
+        sample_map_path: str | Path = "",
+        audio_root: str | Path = "",
+        manual_voice_groups: tuple[ManualVoiceGroupReview, ...] = (),
+        audio_fingerprint: str = "",
+        pitch_offset: int = 0,
+        review_state: TranscriptionAssistReviewState | None = None,
+        previous_candidates: tuple[object, ...] = (),
+        reuse_instrument_matches: InstrumentMatchAnalysis | None = None,
+        reuse_timbre_profile_index: object | None = None,
+        reuse_group_timbre_profiles: object | None = None,
+        reuse_group_timbre_revision: str = "",
+        allow_review_recovery: bool = True,
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.cache_key = str(cache_key)
+        self.candidates = tuple(candidates)
+        self.audio_time_notes = tuple(audio_time_notes)
+        self.descriptors = tuple(descriptors)
+        self.bpm = float(bpm)
+        self.time_signature = int(time_signature)
+        self.beat_origin_audio_ms = float(beat_origin_audio_ms)
+        self.duration_ms = (
+            None if duration_ms is None else float(duration_ms)
+        )
+        self.midi_min = int(midi_min)
+        self.reference_audio_path = str(reference_audio_path or "")
+        self.sample_map_path = Path(sample_map_path) if sample_map_path else None
+        self.audio_root = Path(audio_root) if audio_root else None
+        self.manual_voice_groups = tuple(manual_voice_groups)
+        self.audio_fingerprint = str(audio_fingerprint or "")
+        self.pitch_offset = int(pitch_offset)
+        self.review_state = (
+            review_state
+            if isinstance(review_state, TranscriptionAssistReviewState)
+            else TranscriptionAssistReviewState()
+        )
+        self.previous_candidates = tuple(previous_candidates)
+        self.reuse_instrument_matches = reuse_instrument_matches
+        self.reuse_timbre_profile_index = reuse_timbre_profile_index
+        self.reuse_group_timbre_profiles = reuse_group_timbre_profiles
+        self.reuse_group_timbre_revision = str(
+            reuse_group_timbre_revision or ""
+        )
+        self.allow_review_recovery = bool(allow_review_recovery)
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+    def run(self) -> None:
+        frame = None
+        times = None
+        try:
+            frame = load_transcription_evidence(self.cache_key, "frame")
+            times = load_transcription_frame_times(self.cache_key)
+            if frame is None or times is None:
+                raise TranscriptionError(
+                    "扒谱证据缓存缺失或校验失败，无法生成和声建议。"
+                )
+            if self._cancelled.is_set():
+                self.cancelled.emit()
+                return
+            candidate_revision = _semantic_revision(
+                self.candidates,
+                (
+                    "candidate_id",
+                    "pitch",
+                    "start_ms",
+                    "duration_ms",
+                    "confidence",
+                ),
+            )
+            note_revision = _semantic_revision(
+                self.audio_time_notes,
+                ("pitch", "start", "dur", "vel", "ntype"),
+            )
+            derived_cache_key = harmony_cache_key(
+                self.cache_key,
+                bpm=self.bpm,
+                time_signature=self.time_signature,
+                beat_origin_audio_ms=self.beat_origin_audio_ms,
+                candidate_revision=candidate_revision,
+                note_revision=note_revision,
+            )
+            harmony = analyse_harmony(
+                frame,
+                times,
+                cache_key=derived_cache_key,
+                bpm=self.bpm,
+                beat_origin_audio_ms=self.beat_origin_audio_ms,
+                midi_min=self.midi_min,
+                duration_ms=self.duration_ms,
+                symbolic_candidates=self.candidates,
+                symbolic_notes=self.audio_time_notes,
+                cancelled=self._cancelled.is_set,
+            )
+            if self._cancelled.is_set():
+                self.cancelled.emit()
+                return
+            profile_index = self.reuse_timbre_profile_index
+            group_profiles = self.reuse_group_timbre_profiles
+            group_profile_revision = self.reuse_group_timbre_revision
+            instrument_matches = self.reuse_instrument_matches
+            if instrument_matches is None:
+                groups = group_voice_candidates(
+                    self.candidates,
+                    beat_ms=60_000.0 / max(1.0, self.bpm),
+                    cancelled=self._cancelled.is_set,
+                )
+                if self.manual_voice_groups:
+                    groups = overlay_manual_voice_groups(
+                        groups,
+                        self.candidates,
+                        self.manual_voice_groups,
+                        cancelled=self._cancelled.is_set,
+                    )
+                wanted_group_revision = _semantic_revision(
+                    tuple(groups),
+                    (
+                        "group_id",
+                        "candidate_ids",
+                        "start_audio_ms",
+                        "end_audio_ms",
+                        "role",
+                    ),
+                )
+                wanted_group_revision = hashlib.sha256(
+                    (
+                        f"{self.audio_fingerprint}|"
+                        f"{candidate_revision}|"
+                        f"{wanted_group_revision}"
+                    ).encode("utf-8")
+                ).hexdigest()[:24]
+                instrument_profiles = {}
+                sample_profile_key = ""
+                if (
+                    self.reference_audio_path
+                    and self.sample_map_path is not None
+                    and self.sample_map_path.is_file()
+                    and self.audio_root is not None
+                    and self.audio_root.is_dir()
+                    and not self._cancelled.is_set()
+                ):
+                    try:
+                        if profile_index is None:
+                            profile_index = (
+                                load_or_build_timbre_profile_index(
+                                    self.sample_map_path,
+                                    self.audio_root,
+                                    cancelled=self._cancelled.is_set,
+                                )
+                            )
+                        instrument_profiles = profile_index.as_mapping()
+                        sample_profile_key = (
+                            profile_index.sample_profile_key
+                        )
+                        if (
+                            group_profiles is None
+                            or group_profile_revision
+                            != wanted_group_revision
+                        ):
+                            group_profiles = (
+                                extract_group_timbre_profiles(
+                                    self.reference_audio_path,
+                                    self.candidates,
+                                    groups,
+                                    frame_evidence=FramePitchEvidence(
+                                        times,
+                                        frame,
+                                        self.midi_min,
+                                        1,
+                                    ),
+                                    cancelled=self._cancelled.is_set,
+                                )
+                            )
+                            group_profile_revision = (
+                                wanted_group_revision
+                            )
+                    except (
+                        OSError,
+                        TypeError,
+                        ValueError,
+                        TimbreProfileError,
+                    ):
+                        # Local sample evidence is optional.  The deterministic
+                        # range/role fallback remains available and visibly
+                        # capped.
+                        instrument_profiles = {}
+                        group_profiles = {}
+                        group_profile_revision = wanted_group_revision
+                        sample_profile_key = ""
+                else:
+                    group_profiles = {}
+                    group_profile_revision = wanted_group_revision
+                candidate_timbres = getattr(
+                    group_profiles,
+                    "candidate_profiles",
+                    {},
+                )
+                if candidate_timbres:
+                    manual_group_ids = {
+                        str(review.group_id)
+                        for review in self.manual_voice_groups
+                        if not bool(getattr(review, "orphaned", False))
+                    }
+                    fixed_groups = tuple(
+                        group
+                        for group in groups
+                        if group.group_id in manual_group_ids
+                    )
+                    refinable_groups = tuple(
+                        group
+                        for group in groups
+                        if group.group_id not in manual_group_ids
+                    )
+                    refined_groups = refine_voice_groups_by_timbre(
+                        refinable_groups,
+                        self.candidates,
+                        candidate_timbres,
+                        cancelled=self._cancelled.is_set,
+                    )
+                    if refined_groups != refinable_groups:
+                        groups = tuple(
+                            sorted(
+                                (*fixed_groups, *refined_groups),
+                                key=lambda group: (
+                                    group.start_audio_ms,
+                                    group.end_audio_ms,
+                                    group.group_id,
+                                ),
+                            )
+                        )
+                        group_profiles = remap_group_timbre_profiles(
+                            group_profiles,
+                            self.candidates,
+                            groups,
+                            cancelled=self._cancelled.is_set,
+                        )
+                instrument_matches = match_bdo_instruments(
+                    groups,
+                    self.candidates,
+                    self.descriptors,
+                    group_timbre_profiles=group_profiles or {},
+                    instrument_timbre_profiles=instrument_profiles,
+                    sample_profile_key=sample_profile_key,
+                    pitch_offset=self.pitch_offset,
+                    beat_ms=60_000.0 / max(1.0, self.bpm),
+                    top_k=3,
+                    cancelled=self._cancelled.is_set,
+                )
+            previous_revision = _semantic_revision(
+                self.previous_candidates,
+                (
+                    "candidate_id",
+                    "pitch",
+                    "start_ms",
+                    "duration_ms",
+                    "confidence",
+                ),
+            )
+            candidate_revision_changed = bool(
+                self.previous_candidates
+            ) and previous_revision != candidate_revision
+            current_group_ids = {
+                group.group_id for group in instrument_matches.groups
+            }
+            review_group_ids = {
+                item.group_id
+                for item in self.review_state.active_voice_groups
+            }
+            needs_recovery = (
+                self.audio_fingerprint
+                != self.review_state.audio_fingerprint
+                or self.review_state.has_orphaned_reviews
+                or candidate_revision_changed
+                or not review_group_ids.issubset(current_group_ids)
+            )
+            recovered_review = None
+            if needs_recovery and self.allow_review_recovery:
+                recovered_review = recover_assist_review(
+                    self.review_state,
+                    audio_fingerprint=self.audio_fingerprint,
+                    old_candidates=self.previous_candidates,
+                    new_candidates=self.candidates,
+                    chord_segments=harmony.chord_segments,
+                    voice_groups=instrument_matches.groups,
+                    force_reanchor=(
+                        candidate_revision_changed
+                        and self.audio_fingerprint
+                        == self.review_state.audio_fingerprint
+                    ),
+                    cancelled=self._cancelled.is_set,
+                ).state
+        except (HarmonyAnalysisCancelled, InstrumentAnalysisCancelled):
+            self.cancelled.emit()
+        except RuntimeError:
+            if self._cancelled.is_set():
+                self.cancelled.emit()
+            else:
+                self.failed.emit(
+                    "语义分析失败；缓存或本地音色证据不可用。"
+                )
+        except TranscriptionError as exc:
+            self.failed.emit(str(exc))
+        except (OSError, TypeError, ValueError):
+            # Do not surface cache/sample paths in UI state, logs, project
+            # payloads, or packaged diagnostics.
+            self.failed.emit(
+                "语义分析失败；缓存或本地音色证据不可用。"
+            )
+        except Exception:
+            self.failed.emit("语义分析失败；请重新分析整首。")
+        else:
+            if self._cancelled.is_set():
+                self.cancelled.emit()
+            else:
+                self.succeeded.emit(
+                    TranscriptionAssistAnalysisBundle(
+                        harmony,
+                        instrument_matches,
+                        recovered_review,
+                        profile_index,
+                        group_profiles,
+                        group_profile_revision,
+                    )
+                )
+        finally:
+            _close_mapped_array(frame)
+            _close_mapped_array(times)
+
+
 class TranscriptionAnalysisWorker(QThread):
-    """Run optional Basic Pitch inference away from the GUI/audio threads."""
+    """Run bundled Basic Pitch inference away from the GUI/audio threads."""
 
     progress_changed = Signal(int)
     succeeded = Signal(object)
     failed = Signal(str)
     cancelled = Signal()
 
-    def __init__(self, audio_path: str | Path, parent: QObject | None = None) -> None:
+    def __init__(
+        self,
+        audio_path: str | Path,
+        parent: QObject | None = None,
+        *,
+        analysis_mode: str = DEFAULT_TRANSCRIPTION_ANALYSIS_MODE,
+        sensitivity: str = "balanced",
+        cleanup_profile: str = DEFAULT_TRANSCRIPTION_CLEANUP_PROFILE,
+    ) -> None:
         super().__init__(parent)
         self.audio_path = Path(audio_path)
+        self.analysis_mode = str(analysis_mode)
+        self.sensitivity = str(sensitivity)
+        self.cleanup_profile = str(cleanup_profile)
         self._cancelled = threading.Event()
 
     def cancel(self) -> None:
@@ -5402,18 +11978,282 @@ class TranscriptionAnalysisWorker(QThread):
                 self.audio_path,
                 self.progress_changed.emit,
                 self._cancelled.is_set,
+                analysis_mode=self.analysis_mode,
+                sensitivity=self.sensitivity,
+                cleanup_profile=self.cleanup_profile,
             )
         except TranscriptionCancelled:
             self.cancelled.emit()
-        except (TranscriptionError, OSError) as exc:
+        except TranscriptionError as exc:
+            append_crash_log(
+                "Transcription analysis failed",
+                traceback.format_exc(),
+            )
             self.failed.emit(str(exc))
-        except Exception as exc:
-            self.failed.emit(f"扒谱分析失败：{exc}")
+        except Exception:
+            append_crash_log(
+                "Transcription analysis failed",
+                traceback.format_exc(),
+            )
+            self.failed.emit(tr("扒谱分析失败。"))
         else:
             if self._cancelled.is_set():
                 self.cancelled.emit()
             else:
                 self.succeeded.emit(result)
+
+
+class TranscriptionRedecodeWorker(QThread):
+    """Decode one A–B range from cached evidence without running ONNX."""
+
+    succeeded = Signal(object)
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(
+        self,
+        cache_key: str,
+        start_ms: float,
+        end_ms: float,
+        sensitivity: str,
+        parent: QObject | None = None,
+        *,
+        cleanup_profile: str = DEFAULT_TRANSCRIPTION_CLEANUP_PROFILE,
+    ) -> None:
+        super().__init__(parent)
+        self.cache_key = str(cache_key)
+        self.start_ms = float(start_ms)
+        self.end_ms = float(end_ms)
+        self.sensitivity = str(sensitivity)
+        self.cleanup_profile = str(cleanup_profile)
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+    def run(self) -> None:
+        try:
+            result = redecode_transcription_interval(
+                self.cache_key,
+                self.start_ms,
+                self.end_ms,
+                sensitivity=self.sensitivity,
+                cleanup_profile=self.cleanup_profile,
+                context_ms=500.0,
+                cancelled=self._cancelled.is_set,
+            )
+        except TranscriptionCancelled:
+            self.cancelled.emit()
+        except TranscriptionError as exc:
+            append_crash_log(
+                "Transcription range decode failed",
+                traceback.format_exc(),
+            )
+            self.failed.emit(str(exc))
+        except Exception:
+            append_crash_log(
+                "Transcription range decode failed",
+                traceback.format_exc(),
+            )
+            self.failed.emit(tr("区间重解码失败。"))
+        else:
+            if self._cancelled.is_set():
+                self.cancelled.emit()
+            else:
+                self.succeeded.emit(result)
+
+
+class TranscriptionCacheLoadWorker(QThread):
+    """Validate and restore a cached analysis away from the GUI thread."""
+
+    succeeded = Signal(object)
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(
+        self,
+        cache_key: str,
+        parent: QObject | None = None,
+        *,
+        audio_path: str | Path = "",
+        expected_audio_fingerprint: str = "",
+        analysis_mode: str = DEFAULT_TRANSCRIPTION_ANALYSIS_MODE,
+        sensitivity: str = "balanced",
+        cleanup_profile: str = DEFAULT_TRANSCRIPTION_CLEANUP_PROFILE,
+    ) -> None:
+        super().__init__(parent)
+        self.cache_key = str(cache_key)
+        self.audio_path = Path(audio_path) if audio_path else None
+        self.expected_audio_fingerprint = str(
+            expected_audio_fingerprint or ""
+        )
+        self.analysis_mode = str(analysis_mode)
+        self.sensitivity = str(sensitivity)
+        self.cleanup_profile = str(cleanup_profile)
+        self.current_audio_fingerprint = ""
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+    def run(self) -> None:
+        try:
+            initial_audio_fingerprint = ""
+            if self.audio_path is not None:
+                try:
+                    initial_audio_fingerprint = (
+                        transcription_audio_fingerprint(
+                            self.audio_path,
+                            cancelled=self._cancelled.is_set,
+                        )
+                    )
+                except OSError:
+                    self.succeeded.emit(None)
+                    return
+                self.current_audio_fingerprint = initial_audio_fingerprint
+                if (
+                    self.expected_audio_fingerprint
+                    and initial_audio_fingerprint
+                    != self.expected_audio_fingerprint
+                ):
+                    self.succeeded.emit(None)
+                    return
+            expected = (
+                initial_audio_fingerprint
+                or self.expected_audio_fingerprint
+                or None
+            )
+            result = load_cached_transcription_result(
+                self.cache_key,
+                expected_audio_fingerprint=expected,
+                cancelled=self._cancelled.is_set,
+            )
+            if result is not None:
+                descriptor = getattr(
+                    result, "evidence_descriptor", None
+                )
+                if (
+                    descriptor is not None
+                    and descriptor.analysis_mode != self.analysis_mode
+                ):
+                    result = None
+                elif (
+                    descriptor is not None
+                    and (
+                        descriptor.decode_sensitivity != self.sensitivity
+                        or descriptor.cleanup_profile
+                        != self.cleanup_profile
+                        or descriptor.postprocess_version
+                        != POSTPROCESS_VERSION
+                        or result.postprocess_report is None
+                    )
+                ):
+                    result = redecode_transcription_full(
+                        self.cache_key,
+                        sensitivity=self.sensitivity,
+                        cleanup_profile=self.cleanup_profile,
+                        cancelled=self._cancelled.is_set,
+                    )
+            if self.audio_path is not None:
+                try:
+                    self.current_audio_fingerprint = (
+                        transcription_audio_fingerprint(
+                            self.audio_path,
+                            cancelled=self._cancelled.is_set,
+                        )
+                    )
+                except OSError:
+                    self.succeeded.emit(None)
+                    return
+                if (
+                    self.current_audio_fingerprint
+                    != initial_audio_fingerprint
+                ):
+                    self.succeeded.emit(None)
+                    return
+        except TranscriptionCancelled:
+            self.cancelled.emit()
+            return
+        except Exception as exc:
+            self.failed.emit(str(exc))
+        else:
+            if self._cancelled.is_set():
+                self.cancelled.emit()
+            else:
+                self.succeeded.emit(result)
+
+
+class SamplePackPrepareWorker(QThread):
+    """Hash, validate, and extract one local sample pack off the GUI thread."""
+
+    progress_changed = Signal(int)
+    succeeded = Signal(str)
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(
+        self,
+        pack_path: str | Path,
+        cache_root: str | Path,
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.pack_path = Path(pack_path)
+        self.cache_root = Path(cache_root)
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+    def run(self) -> None:
+        try:
+            audio_root = extract_sample_pack(
+                self.pack_path,
+                self.cache_root,
+                progress=self.progress_changed.emit,
+                cancelled=self._cancelled.is_set,
+            )
+        except SamplePackCancelled:
+            self.cancelled.emit()
+        except (OSError, SamplePackError) as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:
+            self.failed.emit(str(exc) or type(exc).__name__)
+        else:
+            if self._cancelled.is_set():
+                self.cancelled.emit()
+            else:
+                self.succeeded.emit(str(audio_root))
+
+
+class GameArtImportWorker(QThread):
+    """Decrypt the allow-listed game sprite into a local cache off the GUI thread."""
+
+    succeeded = Signal(object)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        paz_root: str | Path,
+        cache_root: str | Path,
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.paz_root = Path(paz_root)
+        self.cache_root = Path(cache_root)
+
+    def run(self) -> None:
+        try:
+            report = import_game_instrument_art(
+                self.paz_root,
+                self.cache_root,
+            )
+        except (OSError, GameArtImportError) as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:
+            self.failed.emit(str(exc) or type(exc).__name__)
+        else:
+            self.succeeded.emit(report)
 
 
 class OptimizerAnalysisWorker(QThread):
@@ -5455,6 +12295,7 @@ class MidiOptimizeDialog(QDialog):
         self.discovery_diagnostics: tuple[str, ...] = ()
         self.session = None
         self._applied_result = None
+        self._analysis_started_once = False
         self.analysis_worker: OptimizerAnalysisWorker | None = None
         scope_title = "单轨优化" if target_track_id is not None else "全局 MIDI 优化"
         self.setWindowTitle(scope_title)
@@ -5616,7 +12457,12 @@ class MidiOptimizeDialog(QDialog):
         self.session = None
         self._applied_result = None
         self.apply_button.setEnabled(False)
-        self.summary_label.setText("设置已变化，请重新分析优化。")
+        if self._selected_algorithm() is None:
+            self.summary_label.setText("没有可用的优化算法。")
+        elif self._analysis_started_once:
+            self.summary_label.setText("设置已更新，点击分析优化刷新预览。")
+        else:
+            self.summary_label.setText("选择算法和强度，然后分析优化。")
         diagnostics = [f"算法包：{item}" for item in self.discovery_diagnostics]
         self.report_text.setPlainText("\n".join(diagnostics))
 
@@ -5670,6 +12516,7 @@ class MidiOptimizeDialog(QDialog):
         if not self._target_track_ids():
             self.summary_label.setText("请至少选择一条允许写入的轨道。")
             return
+        self._analysis_started_once = True
         self._set_analysis_busy(True)
         self.summary_label.setText("正在分析优化…")
         arguments = (
@@ -5716,12 +12563,22 @@ class MidiOptimizeDialog(QDialog):
         self.apply_button.setEnabled(bool(preview.operations))
 
     def _analysis_failed(self, message: str, traceback_text: str) -> None:
-        append_crash_log("Optimizer plugin analysis failed", traceback_text)
+        descriptor = self._selected_algorithm()
+        builtin = descriptor is not None and descriptor.bundle is None
+        append_crash_log(
+            "Built-in optimizer analysis failed"
+            if builtin
+            else "Optimizer plugin analysis failed",
+            traceback_text,
+        )
         self.session = None
         self.summary_label.setText(f"分析失败：{message}")
-        self.report_text.setPlainText(
-            f"算法未应用任何修改。请检查算法包，或切换到 BDO 游戏安全优化。\n\n{message}"
+        guidance = (
+            tr("安全优化未应用任何修改。请先运行转换检查；处理阻断项后再试。")
+            if builtin
+            else tr("算法未应用任何修改。请检查算法包，或切换到 BDO 游戏安全优化。")
         )
+        self.report_text.setPlainText(f"{guidance}\n\n{message}")
         self.apply_button.setEnabled(False)
 
     def _analysis_finished(self) -> None:
@@ -5931,6 +12788,11 @@ class ConversionCheckDialog(QDialog):
 class SettingsDialog(QDialog):
     def __init__(self, parent: "MidiToBdoWindow") -> None:
         super().__init__(parent)
+        self.game_art_worker: GameArtImportWorker | None = None
+        self._game_art_pending_paz_root = ""
+        self.selected_paz_root = str(
+            parent.audio_sources.get("paz_root", "") or ""
+        )
         self.setObjectName("SettingsDialog")
         self.setWindowTitle("设置")
         self.setModal(True)
@@ -6018,6 +12880,28 @@ class SettingsDialog(QDialog):
         self.transpose.setSuffix(" 半音")
         self.transpose.setValue(parent.transpose)
         form.addRow("移调", self.transpose)
+
+        output, output_layout = self._section(
+            "输出目录",
+            "转换文件保存位置。",
+        )
+        general_page_layout.addWidget(output)
+        output_row = QHBoxLayout()
+        output_row.setContentsMargins(0, 0, 0, 0)
+        output_row.setSpacing(6)
+        self.output_dir = QLineEdit(parent.output_dir_path)
+        self.output_dir.setObjectName("OutputDirectoryEdit")
+        self.output_dir.setPlaceholderText(tr("输出目录"))
+        output_row.addWidget(self.output_dir, stretch=1)
+        browse_output = PillButton("选择", "secondary")
+        browse_output.setObjectName("BrowseOutputDirectoryButton")
+        browse_output.clicked.connect(self._browse_output_folder)
+        output_row.addWidget(browse_output)
+        open_output = PillButton("打开", "ghost")
+        open_output.setObjectName("OpenOutputDirectoryButton")
+        open_output.clicked.connect(self._open_output_folder)
+        output_row.addWidget(open_output)
+        output_layout.addLayout(output_row)
 
         owner, owner_layout = self._section(
             "游戏编辑权限",
@@ -6124,21 +13008,55 @@ class SettingsDialog(QDialog):
             "仅用于本机近似试听，不会写入曲谱，也不会上传。",
         )
         audio_page_layout.addWidget(audio)
-        self.audio_source = QLineEdit(parent.audio_sources.get("sample_pack", ""))
+        self.audio_source = QLineEdit(displayed_audio_source(parent.audio_sources))
         self.audio_source.setReadOnly(True)
+        self.audio_source.setPlaceholderText("未选择")
         audio_source_row = QWidget()
         audio_source_layout = QHBoxLayout(audio_source_row)
         audio_source_layout.setContentsMargins(0, 0, 0, 0)
-        audio_source_layout.setSpacing(10)
+        audio_source_layout.setSpacing(6)
         audio_source_layout.addWidget(self.audio_source, stretch=1)
-        sample_pack_button = PillButton("选择音源包", "secondary")
+        sample_pack_button = PillButton("音源包", "secondary")
+        sample_pack_button.setToolTip("选择 .bdosamples 音源包")
         sample_pack_button.clicked.connect(self._browse_sample_pack)
         audio_source_layout.addWidget(sample_pack_button)
+        audio_folder_button = PillButton("文件夹", "secondary")
+        audio_folder_button.setToolTip("选择已准备好的本地 BDO 音源目录")
+        audio_folder_button.clicked.connect(self._browse_audio_folder)
+        audio_source_layout.addWidget(audio_folder_button)
+        clear_audio_button = PillButton("清除", "ghost")
+        clear_audio_button.clicked.connect(self.audio_source.clear)
+        audio_source_layout.addWidget(clear_audio_button)
         audio_layout.addWidget(audio_source_row)
 
+        self.instrument_art_dir = QLineEdit(parent.instrument_art_dir)
+        self.instrument_art_dir.setReadOnly(True)
+        self.instrument_art_dir.setPlaceholderText("内置原创图标")
+        art_source_row = QWidget()
+        art_source_layout = QHBoxLayout(art_source_row)
+        art_source_layout.setContentsMargins(0, 0, 0, 0)
+        art_source_layout.setSpacing(6)
+        art_source_layout.addWidget(self.instrument_art_dir, stretch=1)
+        art_folder_button = PillButton("轨道背景", "secondary")
+        art_folder_button.setToolTip(
+            "选择本地乐器图片目录；未设置时使用内置原创图标"
+        )
+        art_folder_button.clicked.connect(self._browse_instrument_art_folder)
+        art_source_layout.addWidget(art_folder_button)
+        self.game_art_button = PillButton("游戏图", "secondary")
+        self.game_art_button.setToolTip(
+            "从本机游戏 PAZ 解密乐器图；只写入本地缓存"
+        )
+        self.game_art_button.clicked.connect(self._import_game_art)
+        art_source_layout.addWidget(self.game_art_button)
+        clear_art_button = PillButton("清除", "ghost")
+        clear_art_button.clicked.connect(self.instrument_art_dir.clear)
+        art_source_layout.addWidget(clear_art_button)
+        audio_layout.addWidget(art_source_row)
+
         effects, effects_layout = self._section(
-            "MIDI 效果",
-            "数值范围为 0–127；设为 0 即不写入对应效果。",
+            "游戏主效果",
+            "每轨发送在轨道 FX；本地试听不模拟。",
         )
         effect_grid = QGridLayout()
         effect_grid.setContentsMargins(0, 0, 0, 0)
@@ -6148,30 +13066,82 @@ class SettingsDialog(QDialog):
             effect_grid.setColumnStretch(column, 1)
         effects_layout.addLayout(effect_grid)
         audio_page_layout.addWidget(effects)
+        try:
+            self._master_effect_original = MasterEffects.from_legacy(
+                parent.reverb,
+                parent.delay,
+                parent.chorus,
+            )
+        except (TypeError, ValueError):
+            self._master_effect_original = MasterEffects()
+        self._master_effect_dirty: set[str] = set()
+        self._master_effect_fields: dict[str, QSpinBox] = {}
+
+        def configure_master_field(
+            field: QSpinBox,
+            name: str,
+            raw_value: int,
+        ) -> None:
+            field.setRange(0, GAME_PERCENT_MAX)
+            field.setValue(max(0, min(GAME_PERCENT_MAX, int(raw_value))))
+            if int(raw_value) > GAME_PERCENT_MAX:
+                field.setToolTip(
+                    trf(
+                        "导入原值 {value}；修改后按 0–100 写入。",
+                        value=int(raw_value),
+                    )
+                )
+            field.valueChanged.connect(
+                lambda _value, effect_name=name: self._master_effect_dirty.add(
+                    effect_name
+                )
+            )
+            self._master_effect_fields[name] = field
+
         self.reverb = QSpinBox()
-        self.reverb.setRange(0, 127)
-        self.reverb.setValue(parent.reverb)
+        self.reverb.setObjectName("MasterReverbTime")
+        configure_master_field(
+            self.reverb,
+            "reverb_time",
+            self._master_effect_original.reverb_time,
+        )
         self.delay = QSpinBox()
-        self.delay.setRange(0, 127)
-        self.delay.setValue(parent.delay)
-        effect_grid.addWidget(QLabel("混响"), 0, 0, alignment=Qt.AlignRight | Qt.AlignVCenter)
+        self.delay.setObjectName("MasterDelayFeedback")
+        configure_master_field(
+            self.delay,
+            "delay_feedback",
+            self._master_effect_original.delay_feedback,
+        )
+        effect_grid.addWidget(QLabel("混响时间"), 0, 0, alignment=Qt.AlignRight | Qt.AlignVCenter)
         effect_grid.addWidget(self.reverb, 0, 1)
-        effect_grid.addWidget(QLabel("延迟"), 0, 2, alignment=Qt.AlignRight | Qt.AlignVCenter)
+        effect_grid.addWidget(QLabel("延迟反馈"), 0, 2, alignment=Qt.AlignRight | Qt.AlignVCenter)
         effect_grid.addWidget(self.delay, 0, 3)
 
         self.chorus_feedback = QSpinBox()
-        self.chorus_feedback.setRange(0, 127)
-        self.chorus_feedback.setValue(parent.chorus[0] if parent.chorus else 0)
+        self.chorus_feedback.setObjectName("MasterChorusFeedback")
+        configure_master_field(
+            self.chorus_feedback,
+            "chorus_feedback",
+            self._master_effect_original.chorus_feedback,
+        )
         self.chorus_depth = QSpinBox()
-        self.chorus_depth.setRange(0, 127)
-        self.chorus_depth.setValue(parent.chorus[1] if parent.chorus else 0)
+        self.chorus_depth.setObjectName("MasterChorusLfoDepth")
+        configure_master_field(
+            self.chorus_depth,
+            "chorus_lfo_depth",
+            self._master_effect_original.chorus_lfo_depth,
+        )
         self.chorus_freq = QSpinBox()
-        self.chorus_freq.setRange(0, 127)
-        self.chorus_freq.setValue(parent.chorus[2] if parent.chorus else 0)
+        self.chorus_freq.setObjectName("MasterChorusLfoFrequency")
+        configure_master_field(
+            self.chorus_freq,
+            "chorus_lfo_frequency",
+            self._master_effect_original.chorus_lfo_frequency,
+        )
         for column, label, field in (
             (0, "合唱反馈", self.chorus_feedback),
-            (2, "深度", self.chorus_depth),
-            (4, "频率", self.chorus_freq),
+            (2, "LFO 深度", self.chorus_depth),
+            (4, "LFO 频率", self.chorus_freq),
         ):
             effect_grid.addWidget(QLabel(label), 1, column, alignment=Qt.AlignRight | Qt.AlignVCenter)
             effect_grid.addWidget(field, 1, column + 1)
@@ -6181,16 +13151,34 @@ class SettingsDialog(QDialog):
         midi_page_layout.addStretch(1)
         audio_page_layout.addStretch(1)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.setObjectName("SettingsButtons")
-        buttons.button(QDialogButtonBox.Ok).setText("保存设置")
-        buttons.button(QDialogButtonBox.Ok).setProperty("kind", "convert")
-        buttons.button(QDialogButtonBox.Cancel).setText("取消")
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.settings_buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        self.settings_buttons.setObjectName("SettingsButtons")
+        self.settings_buttons.button(QDialogButtonBox.Ok).setText("保存设置")
+        self.settings_buttons.button(QDialogButtonBox.Ok).setProperty("kind", "convert")
+        self.settings_buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        self.settings_buttons.accepted.connect(self.accept)
+        self.settings_buttons.rejected.connect(self.reject)
+        layout.addWidget(self.settings_buttons)
         self.settings_nav.currentRowChanged.connect(self._show_page_tip)
         self._sync_velocity_controls()
+
+    def selected_master_effects(self) -> MasterEffects:
+        """Keep imported raw bytes until a specific authoring field changes."""
+
+        values = {
+            "reverb_time": self._master_effect_original.reverb_time,
+            "delay_feedback": self._master_effect_original.delay_feedback,
+            "chorus_feedback": self._master_effect_original.chorus_feedback,
+            "chorus_lfo_depth": self._master_effect_original.chorus_lfo_depth,
+            "chorus_lfo_frequency": (
+                self._master_effect_original.chorus_lfo_frequency
+            ),
+        }
+        for name in self._master_effect_dirty:
+            values[name] = self._master_effect_fields[name].value()
+        return MasterEffects(**values)
 
     @staticmethod
     def _settings_page(
@@ -6263,12 +13251,133 @@ class SettingsDialog(QDialog):
         if index == 2 and self.isVisible():
             show_global_toast(self, "轨道 FX 中的奏法会写入支持的 BDO 乐器。")
 
+    def _browse_output_folder(self) -> None:
+        current = self.output_dir.text().strip()
+        start = current if current and Path(current).is_dir() else ""
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            tr("选择输出目录"),
+            start,
+        )
+        if selected:
+            self.output_dir.setText(selected)
+
+    def _open_output_folder(self) -> None:
+        directory = Path(self.output_dir.text().strip() or DEFAULT_OUTDIR)
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                tr("输出目录不可用"),
+                str(exc),
+            )
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
+
     def _browse_sample_pack(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(
             self, tr("选择本地音源包"), self.audio_source.text(), f"BDO Sample Pack (*{PACK_SUFFIX})"
         )
         if selected:
             self.audio_source.setText(selected)
+
+    def _browse_audio_folder(self) -> None:
+        current = self.audio_source.text().strip()
+        start = current if current and Path(current).is_dir() else ""
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            tr("选择本地音源目录"),
+            start,
+        )
+        if selected:
+            self.audio_source.setText(selected)
+
+    def _browse_instrument_art_folder(self) -> None:
+        current = self.instrument_art_dir.text().strip()
+        start = current if current and Path(current).is_dir() else ""
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            tr("选择乐器背景目录"),
+            start,
+        )
+        if selected:
+            self.instrument_art_dir.setText(selected)
+
+    def _import_game_art(self) -> None:
+        if self.game_art_worker is not None:
+            return
+        current = self.selected_paz_root.strip()
+        start = current if current and Path(current).is_dir() else ""
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            tr("选择游戏 PAZ 目录"),
+            start,
+        )
+        if not selected:
+            return
+        self._game_art_pending_paz_root = selected
+        worker = GameArtImportWorker(
+            selected,
+            GAME_ART_CACHE_DIR,
+            self,
+        )
+        self.game_art_worker = worker
+        self.game_art_button.setEnabled(False)
+        self.game_art_button.setText(tr("解密中…"))
+        for role in (QDialogButtonBox.Ok, QDialogButtonBox.Cancel):
+            button = self.settings_buttons.button(role)
+            if button is not None:
+                button.setEnabled(False)
+        worker.succeeded.connect(self._game_art_import_succeeded)
+        worker.failed.connect(self._game_art_import_failed)
+        worker.finished.connect(self._game_art_import_finished)
+        worker.start()
+
+    def _game_art_import_succeeded(self, report: object) -> None:
+        output_dir = str(getattr(report, "output_dir", "") or "")
+        image_count = int(getattr(report, "image_count", 0) or 0)
+        if output_dir:
+            self.instrument_art_dir.setText(output_dir)
+            self.selected_paz_root = self._game_art_pending_paz_root
+        show_global_toast(
+            self,
+            trf("已解密 {count} 张游戏乐器图", count=image_count),
+            kind="success",
+        )
+
+    def _game_art_import_failed(self, detail: str) -> None:
+        QMessageBox.warning(
+            self,
+            tr("游戏图不可用"),
+            trf("无法读取游戏乐器图：{detail}", detail=detail),
+        )
+
+    def _game_art_import_finished(self) -> None:
+        worker = self.game_art_worker
+        self.game_art_worker = None
+        self._game_art_pending_paz_root = ""
+        self.game_art_button.setText(tr("游戏图"))
+        self.game_art_button.setEnabled(True)
+        for role in (QDialogButtonBox.Ok, QDialogButtonBox.Cancel):
+            button = self.settings_buttons.button(role)
+            if button is not None:
+                button.setEnabled(True)
+        if worker is not None:
+            worker.deleteLater()
+
+    def reject(self) -> None:
+        if self.game_art_worker is not None:
+            show_global_toast(self, tr("正在解密游戏图"))
+            return
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        if self.game_art_worker is not None:
+            event.ignore()
+            show_global_toast(self, tr("正在解密游戏图"))
+            return
+        super().closeEvent(event)
 
     def _refresh_owner_status(self, error: str = "") -> None:
         if error:
@@ -6346,6 +13455,58 @@ class MidiToBdoWindow(QMainWindow):
         self.tracks: list[TrackState] = []
         self.lyric_events: list[dict] = []
         self.reference_audio_path = ""
+        self.reference_audio_relink_required = False
+        self.reference_audio_offset_ms = 0.0
+        self.beat_origin_ms = 0.0
+        self.reference_layer_settings = normalize_reference_layer_settings(
+            DEFAULT_REFERENCE_LAYER_SETTINGS
+        )
+        self.transcription_session = TranscriptionSession()
+        self.transcription_result: TranscriptionResult | None = None
+        self.workspace_transcription_worker: QThread | None = None
+        self.workspace_transcription_generation = 0
+        self._pending_transcription_cleanup_profile: (
+            tuple[int, str, str] | None
+        ) = None
+        self.transcription_assist_worker: QThread | None = None
+        self.sample_pack_worker: SamplePackPrepareWorker | None = None
+        self.transcription_assist_generation = 0
+        self.transcription_assist_restart_pending = False
+        self.transcription_assist_restart_harmony_only = False
+        self.transcription_assist_restart_allow_review_recovery = True
+        self.automatic_harmony_analysis: HarmonyAnalysis | None = None
+        self.automatic_instrument_match_analysis: InstrumentMatchAnalysis | None = None
+        self.transcription_timbre_profile_index: object | None = None
+        self.transcription_group_timbre_profiles: object | None = None
+        self.transcription_group_timbre_revision = ""
+        self.harmony_analysis: HarmonyAnalysis | None = None
+        self.instrument_match_analysis: InstrumentMatchAnalysis | None = None
+        self.transcription_assist_review = TranscriptionAssistReviewState()
+        self.transcription_assist_previous_candidates: tuple[object, ...] = ()
+        self.transcription_assist_review_undo: list[
+            TranscriptionAssistReviewState
+        ] = []
+        self.transcription_assist_review_redo: list[
+            TranscriptionAssistReviewState
+        ] = []
+        self.transcription_review_action_undo: list[str] = []
+        self.transcription_review_action_redo: list[str] = []
+        self.active_voice_group_id = ""
+        self.loop_current_voice_group = False
+        self.transcription_assist_refresh_timer = QTimer(self)
+        self.transcription_assist_refresh_timer.setSingleShot(True)
+        self.transcription_assist_refresh_timer.setInterval(320)
+        self.transcription_assist_refresh_timer.timeout.connect(
+            lambda: self._start_transcription_assist_analysis(
+                harmony_only=True
+            )
+        )
+        self.workspace_close_pending = False
+        self.active_transcription_editor: MidiNoteEditorDialog | None = None
+        self.transcription_analysis_busy = False
+        self.transcription_analysis_progress: int | None = None
+        self.transcription_ui_status = tr("载入参考音频后可开始整首分析")
+        self.pending_transcription_review_payload: dict = {}
         self.selected_track: TrackState | None = None
         self.bpm = 120
         self.time_sig = 4
@@ -6353,6 +13514,9 @@ class MidiToBdoWindow(QMainWindow):
         self.worker: ConvertWorker | None = None
         self.preview_generation = 0
         self.audio_sources = audio_source_config(self.config)
+        self.instrument_art_dir = str(
+            self.config.get("instrument_art_dir", "") or ""
+        )
         self.config.setdefault("audio_sources", self.audio_sources)
         save_config(self.config)
         self.realtime_audio = BdoRealtimeAudioEngine(self, self.audio_sources)
@@ -6371,7 +13535,15 @@ class MidiToBdoWindow(QMainWindow):
         self.reference_status_timer.timeout.connect(self._poll_reference_audio_status)
         self.reference_last_resync_at = 0.0
         self.last_reported_underruns = 0
-        self.last_output_dir = DEFAULT_OUTDIR
+        self.process_metrics_sampler = ProcessMetricsSampler()
+        self.process_metrics_timer = QTimer(self)
+        self.process_metrics_timer.setInterval(1000)
+        self.process_metrics_timer.setTimerType(Qt.VeryCoarseTimer)
+        self.process_metrics_timer.timeout.connect(self._update_process_metrics)
+        self.output_dir_path = str(
+            self.config.get("output_dir", "") or DEFAULT_OUTDIR
+        )
+        self.last_output_dir = Path(self.output_dir_path)
         self.autosave_project_dir: Path | None = None
         self.autosave_source_copy: Path | None = None
         self.loading_project = False
@@ -6420,6 +13592,8 @@ class MidiToBdoWindow(QMainWindow):
         self.project_redo_shortcut.activated.connect(self._redo_project)
         self._apply_style()
         self._sync_preview_state()
+        self._update_process_metrics()
+        self.process_metrics_timer.start()
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -6440,8 +13614,9 @@ class MidiToBdoWindow(QMainWindow):
         workspace_layout = QVBoxLayout(self.workspace_page)
         workspace_layout.setContentsMargins(0, 0, 0, 0)
         workspace_layout.setSpacing(0)
+        self._create_workspace_status_state()
         workspace_layout.addWidget(self._build_timeline_panel(), stretch=1)
-        workspace_layout.addWidget(self._build_inspector())
+        workspace_layout.addWidget(self._build_performance_strip())
         self.page_stack.addWidget(self.home_page)
         self.page_stack.addWidget(self.workspace_page)
         root.addWidget(self.page_stack, stretch=1)
@@ -6452,13 +13627,13 @@ class MidiToBdoWindow(QMainWindow):
         bar = QFrame()
         bar.setObjectName("Toolbar")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(10, 7, 10, 7)
-        layout.setSpacing(7)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(5)
 
         command_group = QFrame()
         command_group.setObjectName("CommandGroup")
         command_layout = QHBoxLayout(command_group)
-        command_layout.setContentsMargins(2, 2, 2, 2)
+        command_layout.setContentsMargins(1, 1, 1, 1)
         command_layout.setSpacing(1)
 
         home_btn = PillButton("主页", "secondary", FluentSymbol.HOME)
@@ -6510,7 +13685,7 @@ class MidiToBdoWindow(QMainWindow):
         utility_group = QFrame()
         utility_group.setObjectName("CommandGroup")
         utility_layout = QHBoxLayout(utility_group)
-        utility_layout.setContentsMargins(2, 2, 2, 2)
+        utility_layout.setContentsMargins(1, 1, 1, 1)
         utility_layout.setSpacing(1)
 
         thanks_btn = PillButton("致谢", "secondary", FluentSymbol.INFO)
@@ -6646,6 +13821,8 @@ class MidiToBdoWindow(QMainWindow):
         self.project_list.clear()
         for entry in scan_game_scores(default_game_music_dir()):
             self._add_home_entry(self.game_score_list, entry)
+        for entry in scan_example_projects(EXAMPLE_PROJECTS_DIR):
+            self._add_home_entry(self.project_list, entry)
         project_entries = scan_local_projects(AUTO_SAVE_DIR, limit=400)
         for raw in self.config.get("recent_items", []):
             if not isinstance(raw, dict):
@@ -6685,14 +13862,175 @@ class MidiToBdoWindow(QMainWindow):
         self._set_home_toolbar_mode(False)
 
     def _reference_audio_changed(self, path: str) -> None:
+        previous_path = self.reference_audio_path
+        review_state = self.transcription_session.state
+        relinking_saved_audio = bool(
+            self.reference_audio_relink_required
+            and not previous_path
+            and path
+        )
+        audio_changed = bool(
+            previous_path != path
+            and not self.loading_project
+            and not relinking_saved_audio
+            and (
+                previous_path
+                or review_state.cache_key
+                or self.transcription_result is not None
+            )
+        )
+        editor = self.active_transcription_editor
+        if (
+            audio_changed
+            and editor is not None
+            and editor.has_transcription_staging()
+        ):
+            QMessageBox.warning(
+                editor,
+                tr("存在未提交候选草稿"),
+                tr("请先应用、撤销或清除本次暂存，再更换音频或重新分析。"),
+            )
+            QTimer.singleShot(
+                0,
+                lambda old_path=previous_path:
+                self.reference_audio.set_audio_path(old_path),
+            )
+            return
+        if audio_changed and review_state.pending_routes:
+            answer = QMessageBox.question(
+                self,
+                tr("更换参考音频"),
+                tr(
+                    "当前仍有尚未应用的扒谱路由。更换或卸载音频会丢弃这些"
+                    "审阅路由；已应用的正式音符不受影响。是否继续？"
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                QTimer.singleShot(
+                    0,
+                    lambda old_path=previous_path:
+                    self.reference_audio.set_audio_path(old_path),
+                )
+                return
+        if audio_changed:
+            # Invalidate queued success/failure callbacks before cancelling.
+            # The worker pointer remains until its own finished signal so a
+            # second analysis cannot start while the old thread is draining.
+            self._rollback_cleanup_profile_transaction()
+            self.workspace_transcription_generation += 1
+            self.transcription_assist_generation += 1
+            self.transcription_assist_restart_pending = False
+            self.transcription_assist_restart_harmony_only = False
+            self.transcription_assist_restart_allow_review_recovery = True
+            if self.workspace_transcription_worker is not None:
+                cancel = getattr(self.workspace_transcription_worker, "cancel", None)
+                if callable(cancel):
+                    cancel()
+            if self.transcription_assist_worker is not None:
+                cancel = getattr(self.transcription_assist_worker, "cancel", None)
+                if callable(cancel):
+                    cancel()
+            if editor is not None:
+                editor.release_transcription_resources()
+            self.transcription_assist_previous_candidates = tuple(
+                self.transcription_session.candidates
+            )
+            self.transcription_assist_review = (
+                isolate_assist_review_for_audio(
+                    self.transcription_assist_review,
+                    "",
+                )
+            )
+            self.automatic_harmony_analysis = None
+            self.automatic_instrument_match_analysis = None
+            self.harmony_analysis = None
+            self.instrument_match_analysis = None
+            self.transcription_group_timbre_profiles = None
+            self.transcription_group_timbre_revision = ""
+            self.transcription_result = None
+            self.transcription_session = TranscriptionSession(
+                state=TranscriptionSessionState(
+                    region=review_state.region,
+                    analysis_mode=review_state.analysis_mode,
+                    sensitivity=review_state.sensitivity,
+                    cleanup_profile=review_state.cleanup_profile,
+                )
+            )
+            self._clear_transcription_review_history()
         self.reference_audio_path = path
+        self.reference_audio_relink_required = False
+        self._refresh_transcription_workspace()
         if self.tracks and not self.loading_project:
             self._autosave_project("reference audio", immediate=True)
+        if (
+            relinking_saved_audio
+            and review_state.cache_key
+            and not self.transcription_session.candidates
+            and self.workspace_transcription_worker is None
+        ):
+            # The cache worker validates the newly linked audio fingerprint
+            # before restoring review state; relinking itself must not erase it.
+            QTimer.singleShot(0, self._restore_cached_transcription)
         self._sync_preview_state()
 
     def _reference_volume_changed(self, _volume: int) -> None:
         if self.tracks and not self.loading_project:
             self._autosave_project("reference audio volume")
+
+    def _reference_offset_changed(self, offset_ms: float) -> None:
+        editor = self.active_transcription_editor
+        if (
+            editor is not None
+            and editor.has_transcription_staging()
+            and not math.isclose(
+                float(offset_ms),
+                float(self.reference_audio_offset_ms),
+                abs_tol=0.001,
+            )
+        ):
+            QMessageBox.warning(
+                editor,
+                tr("存在未提交候选草稿"),
+                tr("请先应用、撤销或清除本次暂存，再修改音频对齐。"),
+            )
+            self.reference_audio.set_project_offset_ms(
+                self.reference_audio_offset_ms,
+                notify=False,
+            )
+            return
+        self.reference_audio_offset_ms = float(offset_ms)
+        self._refresh_transcription_workspace()
+        if self.transcription_result is not None:
+            self._start_transcription_assist_analysis(harmony_only=True)
+        if self.tracks and not self.loading_project:
+            self._autosave_project("reference audio offset")
+
+    def _set_reference_alignment(
+        self,
+        offset_ms: float,
+        beat_origin_ms: float,
+        *,
+        autosave: bool = False,
+    ) -> None:
+        self.reference_audio_offset_ms = float(offset_ms)
+        self.beat_origin_ms = float(beat_origin_ms)
+        self.reference_audio.set_project_offset_ms(
+            self.reference_audio_offset_ms,
+            notify=False,
+        )
+        if hasattr(self, "timeline"):
+            self.timeline.set_musical_grid(
+                self.bpm_override or self.bpm,
+                self.time_sig,
+                self.beat_origin_ms,
+            )
+        self._refresh_transcription_workspace()
+        if self.transcription_result is not None:
+            self._start_transcription_assist_analysis(harmony_only=True)
+        if autosave and self.tracks and not self.loading_project:
+            self._autosave_project("reference alignment", immediate=True)
 
     def _reference_playback_state_changed(
         self, state: QMediaPlayer.PlaybackState,
@@ -6742,10 +14080,29 @@ class MidiToBdoWindow(QMainWindow):
         try:
             self._stop_preview()
             self.project_commands.clear()
+            if self.active_transcription_editor is not None:
+                self.active_transcription_editor.release_transcription_resources()
+            self.reference_layer_settings = normalize_reference_layer_settings(
+                DEFAULT_REFERENCE_LAYER_SETTINGS
+            )
+            self.transcription_session = TranscriptionSession()
+            self.transcription_result = None
+            self.transcription_assist_review = (
+                TranscriptionAssistReviewState()
+            )
+            self.automatic_harmony_analysis = None
+            self.automatic_instrument_match_analysis = None
+            self.harmony_analysis = None
+            self.instrument_match_analysis = None
+            self.transcription_group_timbre_profiles = None
+            self.transcription_group_timbre_revision = ""
+            self._clear_transcription_review_history()
             self._clear_track_selection()
             self.reference_audio.set_audio_path(None, notify=False)
             self.reference_audio.set_volume_percent(50, notify=False)
+            self._set_reference_alignment(0.0, 0.0)
             self.reference_audio_path = ""
+            self.reference_audio_relink_required = False
             self.source_format = "project"
             self.bdo_source_snapshot = None
             self.bdo_source_document = None
@@ -6763,7 +14120,7 @@ class MidiToBdoWindow(QMainWindow):
             self.vel_range = None
             self.vel_floor = None
             self.vel_step = None
-            instrument_id = gm_to_bdo_instrument_for_ui(0, False)
+            instrument_id = gm_to_bdo_instrument(0, False)
             instrument_name = BDO_INSTRUMENT_NAMES.get(instrument_id, tr("未知 BDO 乐器"))
             self.tracks = [
                 TrackState(
@@ -6819,7 +14176,7 @@ class MidiToBdoWindow(QMainWindow):
             return
         path = Path(str(data.get("path") or ""))
         kind = str(data.get("kind") or "")
-        if kind == "project" and path.is_file():
+        if kind in {"project", "example"} and path.is_file():
             self._load_project(path)
         elif kind == "midi" and path.is_file():
             self._open_midi_path(path)
@@ -6886,8 +14243,8 @@ class MidiToBdoWindow(QMainWindow):
         controls = QFrame()
         controls.setObjectName("TimelineControlBar")
         header = QHBoxLayout(controls)
-        header.setContentsMargins(12, 6, 12, 6)
-        header.setSpacing(6)
+        header.setContentsMargins(10, 4, 10, 4)
+        header.setSpacing(5)
         self.timeline_meta = QLabel("等待 MIDI")
         self.timeline_meta.setObjectName("TimelineMeta")
         fit_btn = PillButton("Fit", "ghost", FluentSymbol.FIT)
@@ -6910,7 +14267,7 @@ class MidiToBdoWindow(QMainWindow):
         transport_group = QFrame()
         transport_group.setObjectName("TransportGroup")
         transport_layout = QHBoxLayout(transport_group)
-        transport_layout.setContentsMargins(2, 2, 2, 2)
+        transport_layout.setContentsMargins(1, 1, 1, 1)
         transport_layout.setSpacing(1)
         self.play_button = PillButton("播放", "secondary", FluentSymbol.PLAY)
         self.play_button.clicked.connect(self._play_preview)
@@ -6918,9 +14275,12 @@ class MidiToBdoWindow(QMainWindow):
         self.pause_button.clicked.connect(self._pause_preview)
         self.stop_button = PillButton("停止", "secondary", FluentSymbol.STOP)
         self.stop_button.clicked.connect(lambda: self._stop_preview(reset_playhead=True))
+        self.timeline_loop_box = QCheckBox(tr("循环区间"))
+        self.timeline_loop_box.setToolTip(tr("循环播放 A–B 时间区间"))
         transport_layout.addWidget(self.play_button)
         transport_layout.addWidget(self.pause_button)
         transport_layout.addWidget(self.stop_button)
+        transport_layout.addWidget(self.timeline_loop_box)
         self.add_track_button = PillButton("新建轨道", "secondary", FluentSymbol.ADD_TRACK)
         self.add_track_button.clicked.connect(self._show_new_track_menu)
         self.track_actions_button = PillButton(tr("轨道"), "ghost")
@@ -6944,11 +14304,23 @@ class MidiToBdoWindow(QMainWindow):
         header.addWidget(self.track_actions_button)
         header.addStretch(1)
 
-        # Hidden extension host for the upcoming transcription tools. Keeping
-        # it outside the transport and view groups avoids reworking the bar.
         self.transcription_tools_slot = QFrame()
         self.transcription_tools_slot.setObjectName("TranscriptionToolsSlot")
-        self.transcription_tools_slot.setVisible(False)
+        transcription_slot_layout = QHBoxLayout(self.transcription_tools_slot)
+        transcription_slot_layout.setContentsMargins(0, 0, 0, 0)
+        transcription_slot_layout.setSpacing(0)
+        self.transcription_entry_button = PillButton(
+            tr("扒谱模式"),
+            "secondary",
+        )
+        self.transcription_entry_button.setObjectName("TranscriptionModeButton")
+        self.transcription_entry_button.setToolTip(
+            tr("在当前乐器轨的音符编辑器中打开完整扒谱模式")
+        )
+        self.transcription_entry_button.clicked.connect(
+            self._open_transcription_mode
+        )
+        transcription_slot_layout.addWidget(self.transcription_entry_button)
         header.addWidget(self.transcription_tools_slot)
 
         header.addWidget(zoom_label)
@@ -6959,6 +14331,7 @@ class MidiToBdoWindow(QMainWindow):
         layout.addWidget(controls)
         self.timeline = TimelineCanvas()
         self.timeline.setObjectName("TimelineCanvas")
+        self.timeline.set_instrument_art_dir(self.instrument_art_dir)
         self.timeline.changed.connect(self._on_track_changed)
         self.timeline.track_state_changed.connect(self._on_track_filter_changed)
         self.timeline.instrument_changed.connect(self._on_track_instrument_changed)
@@ -6967,70 +14340,3149 @@ class MidiToBdoWindow(QMainWindow):
         self.timeline.midi_tools_requested.connect(self._open_midi_tool)
         self.timeline.note_editor_requested.connect(self._open_note_editor)
         self.timeline.seek_requested.connect(self._seek_preview)
+        self.timeline.time_range_changed.connect(self._timeline_range_changed)
         self.timeline_zoom.valueChanged.connect(self.timeline.set_zoom_percent)
         self.timeline_pan.valueChanged.connect(self.timeline.set_pan_percent)
         layout.addWidget(self.timeline, stretch=1)
         self.reference_audio = ReferenceAudioController(self)
+        self.reference_audio.set_project_offset_ms(
+            self.reference_audio_offset_ms,
+            notify=False,
+        )
         self.reference_audio.file_changed.connect(self._reference_audio_changed)
         self.reference_audio.volume_changed.connect(self._reference_volume_changed)
+        self.reference_audio.offset_changed.connect(self._reference_offset_changed)
         self.reference_audio.player.playbackStateChanged.connect(
             self._reference_playback_state_changed
         )
         self.timeline.set_reference_audio(self.reference_audio)
         return workspace
 
-    def _build_inspector(self) -> QWidget:
-        panel = QFrame()
-        panel.setObjectName("Inspector")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(10, 5, 10, 5)
-        layout.setSpacing(0)
+    def _build_performance_strip(self) -> QWidget:
+        """Compact process/audio telemetry below the multitrack timeline."""
 
-        # Async code can keep writing status without reserving permanent UI.
-        self.status_label = QLabel("就绪", panel)
+        strip = QFrame()
+        strip.setObjectName("PerformanceStrip")
+        strip.setFixedHeight(25)
+        layout = QHBoxLayout(strip)
+        layout.setContentsMargins(10, 0, 10, 0)
+        layout.setSpacing(14)
+        caption = QLabel(tr("本程序"))
+        caption.setObjectName("PerformanceCaption")
+        self.process_cpu_label = QLabel("CPU --")
+        self.process_cpu_label.setObjectName("PerformanceMetric")
+        self.process_ram_label = QLabel("RAM --")
+        self.process_ram_label.setObjectName("PerformanceMetric")
+        self.audio_load_label = QLabel(tr("音频 --"))
+        self.audio_load_label.setObjectName("PerformanceMetric")
+        self.active_voice_label = QLabel(tr("声部 --"))
+        self.active_voice_label.setObjectName("PerformanceMetric")
+        tooltip = tr("当前 BDO Music Composer 进程；每秒低开销采样一次")
+        for widget in (
+            caption,
+            self.process_cpu_label,
+            self.process_ram_label,
+            self.audio_load_label,
+            self.active_voice_label,
+        ):
+            widget.setToolTip(tooltip)
+        layout.addWidget(caption)
+        layout.addWidget(self.process_cpu_label)
+        layout.addWidget(self.process_ram_label)
+        layout.addStretch(1)
+        layout.addWidget(self.audio_load_label)
+        layout.addWidget(self.active_voice_label)
+        return strip
+
+    def _update_process_metrics(self) -> None:
+        if not hasattr(self, "process_cpu_label"):
+            return
+        metrics = self.process_metrics_sampler.sample()
+        self.process_cpu_label.setText(f"CPU {metrics.cpu_percent:.1f}%")
+        self.process_ram_label.setText(f"RAM {metrics.working_set_mib:.0f} MB")
+        audio_load = 0.0
+        active_voices = 0
+        underruns = self.last_reported_underruns
+        if self.realtime_preview_active:
+            try:
+                status = self.realtime_audio.get_status()
+            except AudioEngineError:
+                status = None
+            if status is not None:
+                audio_load = max(0.0, float(status.render_p95_load))
+                active_voices = max(0, int(status.active_voices))
+                underruns = max(underruns, int(status.underruns))
+        self.audio_load_label.setText(
+            trf("音频 {load:.0f}% · XRUN {count}", load=audio_load * 100.0, count=underruns)
+        )
+        self.active_voice_label.setText(trf("声部 {count}", count=active_voices))
+
+    def _open_transcription_mode(self) -> None:
+        melodic_tracks = [
+            track
+            for track in self.tracks
+            if not track.is_percussion
+            and int(track.bdo_instrument_id) != 0x0D
+        ]
+        if not melodic_tracks:
+            QMessageBox.information(
+                self,
+                tr("扒谱模式"),
+                tr("当前工程没有可用于扒谱的旋律乐器轨，请先新建乐器轨。"),
+            )
+            return
+        target = (
+            self.selected_track
+            if self.selected_track in melodic_tracks
+            else None
+        )
+        if target is None:
+            labels = [
+                (
+                    f"{track.display_name}  [#{track.track_id} · "
+                    f"{BDO_INSTRUMENT_NAMES.get(int(track.bdo_instrument_id), '')}]"
+                )
+                for track in melodic_tracks
+            ]
+            tracks_by_label = dict(zip(labels, melodic_tracks, strict=True))
+            selected_label, accepted = QInputDialog.getItem(
+                self,
+                tr("选择扒谱目标轨"),
+                tr("请选择要打开的旋律乐器轨："),
+                labels,
+                0,
+                False,
+            )
+            if not accepted:
+                return
+            target = tracks_by_label.get(selected_label)
+            if target is None:
+                return
+        self._open_note_editor(target, transcription_mode=True)
+
+    def _transcription_target_track(self) -> TrackState | None:
+        editor = self.active_transcription_editor
+        target = editor.track if editor is not None else self.selected_track
+        if (
+            target in self.tracks
+            and target is not None
+            and not target.is_percussion
+            and int(target.bdo_instrument_id) != 0x0D
+        ):
+            return target
+        return None
+
+    def _candidate_invalid_for_track(
+        self,
+        candidate: TranscriptionCandidate,
+        track: TrackState | None,
+    ) -> bool:
+        if track is None:
+            return True
+        if not CANDIDATE_NOTE_POLICY.project_timing_is_valid(
+            candidate,
+            self.reference_audio_offset_ms,
+        ):
+            return True
+        supported = game_supported_pitches(
+            int(track.bdo_instrument_id), track.marnian_synth_mode
+        )
+        return not CANDIDATE_NOTE_POLICY.pitch_is_valid_for_melodic_track(
+            candidate.pitch,
+            is_percussion=track.is_percussion,
+            instrument_id=track.bdo_instrument_id,
+            transpose=self.transpose,
+            supported_pitches=supported,
+        )
+
+    def _transcription_candidate_flags(
+        self,
+    ) -> tuple[set[str], set[str]]:
+        track = self._transcription_target_track()
+        invalid: set[str] = set()
+        duplicates: set[str] = set()
+        notes_by_pitch: dict[int, tuple[list[float], list[Note]]] = {}
+        if track is not None:
+            grouped_notes: dict[int, list[Note]] = defaultdict(list)
+            for note in track.notes:
+                grouped_notes[int(note.pitch)].append(note)
+            for pitch, notes in grouped_notes.items():
+                ordered = sorted(notes, key=lambda note: float(note.start))
+                notes_by_pitch[pitch] = (
+                    [float(note.start) for note in ordered],
+                    ordered,
+                )
+        for candidate in self.transcription_session.candidates:
+            candidate_id = self.transcription_session.candidate_id(candidate)
+            if self._candidate_invalid_for_track(candidate, track):
+                invalid.add(candidate_id)
+                continue
+            starts, notes = notes_by_pitch.get(
+                int(candidate.pitch),
+                ([], []),
+            )
+            window_start, window_end = CANDIDATE_NOTE_POLICY.match_window(
+                candidate,
+                self.reference_audio_offset_ms,
+            )
+            first = bisect_left(starts, window_start)
+            last = bisect_right(starts, window_end)
+            if any(
+                CANDIDATE_NOTE_POLICY.matches_note(
+                    candidate,
+                    note,
+                    self.reference_audio_offset_ms,
+                )
+                for note in notes[first:last]
+            ):
+                duplicates.add(candidate_id)
+        return invalid, duplicates
+
+    def _refresh_transcription_workspace(self) -> None:
+        """Refresh the only transcription view: the active note editor.
+
+        The method name is retained as an internal compatibility seam while
+        older callers are migrated.  It no longer owns or refreshes a main-page
+        transcription workspace.
+        """
+
+        state = self.transcription_session.state
+        self.timeline.set_time_range(
+            *(state.region if state.region is not None else (None, None))
+        )
+        editor = self.active_transcription_editor
+        if editor is None:
+            return
+        editor.beat_origin_ms = float(self.beat_origin_ms)
+        editor.refresh_transcription_projection()
+        editor.set_transcription_analysis_ui(
+            self.transcription_analysis_busy,
+            self.transcription_analysis_progress,
+            status=self.transcription_ui_status,
+        )
+
+    def _visible_region_candidate_ids(
+        self,
+        *,
+        include_routed: bool = False,
+    ) -> tuple[str, ...]:
+        editor = self.active_transcription_editor
+        if editor is not None:
+            return editor.eligible_transcription_candidate_ids(
+                include_routed=include_routed
+            )
+        state = self.transcription_session.state
+        if state.selected_candidate_ids:
+            selected = state.selected_candidate_ids.difference(
+                state.rejected_candidate_ids
+            )
+            return tuple(
+                self.transcription_session.candidate_id(candidate)
+                for candidate in self.transcription_session.candidates
+                if (
+                    self.transcription_session.candidate_id(candidate)
+                    in selected
+                )
+            )
+        if state.region is None:
+            return ()
+        routed = {
+            route.candidate_id
+            for route in (*state.pending_routes, *state.applied_routes)
+        }
+        start_ms, end_ms = state.region
+        values: list[str] = []
+        for candidate in self.transcription_session.candidates:
+            candidate_id = self.transcription_session.candidate_id(candidate)
+            if candidate_id in state.rejected_candidate_ids:
+                continue
+            if not include_routed and candidate_id in routed:
+                continue
+            project_start = CANDIDATE_NOTE_POLICY.project_start_ms(
+                candidate,
+                self.reference_audio_offset_ms,
+            )
+            if start_ms <= project_start < end_ms:
+                values.append(candidate_id)
+        return tuple(values)
+
+    def _refresh_transcription_action_state(self) -> None:
+        editor = self.active_transcription_editor
+        if editor is not None:
+            editor.refresh_transcription_projection()
+
+    def _transcription_target_changed(self, track_id: int) -> None:
+        target = next(
+            (
+                track
+                for track in self.tracks
+                if int(track.track_id) == int(track_id)
+                and not track.is_percussion
+                and int(track.bdo_instrument_id) != 0x0D
+            ),
+            None,
+        )
+        if target is not None:
+            self._select_track(target)
+
+    def _transcription_selection_changed(
+        self, candidate_ids: Iterable[str],
+    ) -> None:
+        self.transcription_session.set_selection(candidate_ids)
+        self._activate_voice_group_for_candidates(candidate_ids)
+        self._refresh_transcription_workspace()
+        if self.tracks and not self.loading_project:
+            self._autosave_project("transcription selection")
+
+    def _set_transcription_region(
+        self, value: tuple[float, float] | None,
+    ) -> None:
+        if value is None:
+            self.transcription_session.clear_region()
+        else:
+            self.transcription_session.set_region(value[0], value[1])
+        region = self.transcription_session.state.region
+        self.timeline.set_time_range(
+            *(region if region is not None else (None, None))
+        )
+        editor = self.active_transcription_editor
+        if editor is not None:
+            editor.refresh_transcription_projection()
+        if self.tracks and not self.loading_project:
+            self._autosave_project("transcription A-B")
+
+    def _timeline_range_changed(
+        self, value: tuple[float, float] | None,
+    ) -> None:
+        self._set_transcription_region(value)
+
+    def _workbench_range_changed(
+        self, value: tuple[float, float] | None,
+    ) -> None:
+        self._set_transcription_region(value)
+
+    def _workbench_view_changed(
+        self, view: tuple[float, float],
+    ) -> None:
+        # Kept for source compatibility with pre-embedded callers.  The editor
+        # now owns its own scroll/zoom and no longer drives the main timeline.
+        del view
+
+    def _transcription_sensitivity_changed(self, sensitivity: str) -> None:
+        editor = self.active_transcription_editor
+        if editor is not None and editor.has_transcription_staging():
+            editor.warn_transcription_staging_blocked()
+            editor.transcription_panel.set_sensitivity(
+                self.transcription_session.state.sensitivity
+            )
+            return
+        self.transcription_session.set_sensitivity(sensitivity)
+        self._refresh_transcription_action_state()
+        if self.tracks and not self.loading_project:
+            self._autosave_project("transcription sensitivity")
+        if (
+            self.transcription_session.state.cache_key
+            and self.workspace_transcription_worker is None
+        ):
+            self._stop_preview(reset_playhead=False)
+            self._restore_cached_transcription()
+
+    def _transcription_cleanup_profile_changed(
+        self,
+        cleanup_profile: str,
+    ) -> None:
+        previous = self.transcription_session.state.cleanup_profile
+        requested = str(cleanup_profile)
+        if requested == previous:
+            return
+        editor = self.active_transcription_editor
+        if editor is not None and editor.has_transcription_staging():
+            editor.warn_transcription_staging_blocked()
+            editor.transcription_panel.set_cleanup_profile(previous)
+            return
+        if self.workspace_transcription_worker is not None:
+            if editor is not None:
+                editor.transcription_panel.set_cleanup_profile(previous)
+            return
+        if self.transcription_session.state.cache_key:
+            self._stop_preview(reset_playhead=False)
+            profile_label = (
+                editor.transcription_panel.cleanup_profile_combo.currentText()
+                if editor is not None
+                else requested
+            )
+            try:
+                generation = self._restore_cached_transcription(
+                    status=trf(
+                        "正在按“{profile}”从缓存证据重新解码；"
+                        "不会再次运行模型。",
+                        profile=profile_label,
+                    ),
+                    cleanup_profile=requested,
+                    rollback_cleanup_profile=previous,
+                )
+            except Exception:
+                append_crash_log(
+                    "Transcription cleanup profile switch failed",
+                    traceback.format_exc(),
+                )
+                self._rollback_cleanup_profile_transaction()
+                generation = None
+                self._set_transcription_status(
+                    tr("碎音处理切换失败；已恢复原档位。")
+                )
+            if generation is None and editor is not None:
+                editor.transcription_panel.set_cleanup_profile(previous)
+            return
+        self.transcription_session.set_cleanup_profile(requested)
+        self._refresh_transcription_action_state()
+        if self.tracks and not self.loading_project:
+            self._autosave_project("transcription fragment cleanup")
+        if editor is not None:
+            self._set_transcription_status(
+                trf(
+                    "已选择“{profile}”；下次分析将使用该档位。",
+                    profile=(
+                        editor.transcription_panel.cleanup_profile_combo
+                        .currentText()
+                    ),
+                )
+            )
+
+    def _select_suspected_transcription_fragments(self) -> None:
+        state = self.transcription_session.state
+        region = state.region
+        selected: list[str] = []
+        for candidate in self.transcription_session.candidates:
+            candidate_id = self.transcription_session.candidate_id(
+                candidate
+            )
+            annotation = self.transcription_session.annotation_for_id(
+                candidate_id
+            )
+            if (
+                annotation is None
+                or not {
+                    "review_fragment",
+                    "pitch_flicker",
+                }.intersection(annotation.flags)
+                or candidate_id in state.rejected_candidate_ids
+            ):
+                continue
+            if region is not None:
+                project_start = CANDIDATE_NOTE_POLICY.project_start_ms(
+                    candidate,
+                    self.reference_audio_offset_ms,
+                )
+                if not region[0] <= project_start < region[1]:
+                    continue
+            selected.append(candidate_id)
+        self._transcription_selection_changed(selected)
+        self._set_transcription_status(
+            trf(
+                "已选择 {count} 个疑似碎音候选",
+                count=len(selected),
+            )
+        )
+
+    def _transcription_analysis_mode_changed(
+        self, analysis_mode: str,
+    ) -> None:
+        previous = self.transcription_session.state
+        if str(analysis_mode) == previous.analysis_mode:
+            return
+        editor = self.active_transcription_editor
+        if editor is not None and editor.has_transcription_staging():
+            editor.warn_transcription_staging_blocked()
+            editor.transcription_panel.set_analysis_mode(
+                previous.analysis_mode
+            )
+            return
+        self.transcription_assist_previous_candidates = tuple(
+            self.transcription_session.candidates
+        )
+        self.transcription_session = TranscriptionSession(
+            state=TranscriptionSessionState(
+                region=previous.region,
+                analysis_mode=str(analysis_mode),
+                sensitivity=previous.sensitivity,
+                cleanup_profile=previous.cleanup_profile,
+            )
+        )
+        self.transcription_result = None
+        self.automatic_harmony_analysis = None
+        self.automatic_instrument_match_analysis = None
+        self.harmony_analysis = None
+        self.instrument_match_analysis = None
+        self.transcription_group_timbre_profiles = None
+        self.transcription_group_timbre_revision = ""
+        self.transcription_assist_review = TranscriptionAssistReviewState()
+        self.transcription_assist_review_undo.clear()
+        self.transcription_assist_review_redo.clear()
+        self._clear_transcription_review_history()
+        if editor is not None:
+            editor.release_transcription_resources()
+        self._refresh_transcription_workspace()
+        self._set_transcription_status(
+            tr("识别模式已更改；请重新分析整首。")
+        )
+        if self.tracks and not self.loading_project:
+            self._autosave_project(
+                "transcription analysis mode",
+                immediate=True,
+            )
+
+    def _route_transcription_candidates(self, copy: bool) -> None:
+        # Persistent routing is intentionally disabled in embedded mode.
+        # Candidate writes and copies are staged inside the open dialog.
+        editor = self.active_transcription_editor
+        if editor is None:
+            return
+        if copy:
+            editor.set_transcription_status(
+                tr("请从“显式复制到…”选择目标轨")
+            )
+        else:
+            editor.accept_transcription_candidates()
+
+    def _reject_transcription_candidates(self) -> None:
+        candidate_ids = self._visible_region_candidate_ids()
+        rejected = self.transcription_session.reject(candidate_ids)
+        self._refresh_transcription_workspace()
+        if rejected:
+            self._record_transcription_review_action("session")
+            self._autosave_project("transcription reject")
+            self._set_transcription_status(
+                trf("已拒绝 {count} 个候选", count=len(rejected))
+            )
+
+    def _restore_transcription_candidates(self) -> None:
+        state = self.transcription_session.state
+        selected = state.selected_candidate_ids.intersection(
+            state.rejected_candidate_ids
+        )
+        if selected:
+            candidate_ids = selected
+        elif state.region is not None:
+            start_ms, end_ms = state.region
+            candidate_ids = {
+                self.transcription_session.candidate_id(candidate)
+                for candidate in self.transcription_session.candidates
+                if (
+                    self.transcription_session.candidate_id(candidate)
+                    in state.rejected_candidate_ids
+                    and start_ms
+                    <= CANDIDATE_NOTE_POLICY.project_start_ms(
+                        candidate,
+                        self.reference_audio_offset_ms,
+                    )
+                    < end_ms
+                )
+            }
+        else:
+            candidate_ids = state.rejected_candidate_ids
+        restored = self.transcription_session.restore_rejected(candidate_ids)
+        self._refresh_transcription_workspace()
+        if restored:
+            self._record_transcription_review_action("session")
+            self._autosave_project("transcription restore")
+            self._set_transcription_status(
+                trf("已恢复 {count} 个候选", count=len(restored))
+            )
+
+    def _undo_transcription_review(self) -> None:
+        kind = (
+            self.transcription_review_action_undo.pop()
+            if self.transcription_review_action_undo
+            else "session"
+        )
+        changed = False
+        if kind == "assist":
+            if self.transcription_assist_review_undo:
+                self.transcription_assist_review_redo.append(
+                    self.transcription_assist_review
+                )
+                self.transcription_assist_review = (
+                    self.transcription_assist_review_undo.pop()
+                )
+                changed = True
+        else:
+            changed = self.transcription_session.undo()
+        if not changed:
+            return
+        self.transcription_review_action_redo.append(kind)
+        self._reapply_transcription_assist_review()
+        self._refresh_transcription_workspace()
+        self._start_transcription_assist_analysis()
+        self._autosave_project(
+            "transcription review undo",
+            immediate=True,
+        )
+
+    def _redo_transcription_review(self) -> None:
+        kind = (
+            self.transcription_review_action_redo.pop()
+            if self.transcription_review_action_redo
+            else "session"
+        )
+        changed = False
+        if kind == "assist":
+            if self.transcription_assist_review_redo:
+                self.transcription_assist_review_undo.append(
+                    self.transcription_assist_review
+                )
+                self.transcription_assist_review = (
+                    self.transcription_assist_review_redo.pop()
+                )
+                changed = True
+        else:
+            changed = self.transcription_session.redo()
+        if not changed:
+            return
+        self.transcription_review_action_undo.append(kind)
+        self._reapply_transcription_assist_review()
+        self._refresh_transcription_workspace()
+        self._start_transcription_assist_analysis()
+        self._autosave_project(
+            "transcription review redo",
+            immediate=True,
+        )
+
+    def _align_reference_audio_to_playhead(self) -> None:
+        if not self.reference_audio.audio_path:
+            self.show_toast(tr("请先载入参考音频。"), kind="warning")
+            return
+        editor = self.active_transcription_editor
+        playhead_ms = (
+            float(editor.playhead_ms)
+            if editor is not None
+            else float(self.timeline.playhead_ms)
+        )
+        audio_position = float(self.reference_audio.player.position())
+        offset = playhead_ms - audio_position
+        self._set_reference_alignment(
+            offset,
+            self.beat_origin_ms,
+            autosave=True,
+        )
+        self._refresh_transcription_workspace()
+        self.show_toast(
+            tr("当前音频位置已对齐到播放头。"),
+            kind="success",
+        )
+
+    def _set_playhead_as_beat_origin(self) -> None:
+        editor = self.active_transcription_editor
+        playhead_ms = (
+            float(editor.playhead_ms)
+            if editor is not None
+            else float(self.timeline.playhead_ms)
+        )
+        self._set_reference_alignment(
+            self.reference_audio_offset_ms,
+            playhead_ms,
+            autosave=True,
+        )
+        self.show_toast(
+            tr("第一拍锚点已更新；正式音符位置未移动。"),
+            kind="success",
+        )
+
+    def _set_transcription_status(self, text: str) -> None:
+        self.transcription_ui_status = tr(str(text))
+        editor = self.active_transcription_editor
+        if editor is not None:
+            editor.set_transcription_status(self.transcription_ui_status)
+
+    def _transcription_audio_time_notes(self) -> tuple[Note, ...]:
+        """Snapshot current formal/draft notes once for background harmony."""
+
+        draft_track_id = None
+        draft_notes: tuple[Note, ...] = ()
+        editor = self.active_transcription_editor
+        if editor is not None:
+            draft_track_id = int(editor.track.track_id)
+            draft_notes = tuple(editor.canvas.notes)
+        offset_ms = float(self.reference_audio_offset_ms)
+        projected: list[Note] = []
+        for track in self.tracks:
+            if track.is_percussion or int(track.bdo_instrument_id) == 0x0D:
+                continue
+            notes = (
+                draft_notes
+                if draft_track_id is not None
+                and int(track.track_id) == draft_track_id
+                else tuple(track.notes)
+            )
+            for note in notes:
+                projected.append(
+                    note._replace(start=float(note.start) - offset_ms)
+                )
+        projected.sort(
+            key=lambda note: (
+                float(note.start),
+                int(note.pitch),
+                float(note.dur),
+                int(note.vel),
+                int(note.ntype),
+            )
+        )
+        return tuple(projected)
+
+    def _schedule_transcription_assist_refresh(self) -> None:
+        """Debounce semantic recomputation after draft/formal note edits."""
+
+        result = self.transcription_result
+        descriptor = (
+            result.evidence_descriptor if result is not None else None
+        )
+        if (
+            descriptor is None
+            or not descriptor.cache_key
+            or self.workspace_close_pending
+        ):
+            return
+        self.transcription_assist_refresh_timer.start()
+
+    def _start_transcription_assist_analysis(
+        self,
+        *,
+        harmony_only: bool = False,
+        allow_review_recovery: bool = True,
+    ) -> None:
+        if self.workspace_close_pending:
+            self.transcription_assist_restart_pending = False
+            self.transcription_assist_restart_harmony_only = False
+            self.transcription_assist_restart_allow_review_recovery = True
+            return
+        result = self.transcription_result
+        descriptor = (
+            result.evidence_descriptor if result is not None else None
+        )
+        if result is None or descriptor is None or not descriptor.cache_key:
+            self.harmony_analysis = None
+            self.instrument_match_analysis = None
+            self._refresh_transcription_workspace()
+            return
+        if self.transcription_assist_worker is not None:
+            if not self.transcription_assist_restart_pending:
+                self.transcription_assist_restart_harmony_only = bool(
+                    harmony_only
+                )
+                self.transcription_assist_restart_allow_review_recovery = (
+                    bool(allow_review_recovery)
+                )
+            else:
+                self.transcription_assist_restart_harmony_only = bool(
+                    self.transcription_assist_restart_harmony_only
+                    and harmony_only
+                )
+                self.transcription_assist_restart_allow_review_recovery = (
+                    bool(
+                        self.transcription_assist_restart_allow_review_recovery
+                        and allow_review_recovery
+                    )
+                )
+            self.transcription_assist_restart_pending = True
+            cancel = getattr(self.transcription_assist_worker, "cancel", None)
+            if callable(cancel):
+                cancel()
+            return
+        self.transcription_assist_restart_pending = False
+        self.transcription_assist_restart_harmony_only = False
+        self.transcription_assist_restart_allow_review_recovery = True
+        self.transcription_assist_generation += 1
+        generation = self.transcription_assist_generation
+        effective_bpm = float(max(1, self.bpm_override or self.bpm))
+        worker = TranscriptionAssistAnalysisWorker(
+            cache_key=descriptor.cache_key,
+            candidates=tuple(self.transcription_session.candidates),
+            audio_time_notes=self._transcription_audio_time_notes(),
+            descriptors=bdo_transcription_instrument_descriptors(),
+            bpm=effective_bpm,
+            time_signature=max(1, int(self.time_sig)),
+            beat_origin_audio_ms=(
+                float(self.beat_origin_ms)
+                - float(self.reference_audio_offset_ms)
+            ),
+            duration_ms=float(descriptor.duration_ms),
+            midi_min=int(descriptor.midi_min),
+            reference_audio_path=str(
+                self.reference_audio.audio_path or ""
+            ),
+            sample_map_path=BDO_SAMPLE_MAP_PATH,
+            audio_root=str(self.audio_sources.get("audio_root", "") or ""),
+            manual_voice_groups=(
+                self.transcription_assist_review.active_voice_groups
+            ),
+            audio_fingerprint=str(
+                getattr(descriptor, "audio_fingerprint", "") or ""
+            ),
+            pitch_offset=int(self.transpose),
+            review_state=self.transcription_assist_review,
+            previous_candidates=(
+                self.transcription_assist_previous_candidates
+            ),
+            reuse_instrument_matches=(
+                self.automatic_instrument_match_analysis
+                if harmony_only
+                else None
+            ),
+            reuse_timbre_profile_index=(
+                self.transcription_timbre_profile_index
+            ),
+            reuse_group_timbre_profiles=(
+                self.transcription_group_timbre_profiles
+            ),
+            reuse_group_timbre_revision=(
+                self.transcription_group_timbre_revision
+            ),
+            allow_review_recovery=allow_review_recovery,
+            parent=self,
+        )
+        self.transcription_assist_worker = worker
+        worker.succeeded.connect(
+            lambda bundle, token=generation:
+            self._transcription_assist_succeeded(token, bundle)
+        )
+        worker.failed.connect(
+            lambda message, token=generation:
+            self._transcription_assist_failed(token, message)
+        )
+        worker.finished.connect(
+            lambda token=generation, current=worker:
+            self._transcription_assist_finished(token, current)
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _transcription_assist_succeeded(
+        self,
+        generation: int,
+        bundle: TranscriptionAssistAnalysisBundle,
+    ) -> None:
+        if generation != self.transcription_assist_generation:
+            return
+        self.automatic_harmony_analysis = bundle.harmony
+        self.automatic_instrument_match_analysis = bundle.instrument_matches
+        self.transcription_timbre_profile_index = (
+            bundle.timbre_profile_index
+        )
+        self.transcription_group_timbre_profiles = (
+            bundle.group_timbre_profiles
+        )
+        self.transcription_group_timbre_revision = (
+            bundle.group_timbre_revision
+        )
+        previous_review = self.transcription_assist_review
+        review = (
+            bundle.recovered_review
+            if bundle.recovered_review is not None
+            else previous_review
+        )
+        self.transcription_assist_review = review
+        self.transcription_assist_previous_candidates = tuple(
+            self.transcription_session.candidates
+        )
+        key_review = review.active_key_override
+        key_override = (
+            KeyEstimate(
+                key_review.root_pc,
+                key_review.mode,
+                1.0,
+                (),
+                "manual",
+            )
+            if key_review is not None
+            else None
+        )
+        chord_overrides = tuple(
+            ChordSegment(
+                item.segment_id,
+                item.start_audio_ms,
+                item.end_audio_ms,
+                item.root_pc,
+                item.quality,
+                item.bass_pc,
+                1.0,
+                (),
+                "manual",
+                bool(item.locked),
+            )
+            for item in review.active_chord_segments
+        )
+        self.harmony_analysis = apply_harmony_overrides(
+            bundle.harmony,
+            key_override=key_override,
+            chord_overrides=chord_overrides,
+        )
+        group_reviews = {
+            item.group_id: item for item in review.active_voice_groups
+        }
+        reviewed_groups = tuple(
+            VoiceGroup(
+                group.group_id,
+                group_reviews[group.group_id].candidate_ids,
+                group_reviews[group.group_id].start_audio_ms,
+                group_reviews[group.group_id].end_audio_ms,
+                group_reviews[group.group_id].role,
+                group.confidence,
+            )
+            if group.group_id in group_reviews
+            else group
+            for group in bundle.instrument_matches.groups
+        )
+        self.instrument_match_analysis = replace(
+            bundle.instrument_matches,
+            groups=reviewed_groups,
+        )
+        group_ids = {
+            group.group_id for group in reviewed_groups
+        }
+        if self.active_voice_group_id not in group_ids:
+            self.active_voice_group_id = (
+                reviewed_groups[0].group_id
+                if reviewed_groups
+                else ""
+            )
+        self._refresh_transcription_workspace()
+        if (
+            not self.loading_project
+            and bundle.recovered_review is not None
+            and review != previous_review
+        ):
+            self._autosave_project(
+                "transcription assist review recovery",
+                immediate=True,
+            )
+
+    def _reapply_transcription_assist_review(
+        self, *, autosave_reason: str | None = None
+    ) -> None:
+        harmony = self.automatic_harmony_analysis
+        matches = self.automatic_instrument_match_analysis
+        if harmony is None or matches is None:
+            return
+        review = self.transcription_assist_review
+        key_review = review.active_key_override
+        key_override = (
+            KeyEstimate(
+                key_review.root_pc,
+                key_review.mode,
+                1.0,
+                (),
+                "manual",
+            )
+            if key_review is not None
+            else None
+        )
+        chord_overrides = tuple(
+            ChordSegment(
+                item.segment_id,
+                item.start_audio_ms,
+                item.end_audio_ms,
+                item.root_pc,
+                item.quality,
+                item.bass_pc,
+                1.0,
+                (),
+                "manual",
+                bool(item.locked),
+            )
+            for item in review.active_chord_segments
+        )
+        self.harmony_analysis = apply_harmony_overrides(
+            harmony,
+            key_override=key_override,
+            chord_overrides=chord_overrides,
+        )
+        group_reviews = {
+            item.group_id: item for item in review.active_voice_groups
+        }
+        groups = tuple(
+            VoiceGroup(
+                group.group_id,
+                group_reviews[group.group_id].candidate_ids,
+                group_reviews[group.group_id].start_audio_ms,
+                group_reviews[group.group_id].end_audio_ms,
+                group_reviews[group.group_id].role,
+                group.confidence,
+            )
+            if group.group_id in group_reviews
+            else group
+            for group in matches.groups
+        )
+        self.instrument_match_analysis = replace(matches, groups=groups)
+        self._refresh_transcription_workspace()
+        if autosave_reason and not self.loading_project:
+            self._autosave_project(autosave_reason, immediate=True)
+
+    def _current_analysis_fingerprint(self) -> str:
+        descriptor = (
+            self.transcription_result.evidence_descriptor
+            if self.transcription_result is not None
+            else None
+        )
+        return str(
+            getattr(descriptor, "audio_fingerprint", "") or ""
+        )
+
+    def _record_transcription_review_action(self, kind: str) -> None:
+        value = str(kind)
+        if value not in {"session", "assist"}:
+            raise ValueError("unknown transcription review action")
+        if value == "assist":
+            self.transcription_session.commands.discard_redo()
+        else:
+            self.transcription_assist_review_redo.clear()
+        self.transcription_review_action_undo.append(value)
+        del self.transcription_review_action_undo[:-100]
+        self.transcription_review_action_redo.clear()
+
+    def _set_transcription_assist_review_state(
+        self, state: TranscriptionAssistReviewState
+    ) -> bool:
+        if state == self.transcription_assist_review:
+            return False
+        self.transcription_assist_review_undo.append(
+            self.transcription_assist_review
+        )
+        del self.transcription_assist_review_undo[:-100]
+        self.transcription_assist_review_redo.clear()
+        self.transcription_assist_review = state
+        self._record_transcription_review_action("assist")
+        return True
+
+    def _clear_transcription_review_history(self) -> None:
+        self.transcription_assist_review_undo.clear()
+        self.transcription_assist_review_redo.clear()
+        self.transcription_review_action_undo.clear()
+        self.transcription_review_action_redo.clear()
+        self.transcription_session.commands.clear()
+
+    def _can_undo_transcription_review(self) -> bool:
+        return bool(self.transcription_review_action_undo) or bool(
+            self.transcription_session.commands.can_undo
+        )
+
+    def _can_redo_transcription_review(self) -> bool:
+        return bool(self.transcription_review_action_redo) or bool(
+            self.transcription_session.commands.can_redo
+        )
+
+    def _set_assist_key_override(
+        self,
+        root_pc: int,
+        mode: str,
+        *,
+        manual: bool,
+        locked: bool,
+    ) -> None:
+        self._set_transcription_assist_review_state(
+            replace(
+                self.transcription_assist_review,
+                audio_fingerprint=self._current_analysis_fingerprint(),
+                key_override=KeyReviewOverride(
+                    int(root_pc),
+                    str(mode),
+                    manual=manual,
+                    locked=locked,
+                ),
+            ),
+        )
+        self._reapply_transcription_assist_review(
+            autosave_reason="transcription key review"
+        )
+
+    def _clear_assist_key_override(self) -> None:
+        self._set_transcription_assist_review_state(
+            replace(
+                self.transcription_assist_review,
+                key_override=None,
+            ),
+        )
+        self._reapply_transcription_assist_review(
+            autosave_reason="transcription key unlock"
+        )
+
+    def _set_assist_chord_review(
+        self,
+        segment: ChordSegment,
+        *,
+        root_pc: int | None = None,
+        quality: str | None = None,
+        bass_pc: int | None = None,
+        manual: bool,
+        locked: bool,
+    ) -> None:
+        chosen_quality = str(quality or segment.quality)
+        chosen_root = (
+            segment.root_pc if root_pc is None else int(root_pc)
+        )
+        if chosen_quality == "N":
+            chosen_root = None
+            bass_pc = None
+        candidate_ids = self._candidate_ids_for_audio_range(
+            segment.start_audio_ms,
+            segment.end_audio_ms,
+        )
+        existing = [
+            item
+            for item in self.transcription_assist_review.locked_chord_segments
+            if not (
+                item.segment_id == segment.segment_id
+                or (
+                    math.isclose(
+                        item.start_audio_ms,
+                        segment.start_audio_ms,
+                        abs_tol=0.5,
+                    )
+                    and math.isclose(
+                        item.end_audio_ms,
+                        segment.end_audio_ms,
+                        abs_tol=0.5,
+                    )
+                )
+            )
+        ]
+        existing.append(
+            LockedChordReview(
+                "",
+                segment.segment_id,
+                segment.start_audio_ms,
+                segment.end_audio_ms,
+                chosen_root,
+                chosen_quality,
+                segment.bass_pc if bass_pc is None else bass_pc,
+                candidate_ids,
+                manual=manual,
+                locked=locked,
+            )
+        )
+        self._set_transcription_assist_review_state(
+            replace(
+                self.transcription_assist_review,
+                audio_fingerprint=self._current_analysis_fingerprint(),
+                locked_chord_segments=tuple(existing),
+            ),
+        )
+        self._reapply_transcription_assist_review(
+            autosave_reason="transcription chord review"
+        )
+
+    def _candidate_ids_for_audio_range(
+        self, start_audio_ms: float, end_audio_ms: float
+    ) -> tuple[str, ...]:
+        return tuple(
+            self.transcription_session.candidate_id(candidate)
+            for candidate in self.transcription_session.candidates
+            if min(
+                float(candidate.start_ms + candidate.duration_ms),
+                float(end_audio_ms),
+            )
+            > max(
+                float(candidate.start_ms),
+                float(start_audio_ms),
+            )
+        )
+
+    def _remove_assist_chord_review(self, segment_id: str) -> None:
+        segment = next(
+            (
+                item
+                for item in (
+                    self.harmony_analysis.chord_segments
+                    if self.harmony_analysis is not None
+                    else ()
+                )
+                if item.segment_id == str(segment_id)
+            ),
+            None,
+        )
+        retained = tuple(
+            item
+            for item in self.transcription_assist_review.locked_chord_segments
+            if not (
+                item.segment_id == str(segment_id)
+                or (
+                    segment is not None
+                    and math.isclose(
+                        item.start_audio_ms,
+                        segment.start_audio_ms,
+                        abs_tol=0.5,
+                    )
+                    and math.isclose(
+                        item.end_audio_ms,
+                        segment.end_audio_ms,
+                        abs_tol=0.5,
+                    )
+                )
+            )
+        )
+        self._set_transcription_assist_review_state(
+            replace(
+                self.transcription_assist_review,
+                locked_chord_segments=retained,
+            ),
+        )
+        self._reapply_transcription_assist_review(
+            autosave_reason="transcription chord unlock"
+        )
+
+    def _replace_assist_chord_reviews(
+        self,
+        removed_segments: Iterable[ChordSegment],
+        additions: Iterable[LockedChordReview],
+        *,
+        reason: str,
+    ) -> None:
+        removed = tuple(removed_segments)
+        retained = [
+            item
+            for item in self.transcription_assist_review.locked_chord_segments
+            if not any(
+                item.segment_id == segment.segment_id
+                or (
+                    math.isclose(
+                        item.start_audio_ms,
+                        segment.start_audio_ms,
+                        abs_tol=0.5,
+                    )
+                    and math.isclose(
+                        item.end_audio_ms,
+                        segment.end_audio_ms,
+                        abs_tol=0.5,
+                    )
+                )
+                for segment in removed
+            )
+        ]
+        retained.extend(additions)
+        self._set_transcription_assist_review_state(
+            replace(
+                self.transcription_assist_review,
+                audio_fingerprint=self._current_analysis_fingerprint(),
+                locked_chord_segments=tuple(retained),
+            ),
+        )
+        self._reapply_transcription_assist_review(
+            autosave_reason=reason
+        )
+
+    def _split_transcription_chord_segment(
+        self, segment_id: str, project_ms: float
+    ) -> None:
+        harmony = self.harmony_analysis
+        if harmony is None:
+            return
+        segment = next(
+            (
+                item
+                for item in harmony.chord_segments
+                if item.segment_id == str(segment_id)
+            ),
+            None,
+        )
+        if segment is None:
+            return
+        split_audio_ms = (
+            float(project_ms) - float(self.reference_audio_offset_ms)
+        )
+        if not (
+            segment.start_audio_ms + 1.0
+            < split_audio_ms
+            < segment.end_audio_ms - 1.0
+        ):
+            self.show_toast(
+                tr("请先将播放头放在所选和弦段内部。"),
+                kind="warning",
+            )
+            return
+        left_id = stable_assist_review_id(
+            "chord-segment",
+            segment.segment_id,
+            round(segment.start_audio_ms, 3),
+            round(split_audio_ms, 3),
+        )
+        right_id = stable_assist_review_id(
+            "chord-segment",
+            segment.segment_id,
+            round(split_audio_ms, 3),
+            round(segment.end_audio_ms, 3),
+        )
+        additions = (
+            LockedChordReview(
+                "",
+                left_id,
+                segment.start_audio_ms,
+                split_audio_ms,
+                segment.root_pc,
+                segment.quality,
+                segment.bass_pc,
+                self._candidate_ids_for_audio_range(
+                    segment.start_audio_ms, split_audio_ms
+                ),
+                manual=True,
+                locked=True,
+            ),
+            LockedChordReview(
+                "",
+                right_id,
+                split_audio_ms,
+                segment.end_audio_ms,
+                segment.root_pc,
+                segment.quality,
+                segment.bass_pc,
+                self._candidate_ids_for_audio_range(
+                    split_audio_ms, segment.end_audio_ms
+                ),
+                manual=True,
+                locked=True,
+            ),
+        )
+        self._replace_assist_chord_reviews(
+            (segment,),
+            additions,
+            reason="transcription chord split",
+        )
+
+    def _merge_transcription_chord_segments(
+        self,
+        first_segment_id: str,
+        second_segment_id: str,
+        retained_segment_id: str,
+    ) -> None:
+        harmony = self.harmony_analysis
+        if harmony is None:
+            return
+        by_id = {
+            segment.segment_id: segment
+            for segment in harmony.chord_segments
+        }
+        first = by_id.get(str(first_segment_id))
+        second = by_id.get(str(second_segment_id))
+        retained = by_id.get(str(retained_segment_id))
+        if (
+            first is None
+            or second is None
+            or retained not in {first, second}
+        ):
+            return
+        left, right = sorted(
+            (first, second),
+            key=lambda segment: (
+                segment.start_audio_ms,
+                segment.end_audio_ms,
+            ),
+        )
+        if abs(left.end_audio_ms - right.start_audio_ms) > 1.0:
+            self.show_toast(
+                tr("只能合并相邻的和弦段。"),
+                kind="warning",
+            )
+            return
+        start_audio_ms = left.start_audio_ms
+        end_audio_ms = right.end_audio_ms
+        merged = LockedChordReview(
+            "",
+            stable_assist_review_id(
+                "chord-segment",
+                left.segment_id,
+                right.segment_id,
+                retained.root_pc,
+                retained.quality,
+            ),
+            start_audio_ms,
+            end_audio_ms,
+            retained.root_pc,
+            retained.quality,
+            retained.bass_pc,
+            self._candidate_ids_for_audio_range(
+                start_audio_ms, end_audio_ms
+            ),
+            manual=True,
+            locked=True,
+        )
+        self._replace_assist_chord_reviews(
+            (first, second),
+            (merged,),
+            reason="transcription chord merge",
+        )
+
+    def _confirm_assist_instrument_match(
+        self, group_id: str, instrument_id: int
+    ) -> None:
+        analysis = self.instrument_match_analysis
+        if analysis is None:
+            return
+        group = next(
+            (
+                item
+                for item in analysis.groups
+                if item.group_id == str(group_id)
+            ),
+            None,
+        )
+        if group is None:
+            return
+        legal_matches = analysis.matches_for_group(group.group_id)
+        if int(instrument_id) not in {
+            int(match.instrument_id) for match in legal_matches
+        }:
+            self.show_toast(
+                tr("该乐器不在当前声部的 Top-3 建议中。"),
+                kind="warning",
+            )
+            return
+        reviews = [
+            item
+            for item in self.transcription_assist_review.voice_groups
+            if item.group_id != group.group_id
+        ]
+        reviews.append(
+            ManualVoiceGroupReview(
+                "",
+                group.group_id,
+                group.candidate_ids,
+                group.start_audio_ms,
+                group.end_audio_ms,
+                group.role,
+                int(instrument_id),
+            )
+        )
+        self._set_transcription_assist_review_state(
+            replace(
+                self.transcription_assist_review,
+                audio_fingerprint=self._current_analysis_fingerprint(),
+                voice_groups=tuple(reviews),
+            ),
+        )
+        self._reapply_transcription_assist_review(
+            autosave_reason="transcription instrument confirmation"
+        )
+        self.show_toast(
+            trf(
+                "已确认声部的 BDO 乐器建议：{instrument}",
+                instrument=BDO_INSTRUMENT_NAMES.get(
+                    int(instrument_id),
+                    f"0x{int(instrument_id):02X}",
+                ),
+            ),
+            kind="success",
+        )
+
+    def _replace_manual_voice_group_reviews(
+        self,
+        removed_group_ids: Iterable[str],
+        additions: Iterable[ManualVoiceGroupReview],
+        *,
+        reason: str,
+    ) -> None:
+        removed = {str(group_id) for group_id in removed_group_ids}
+        retained = [
+            item
+            for item in self.transcription_assist_review.voice_groups
+            if item.group_id not in removed
+        ]
+        retained.extend(additions)
+        self._set_transcription_assist_review_state(
+            replace(
+                self.transcription_assist_review,
+                audio_fingerprint=self._current_analysis_fingerprint(),
+                voice_groups=tuple(retained),
+            ),
+        )
+        self._autosave_project(reason, immediate=True)
+        self._start_transcription_assist_analysis()
+
+    def _split_transcription_voice_group(
+        self, group_id: str, project_ms: float
+    ) -> None:
+        analysis = self.instrument_match_analysis
+        if analysis is None:
+            return
+        group = next(
+            (
+                item
+                for item in analysis.groups
+                if item.group_id == str(group_id)
+            ),
+            None,
+        )
+        if group is None:
+            return
+        split_audio_ms = float(project_ms) - float(
+            self.reference_audio_offset_ms
+        )
+        candidates_by_id = {
+            self.transcription_session.candidate_id(candidate): candidate
+            for candidate in self.transcription_session.candidates
+        }
+        left_ids = tuple(
+            candidate_id
+            for candidate_id in group.candidate_ids
+            if candidate_id in candidates_by_id
+            and (
+                float(candidates_by_id[candidate_id].start_ms)
+                + float(candidates_by_id[candidate_id].duration_ms) * 0.5
+            )
+            < split_audio_ms
+        )
+        left_id_set = set(left_ids)
+        right_ids = tuple(
+            candidate_id
+            for candidate_id in group.candidate_ids
+            if candidate_id not in left_id_set
+            and candidate_id in candidates_by_id
+        )
+        if not left_ids or not right_ids:
+            self.show_toast(
+                tr("播放头两侧必须都包含候选，才能分割声部。"),
+                kind="warning",
+            )
+            return
+        existing = next(
+            (
+                item
+                for item in self.transcription_assist_review.voice_groups
+                if item.group_id == group.group_id
+            ),
+            None,
+        )
+        confirmed = (
+            existing.confirmed_instrument_id
+            if existing is not None
+            else None
+        )
+        left_group_id = stable_assist_review_id(
+            "voice", tuple(sorted(left_ids))
+        )
+        right_group_id = stable_assist_review_id(
+            "voice", tuple(sorted(right_ids))
+        )
+        additions = (
+            ManualVoiceGroupReview(
+                "",
+                left_group_id,
+                left_ids,
+                group.start_audio_ms,
+                split_audio_ms,
+                group.role,
+                confirmed,
+            ),
+            ManualVoiceGroupReview(
+                "",
+                right_group_id,
+                right_ids,
+                split_audio_ms,
+                group.end_audio_ms,
+                group.role,
+                confirmed,
+            ),
+        )
+        self._replace_manual_voice_group_reviews(
+            (group.group_id,),
+            additions,
+            reason="transcription voice split",
+        )
+
+    def _merge_transcription_voice_groups(
+        self, first_group_id: str, second_group_id: str
+    ) -> None:
+        analysis = self.instrument_match_analysis
+        if analysis is None or first_group_id == second_group_id:
+            return
+        groups = {
+            group.group_id: group for group in analysis.groups
+        }
+        first = groups.get(str(first_group_id))
+        second = groups.get(str(second_group_id))
+        if first is None or second is None:
+            return
+        candidate_ids = tuple(
+            sorted(set(first.candidate_ids).union(second.candidate_ids))
+        )
+        reviews = {
+            item.group_id: item
+            for item in self.transcription_assist_review.voice_groups
+        }
+        confirmations = {
+            review.confirmed_instrument_id
+            for group_id in (first.group_id, second.group_id)
+            if (review := reviews.get(group_id)) is not None
+            and review.confirmed_instrument_id is not None
+        }
+        confirmed = (
+            next(iter(confirmations)) if len(confirmations) == 1 else None
+        )
+        merged = ManualVoiceGroupReview(
+            "",
+            stable_assist_review_id("voice", candidate_ids),
+            candidate_ids,
+            min(first.start_audio_ms, second.start_audio_ms),
+            max(first.end_audio_ms, second.end_audio_ms),
+            first.role,
+            confirmed,
+        )
+        self._replace_manual_voice_group_reviews(
+            (first.group_id, second.group_id),
+            (merged,),
+            reason="transcription voice merge",
+        )
+
+    def _set_transcription_voice_group_color(
+        self, group_id: str, color: str
+    ) -> None:
+        ui_config = self.config.setdefault("transcription_ui", {})
+        if not isinstance(ui_config, dict):
+            return
+        colors = ui_config.setdefault("voice_group_colors", {})
+        if not isinstance(colors, dict):
+            colors = {}
+            ui_config["voice_group_colors"] = colors
+        colors[str(group_id)] = str(color)
+        # Bound stale local-only color preferences.
+        while len(colors) > 256:
+            colors.pop(next(iter(colors)))
+        save_config(self.config)
+        self._refresh_transcription_workspace()
+
+    def _set_transcription_voice_group_role(
+        self, group_id: str, role: str
+    ) -> None:
+        analysis = self.instrument_match_analysis
+        if analysis is None:
+            return
+        group = next(
+            (
+                item
+                for item in analysis.groups
+                if item.group_id == str(group_id)
+            ),
+            None,
+        )
+        if group is None:
+            return
+        existing = next(
+            (
+                item
+                for item in self.transcription_assist_review.voice_groups
+                if item.group_id == group.group_id
+            ),
+            None,
+        )
+        updated = ManualVoiceGroupReview(
+            "",
+            group.group_id,
+            group.candidate_ids,
+            group.start_audio_ms,
+            group.end_audio_ms,
+            str(role),
+            (
+                existing.confirmed_instrument_id
+                if existing is not None
+                else None
+            ),
+        )
+        self._replace_manual_voice_group_reviews(
+            (group.group_id,),
+            (updated,),
+            reason="transcription voice role",
+        )
+
+    def _transcription_assist_failed(
+        self, generation: int, message: str
+    ) -> None:
+        if generation != self.transcription_assist_generation:
+            return
+        self.automatic_harmony_analysis = None
+        self.automatic_instrument_match_analysis = None
+        self.harmony_analysis = None
+        self.instrument_match_analysis = None
+        append_crash_log("Transcription assist analysis failed", message)
+        editor = self.active_transcription_editor
+        if editor is not None:
+            editor.transcription_panel.set_assist_available(False)
+
+    def _transcription_assist_finished(
+        self, generation: int, worker: QThread
+    ) -> None:
+        if self.transcription_assist_worker is not worker:
+            return
+        self.transcription_assist_worker = None
+        if self.transcription_assist_restart_pending:
+            harmony_only = self.transcription_assist_restart_harmony_only
+            allow_review_recovery = (
+                self.transcription_assist_restart_allow_review_recovery
+            )
+            self.transcription_assist_restart_pending = False
+            self.transcription_assist_restart_harmony_only = False
+            self.transcription_assist_restart_allow_review_recovery = True
+            QTimer.singleShot(
+                0,
+                lambda value=harmony_only, recover=allow_review_recovery:
+                self._start_transcription_assist_analysis(
+                    harmony_only=value,
+                    allow_review_recovery=recover,
+                ),
+            )
+        elif self.workspace_close_pending:
+            workspace_worker = self.workspace_transcription_worker
+            if workspace_worker is None or not workspace_worker.isRunning():
+                self.workspace_close_pending = False
+                QTimer.singleShot(0, self.close)
+
+    def _active_voice_group(self) -> VoiceGroup | None:
+        analysis = self.instrument_match_analysis
+        if analysis is None or not analysis.groups:
+            return None
+        for group in analysis.groups:
+            if group.group_id == self.active_voice_group_id:
+                return group
+        selected = self.transcription_session.state.selected_candidate_ids
+        if selected:
+            matching = [
+                group
+                for group in analysis.groups
+                if selected.intersection(group.candidate_ids)
+            ]
+            if matching:
+                return min(
+                    matching,
+                    key=lambda group: (
+                        group.start_audio_ms,
+                        group.group_id,
+                    ),
+                )
+        return analysis.groups[0]
+
+    def _activate_voice_group_for_candidates(
+        self, candidate_ids: Iterable[str]
+    ) -> None:
+        analysis = self.instrument_match_analysis
+        selected = {str(item) for item in candidate_ids}
+        if analysis is None or not selected:
+            return
+        matching = [
+            group
+            for group in analysis.groups
+            if selected.intersection(group.candidate_ids)
+        ]
+        if matching:
+            self.active_voice_group_id = min(
+                matching,
+                key=lambda group: (
+                    group.start_audio_ms,
+                    group.group_id,
+                ),
+            ).group_id
+
+    def _set_active_voice_group(
+        self,
+        group: VoiceGroup,
+        *,
+        update_range: bool,
+        focus: bool = True,
+    ) -> None:
+        self.active_voice_group_id = group.group_id
+        if update_range:
+            offset_ms = float(self.reference_audio_offset_ms)
+            self._set_transcription_region(
+                (
+                    group.start_audio_ms + offset_ms,
+                    group.end_audio_ms + offset_ms,
+                )
+            )
+        editor = self.active_transcription_editor
+        if editor is not None and focus:
+            editor.focus_transcription_time_range(
+                group.start_audio_ms
+                + float(self.reference_audio_offset_ms),
+                group.end_audio_ms
+                + float(self.reference_audio_offset_ms),
+            )
+        self._refresh_transcription_workspace()
+
+    def _navigate_voice_group(self, direction: int) -> None:
+        analysis = self.instrument_match_analysis
+        if analysis is None or not analysis.groups:
+            return
+        groups = analysis.groups
+        current = self._active_voice_group()
+        current_index = (
+            next(
+                (
+                    index
+                    for index, group in enumerate(groups)
+                    if current is not None
+                    and group.group_id == current.group_id
+                ),
+                0,
+            )
+        )
+        target_index = max(
+            0,
+            min(len(groups) - 1, current_index + int(direction)),
+        )
+        self._set_active_voice_group(
+            groups[target_index],
+            update_range=True,
+        )
+
+    def _set_voice_group_loop(self, enabled: bool) -> None:
+        self.loop_current_voice_group = bool(enabled)
+        group = self._active_voice_group()
+        if enabled and group is not None:
+            self._set_active_voice_group(group, update_range=True)
+        editor = self.active_transcription_editor
+        if editor is not None:
+            editor.loop_box.setChecked(bool(enabled and group is not None))
+        self._refresh_transcription_workspace()
+
+    def _open_transcription_review_queue(self) -> None:
+        editor = self.active_transcription_editor
+        if editor is None:
+            return
+        offset_ms = float(self.reference_audio_offset_ms)
+        items: list[tuple[str, float, float, str]] = []
+        queue_truncated = False
+
+        def append_item(
+            item: tuple[str, float, float, str],
+        ) -> bool:
+            nonlocal queue_truncated
+            if len(items) >= TRANSCRIPTION_REVIEW_QUEUE_LIMIT:
+                queue_truncated = True
+                return False
+            items.append(item)
+            return True
+
+        invalid_ids = set()
+        duplicate_ids = set()
+        tracks_by_id = {
+            int(track.track_id): track for track in self.tracks
+        }
+        fallback_region = (
+            self.transcription_session.state.region
+            or (
+                float(editor.playhead_ms),
+                float(editor.playhead_ms) + float(editor.canvas.beat_ms),
+            )
+        )
+        for route in self.transcription_session.state.pending_routes:
+            candidate = self.transcription_session.candidate_for_id(
+                route.candidate_id
+            )
+            target = tracks_by_id.get(int(route.track_id))
+            orphaned = candidate is None or target is None
+            invalid = (
+                not orphaned
+                and self._candidate_invalid_for_track(candidate, target)
+            )
+            if not orphaned and not invalid:
+                continue
+            if candidate is None:
+                start_ms, end_ms = fallback_region
+            else:
+                start_ms = float(candidate.start_ms) + offset_ms
+                end_ms = (
+                    float(candidate.start_ms + candidate.duration_ms)
+                    + offset_ms
+                )
+            if not append_item(
+                (
+                    trf(
+                        "{state} · 轨道 {track_id}",
+                        state=(
+                            tr("孤立路由")
+                            if orphaned
+                            else tr("失效路由")
+                        ),
+                        track_id=int(route.track_id),
+                    ),
+                    start_ms,
+                    end_ms,
+                    "",
+                )
+            ):
+                break
+        cached_flags = getattr(
+            editor, "_transcription_candidate_flag_cache", None
+        )
+        if cached_flags is not None:
+            invalid_ids.update(cached_flags[1])
+            duplicate_ids.update(cached_flags[2])
+        for alternate_id, primary_id in (
+            editor.canvas._folded_candidate_primary.items()
+        ):
+            duplicate_ids.add(alternate_id)
+            duplicate_ids.add(primary_id)
+        for candidate_id in sorted(invalid_ids):
+            candidate = self.transcription_session.candidate_for_id(
+                candidate_id
+            )
+            if candidate is None:
+                continue
+            if not append_item(
+                (
+                    trf(
+                        "越界候选 · {note}",
+                        note=note_name(int(candidate.pitch)),
+                    ),
+                    float(candidate.start_ms) + offset_ms,
+                    float(candidate.start_ms + candidate.duration_ms)
+                    + offset_ms,
+                    "",
+                )
+            ):
+                break
+        for candidate_id in sorted(duplicate_ids.difference(invalid_ids)):
+            candidate = self.transcription_session.candidate_for_id(
+                candidate_id
+            )
+            if candidate is None:
+                continue
+            if not append_item(
+                (
+                    trf(
+                        "重叠或重复 · {note}",
+                        note=note_name(int(candidate.pitch)),
+                    ),
+                    float(candidate.start_ms) + offset_ms,
+                    float(candidate.start_ms + candidate.duration_ms)
+                    + offset_ms,
+                    "",
+                )
+            ):
+                break
+        reviewed_fragment_ids = (
+            invalid_ids
+            | duplicate_ids
+            | set(self.transcription_session.state.rejected_candidate_ids)
+        )
+        for annotation in self.transcription_session.annotations:
+            if (
+                annotation.candidate_id in reviewed_fragment_ids
+                or not {
+                    "review_fragment",
+                    "pitch_flicker",
+                }.intersection(annotation.flags)
+            ):
+                continue
+            candidate = self.transcription_session.candidate_for_id(
+                annotation.candidate_id
+            )
+            if candidate is None:
+                continue
+            if not append_item(
+                (
+                    trf(
+                        "疑似碎音 · {note}",
+                        note=note_name(int(candidate.pitch)),
+                    ),
+                    float(candidate.start_ms) + offset_ms,
+                    float(candidate.start_ms + candidate.duration_ms)
+                    + offset_ms,
+                    "",
+                )
+            ):
+                break
+        harmony = self.harmony_analysis
+        if harmony is not None:
+            conflicts = {item.segment_id for item in harmony.conflicts}
+            for segment in harmony.chord_segments:
+                if (
+                    segment.segment_id not in conflicts
+                    and (
+                        segment.quality == "N"
+                        or float(segment.confidence) >= 0.55
+                    )
+                ):
+                    continue
+                if not append_item(
+                    (
+                        trf(
+                            "和声不确定 · {chord}",
+                            chord=(
+                                "N"
+                                if segment.root_pc is None
+                                else (
+                                    f"{editor._pitch_class_label(segment.root_pc)} "
+                                    f"{segment.quality}"
+                                )
+                            ),
+                        ),
+                        segment.start_audio_ms + offset_ms,
+                        segment.end_audio_ms + offset_ms,
+                        "",
+                    )
+                ):
+                    break
+        analysis = self.instrument_match_analysis
+        if analysis is not None:
+            confirmed_group_ids = {
+                item.group_id
+                for item in self.transcription_assist_review.active_voice_groups
+                if item.confirmed_instrument_id is not None
+            }
+            for group in analysis.groups:
+                matches = analysis.matches_for_group(group.group_id)
+                confirmed = next(
+                    (
+                        item.confirmed_instrument_id
+                        for item in self.transcription_assist_review.active_voice_groups
+                        if item.group_id == group.group_id
+                    ),
+                    None,
+                )
+                if (
+                    group.group_id in confirmed_group_ids
+                    and confirmed is not None
+                    and int(confirmed)
+                    in {match.instrument_id for match in matches}
+                ):
+                    continue
+                if (
+                    matches
+                    and matches[0].timbre_score is not None
+                    and matches[0].total_score >= 0.45
+                ):
+                    continue
+                if not append_item(
+                    (
+                        trf(
+                            "乐器匹配待确认 · {role}",
+                            role=voice_role_label(group.role),
+                        ),
+                        group.start_audio_ms + offset_ms,
+                        group.end_audio_ms + offset_ms,
+                        group.group_id,
+                    )
+                ):
+                    break
+        if not items:
+            self.show_toast(tr("当前没有待审项目。"), kind="success")
+            return
+        if queue_truncated:
+            self.show_toast(
+                trf(
+                    "待审项目较多，当前只显示优先级最高的 {count} 项。",
+                    count=TRANSCRIPTION_REVIEW_QUEUE_LIMIT,
+                ),
+                kind="warning",
+            )
+        labels = [
+            f"{index + 1}. {label} · {start_ms / 1000.0:.1f}s"
+            for index, (label, start_ms, _end_ms, _group_id)
+            in enumerate(items)
+        ]
+        selected, accepted = QInputDialog.getItem(
+            editor,
+            tr("待审队列"),
+            tr("选择后只定位并设置 A–B，不会自动选择或写入音符："),
+            labels,
+            0,
+            False,
+        )
+        if not accepted:
+            return
+        selected_index = labels.index(str(selected))
+        _label, start_ms, end_ms, group_id = items[selected_index]
+        self._set_transcription_region((start_ms, end_ms))
+        if group_id and analysis is not None:
+            group = next(
+                (
+                    item
+                    for item in analysis.groups
+                    if item.group_id == group_id
+                ),
+                None,
+            )
+            if group is not None:
+                self.active_voice_group_id = group.group_id
+        editor.focus_transcription_time_range(start_ms, end_ms)
+        self._refresh_transcription_workspace()
+
+    def _set_transcription_analysis_state(
+        self,
+        busy: bool,
+        progress: int | None = None,
+        *,
+        status: str | None = None,
+    ) -> None:
+        self.transcription_analysis_busy = bool(busy)
+        self.transcription_analysis_progress = (
+            None
+            if progress is None
+            else max(0, min(100, int(progress)))
+        )
+        if status is not None:
+            self.transcription_ui_status = tr(str(status))
+        editor = self.active_transcription_editor
+        if editor is not None:
+            editor.refresh_transcription_projection()
+            editor.set_transcription_analysis_ui(
+                self.transcription_analysis_busy,
+                self.transcription_analysis_progress,
+                status=self.transcription_ui_status,
+            )
+
+    def _start_workspace_transcription_analysis(self) -> None:
+        audio_path = self.reference_audio.audio_path
+        if not audio_path:
+            self.show_toast(
+                tr("请先载入 MP3/WAV 参考音频。"),
+                kind="warning",
+            )
+            return
+        if self.workspace_transcription_worker is not None:
+            return
+        editor = self.active_transcription_editor
+        if editor is not None and editor.has_transcription_staging():
+            editor.warn_transcription_staging_blocked()
+            return
+        available, reason = transcription_backend_quick_status()
+        if not available:
+            QMessageBox.warning(self, tr("无法开始扒谱"), tr(reason))
+            return
+        self._stop_preview(reset_playhead=False)
+        self.workspace_transcription_generation += 1
+        generation = self.workspace_transcription_generation
+        state = self.transcription_session.state
+        worker = TranscriptionAnalysisWorker(
+            audio_path,
+            self,
+            analysis_mode=state.analysis_mode,
+            sensitivity=state.sensitivity,
+            cleanup_profile=state.cleanup_profile,
+        )
+        self.workspace_transcription_worker = worker
+        worker.progress_changed.connect(
+            lambda value, token=generation:
+            self._workspace_transcription_progress(token, value)
+        )
+        worker.succeeded.connect(
+            lambda result, token=generation:
+            self._workspace_transcription_succeeded(token, result, False)
+        )
+        worker.failed.connect(
+            lambda message, token=generation:
+            self._workspace_transcription_failed(token, message)
+        )
+        worker.cancelled.connect(
+            lambda token=generation:
+            self._workspace_transcription_cancelled(token)
+        )
+        worker.finished.connect(
+            lambda token=generation, current=worker:
+            self._workspace_transcription_finished(token, current)
+        )
+        worker.finished.connect(worker.deleteLater)
+        self._set_transcription_analysis_state(
+            True,
+            0,
+            status=tr("正在分析参考音频…"),
+        )
+        worker.start()
+
+    def _redecode_transcription_range(self) -> None:
+        state = self.transcription_session.state
+        if (
+            self.workspace_transcription_worker is not None
+            or not state.cache_key
+            or state.region is None
+        ):
+            return
+        editor = self.active_transcription_editor
+        if editor is not None and editor.has_transcription_staging():
+            editor.warn_transcription_staging_blocked()
+            return
+        start_ms, end_ms = state.region
+        self._stop_preview(reset_playhead=False)
+        self.workspace_transcription_generation += 1
+        generation = self.workspace_transcription_generation
+        worker = TranscriptionRedecodeWorker(
+            state.cache_key,
+            start_ms - self.reference_audio_offset_ms,
+            end_ms - self.reference_audio_offset_ms,
+            state.sensitivity,
+            self,
+            cleanup_profile=state.cleanup_profile,
+        )
+        self.workspace_transcription_worker = worker
+        worker.succeeded.connect(
+            lambda result, token=generation:
+            self._workspace_transcription_succeeded(token, result, True)
+        )
+        worker.failed.connect(
+            lambda message, token=generation:
+            self._workspace_transcription_failed(token, message)
+        )
+        worker.cancelled.connect(
+            lambda token=generation:
+            self._workspace_transcription_cancelled(token)
+        )
+        worker.finished.connect(
+            lambda token=generation, current=worker:
+            self._workspace_transcription_finished(token, current)
+        )
+        worker.finished.connect(worker.deleteLater)
+        self._set_transcription_analysis_state(
+            True,
+            status=tr("正在从缓存证据重新解码 A–B；不会再次运行模型。"),
+        )
+        worker.start()
+
+    def _restore_cached_transcription(
+        self,
+        *,
+        status: str | None = None,
+        cleanup_profile: str | None = None,
+        rollback_cleanup_profile: str | None = None,
+    ) -> int | None:
+        cache_key = self.transcription_session.state.cache_key
+        if (
+            not cache_key
+            or self.workspace_transcription_worker is not None
+            or self._pending_transcription_cleanup_profile is not None
+        ):
+            return None
+        requested_cleanup_profile = str(
+            cleanup_profile
+            if cleanup_profile is not None
+            else self.transcription_session.state.cleanup_profile
+        )
+        if requested_cleanup_profile not in {
+            "preserve",
+            "balanced",
+            "clean",
+        }:
+            raise ValueError(
+                "unknown transcription cleanup profile: "
+                f"{requested_cleanup_profile}"
+            )
+        self.workspace_transcription_generation += 1
+        generation = self.workspace_transcription_generation
+        if rollback_cleanup_profile is not None:
+            self._pending_transcription_cleanup_profile = (
+                generation,
+                str(rollback_cleanup_profile),
+                requested_cleanup_profile,
+            )
+        worker = TranscriptionCacheLoadWorker(
+            cache_key,
+            self,
+            audio_path=str(self.reference_audio.audio_path or ""),
+            expected_audio_fingerprint=(
+                self.transcription_session.state.analysis_fingerprint
+            ),
+            analysis_mode=self.transcription_session.state.analysis_mode,
+            sensitivity=self.transcription_session.state.sensitivity,
+            cleanup_profile=requested_cleanup_profile,
+        )
+        self.workspace_transcription_worker = worker
+        worker.succeeded.connect(
+            lambda result, token=generation, current=worker:
+            self._workspace_transcription_succeeded(
+                token,
+                result,
+                False,
+                True,
+                current.current_audio_fingerprint,
+            )
+        )
+        worker.failed.connect(
+            lambda message, token=generation:
+            self._workspace_transcription_failed(token, message, quiet=True)
+        )
+        worker.cancelled.connect(
+            lambda token=generation:
+            self._workspace_transcription_cancelled(token)
+        )
+        worker.finished.connect(
+            lambda token=generation, current=worker:
+            self._workspace_transcription_finished(token, current)
+        )
+        worker.finished.connect(worker.deleteLater)
+        self._set_transcription_analysis_state(
+            True,
+            status=(
+                str(status)
+                if status is not None
+                else tr("正在校验并恢复扒谱缓存…")
+            ),
+        )
+        try:
+            worker.start()
+        except Exception:
+            if self.workspace_transcription_worker is worker:
+                self.workspace_transcription_worker = None
+            self._rollback_cleanup_profile_transaction(generation)
+            worker.deleteLater()
+            raise
+        return generation
+
+    def _cleanup_profile_transaction(
+        self,
+        generation: int,
+    ) -> tuple[int, str, str] | None:
+        pending = self._pending_transcription_cleanup_profile
+        if pending is None or pending[0] != generation:
+            return None
+        return pending
+
+    def _rollback_cleanup_profile_transaction(
+        self,
+        generation: int | None = None,
+    ) -> bool:
+        pending = self._pending_transcription_cleanup_profile
+        if pending is None:
+            return False
+        if generation is not None and pending[0] != generation:
+            return False
+        _token, previous, _requested = pending
+        self._pending_transcription_cleanup_profile = None
+        self.transcription_session.set_cleanup_profile(previous)
+        editor = self.active_transcription_editor
+        if editor is not None:
+            editor.transcription_panel.set_cleanup_profile(previous)
+        self._refresh_transcription_action_state()
+        return True
+
+    def _commit_cleanup_profile_transaction(
+        self,
+        generation: int,
+        result: TranscriptionResult,
+    ) -> bool:
+        pending = self._cleanup_profile_transaction(generation)
+        if pending is None:
+            return True
+        _token, _previous, requested = pending
+        report = result.postprocess_report
+        descriptor = result.evidence_descriptor
+        result_profile = str(
+            report.profile
+            if report is not None
+            else descriptor.cleanup_profile
+            if descriptor is not None
+            else ""
+        )
+        if result_profile != requested:
+            self._rollback_cleanup_profile_transaction(generation)
+            return False
+        self.transcription_session.set_cleanup_profile(requested)
+        self._pending_transcription_cleanup_profile = None
+        editor = self.active_transcription_editor
+        if editor is not None:
+            editor.transcription_panel.set_cleanup_profile(requested)
+        self._refresh_transcription_action_state()
+        return True
+
+    def _workspace_transcription_progress(
+        self, generation: int, value: int,
+    ) -> None:
+        if generation == self.workspace_transcription_generation:
+            self._set_transcription_analysis_state(True, value)
+
+    def _workspace_transcription_succeeded(
+        self,
+        generation: int,
+        result: TranscriptionResult | None,
+        interval: bool,
+        restoring: bool = False,
+        restored_audio_fingerprint: str = "",
+    ) -> None:
+        if generation != self.workspace_transcription_generation:
+            return
+        previous = self.transcription_session.state
+        saved_fingerprint = (
+            previous.analysis_fingerprint
+            or self.transcription_assist_review.audio_fingerprint
+        )
+        restore_identity_mismatch = bool(
+            restoring
+            and (
+                (
+                    restored_audio_fingerprint
+                    and saved_fingerprint
+                    and restored_audio_fingerprint != saved_fingerprint
+                )
+                or (
+                    self.reference_audio.audio_path
+                    and not restored_audio_fingerprint
+                )
+            )
+        )
+        if restore_identity_mismatch:
+            self._rollback_cleanup_profile_transaction(generation)
+            self.transcription_assist_previous_candidates = tuple(
+                self.transcription_session.candidates
+            )
+            self.transcription_assist_review = isolate_assist_review_for_audio(
+                self.transcription_assist_review,
+                restored_audio_fingerprint,
+            )
+            self.automatic_harmony_analysis = None
+            self.automatic_instrument_match_analysis = None
+            self.harmony_analysis = None
+            self.instrument_match_analysis = None
+            self.transcription_group_timbre_profiles = None
+            self.transcription_group_timbre_revision = ""
+            self.transcription_assist_review_undo.clear()
+            self.transcription_assist_review_redo.clear()
+            self.transcription_session = TranscriptionSession(
+                state=TranscriptionSessionState(
+                    region=previous.region,
+                    analysis_mode=previous.analysis_mode,
+                    sensitivity=previous.sensitivity,
+                    cleanup_profile=previous.cleanup_profile,
+                )
+            )
+            self.transcription_result = None
+            self._clear_transcription_review_history()
+            editor = self.active_transcription_editor
+            if editor is not None:
+                editor.release_transcription_resources()
+            self._refresh_transcription_workspace()
+            self._set_transcription_status(
+                tr("参考音频已变化；旧审阅状态已隔离，请重新分析整首。")
+            )
+            if not self.loading_project:
+                self._autosave_project(
+                    "transcription audio identity changed",
+                    immediate=True,
+                )
+            return
+        if result is None:
+            self._rollback_cleanup_profile_transaction(generation)
+            self._set_transcription_status(
+                tr("扒谱缓存不存在或校验失败；请重新分析整首。")
+            )
+            return
+        if not self._commit_cleanup_profile_transaction(generation, result):
+            self._set_transcription_status(
+                tr("碎音处理切换失败；已恢复原档位。")
+            )
+            return
+        previous = self.transcription_session.state
+        self.transcription_assist_previous_candidates = tuple(
+            self.transcription_session.candidates
+        )
+        descriptor = result.evidence_descriptor
+        fingerprint = (
+            descriptor.audio_fingerprint if descriptor is not None else ""
+        )
+        backend_id = descriptor.backend_id if descriptor is not None else ""
+        annotations = _session_candidate_annotations(result)
+        if interval:
+            start_ms, end_ms = previous.region or (0.0, 0.0)
+            replaced = self.transcription_session.replace_region_candidates(
+                result.candidates,
+                start_ms - self.reference_audio_offset_ms,
+                end_ms - self.reference_audio_offset_ms,
+                annotations=annotations,
+            )
+            if (
+                replaced.added_candidate_ids
+                or replaced.removed_candidate_ids
+            ):
+                self._record_transcription_review_action("session")
+            self.transcription_result = TranscriptionResult(
+                tuple(self.transcription_session.candidates),
+                result.cache_key,
+                result.evidence_layers,
+                True,
+                descriptor,
+                result.postprocess_report,
+            )
+            fragment_report = result.postprocess_report
+            profile_label, profile_state = (
+                _transcription_cleanup_ui_labels(
+                    (
+                        fragment_report.profile
+                        if fragment_report is not None
+                        else previous.cleanup_profile
+                    ),
+                    fragment_report,
+                )
+            )
+            self._set_transcription_status(
+                trf(
+                    "区间重解码完成 · {profile} · {profile_state} · "
+                    "新增 {added} · 替换 {removed} · 保护 {protected} · "
+                    "自动合并 {merged} · 疑似碎音 {suspected} · "
+                    "已隐藏 {suppressed}",
+                    profile=profile_label,
+                    profile_state=profile_state,
+                    added=len(replaced.added_candidate_ids),
+                    removed=len(replaced.removed_candidate_ids),
+                    protected=len(replaced.protected_candidate_ids),
+                    merged=(
+                        fragment_report.automatic_merge_count
+                        if fragment_report is not None
+                        else 0
+                    ),
+                    suspected=(
+                        fragment_report.suspected_fragment_count
+                        if fragment_report is not None
+                        else 0
+                    ),
+                    suppressed=(
+                        fragment_report.suppressed_count
+                        if fragment_report is not None
+                        else 0
+                    ),
+                )
+            )
+        else:
+            project_candidates = tuple(result.candidates)
+            same_analysis = bool(
+                previous.cache_key
+                and previous.cache_key == result.cache_key
+            )
+            if same_analysis:
+                restored_state = previous
+                replaced = self.transcription_session.replace_all_candidates(
+                    project_candidates,
+                    annotations=annotations,
+                )
+                if (
+                    replaced.added_candidate_ids
+                    or replaced.removed_candidate_ids
+                ):
+                    self._record_transcription_review_action("session")
+            else:
+                restored_state = TranscriptionSessionState(
+                    cache_key=result.cache_key,
+                    analysis_fingerprint=fingerprint,
+                    region=previous.region,
+                    analysis_mode=(
+                        descriptor.analysis_mode
+                        if descriptor is not None
+                        else previous.analysis_mode
+                    ),
+                    sensitivity=(
+                        descriptor.decode_sensitivity
+                        if descriptor is not None
+                        else previous.sensitivity
+                    ),
+                    cleanup_profile=(
+                        descriptor.cleanup_profile
+                        if descriptor is not None
+                        else previous.cleanup_profile
+                    ),
+                )
+                self.transcription_session = TranscriptionSession(
+                    project_candidates,
+                    cache_key=result.cache_key,
+                    backend_id=backend_id,
+                    analysis_fingerprint=fingerprint,
+                    state=restored_state,
+                    annotations=annotations,
+                )
+            project_candidates = tuple(
+                self.transcription_session.candidates
+            )
+            self.transcription_result = TranscriptionResult(
+                tuple(project_candidates),
+                result.cache_key,
+                result.evidence_layers,
+                result.cache_hit,
+                descriptor,
+                result.postprocess_report,
+            )
+            fragment_report = result.postprocess_report
+            profile_label, profile_state = (
+                _transcription_cleanup_ui_labels(
+                    (
+                        fragment_report.profile
+                        if fragment_report is not None
+                        else self.transcription_session.state.cleanup_profile
+                    ),
+                    fragment_report,
+                )
+            )
+            self._set_transcription_status(
+                trf(
+                    "{prefix}{profile} · {profile_state} · "
+                    "{count} 个候选 · 自动合并 {merged} · "
+                    "疑似碎音 {suspected} · 已隐藏 {suppressed}",
+                    prefix=tr(
+                        "已恢复缓存 · "
+                        if restoring or result.cache_hit
+                        else "分析完成 · "
+                    ),
+                    profile=profile_label,
+                    profile_state=profile_state,
+                    count=len(project_candidates),
+                    merged=(
+                        fragment_report.automatic_merge_count
+                        if fragment_report is not None
+                        else 0
+                    ),
+                    suspected=(
+                        fragment_report.suspected_fragment_count
+                        if fragment_report is not None
+                        else 0
+                    ),
+                    suppressed=(
+                        fragment_report.suppressed_count
+                        if fragment_report is not None
+                        else 0
+                    ),
+                )
+            )
+        self._refresh_transcription_workspace()
+        self._start_transcription_assist_analysis()
+        self._autosave_project(
+            "transcription interval decode"
+            if interval
+            else "transcription analysis",
+            immediate=True,
+        )
+
+    def _workspace_transcription_failed(
+        self,
+        generation: int,
+        message: str,
+        *,
+        quiet: bool = False,
+    ) -> None:
+        if generation != self.workspace_transcription_generation:
+            return
+        cleanup_rolled_back = self._rollback_cleanup_profile_transaction(
+            generation
+        )
+        self._set_transcription_status(
+            tr("碎音处理切换失败；已恢复原档位。")
+            if cleanup_rolled_back
+            else
+            tr("缓存无法恢复；请重新分析整首。")
+            if quiet
+            else tr("扒谱分析失败。")
+        )
+        if not quiet:
+            QMessageBox.warning(self, tr("扒谱分析失败"), message)
+
+    def _workspace_transcription_cancelled(self, generation: int) -> None:
+        if generation == self.workspace_transcription_generation:
+            cleanup_rolled_back = (
+                self._rollback_cleanup_profile_transaction(generation)
+            )
+            self._set_transcription_status(
+                tr("碎音处理切换已取消；已恢复原档位。")
+                if cleanup_rolled_back
+                else tr("扒谱分析已取消。")
+            )
+
+    def _workspace_transcription_finished(
+        self,
+        generation: int,
+        worker: QThread,
+    ) -> None:
+        # Generation gates result validity; identity gates thread ownership.
+        # A stale worker may finish after a new one has been installed and
+        # must never clear that replacement.
+        if self.workspace_transcription_worker is not worker:
+            return
+        self.workspace_transcription_worker = None
+        orphaned_cleanup_switch = (
+            self._rollback_cleanup_profile_transaction(generation)
+        )
+        available, reason = transcription_backend_quick_status()
+        self._set_transcription_analysis_state(False)
+        editor = self.active_transcription_editor
+        if editor is not None:
+            editor.set_transcription_analysis_ui(
+                False,
+                status=self.transcription_ui_status,
+                available=available,
+                unavailable_reason=(
+                    reason if not available else ""
+                ),
+            )
+        self._refresh_transcription_action_state()
+        if not available:
+            self._set_transcription_status(reason)
+        elif not self.reference_audio.audio_path:
+            self._set_transcription_status(
+                tr("载入参考音频后可开始整首分析")
+            )
+        elif orphaned_cleanup_switch:
+            self._set_transcription_status(
+                tr("碎音处理切换失败；已恢复原档位。")
+            )
+        if self.workspace_close_pending:
+            self.workspace_close_pending = False
+            QTimer.singleShot(0, self.close)
+
+    @staticmethod
+    def _normalise_editor_draft(
+        draft_notes: Iterable[object],
+    ) -> tuple[Note, ...] | None:
+        """Validate the editor wire shape without changing musical meaning."""
+
+        normalised: list[Note] = []
+        try:
+            for value in draft_notes:
+                pitch = int(getattr(value, "pitch"))
+                velocity = int(getattr(value, "vel"))
+                start = float(getattr(value, "start"))
+                duration = float(getattr(value, "dur"))
+                note_type = int(getattr(value, "ntype"))
+                if (
+                    not 0 <= pitch <= 127
+                    or not 0 <= velocity <= 127
+                    or not math.isfinite(start)
+                    or not math.isfinite(duration)
+                    or start < 0.0
+                    or duration <= 0.0
+                ):
+                    return None
+                normalised.append(
+                    Note(pitch, velocity, start, duration, note_type)
+                )
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            return None
+        return tuple(
+            sorted(
+                normalised,
+                key=lambda note: (
+                    float(note.start),
+                    int(note.pitch),
+                    float(note.dur),
+                    int(note.vel),
+                    int(note.ntype),
+                ),
+            )
+        )
+
+    def _commit_note_editor(
+        self,
+        request: TranscriptionEditorCommit,
+    ) -> TranscriptionEditorCommitReport | None:
+        """Commit one complete note-editor draft and all staged routes.
+
+        Preflight is intentionally side-effect free.  When anything changes,
+        all affected tracks and the transcription sidecar are captured by one
+        project snapshot and saved once.
+        """
+
+        tracks_by_id = {int(track.track_id): track for track in self.tracks}
+        existing_track_ids = set(tracks_by_id)
+        current_track = tracks_by_id.get(int(request.current_track_id))
+        draft_notes = self._normalise_editor_draft(request.draft_notes)
+        if current_track is None or draft_notes is None:
+            QMessageBox.warning(
+                self,
+                tr("无法应用音符编辑"),
+                tr("目标轨道已经失效，或草稿包含无效音符。"),
+            )
+            return None
+        state = self.transcription_session.state
+        historical_track_ids = {
+            int(route.track_id)
+            for route in (*state.pending_routes, *state.applied_routes)
+        }
+        new_tracks_by_id: dict[int, TrackState] = {}
+        failed_new_track_ids: set[int] = set()
+        for track_id, instrument_id in request.new_track_specs:
+            if (
+                int(track_id) in existing_track_ids
+                or int(track_id) in historical_track_ids
+                or int(instrument_id) not in BDO_INSTRUMENT_NAMES
+                or int(instrument_id) in {0x04, 0x05, 0x0D}
+            ):
+                failed_new_track_ids.add(int(track_id))
+                continue
+            instrument_name = BDO_INSTRUMENT_NAMES[int(instrument_id)]
+            new_track = TrackState(
+                track_id=int(track_id),
+                notes=[],
+                gm_program=0,
+                is_percussion=False,
+                display_name=trf(
+                    "扒谱：{instrument}",
+                    instrument=instrument_name.rsplit("：", 1)[-1],
+                ),
+                bdo_instrument_id=int(instrument_id),
+                color=TRACK_COLORS[
+                    (len(self.tracks) + len(new_tracks_by_id))
+                    % len(TRACK_COLORS)
+                ],
+            )
+            new_tracks_by_id[int(track_id)] = new_track
+            tracks_by_id[int(track_id)] = new_track
+
+        old_pending = set(state.pending_routes)
+        old_applied = set(state.applied_routes)
+        local_routes = set(request.routes)
+        all_routes = tuple(sorted(old_pending.union(local_routes)))
+        local_identity_valid = (
+            str(request.cache_key or "") == str(state.cache_key or "")
+            and str(request.analysis_fingerprint or "")
+            == str(state.analysis_fingerprint or "")
+        )
+
+        created: set[CandidateRoute] = set()
+        satisfied: set[CandidateRoute] = set()
+        invalid: set[CandidateRoute] = set()
+        orphaned: set[CandidateRoute] = set()
+        unresolved_local: set[CandidateRoute] = set()
+        successful: set[CandidateRoute] = set()
+        additions: dict[int, list[Note]] = defaultdict(list)
+        unused_draft_indices = set(range(len(draft_notes)))
+        # A rejected/invalid staged candidate must not cross the project
+        # boundary merely because its generated Note is also present in the
+        # complete current-track draft.  Exact pre-existing notes remain
+        # protected; a modified candidate note that no longer matches is a
+        # normal manual edit by design.
+        baseline_note_counts = Counter(current_track.notes)
+        nonbaseline_draft_indices: set[int] = set()
+        for index, note in enumerate(draft_notes):
+            if baseline_note_counts[note] > 0:
+                baseline_note_counts[note] -= 1
+            else:
+                nonbaseline_draft_indices.add(index)
+        blocked_draft_indices: set[int] = set()
+        draft_by_pitch: dict[int, tuple[list[float], list[int]]] = {}
+        grouped_draft_indices: dict[int, list[int]] = defaultdict(list)
+        for index, note in enumerate(draft_notes):
+            grouped_draft_indices[int(note.pitch)].append(index)
+        for pitch, indices in grouped_draft_indices.items():
+            ordered = sorted(
+                indices,
+                key=lambda index: float(draft_notes[index].start),
+            )
+            draft_by_pitch[pitch] = (
+                [float(draft_notes[index].start) for index in ordered],
+                ordered,
+            )
+        formal_by_track: dict[
+            int,
+            dict[int, tuple[list[float], list[Note]]],
+        ] = {}
+
+        def formal_index(
+            track: TrackState,
+        ) -> dict[int, tuple[list[float], list[Note]]]:
+            track_id = int(track.track_id)
+            cached = formal_by_track.get(track_id)
+            if cached is not None:
+                return cached
+            grouped: dict[int, list[Note]] = defaultdict(list)
+            for note in track.notes:
+                grouped[int(note.pitch)].append(note)
+            cached = {}
+            for pitch, notes in grouped.items():
+                ordered = sorted(
+                    notes,
+                    key=lambda note: float(note.start),
+                )
+                cached[pitch] = (
+                    [float(note.start) for note in ordered],
+                    ordered,
+                )
+            formal_by_track[track_id] = cached
+            return cached
+
+        def matching_formal_notes(
+            candidate: TranscriptionCandidate,
+            track: TrackState,
+        ) -> list[Note]:
+            starts, notes = formal_index(track).get(
+                int(candidate.pitch),
+                ([], []),
+            )
+            window_start, window_end = CANDIDATE_NOTE_POLICY.match_window(
+                candidate,
+                self.reference_audio_offset_ms,
+            )
+            first = bisect_left(starts, window_start)
+            last = bisect_right(starts, window_end)
+            return [
+                note
+                for note in notes[first:last]
+                if CANDIDATE_NOTE_POLICY.matches_note(
+                    candidate,
+                    note,
+                    self.reference_audio_offset_ms,
+                )
+            ]
+
+        def best_draft_match(
+            candidate: TranscriptionCandidate,
+            *,
+            allowed_indices: set[int] | None = None,
+        ) -> int | None:
+            starts, indices = draft_by_pitch.get(
+                int(candidate.pitch),
+                ([], []),
+            )
+            project_start = CANDIDATE_NOTE_POLICY.project_start_ms(
+                candidate,
+                self.reference_audio_offset_ms,
+            )
+            window_start, window_end = CANDIDATE_NOTE_POLICY.match_window(
+                candidate,
+                self.reference_audio_offset_ms,
+            )
+            first = bisect_left(starts, window_start)
+            last = bisect_right(starts, window_end)
+            matches = [
+                index
+                for index in indices[first:last]
+                if index in unused_draft_indices
+                if allowed_indices is None or index in allowed_indices
+                if CANDIDATE_NOTE_POLICY.matches_note(
+                    candidate,
+                    draft_notes[index],
+                    self.reference_audio_offset_ms,
+                )
+            ]
+            if not matches:
+                return None
+            return min(
+                matches,
+                key=lambda index: (
+                    abs(float(draft_notes[index].start) - project_start),
+                    abs(
+                        float(draft_notes[index].dur)
+                        - CANDIDATE_NOTE_POLICY.note_duration_ms(
+                            candidate
+                        )
+                    ),
+                    index,
+                ),
+            )
+
+        def block_staged_current_draft_note(
+            route: CandidateRoute,
+            candidate: TranscriptionCandidate | None,
+            *,
+            is_local: bool,
+        ) -> None:
+            if (
+                not is_local
+                or candidate is None
+                or int(route.track_id) != int(current_track.track_id)
+            ):
+                return
+            match_index = best_draft_match(
+                candidate,
+                allowed_indices=nonbaseline_draft_indices,
+            )
+            if match_index is None:
+                return
+            blocked_draft_indices.add(match_index)
+            unused_draft_indices.discard(match_index)
+            nonbaseline_draft_indices.discard(match_index)
+
+        for route in all_routes:
+            is_local = route in local_routes
+            candidate = self.transcription_session.candidate_for_id(
+                route.candidate_id
+            )
+            if (
+                candidate is not None
+                and route.candidate_id in state.rejected_candidate_ids
+            ):
+                invalid.add(route)
+                if is_local:
+                    unresolved_local.add(route)
+                    block_staged_current_draft_note(
+                        route,
+                        candidate,
+                        is_local=True,
+                    )
+                continue
+            if is_local and int(route.track_id) in failed_new_track_ids:
+                invalid.add(route)
+                unresolved_local.add(route)
+                block_staged_current_draft_note(
+                    route,
+                    candidate,
+                    is_local=True,
+                )
+                continue
+            if route in old_applied:
+                satisfied.add(route)
+                successful.add(route)
+                continue
+            if is_local and not local_identity_valid:
+                unresolved_local.add(route)
+                block_staged_current_draft_note(
+                    route,
+                    candidate,
+                    is_local=True,
+                )
+                continue
+            target = tracks_by_id.get(int(route.track_id))
+            if target is None or candidate is None:
+                orphaned.add(route)
+                if is_local:
+                    unresolved_local.add(route)
+                continue
+            if self._candidate_invalid_for_track(candidate, target):
+                invalid.add(route)
+                if is_local:
+                    unresolved_local.add(route)
+                    block_staged_current_draft_note(
+                        route,
+                        candidate,
+                        is_local=True,
+                    )
+                continue
+            if int(target.track_id) == int(current_track.track_id):
+                match_index = best_draft_match(candidate)
+                if match_index is None:
+                    if is_local:
+                        unresolved_local.add(route)
+                    continue
+                unused_draft_indices.remove(match_index)
+                if matching_formal_notes(candidate, current_track):
+                    satisfied.add(route)
+                else:
+                    created.add(route)
+                successful.add(route)
+                continue
+            target_additions = additions[int(target.track_id)]
+            if matching_formal_notes(candidate, target):
+                satisfied.add(route)
+                successful.add(route)
+                continue
+            addition = CANDIDATE_NOTE_POLICY.to_note(
+                candidate,
+                self.reference_audio_offset_ms,
+            )
+            target_additions.append(addition)
+            starts, notes = formal_index(target).setdefault(
+                int(addition.pitch),
+                ([], []),
+            )
+            insertion = bisect_right(starts, float(addition.start))
+            starts.insert(insertion, float(addition.start))
+            notes.insert(insertion, addition)
+            created.add(route)
+            successful.add(route)
+
+        final_pending = old_pending.difference(successful)
+        final_applied = old_applied.union(successful)
+        committed_draft_notes = tuple(
+            note
+            for index, note in enumerate(draft_notes)
+            if index not in blocked_draft_indices
+        )
+        final_notes_by_id: dict[int, tuple[Note, ...]] = {
+            int(current_track.track_id): committed_draft_notes,
+        }
+        for track_id, new_notes in additions.items():
+            track = tracks_by_id[track_id]
+            final_notes_by_id[track_id] = tuple(
+                sorted(
+                    (*track.notes, *new_notes),
+                    key=lambda note: (
+                        float(note.start),
+                        int(note.pitch),
+                        float(note.dur),
+                        int(note.vel),
+                        int(note.ntype),
+                    ),
+                )
+            )
+        created_track_ids = {
+            track_id
+            for track_id in new_tracks_by_id
+            if track_id in final_notes_by_id
+            and bool(final_notes_by_id[track_id])
+        }
+
+        notes_changed = any(
+            tuple(tracks_by_id[track_id].notes) != notes
+            for track_id, notes in final_notes_by_id.items()
+        )
+        sidecar_changed = (
+            final_pending != old_pending or final_applied != old_applied
+        )
+        project_changed = (
+            notes_changed or sidecar_changed or bool(created_track_ids)
+        )
+
+        if project_changed:
+            self._push_project_snapshot()
+            self._stop_preview(reset_playhead=False)
+            for track_id in sorted(created_track_ids):
+                self.tracks.append(new_tracks_by_id[track_id])
+            for track_id, notes in final_notes_by_id.items():
+                track = tracks_by_id[track_id]
+                if tuple(track.notes) == notes:
+                    continue
+                track.notes = list(notes)
+                track.notes_optimized = False
+            if sidecar_changed:
+                self.transcription_session.commit_project_routes(
+                    successful,
+                    pending_routes=final_pending,
+                )
+            self.timeline.set_tracks(self.tracks)
+            self._select_track(current_track)
+            self._on_track_changed()
+            self._mark_conversion_check_dirty()
+            self._autosave_project(
+                "transcription editor apply"
+                if local_routes or successful
+                else "note edit",
+                immediate=True,
+            )
+            self.status_label.setText(
+                trf(
+                    "已更新 {track} · {count} 音符",
+                    track=current_track.display_name,
+                    count=len(current_track.notes),
+                )
+            )
+            self.show_toast(
+                tr("音符编辑已作为一个工程操作写入；可整批撤销。"),
+                kind="success",
+            )
+            # Formal Apply crosses into the project undo boundary.  Review
+            # history must not retain stale session snapshots behind it.
+            self._clear_transcription_review_history()
+            self._schedule_transcription_assist_refresh()
+
+        report = TranscriptionEditorCommitReport(
+            tuple(created),
+            tuple(satisfied),
+            tuple(invalid),
+            tuple(orphaned),
+            tuple(unresolved_local),
+            project_changed,
+        )
+        self._set_transcription_status(
+            trf(
+                "已应用 {created} 个音符 · 已满足 {satisfied} · "
+                "保留失效 {invalid} · 孤立 {orphaned}",
+                created=report.created_count,
+                satisfied=report.satisfied_count,
+                invalid=report.invalid_count,
+                orphaned=report.orphaned_count,
+            )
+        )
+        return report
+
+    def _create_workspace_status_state(self) -> None:
+        """Keep legacy status sinks without reserving a visible bottom bar."""
+
+        # Async paths still publish status and diagnostic summaries through
+        # these labels.  Toasts are the visible surface; the labels remain
+        # hidden state owned by the workspace for compatibility with those
+        # paths and tests.
+        self.status_label = QLabel("就绪", self.workspace_page)
         self.status_label.setObjectName("Status")
         self.status_label.hide()
-
-        self.inspector_text = QLabel("", panel)
+        self.inspector_text = QLabel("", self.workspace_page)
         self.inspector_text.setObjectName("InspectorText")
         self.inspector_text.hide()
-
-        output_row = QHBoxLayout()
-        output_row.setSpacing(7)
-        volume_label = QLabel("轨道音量")
-        volume_label.setObjectName("Muted")
-        output_row.addWidget(volume_label)
-
-        self.selected_volume = QSlider(Qt.Horizontal)
-        self.selected_volume.setRange(0, 127)
-        self.selected_volume.setValue(70)
-        self.selected_volume.setFixedWidth(90)
-        self.selected_volume.setEnabled(False)
-        self.selected_volume.valueChanged.connect(self._update_selected_volume)
-        output_row.addWidget(self.selected_volume)
-
-        self.selected_volume_label = QLabel("70")
-        self.selected_volume_label.setObjectName("Muted")
-        self.selected_volume_label.setFixedWidth(38)
-        output_row.addWidget(self.selected_volume_label)
-
-        output_row.addStretch(1)
-
-        output_label = QLabel(tr("输出"))
-        output_label.setObjectName("Muted")
-        output_row.addWidget(output_label)
-        self.out_dir = QLineEdit(str(DEFAULT_OUTDIR))
-        self.out_dir.setPlaceholderText(tr("输出目录"))
-        self.out_dir.setMinimumWidth(220)
-        self.out_dir.setMaximumWidth(360)
-        output_row.addWidget(self.out_dir, stretch=1)
-
-        self.open_output_button = PillButton("打开", "secondary")
-        self.open_output_button.setEnabled(False)
-        self.open_output_button.clicked.connect(self._open_output_dir)
-        output_row.addWidget(self.open_output_button)
-        layout.addLayout(output_row)
-        return panel
 
     def _apply_style(self) -> None:
         self.setFont(QFont("Microsoft YaHei UI", 9))
@@ -7252,6 +17704,8 @@ class MidiToBdoWindow(QMainWindow):
             }
             QFrame#Toolbar QPushButton, QFrame#Toolbar QLineEdit {
                 border-radius: 2px;
+                min-height: 24px;
+                padding: 3px 8px;
             }
             QFrame#ToolbarSeparator {
                 color: #46423d;
@@ -7274,6 +17728,10 @@ class MidiToBdoWindow(QMainWindow):
                 border-bottom: 1px solid #353332;
                 border-radius: 0;
             }
+            QFrame#TimelineControlBar QPushButton {
+                min-height: 24px;
+                padding: 3px 8px;
+            }
             QLabel#TimelineMeta {
                 color: #9f9991;
                 padding: 0 5px;
@@ -7281,6 +17739,22 @@ class MidiToBdoWindow(QMainWindow):
             QLabel#TimelineControlLabel {
                 color: #77716a;
                 font-size: 10px;
+            }
+            QFrame#PerformanceStrip {
+                background: #191919;
+                border: 0;
+                border-top: 1px solid #302e2b;
+                border-radius: 0;
+            }
+            QLabel#PerformanceCaption {
+                color: #7f7971;
+                font-size: 9px;
+                font-weight: 700;
+            }
+            QLabel#PerformanceMetric {
+                color: #b8b0a6;
+                font-size: 10px;
+                font-family: Consolas, monospace;
             }
             QFrame#TimelineSeparator {
                 color: #413d38;
@@ -7291,21 +17765,41 @@ class MidiToBdoWindow(QMainWindow):
                 background: transparent;
                 border: 0;
             }
+            QWidget#TranscriptionEditorPanel,
+            QWidget#TranscriptionWaveformLane {
+                background: #111313;
+                border: 0;
+            }
+            QFrame#TranscriptionAnalysisBar, QFrame#TranscriptionReviewBar {
+                background: #1d1f1f;
+                border: 0;
+                border-bottom: 1px solid #383733;
+                border-radius: 0;
+            }
+            QFrame#TranscriptionReviewBar {
+                border-top: 1px solid #383733;
+                border-bottom: 0;
+            }
+            QFrame#TranscriptionAnalysisBar QPushButton,
+            QFrame#TranscriptionReviewBar QPushButton,
+            QFrame#TranscriptionReviewBar QToolButton {
+                min-height: 27px;
+                padding: 2px 9px;
+                border-radius: 3px;
+            }
             QFrame#EditorToolbar {
                 background: #1d1d1b;
                 border: 1px solid #3b3730;
                 border-bottom: 2px solid #57401e;
                 border-radius: 7px;
             }
-            QLabel#EditorEyebrow {
-                color: #c58e3b;
-                font-size: 9px;
-                font-weight: 900;
-                letter-spacing: 1px;
+            QFrame#EditorToolbar QPushButton {
+                min-height: 22px;
+                padding: 3px 8px;
             }
             QLabel#EditorTrackTitle {
                 color: #f5f1e9;
-                font-size: 17px;
+                font-size: 15px;
                 font-weight: 900;
             }
             QLabel#EditorTrackMeta {
@@ -7359,7 +17853,12 @@ class MidiToBdoWindow(QMainWindow):
                 border: 1px solid #383531;
                 border-radius: 4px;
                 color: #d9d3ca;
-                padding: 5px 7px;
+                padding: 3px 6px;
+            }
+            QFrame#NoteInspectorTop QLineEdit,
+            QFrame#NoteInspectorTop QComboBox {
+                min-height: 20px;
+                padding: 3px 6px;
             }
             QComboBox#ArticulationCombo {
                 border-color: #9b7533;
@@ -7371,8 +17870,8 @@ class MidiToBdoWindow(QMainWindow):
                 border: 1px solid #575044;
                 border-radius: 4px;
                 color: #d8d1c5;
-                min-height: 27px;
-                padding: 2px 7px;
+                min-height: 23px;
+                padding: 1px 6px;
             }
             QPushButton#ArticulationChip:hover { border-color: #b88939; color: #f3dfb4; }
             QPushButton#ArticulationChip:checked {
@@ -7699,9 +18198,18 @@ class MidiToBdoWindow(QMainWindow):
             self._open_midi_path(Path(path))
 
     def _open_midi_path(self, path: Path) -> None:
+        if self.active_transcription_editor is not None:
+            self.active_transcription_editor.release_transcription_resources()
+        self.reference_layer_settings = normalize_reference_layer_settings(
+            DEFAULT_REFERENCE_LAYER_SETTINGS
+        )
+        self.transcription_session = TranscriptionSession()
+        self.transcription_result = None
         self.reference_audio.set_audio_path(None, notify=False)
         self.reference_audio.set_volume_percent(50, notify=False)
+        self._set_reference_alignment(0.0, 0.0)
         self.reference_audio_path = ""
+        self.reference_audio_relink_required = False
         self.midi_path = str(path)
         self.autosave_project_dir = None
         self.autosave_source_copy = None
@@ -7722,9 +18230,18 @@ class MidiToBdoWindow(QMainWindow):
         )
 
     def _open_bdo_score_path(self, path: Path) -> None:
+        if self.active_transcription_editor is not None:
+            self.active_transcription_editor.release_transcription_resources()
+        self.reference_layer_settings = normalize_reference_layer_settings(
+            DEFAULT_REFERENCE_LAYER_SETTINGS
+        )
+        self.transcription_session = TranscriptionSession()
+        self.transcription_result = None
         self.reference_audio.set_audio_path(None, notify=False)
         self.reference_audio.set_volume_percent(50, notify=False)
+        self._set_reference_alignment(0.0, 0.0)
         self.reference_audio_path = ""
+        self.reference_audio_relink_required = False
         if not self._load_bdo_info(path):
             return
         self.autosave_project_dir = None
@@ -7802,7 +18319,14 @@ class MidiToBdoWindow(QMainWindow):
             self._load_project(Path(path))
 
     def _project_snapshot(self) -> ProjectSnapshot:
-        return ProjectSnapshot.capture(self.tracks, self.reverb, self.delay, self.chorus)
+        return ProjectSnapshot.capture(
+            self.tracks,
+            self.reverb,
+            self.delay,
+            self.chorus,
+            self.transcription_session.to_payload(),
+            self.transcription_assist_review.to_payload(),
+        )
 
     def _push_project_snapshot(self) -> None:
         self.project_commands.push(self._project_snapshot())
@@ -7811,9 +18335,59 @@ class MidiToBdoWindow(QMainWindow):
         self._stop_preview(reset_playhead=False)
         self.tracks = snapshot.restored_tracks()
         self.reverb, self.delay, self.chorus = snapshot.reverb, snapshot.delay, snapshot.chorus
+        restored_review = snapshot.restored_transcription_state()
+        if restored_review is not None:
+            self.transcription_session = TranscriptionSession.from_payload(
+                restored_review,
+                self.transcription_session.candidates,
+                backend_id=(
+                    self.transcription_result.evidence_descriptor.backend_id
+                    if self.transcription_result is not None
+                    and self.transcription_result.evidence_descriptor is not None
+                    else ""
+                ),
+            )
+        allow_assist_review_recovery = True
+        restored_assist = snapshot.restored_transcription_assist_state()
+        if restored_assist is not None:
+            restored_assist_review = (
+                TranscriptionAssistReviewState.from_payload(restored_assist)
+            )
+            current_audio_fingerprint = self._current_analysis_fingerprint()
+            assist_identity_matches = bool(
+                current_audio_fingerprint
+                and restored_assist_review.audio_fingerprint
+                == current_audio_fingerprint
+            )
+            self.transcription_assist_review = (
+                isolate_assist_review_for_audio(
+                    restored_assist_review,
+                    current_audio_fingerprint,
+                )
+            )
+            if not assist_identity_matches:
+                allow_assist_review_recovery = False
+                # Project undo may restore a sidecar captured for reference
+                # audio that is no longer loaded.  Do not let current-song
+                # candidates masquerade as the old recovery anchors and
+                # reactivate its key/chord/voice decisions.
+                self.transcription_assist_previous_candidates = ()
+        self._clear_transcription_review_history()
         self.selected_track = None
         self._refresh_tracks()
         self.timeline.set_tracks(self.tracks)
+        self.timeline.set_time_range(
+            *(
+                self.transcription_session.state.region
+                if self.transcription_session.state.region is not None
+                else (None, None)
+            )
+        )
+        self._refresh_transcription_workspace()
+        if self.transcription_result is not None:
+            self._start_transcription_assist_analysis(
+                allow_review_recovery=allow_assist_review_recovery,
+            )
         self._on_track_changed()
         self._mark_conversion_check_dirty()
         self._autosave_project(action, immediate=True)
@@ -7847,10 +18421,27 @@ class MidiToBdoWindow(QMainWindow):
         source_format = str(payload.get("source_format") or "midi")
         if source_format not in {"midi", "bdo", "project"}:
             source_format = "midi"
-        source_path = Path(payload.get("source_midi_path") or "")
-        original_path = Path(payload.get("original_midi_path") or "")
-        midi_path = source_path if source_path.is_file() else original_path
-        if source_format != "project" and not midi_path.is_file():
+        legacy_absolute_paths = (
+            str(payload.get("path_policy") or "") != "project-relative-v1"
+        )
+        source_path = resolve_project_file_reference(
+            project_path.parent,
+            payload.get("source_midi_path"),
+            allow_legacy_absolute=legacy_absolute_paths,
+        )
+        original_path = resolve_project_file_reference(
+            project_path.parent,
+            payload.get("original_midi_path"),
+            allow_legacy_absolute=legacy_absolute_paths,
+        )
+        midi_path = (
+            source_path
+            if source_path is not None and source_path.is_file()
+            else original_path
+        )
+        if source_format != "project" and (
+            midi_path is None or not midi_path.is_file()
+        ):
             QMessageBox.warning(self, "打开工程失败", "工程里的源文件和自动保存副本都不存在。")
             return
 
@@ -7861,9 +18452,23 @@ class MidiToBdoWindow(QMainWindow):
                 int(payload.get("reference_audio_volume", 50)),
                 notify=False,
             )
+            self._set_reference_alignment(
+                float(payload.get("reference_audio_offset_ms", 0.0) or 0.0),
+                float(payload.get("beat_origin_ms", 0.0) or 0.0),
+            )
+            self.reference_layer_settings = (
+                normalize_reference_layer_settings(
+                    payload.get("reference_layers")
+                )
+            )
             self.reference_audio_path = ""
+            self.reference_audio_relink_required = False
             self.autosave_project_dir = project_path.parent
-            self.autosave_source_copy = source_path if source_path.is_file() else None
+            self.autosave_source_copy = (
+                source_path
+                if source_path is not None and source_path.is_file()
+                else None
+            )
             self.midi_path = "" if source_format == "project" else str(midi_path)
             project_name = str(payload.get("output_name") or project_path.parent.name)
             self.file_label.setText(
@@ -7928,7 +18533,7 @@ class MidiToBdoWindow(QMainWindow):
                             0,
                             False,
                             tr("新建轨道 1"),
-                            gm_to_bdo_instrument_for_ui(0, False),
+                            gm_to_bdo_instrument(0, False),
                             color=TRACK_COLORS[0],
                         )
                     )
@@ -7993,16 +18598,64 @@ class MidiToBdoWindow(QMainWindow):
                         except (TypeError, ValueError):
                             continue
                     track.notes = restored_notes
+            if self.active_transcription_editor is not None:
+                self.active_transcription_editor.release_transcription_resources()
+            self.transcription_result = None
+            self.transcription_session = TranscriptionSession.from_payload(
+                payload.get("transcription_review", {}),
+            )
+            self.transcription_assist_review = (
+                TranscriptionAssistReviewState.from_payload(
+                    payload.get("transcription_assist_review", {})
+                )
+            )
+            self._clear_transcription_review_history()
+            self.automatic_harmony_analysis = None
+            self.automatic_instrument_match_analysis = None
+            self.harmony_analysis = None
+            self.instrument_match_analysis = None
+            self.transcription_group_timbre_profiles = None
+            self.transcription_group_timbre_revision = ""
+            self.transcription_assist_previous_candidates = ()
             saved_reference_audio = str(payload.get("reference_audio_path") or "")
-            if saved_reference_audio and self.reference_audio.set_audio_path(
+            reference_audio_was_attached = bool(
+                payload.get("reference_audio_attached", bool(saved_reference_audio))
+            )
+            saved_reference_path = resolve_project_file_reference(
+                project_path.parent,
                 saved_reference_audio,
-                notify=False,
-            ):
+                allow_legacy_absolute=legacy_absolute_paths,
+            )
+            reference_audio_restored = bool(
+                saved_reference_path is not None
+                and saved_reference_path.is_file()
+                and self.reference_audio.set_audio_path(
+                    saved_reference_path,
+                    notify=False,
+                )
+            )
+            if reference_audio_restored:
                 self.reference_audio_path = self.reference_audio.audio_path
+            self.reference_audio_relink_required = bool(
+                reference_audio_was_attached and not reference_audio_restored
+            )
             self._refresh_tracks()
             self.timeline.set_tracks(self.tracks)
             self._reset_timeline_position()
-            self.status_label.setText(tr("工程已恢复"))
+            self.timeline.set_time_range(
+                *(
+                    self.transcription_session.state.region
+                    if self.transcription_session.state.region is not None
+                    else (None, None)
+                )
+            )
+            self._refresh_transcription_workspace()
+            if reference_audio_was_attached and not reference_audio_restored:
+                self.status_label.setText(
+                    tr("工程已恢复；参考音频未随工程保存，请重新载入。")
+                )
+            else:
+                self.status_label.setText(tr("工程已恢复"))
             self.inspector_text.setText(trf("已恢复自动保存工程：{project}", project=project_path))
             self._sync_preview_state()
         finally:
@@ -8123,13 +18776,21 @@ class MidiToBdoWindow(QMainWindow):
             if self.autosave_project_dir is None:
                 return
             saved_at = time.strftime("%Y-%m-%d %H:%M:%S")
+            source_reference = project_relative_file_reference(
+                self.autosave_project_dir,
+                self.autosave_source_copy,
+            )
             payload = {
                 "schema_version": CURRENT_PROJECT_SCHEMA,
+                "path_policy": "project-relative-v1",
                 "saved_at": saved_at,
                 "reason": reason,
                 "source_format": self.source_format,
-                "original_midi_path": str(Path(self.midi_path)) if self.midi_path else "",
-                "source_midi_path": str(self.autosave_source_copy or ""),
+                # The source copy is recoverable inside the autosave directory.
+                # External MIDI/BDO and reference-audio locations are runtime
+                # choices and must not leak machine-local absolute paths.
+                "original_midi_path": "",
+                "source_midi_path": source_reference,
                 "output_name": self.output_name.text().strip(),
                 "owner_id": self.owner_id,
                 "char_name": self.char_name,
@@ -8137,15 +18798,35 @@ class MidiToBdoWindow(QMainWindow):
                 "time_sig": self.time_sig,
                 "tempo_changes": self.tempo_changes,
                 "lyric_events": [dict(event) for event in self.lyric_events],
-                "reference_audio_path": self.reference_audio_path,
+                "reference_audio_path": "",
+                "reference_audio_attached": bool(
+                    self.reference_audio_path
+                    or self.reference_audio_relink_required
+                ),
                 "reference_audio_volume": self.reference_audio.volume_percent,
+                "reference_audio_offset_ms": self.reference_audio_offset_ms,
+                "beat_origin_ms": self.beat_origin_ms,
+                "transcription_review": self.transcription_session.to_payload(),
+                "transcription_assist_review": (
+                    self.transcription_assist_review.to_payload()
+                ),
+                "reference_layers": normalize_reference_layer_settings(
+                    self.reference_layer_settings
+                ),
                 "conversion_settings": self._conversion_settings_payload(),
                 "tracks": [self._track_state_payload(track) for track in self.tracks],
                 "research": dict(self.research_metadata),
             }
             project_path = self.autosave_project_dir / "project.json"
             tmp_path = project_path.with_suffix(".json.tmp")
-            tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp_path.write_text(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
             tmp_path.replace(project_path)
             with (self.autosave_project_dir / "autosave.log").open("a", encoding="utf-8") as file:
                 file.write(f"[{saved_at}] {reason}\n")
@@ -8197,7 +18878,13 @@ class MidiToBdoWindow(QMainWindow):
         else:
             self._open_midi_optimizer(None)
 
-    def _open_note_editor(self, track: TrackState, selected_note_indices: tuple[int, ...] = ()) -> None:
+    def _open_note_editor(
+        self,
+        track: TrackState,
+        selected_note_indices: tuple[int, ...] = (),
+        *,
+        transcription_mode: bool = False,
+    ) -> None:
         if track not in self.tracks:
             return
         dialog = MidiNoteEditorDialog(
@@ -8206,6 +18893,7 @@ class MidiToBdoWindow(QMainWindow):
             self.bpm_override or self.bpm,
             self.time_sig,
             self.transpose,
+            transcription_mode=transcription_mode,
         )
         if selected_note_indices:
             dialog.canvas.selected = {
@@ -8213,25 +18901,26 @@ class MidiToBdoWindow(QMainWindow):
             }
             dialog.canvas.update()
             dialog.refresh_fields()
-
-        def apply_notes(notes) -> None:
-            self._push_project_snapshot()
-            self._stop_preview(reset_playhead=False)
-            track.notes = list(notes)
-            track.notes_optimized = False
-            self.timeline.set_tracks(self.tracks)
-            self._select_track(track)
-            self._on_track_changed()
-            self._mark_conversion_check_dirty()
-            self._autosave_project("note edit", immediate=True)
-            self.status_label.setText(trf("已更新 {track} · {count} 音符", track=track.display_name, count=len(track.notes)))
-            self.show_toast(
-                "音符编辑已写回；转换前建议运行一次转换检查。",
-                kind="success",
-            )
-
-        dialog.notes_applied.connect(apply_notes)
-        dialog.exec()
+        self.active_transcription_editor = dialog
+        self._refresh_transcription_workspace()
+        if (
+            transcription_mode
+            and self.transcription_session.state.cache_key
+            and not self.transcription_session.candidates
+            and self.workspace_transcription_worker is None
+        ):
+            QTimer.singleShot(0, self._restore_cached_transcription)
+        try:
+            dialog.exec()
+        finally:
+            if self.active_transcription_editor is dialog:
+                self.active_transcription_editor = None
+            dialog.release_transcription_resources()
+            if transcription_mode:
+                # A cancelled dialog may have launched a harmony snapshot from
+                # draft notes.  Recompute from formal tracks so discarded
+                # notes cannot leak into the persistent semantic view.
+                self._schedule_transcription_assist_refresh()
 
     def _focus_validation_issue(self, issue: ValidationIssue) -> None:
         if issue.track_id is None:
@@ -8262,6 +18951,7 @@ class MidiToBdoWindow(QMainWindow):
         self._on_track_changed()
         self._mark_conversion_check_dirty()
         self._autosave_project("midi optimize", immediate=True)
+        self._schedule_transcription_assist_refresh()
         scope = f"Track {target_track_id}" if target_track_id is not None else "全局 MIDI"
         self.status_label.setText(trf("{scope} 已优化", scope=tr(scope)))
         effect_text = "，并应用游戏声音效果建议" if optimized_effects is not None else ""
@@ -8333,8 +19023,12 @@ class MidiToBdoWindow(QMainWindow):
         if analysis.get("fixable_count"):
             self._push_project_snapshot()
         fixed: list[str] = []
+        transpose_changed = False
         suggested_transpose = analysis.get("suggested_transpose")
         if suggested_transpose is not None:
+            transpose_changed = int(suggested_transpose) != int(
+                self.transpose
+            )
             self.transpose = int(suggested_transpose)
             fixed.append(f"全局移调设为 {self.transpose:+d}")
         cleared_fx = 0
@@ -8349,6 +19043,10 @@ class MidiToBdoWindow(QMainWindow):
             fixed.append(f"清空 {cleared_fx} 条无效 FX")
         if fixed:
             self._on_track_changed()
+            if transpose_changed and self.transcription_result is not None:
+                self.automatic_instrument_match_analysis = None
+                self.instrument_match_analysis = None
+                self._start_transcription_assist_analysis()
             if self.selected_track:
                 self._select_track(self.selected_track)
             self._autosave_project("conversion check fix", immediate=True)
@@ -8472,7 +19170,7 @@ class MidiToBdoWindow(QMainWindow):
                     gm_program=gm_prog,
                     is_percussion=is_perc,
                     display_name=name,
-                    bdo_instrument_id=gm_to_bdo_instrument_for_ui(gm_prog, is_perc),
+                    bdo_instrument_id=gm_to_bdo_instrument(gm_prog, is_perc),
                     color=TRACK_COLORS[index % len(TRACK_COLORS)],
                     effect_settings_placeholder={
                         "track_effects_enabled": False,
@@ -8494,32 +19192,34 @@ class MidiToBdoWindow(QMainWindow):
         self.selected_track = None
         if hasattr(self, "timeline"):
             self.timeline.set_selected_track(None)
-        if hasattr(self, "selected_volume"):
-            self.selected_volume.blockSignals(True)
-            self.selected_volume.setEnabled(False)
-            self.selected_volume.setValue(70)
-            self.selected_volume.blockSignals(False)
-        if hasattr(self, "selected_volume_label"):
-            self.selected_volume_label.setText("70")
 
     def _refresh_tracks(self) -> None:
         self.timeline.set_tracks(self.tracks)
         self._on_track_changed()
+        self._refresh_transcription_workspace()
 
     def _on_track_changed(self) -> None:
         self.timeline.set_conversion_transpose(self.transpose)
+        self.timeline.set_musical_grid(
+            self.bpm_override or self.bpm,
+            self.time_sig,
+            self.beat_origin_ms,
+        )
         self.timeline.update()
         if hasattr(self, "timeline_meta"):
             rail = tr(chr(0x8F68))
             dot = chr(0x00B7)
             self.timeline_meta.setText(
-                f"{len(self.tracks)} {rail} {dot} BPM {self.bpm} {dot} {self.time_sig}/4"
+                f"{len(self.tracks)} {rail} {dot} BPM "
+                f"{self.bpm_override or self.bpm} {dot} "
+                f"{self.time_sig}/4"
             )
         if hasattr(self, "timeline_pan"):
             self.timeline_pan.blockSignals(True)
             self.timeline_pan.setValue(self.timeline.pan_percent())
             self.timeline_pan.setEnabled(self.timeline.zoom_factor > 1.0)
             self.timeline_pan.blockSignals(False)
+        self._refresh_transcription_workspace()
 
     def _restart_preview_after_timeline_change(self) -> None:
         was_playing = self.realtime_preview_active and self.realtime_audio.status.state == "playing"
@@ -8544,6 +19244,7 @@ class MidiToBdoWindow(QMainWindow):
         if track.bdo_instrument_id not in MARNIAN_SYNTH_INSTRUMENT_IDS:
             track.marnian_synth_mode = "basic"
         self._select_track(track)
+        self._refresh_transcription_workspace()
         self._on_preview_mapping_changed()
 
     def _show_new_track_menu(self) -> None:
@@ -8560,10 +19261,26 @@ class MidiToBdoWindow(QMainWindow):
             return
         self._create_track(int(selected.data()))
 
+    def _reserved_track_ids(self) -> set[int]:
+        """Return every ID that still has project or route-history meaning."""
+
+        reserved = {int(track.track_id) for track in self.tracks}
+        session = getattr(self, "transcription_session", None)
+        state = getattr(session, "state", None)
+        if state is not None:
+            reserved.update(
+                int(route.track_id)
+                for route in (
+                    *state.pending_routes,
+                    *state.applied_routes,
+                )
+            )
+        return reserved
+
     def _create_track(self, instrument_id: int) -> None:
         self._push_project_snapshot()
         self._stop_preview(reset_playhead=False)
-        track_id = max((int(track.track_id) for track in self.tracks), default=-1) + 1
+        track_id = max(self._reserved_track_ids(), default=-1) + 1
         instrument_name = BDO_INSTRUMENT_NAMES.get(instrument_id, f"乐器 {instrument_id}")
         track = TrackState(
             track_id=track_id,
@@ -8581,6 +19298,7 @@ class MidiToBdoWindow(QMainWindow):
         self.tracks.append(track)
         self.timeline.set_tracks(self.tracks)
         self._select_track(track)
+        self._refresh_transcription_workspace()
         self._on_track_changed()
         self._mark_conversion_check_dirty()
         self._autosave_project("create track", immediate=True)
@@ -8606,9 +19324,12 @@ class MidiToBdoWindow(QMainWindow):
         self.tracks.remove(track)
         self._clear_track_selection()
         self.timeline.set_tracks(self.tracks)
+        self._refresh_transcription_workspace()
         self._on_track_changed()
         self._mark_conversion_check_dirty()
         self._autosave_project("delete track", immediate=True)
+        if track.notes:
+            self._schedule_transcription_assist_refresh()
         self.status_label.setText(trf("已删除 {track}", track=track.display_name))
         self.inspector_text.clear()
         self.show_toast("轨道已删除。请选择其他轨道，或新建一条空轨道。")
@@ -8622,19 +19343,7 @@ class MidiToBdoWindow(QMainWindow):
             instrument=BDO_INSTRUMENT_NAMES.get(track.bdo_instrument_id, track.bdo_instrument_id),
             articulation=tr(articulation_label(track.bdo_instrument_id, track.articulation_type)),
         ))
-        self.selected_volume.blockSignals(True)
-        self.selected_volume.setEnabled(True)
-        self.selected_volume.setValue(int(track.bdo_track_volume))
-        self.selected_volume.blockSignals(False)
-        self.selected_volume_label.setText(str(int(track.bdo_track_volume)))
         self.timeline.update()
-
-    def _update_selected_volume(self, value: int) -> None:
-        if not self.selected_track:
-            return
-        self.selected_track.bdo_track_volume = int(value)
-        self.selected_volume_label.setText(str(value))
-        self._on_preview_mapping_changed()
 
     def _show_project_summary(self) -> None:
         notes = [note for track in self.tracks for note in track.notes]
@@ -8654,13 +19363,27 @@ class MidiToBdoWindow(QMainWindow):
         dialog = TrackFxDialog(self, track)
         if dialog.exec() != QDialog.Accepted:
             return
-        track.marnian_synth_mode = (
+        selected_mode = (
             dialog.selected_marnian_synth_mode()
             if track.bdo_instrument_id in MARNIAN_SYNTH_INSTRUMENT_IDS
             else "basic"
         )
+        selected_settings = dialog.selected_track_settings()
+        if (
+            selected_mode == track.marnian_synth_mode
+            and selected_settings == tuple(track.bdo_track_settings)
+        ):
+            return
+        self._push_project_snapshot()
+        track.marnian_synth_mode = selected_mode
+        track.bdo_track_settings = selected_settings
         self.show_toast(
-            f"{track.display_name} · {track.marnian_synth_mode}",
+            (
+                f"{track.display_name} · FX "
+                f"R{selected_settings[TRACK_REVERB_SEND_INDEX]} "
+                f"D{selected_settings[TRACK_DELAY_SEND_INDEX]} "
+                f"C{selected_settings[TRACK_CHORUS_SEND_INDEX]}"
+            ),
             kind="success",
         )
         self._on_preview_mapping_changed()
@@ -8783,7 +19506,16 @@ class MidiToBdoWindow(QMainWindow):
         if not BDO_SAMPLE_MAP_PATH.is_file():
             return ["缺少解包后的 BDO Wwise 映射"]
         try:
-            if not sample_map_covers(BDO_SAMPLE_MAP_PATH, [track.bdo_instrument_id for track in tracks]):
+            missing_banks = [
+                track.display_name
+                for track in tracks
+                if not sample_map_supported_pitches(
+                    BDO_SAMPLE_MAP_PATH,
+                    track.bdo_instrument_id,
+                    track.marnian_synth_mode,
+                )
+            ]
+            if missing_banks:
                 return ["存在未绑定游戏 BNK 的乐器"]
             blockers: list[str] = []
             if self.reverb or self.delay or self.chorus:
@@ -8805,6 +19537,8 @@ class MidiToBdoWindow(QMainWindow):
                         track.bdo_instrument_id,
                         note.pitch,
                         velocity,
+                        ntype,
+                        track.marnian_synth_mode,
                     ):
                         blockers.append(f"{track.display_name} 含无对应游戏音源的键位或力度")
                         break
@@ -8817,7 +19551,10 @@ class MidiToBdoWindow(QMainWindow):
         # temporary-file preview player.
         if self.realtime_preview_active:
             try:
-                self.realtime_audio.stop()
+                # Ordinary transport Stop must discard queued PCM, but closing
+                # the sink and decode pools here makes every subsequent play a
+                # cold start.  ``closeEvent`` still calls the full engine stop.
+                self.realtime_audio.clear_playback()
             except AudioEngineError:
                 pass
 
@@ -8842,6 +19579,16 @@ class MidiToBdoWindow(QMainWindow):
         self._start_preview_from(self.timeline.playhead_ms)
 
     def _start_preview_from(self, start_ms: float) -> None:
+        loop_range = (
+            self.timeline.time_range
+            if self.timeline_loop_box.isChecked()
+            else None
+        )
+        if loop_range is not None and not (
+            loop_range[0] <= start_ms < loop_range[1]
+        ):
+            start_ms = loop_range[0]
+            self.timeline.set_playhead(start_ms)
         tracks = selected_tracks(self.tracks)
         if not tracks:
             QMessageBox.warning(self, "没有可试听轨道", "当前没有可试听轨道，请取消静音或 Solo。")
@@ -8885,12 +19632,19 @@ class MidiToBdoWindow(QMainWindow):
     def _start_reference_audio_from(self, start_ms: float) -> None:
         if not self.reference_audio.audio_path:
             return
-        if start_ms >= self.reference_audio.duration_ms - 1:
+        if start_ms >= self.reference_audio.project_end_ms - 1:
             start_ms = 0.0
             self.timeline.set_playhead(0.0)
+        if start_ms < self.reference_audio.project_start_ms:
+            # With no BDO engine there is no project clock to advance through
+            # leading silence, so begin at the first audible project frame.
+            start_ms = max(0.0, self.reference_audio.project_start_ms)
+            self.timeline.set_playhead(start_ms)
         self.reference_audio.set_position(start_ms)
-        self.reference_audio.play()
-        self.reference_status_timer.start()
+        audio_position = self.reference_audio.project_to_audio(start_ms)
+        if 0.0 <= audio_position < self.reference_audio.duration_ms:
+            self.reference_audio.play()
+            self.reference_status_timer.start()
         self.status_label.setText(tr("参考音频播放"))
         self._sync_preview_state()
 
@@ -8904,7 +19658,9 @@ class MidiToBdoWindow(QMainWindow):
         if not self.reference_audio.audio_path:
             return
         now = time.monotonic()
-        drift = abs(float(self.reference_audio.player.position()) - position_ms)
+        audio_position = self.reference_audio.project_to_audio(position_ms)
+        inside_reference = 0.0 <= audio_position < self.reference_audio.duration_ms
+        drift = abs(self.reference_audio.project_position_ms - position_ms)
         if force or (
             not self.reference_audio.is_playing
             and drift >= REFERENCE_AUDIO_RESYNC_THRESHOLD_MS
@@ -8912,13 +19668,9 @@ class MidiToBdoWindow(QMainWindow):
         ):
             self.reference_audio.set_position(position_ms)
             self.reference_last_resync_at = now
-        if (
-            play
-            and not self.reference_audio.is_playing
-            and position_ms < self.reference_audio.duration_ms
-        ):
+        if play and inside_reference and not self.reference_audio.is_playing:
             self.reference_audio.play()
-        elif not play and self.reference_audio.is_playing:
+        elif (not play or not inside_reference) and self.reference_audio.is_playing:
             self.reference_audio.pause()
 
     def _pause_preview(self) -> None:
@@ -8997,6 +19749,29 @@ class MidiToBdoWindow(QMainWindow):
             self.realtime_audio.last_error = str(exc)
             self._sync_preview_state()
             return
+        loop_range = (
+            self.timeline.time_range
+            if self.timeline_loop_box.isChecked()
+            else None
+        )
+        if (
+            loop_range is not None
+            and status.state == "playing"
+            and status.position_ms >= loop_range[1]
+        ):
+            try:
+                self.realtime_audio.seek(loop_range[0])
+                self.realtime_audio.play()
+                self._sync_reference_to_position(
+                    loop_range[0],
+                    play=True,
+                    force=True,
+                )
+                self.timeline.set_playhead(loop_range[0], follow=True)
+                return
+            except AudioEngineError as exc:
+                self._on_preview_failed(str(exc))
+                return
         self.timeline.set_playhead(status.position_ms, follow=True)
         self.timeline.set_track_levels(getattr(status, "track_levels", {}))
         if status.state == "playing":
@@ -9025,11 +19800,21 @@ class MidiToBdoWindow(QMainWindow):
             self.reference_status_timer.stop()
             self._sync_preview_state()
             return
-        position = float(self.reference_audio.player.position())
+        position = self.reference_audio.project_position_ms
+        loop_range = (
+            self.timeline.time_range
+            if self.timeline_loop_box.isChecked()
+            else None
+        )
+        if loop_range is not None and position >= loop_range[1]:
+            self.reference_audio.set_position(loop_range[0])
+            self.reference_audio.play()
+            self.timeline.set_playhead(loop_range[0], follow=True)
+            return
         self.timeline.set_playhead(position, follow=True)
         if (
             self.reference_audio.duration_ms > 0
-            and position >= self.reference_audio.duration_ms - 1
+            and position >= self.reference_audio.project_end_ms - 1
         ):
             self.reference_status_timer.stop()
 
@@ -9047,31 +19832,149 @@ class MidiToBdoWindow(QMainWindow):
         self.reference_last_resync_at = time.monotonic()
         self._sync_preview_state()
 
+    def _prepare_sample_pack(self, pack_path: str) -> str | None:
+        """Prepare a local sample pack while keeping the Qt event loop live."""
+
+        if self.sample_pack_worker is not None:
+            return None
+        progress_dialog = QProgressDialog(
+            tr("正在校验并准备本地音源包…"),
+            tr("取消"),
+            0,
+            100,
+            self,
+        )
+        progress_dialog.setWindowTitle(tr("准备本地音源包"))
+        progress_dialog.setWindowModality(Qt.ApplicationModal)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setAutoReset(False)
+        progress_dialog.setValue(0)
+
+        worker = SamplePackPrepareWorker(
+            pack_path,
+            SAMPLE_PACK_CACHE_DIR,
+            self,
+        )
+        self.sample_pack_worker = worker
+        loop = QEventLoop(self)
+        outcome: dict[str, str | bool] = {
+            "audio_root": "",
+            "error": "",
+            "cancelled": False,
+        }
+
+        def mark_success(audio_root: str) -> None:
+            outcome["audio_root"] = str(audio_root)
+
+        def mark_failure(message: str) -> None:
+            outcome["error"] = str(message)
+
+        def mark_cancelled() -> None:
+            outcome["cancelled"] = True
+
+        def request_cancel() -> None:
+            progress_dialog.setLabelText(tr("正在取消…"))
+            worker.cancel()
+
+        worker.progress_changed.connect(progress_dialog.setValue)
+        worker.succeeded.connect(mark_success)
+        worker.failed.connect(mark_failure)
+        worker.cancelled.connect(mark_cancelled)
+        worker.finished.connect(loop.quit)
+        progress_dialog.canceled.connect(request_cancel)
+        worker.start()
+        progress_dialog.show()
+        loop.exec()
+        progress_dialog.close()
+        self.sample_pack_worker = None
+        worker.deleteLater()
+
+        if self.workspace_close_pending:
+            self.workspace_close_pending = False
+            QTimer.singleShot(0, self.close)
+            return None
+        if outcome["cancelled"]:
+            return None
+        if outcome["error"]:
+            QMessageBox.warning(
+                self,
+                tr("音源包不可用"),
+                str(outcome["error"]),
+            )
+            return None
+        audio_root = str(outcome["audio_root"])
+        return audio_root or None
+
     def _open_settings(self) -> None:
         old_parse_settings = (self.apply_sustain, self.flatten_tempo)
+        old_effective_bpm = float(max(1, self.bpm_override or self.bpm))
+        old_transpose = int(self.transpose)
+        old_master_effects = MasterEffects.from_legacy(
+            self.reverb,
+            self.delay,
+            self.chorus,
+        )
         dialog = SettingsDialog(self)
         if dialog.exec() != QDialog.Accepted:
             return
 
-        selected_audio_source = dialog.audio_source.text().strip()
-        sample_pack = ""
-        audio_root = ""
-        if selected_audio_source.lower().endswith(PACK_SUFFIX):
-            sample_pack = selected_audio_source
-            try:
-                audio_root = str(extract_sample_pack(Path(sample_pack), SAMPLE_PACK_CACHE_DIR))
-            except (OSError, SamplePackError) as exc:
-                QMessageBox.warning(self, tr("音源包不可用"), str(exc))
-                return
-        elif selected_audio_source:
-            QMessageBox.warning(self, tr("音源包不可用"), selected_audio_source)
+        selected_output_dir = Path(
+            dialog.output_dir.text().strip() or DEFAULT_OUTDIR
+        ).expanduser()
+        if selected_output_dir.exists() and not selected_output_dir.is_dir():
+            QMessageBox.warning(
+                self,
+                tr("输出目录不可用"),
+                tr("请选择有效的输出目录。"),
+            )
             return
+        try:
+            selected_output_dir = selected_output_dir.resolve()
+        except OSError:
+            pass
+
+        selected_instrument_art_dir = dialog.instrument_art_dir.text().strip()
+        if selected_instrument_art_dir:
+            art_root = Path(selected_instrument_art_dir)
+            if not art_root.is_dir():
+                QMessageBox.warning(
+                    self,
+                    tr("背景目录不可用"),
+                    tr("请选择有效的本地乐器图片目录。"),
+                )
+                return
+            selected_instrument_art_dir = str(art_root.resolve())
+
+        selected_audio_source = dialog.audio_source.text().strip()
+        try:
+            sample_pack, audio_root = classify_audio_source(
+                selected_audio_source
+            )
+        except ValueError:
+            QMessageBox.warning(
+                self,
+                tr("音源不可用"),
+                tr("请选择 .bdosamples 音源包或本地音源文件夹。"),
+            )
+            return
+        if sample_pack:
+            prepared_root = self._prepare_sample_pack(sample_pack)
+            if prepared_root is None:
+                return
+            audio_root = prepared_root
 
         self.char_name = dialog.char_name.text().strip() or "MIDI"
         self.language = str(dialog.language.currentData() or "zh_CN")
         self.owner_id = dialog.owner_id
         self.bpm_override = dialog.bpm_override.value() or None
         self.transpose = dialog.transpose.value()
+        effective_bpm_changed = not math.isclose(
+            old_effective_bpm,
+            float(max(1, self.bpm_override or self.bpm)),
+            abs_tol=1e-9,
+        )
+        transpose_changed = old_transpose != int(self.transpose)
         self.apply_sustain = dialog.apply_sustain.isChecked()
         self.flatten_tempo = dialog.flatten_tempo.isChecked()
         self.velocity_mode = dialog.selected_velocity_mode()
@@ -9089,20 +19992,48 @@ class MidiToBdoWindow(QMainWindow):
             self.vel_floor = dialog.vel_step_base.value()
             self.vel_step = (dialog.vel_step_base.value(), dialog.vel_step.value())
 
-        self.reverb = dialog.reverb.value()
-        self.delay = dialog.delay.value()
-        self.chorus = None
-        if dialog.chorus_feedback.value() or dialog.chorus_depth.value() or dialog.chorus_freq.value():
-            self.chorus = (
-                dialog.chorus_feedback.value(),
-                dialog.chorus_depth.value(),
-                dialog.chorus_freq.value(),
-            )
+        selected_master_effects = dialog.selected_master_effects()
+        self.reverb, self.delay, self.chorus = (
+            selected_master_effects.legacy_values()
+        )
+        master_effects_changed = selected_master_effects != old_master_effects
 
+        old_sample_pack = str(self.audio_sources.get("sample_pack", "") or "")
+        old_audio_root = str(self.audio_sources.get("audio_root", "") or "")
+        sample_source_changed = (
+            old_sample_pack != sample_pack or old_audio_root != audio_root
+        )
         self.audio_sources["sample_pack"] = sample_pack
         self.audio_sources["audio_root"] = audio_root
+        self.audio_sources["paz_root"] = dialog.selected_paz_root.strip()
+        if sample_source_changed:
+            # Sample timbre descriptors are scoped to one local pack.  Never
+            # reuse them after a hot source change, otherwise Top-3 results
+            # would silently describe the previous pack until restart.
+            self.transcription_timbre_profile_index = None
+            self.transcription_group_timbre_profiles = None
+            self.transcription_group_timbre_revision = ""
+            self.automatic_instrument_match_analysis = None
+            self.instrument_match_analysis = None
+        if effective_bpm_changed:
+            self.automatic_harmony_analysis = None
+            self.harmony_analysis = None
+        if effective_bpm_changed or transpose_changed:
+            # BPM changes the beat-sized phrase gap and articulation scores;
+            # transpose changes BDO range/sample-pitch matching.  Neither may
+            # reuse a stale Top-3 result while the replacement worker runs.
+            self.automatic_instrument_match_analysis = None
+            self.instrument_match_analysis = None
         self.realtime_audio.source_config = dict(self.audio_sources)
         self.config["audio_sources"] = dict(self.audio_sources)
+        self.output_dir_path = str(selected_output_dir)
+        self.last_output_dir = selected_output_dir
+        self.config["output_dir"] = self.output_dir_path
+        self.instrument_art_dir = selected_instrument_art_dir
+        self.config["instrument_art_dir"] = self.instrument_art_dir
+        loaded_art_count = self.timeline.set_instrument_art_dir(
+            self.instrument_art_dir
+        )
 
         self.config["language"] = self.language
         self.config["conversion_settings"] = {
@@ -9124,17 +20055,34 @@ class MidiToBdoWindow(QMainWindow):
         if active_localizer is not None:
             active_localizer.set_language(self.language)
         self._refresh_home()
-
+        if master_effects_changed:
+            self._restart_preview_after_timeline_change()
+        elif effective_bpm_changed or transpose_changed:
+            self._on_track_changed()
         if (
             self.source_format == "midi"
             and getattr(self, "midi_path", None)
             and old_parse_settings != (self.apply_sustain, self.flatten_tempo)
         ):
             self._load_midi_info(self.midi_path)
+        if (
+            self.transcription_result is not None
+            and (
+                sample_source_changed
+                or effective_bpm_changed
+                or transpose_changed
+            )
+        ):
+            self._start_transcription_assist_analysis()
         self.inspector_text.setText(
             f"转换设置：力度 {self.velocity_mode} · 移调 {self.transpose:+d} · "
             f"BPM {self.bpm_override or 'MIDI'} · 踏板 {'开' if self.apply_sustain else '关'}"
         )
+        if self.instrument_art_dir:
+            self.show_toast(
+                trf("已载入 {count} 张轨道背景", count=loaded_art_count),
+                kind="success" if loaded_art_count else "warning",
+            )
         self._autosave_project("settings")
 
     def _build_params(self) -> dict:
@@ -9157,7 +20105,7 @@ class MidiToBdoWindow(QMainWindow):
                 "请先在 MIDI 软件中转换为等价的 /4 拍号后再导出，程序不会静默写入错误拍号。"
             )
 
-        out_dir = Path(self.out_dir.text().strip() or DEFAULT_OUTDIR)
+        out_dir = Path(self.output_dir_path or DEFAULT_OUTDIR)
         out_name = self.output_name.text().strip() or (Path(midi_path).stem if midi_path else tr("未命名项目"))
         if any(ch in out_name for ch in '<>:"/\\|?*'):
             raise ValueError("曲谱名包含 Windows 文件名非法字符，请去掉 <>:\"/\\|?*")
@@ -9189,11 +20137,16 @@ class MidiToBdoWindow(QMainWindow):
         }
         track_settings_map = {}
         for idx, track in enumerate(export_tracks):
-            settings = list(track.bdo_track_settings if len(track.bdo_track_settings) == 8 else (0,) * 8)
-            settings[1] = int(self.reverb)
-            settings[3] = int(self.delay)
+            try:
+                settings = list(raw_track_settings(track.bdo_track_settings))
+            except ValueError:
+                settings = [0] * 8
+            settings[MASTER_REVERB_TIME_INDEX] = int(self.reverb)
+            settings[MASTER_DELAY_FEEDBACK_INDEX] = int(self.delay)
             chorus = self.chorus or (0, 0, 0)
-            settings[5:8] = [int(value) for value in chorus]
+            settings[MASTER_CHORUS_FEEDBACK_INDEX] = int(chorus[0])
+            settings[MASTER_CHORUS_LFO_DEPTH_INDEX] = int(chorus[1])
+            settings[MASTER_CHORUS_LFO_FREQUENCY_INDEX] = int(chorus[2])
             track_settings_map[idx] = tuple(settings)
         velocity_b_maps = {
             idx: tuple(track.bdo_source_note_records)
@@ -9273,7 +20226,6 @@ class MidiToBdoWindow(QMainWindow):
         self.convert_button.setEnabled(True)
         self.last_output_dir = Path(out_path).parent
         self.last_export_path = Path(out_path)
-        self.open_output_button.setEnabled(True)
         self.status_label.setText(tr("转换完成"))
         summary = dict(summary)
         extra = tr(" · 已复制到游戏目录") if installed else ""
@@ -9308,25 +20260,54 @@ class MidiToBdoWindow(QMainWindow):
     def _on_convert_failed(self, message: str) -> None:
         self.convert_button.setEnabled(True)
         self.status_label.setText(tr("转换失败"))
-        append_crash_log("Convert failed", message)
+        safe_message = _redact_log_paths(message)
+        append_crash_log("Convert failed", safe_message)
         log_path = DEFAULT_OUTDIR / "last_convert_error.log"
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(message, encoding="utf-8")
+            log_path.write_text(safe_message, encoding="utf-8")
         except Exception:
             log_path = None
-        brief = message.splitlines()[0] if message else "未知错误"
+        brief = (
+            safe_message.splitlines()[0]
+            if safe_message
+            else "未知错误"
+        )
         detail = f"\n\n详细错误已写入：{log_path}" if log_path else ""
         QMessageBox.critical(self, "转换失败", f"{brief}{detail}")
         self.worker = None
 
     def _open_output_dir(self) -> None:
-        self.last_output_dir.mkdir(parents=True, exist_ok=True)
-        os.startfile(self.last_output_dir)
+        directory = Path(self.output_dir_path or self.last_output_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
 
     def closeEvent(self, event) -> None:
         self.autosave_timer.stop()
+        self.transcription_assist_refresh_timer.stop()
         self._flush_autosave()
+        running_workers = [
+            worker
+            for worker in (
+                self.workspace_transcription_worker,
+                self.transcription_assist_worker,
+                self.sample_pack_worker,
+            )
+            if worker is not None and worker.isRunning()
+        ]
+        if running_workers:
+            self.transcription_assist_restart_pending = False
+            self.transcription_assist_restart_harmony_only = False
+            self.transcription_assist_restart_allow_review_recovery = True
+            for worker in running_workers:
+                cancel = getattr(worker, "cancel", None)
+                if callable(cancel):
+                    cancel()
+            self.workspace_close_pending = True
+            event.ignore()
+            return
+        if self.active_transcription_editor is not None:
+            self.active_transcription_editor.release_transcription_resources()
         self.reference_audio.set_audio_path(None, notify=False)
         self._stop_preview()
         self.realtime_audio.stop()
@@ -9335,6 +20316,7 @@ class MidiToBdoWindow(QMainWindow):
 
 def main() -> int:
     install_crash_logging()
+    prune_transcription_workspaces()
     if sys.platform == "win32":
         try:
             import ctypes

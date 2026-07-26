@@ -97,6 +97,68 @@ class OptimizerPluginApiTests(unittest.TestCase):
         with self.assertRaisesRegex(InvalidOptimizationPreview, "unsupported"):
             apply_preview([track], request, preview)
 
+    def test_existing_unsupported_pitch_can_be_preserved_but_not_duplicated(self) -> None:
+        track = Track(1, [Note(101, 80, 0, 400, 0)])
+        request = self.request([track])
+        preserved = OptimizationPreview(
+            request.source_fingerprint, "test", "1",
+            (ReplaceTrackNotes(
+                1,
+                request.tracks[0].notes,
+                (NoteSnapshot(101, 84, 5, 395, 0),),
+            ),),
+        )
+        result, _effects = apply_preview([track], request, preserved)
+        self.assertEqual(result[0].notes[0], Note(101, 84, 5, 395, 0))
+
+        duplicated = OptimizationPreview(
+            request.source_fingerprint, "test", "1",
+            (ReplaceTrackNotes(
+                1,
+                request.tracks[0].notes,
+                (
+                    NoteSnapshot(101, 84, 5, 195, 0),
+                    NoteSnapshot(101, 84, 205, 195, 0),
+                ),
+            ),),
+        )
+        with self.assertRaisesRegex(InvalidOptimizationPreview, "unsupported"):
+            apply_preview([track], request, duplicated)
+
+    def test_existing_noncanonical_drum_note_can_be_timing_optimized_only(self) -> None:
+        track = Track(
+            1,
+            [Note(36, 90, 0, 400, 0)],
+            is_percussion=True,
+            bdo_instrument_id=13,
+        )
+        request = build_request(
+            [track], 120, 4, frozenset({1}), {13: frozenset(range(48, 65))},
+            {13: ((99, "drum"),)}, OptimizationIntensity.BALANCED, "global",
+            valid_instrument_ids=frozenset({13}),
+        )
+        preview = OptimizationPreview(
+            request.source_fingerprint, "test", "1",
+            (ReplaceTrackNotes(
+                1,
+                request.tracks[0].notes,
+                (NoteSnapshot(36, 90, 0, 80, 0),),
+            ),),
+        )
+        result, _effects = apply_preview([track], request, preview)
+        self.assertEqual(result[0].notes[0].dur, 80)
+
+        invented = OptimizationPreview(
+            request.source_fingerprint, "test", "1",
+            (ReplaceTrackNotes(
+                1,
+                request.tracks[0].notes,
+                (NoteSnapshot(35, 90, 0, 80, 0),),
+            ),),
+        )
+        with self.assertRaisesRegex(InvalidOptimizationPreview, "unsupported|noncanonical"):
+            apply_preview([track], request, invented)
+
     def test_indexed_replace_insert_and_delete_are_applied_against_original_indices(self) -> None:
         track = Track(1, [Note(60, 80, 0, 300, 0), Note(62, 81, 400, 300, 0)])
         request = self.request([track])

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import tempfile
@@ -7,7 +8,12 @@ import unittest
 import wave
 import zipfile
 
-from bdo_sample_pack import SamplePackError, create_sample_pack, extract_sample_pack
+from bdo_sample_pack import (
+    SamplePackCancelled,
+    SamplePackError,
+    create_sample_pack,
+    extract_sample_pack,
+)
 
 
 class SamplePackTests(unittest.TestCase):
@@ -28,10 +34,54 @@ class SamplePackTests(unittest.TestCase):
             pack = root / "samples.bdosamples"
             manifest = create_sample_pack(source.parents[2], pack)
             self.assertEqual(len(manifest["files"]), 1)
-            extracted = extract_sample_pack(pack, root / "cache")
+            progress: list[int] = []
+            extracted = extract_sample_pack(
+                pack,
+                root / "cache",
+                progress=progress.append,
+            )
             restored = extracted / manifest["files"][0]["path"]
             self.assertEqual(restored.read_bytes(), source.read_bytes())
+            self.assertEqual(progress[-1], 100)
             self.assertEqual(extract_sample_pack(pack, root / "cache"), extracted)
+
+    def test_prepare_can_cancel_without_leaving_cache_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = self._sample_tree(root)
+            pack = root / "samples.bdosamples"
+            create_sample_pack(source.parents[2], pack)
+            cache = root / "cache"
+            with self.assertRaises(SamplePackCancelled):
+                extract_sample_pack(
+                    pack,
+                    cache,
+                    cancelled=lambda: True,
+                )
+            self.assertFalse(cache.exists())
+
+    def test_concurrent_prepare_uses_unique_staging_and_atomic_publish(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = self._sample_tree(root)
+            pack = root / "samples.bdosamples"
+            create_sample_pack(source.parents[2], pack)
+            cache = root / "cache"
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                paths = tuple(
+                    executor.map(
+                        lambda _index: extract_sample_pack(pack, cache),
+                        range(2),
+                    )
+                )
+
+            self.assertEqual(paths[0], paths[1])
+            self.assertTrue((paths[0] / ".ready").is_file())
+            self.assertEqual(
+                list(cache.glob(".*.tmp-*")),
+                [],
+            )
 
     def test_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -8,8 +8,8 @@ import wave
 
 import numpy as np
 
-from bdo_realtime_audio import bank_for_instrument
-from bdo_sample_renderer import BdoSampleMap, GM_TO_BDO_DRUM
+from bdo_instrument_samples import bank_for_instrument, resolve_bdo_pitch
+from bdo_sample_renderer import BdoSampleMap
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +39,9 @@ def sample_coverage_for_tracks(tracks: list[object], map_path: Path) -> tuple[In
         bank = bank_for_instrument(instrument_id, str(getattr(track, "marnian_synth_mode", "basic")))
         for index, note in enumerate(track.notes):
             velocity = max(1, min(127, round(note.vel * float(getattr(track, "volume_scale", 1.0)))))
-            pitch = GM_TO_BDO_DRUM.get(int(note.pitch), int(note.pitch)) if instrument_id == 0x0D and int(note.ntype) != 99 else int(note.pitch)
+            pitch = resolve_bdo_pitch(
+                instrument_id, int(note.pitch), int(note.ntype)
+            )
             if sample_map.choose_bank(bank, pitch, velocity) is None:
                 missing.append(index)
         total = len(track.notes)

@@ -17,11 +17,46 @@ evidence.
 
 Black Desert Online names and format references are used for interoperability. This repository is unofficial, is not affiliated with Pearl Abyss, and must not include proprietary game assets.
 
-Source installations may optionally enable local audio transcription through
-the upstream Basic Pitch package, ONNX Runtime, librosa, and their transitive
-dependencies listed by `requirements-transcription.txt` and
+The single Windows BDO Music Composer package includes local audio
+transcription through the upstream Basic Pitch package, ONNX Runtime, librosa,
+and their transitive dependencies listed by `requirements-transcription.txt`.
+Source checkouts install the same runtime through
 `scripts/install_transcription.ps1`. These packages retain their own upstream
-terms and notices. Before distributing any executable that includes the optional
-transcription stack, collect and review the exact dependency licenses and notices
-for that build; this notice does not assert that such a bundled build has already
-been produced or cleared for release.
+terms and notices.
+
+The bundled stack is expected to include Basic Pitch (Apache-2.0 source
+license), ONNX Runtime (MIT), librosa (ISC), mir_eval (MIT), pretty_midi (MIT),
+resampy (ISC), scikit-learn (BSD-3-Clause), SciPy (BSD-3-Clause), and their
+transitive/native dependencies, including SoundFile (BSD-3-Clause) and
+python-soxr/libsoxr (LGPL-2.1-or-later). These labels are an engineering
+inventory, not a completed legal review. In particular, the Basic Pitch ONNX
+model and native libraries bundled inside scientific Python wheels require an
+exact-artifact notice and redistribution review.
+
+The semantic-block, harmony, deterministic voice-grouping, and BDO Top-3
+features do not add another pretrained model or a separate product edition.
+They operate within the existing Basic Pitch/scientific dependency set already
+covered by the generated build inventory. References to Sonic Visualiser, Tony,
+Chordino, MT3, YourMT3, Essentia, and Omnizart describe interaction or research
+context only; no source code, model, or runtime from those projects is copied or
+bundled by this implementation.
+
+The development-only transcription benchmark can download BabySlakh from
+Zenodo record 4603844. BabySlakh is licensed CC BY 4.0. Its audio and MIDI are
+stored only in the user's local benchmark cache and are not committed,
+packaged, or redistributed with this application.
+
+Optional timbre matching reads only game samples that the user provides
+locally. The application does not distribute those samples. Its Local AppData
+cache contains content-keyed aggregate feature profiles, not WAV payloads,
+audio clips, sample paths, or reference-audio paths; neither that cache nor the
+reference audio is included in project files or the Windows executable.
+
+Every `BDO-Music-Composer.exe` build runs
+`scripts/audit_transcription_licenses.py`. It records the installed transitive
+dependency graph, versions, declared licenses, available license files, and
+hashes of the ONNX model and ONNX Runtime native libraries. Available notice
+files and the generated report are embedded in the executable. The checked-in
+`packaging/transcription_release_policy.json` remains fail-closed, so public
+distribution is not authorized until a reviewer approves that exact inventory
+digest and confirms the complete notice set.

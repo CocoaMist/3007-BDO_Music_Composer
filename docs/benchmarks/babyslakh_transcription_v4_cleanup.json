@@ -1,0 +1,267 @@
+{
+  "report_schema_version": 4,
+  "report_kind": "babyslakh-fragment-cleanup-holdout",
+  "summary": true,
+  "run_status": "completed",
+  "dataset": {
+    "record": "https://zenodo.org/records/4603844",
+    "license": "CC BY 4.0",
+    "archive_md5": "ea1797fc57689a0e33c759c17a2292f5"
+  },
+  "evidence": {
+    "analysis_mode": "mixed_enhanced",
+    "fusion_version": "hpss-fast-stream-30s-2s-1024-512-k9:v2",
+    "frozen_v2_config": {
+      "frame_harmonic_weight": 0.55,
+      "onset_harmonic_weight": 0.25,
+      "onset_threshold": 0.55,
+      "frame_threshold": 0.25,
+      "min_note_len_frames": 5
+    },
+    "evidence_dtype": "<f2"
+  },
+  "postprocess_version": "fragment-cleanup-v3-explicit-opt-in",
+  "production_release_mode": "explicit_opt_in_experimental",
+  "automatic_actions_evaluated": true,
+  "execution_policy": {
+    "safe_default_profile": "preserve",
+    "experimental_profiles": [
+      "balanced",
+      "clean"
+    ],
+    "requires_explicit_user_opt_in": true,
+    "automatic_actions_enabled_for_experimental_profiles": true,
+    "holdout_release_gate_passed": false
+  },
+  "holdout_track_ids": [
+    "Track00013",
+    "Track00014",
+    "Track00015",
+    "Track00016",
+    "Track00017",
+    "Track00018",
+    "Track00019",
+    "Track00020"
+  ],
+  "closed_grid": {
+    "configuration_count": 108,
+    "evaluated_count": 108,
+    "parameter_order": [
+      "max_merge_gap_frames",
+      "nms_min_overlap_ratio",
+      "nms_onset_distance_frames",
+      "max_weak_onset_prominence",
+      "clean_max_confidence"
+    ],
+    "values": {
+      "max_merge_gap_frames": [
+        0,
+        1,
+        2
+      ],
+      "nms_min_overlap_ratio": [
+        0.8,
+        0.85,
+        0.9
+      ],
+      "nms_onset_distance_frames": [
+        1,
+        2
+      ],
+      "max_weak_onset_prominence": [
+        0.05,
+        0.1,
+        0.15
+      ],
+      "clean_max_confidence": [
+        0.25,
+        0.3
+      ]
+    }
+  },
+  "gate_thresholds": {
+    "balanced_release": {
+      "fragmentation_reduction_min": 0.2,
+      "note_precision_gain_min": 0.005,
+      "onset_f1_delta_min": -0.003,
+      "onset_offset_f1_delta_min": -0.002,
+      "note_recall_delta_min": -0.005,
+      "short_le_8_recall_delta_min": -0.01,
+      "false_merge_rate_max": 0.005,
+      "worst_song_onset_f1_delta_min": -0.02,
+      "postprocess_share_max_exclusive": 0.05
+    },
+    "clean_safety": {
+      "onset_f1_delta_min": -0.003,
+      "onset_offset_f1_delta_min": -0.002,
+      "note_recall_delta_min": -0.005,
+      "short_le_8_recall_delta_min": -0.01,
+      "false_merge_rate_max": 0.005,
+      "worst_song_onset_f1_delta_min": -0.02,
+      "candidate_count_must_not_exceed_balanced": true,
+      "postprocess_share_max_exclusive": 0.05
+    }
+  },
+  "balanced_passing_config_count": 0,
+  "clean_safety_passing_config_count": 91,
+  "passing_config_count": 0,
+  "selected_config": null,
+  "selected_metrics": null,
+  "annotation_only": false,
+  "grid_recommendation_only": true,
+  "active_experimental_config": {
+    "max_merge_gap_frames": 2,
+    "nms_min_overlap_ratio": 0.85,
+    "nms_onset_distance_frames": 2,
+    "max_weak_onset_prominence": 0.1,
+    "clean_max_confidence": 0.3
+  },
+  "fixed_v1_metrics": {
+    "metric_version": "fragment-cleanup-metrics-v2",
+    "track_count": 8,
+    "baseline": {
+      "note_precision": 0.17453321603819835,
+      "note_recall": 0.1566713568172323,
+      "onset_f1": 0.3972181390829137,
+      "onset_offset_f1": 0.16274813903583563,
+      "reference_count": 30289,
+      "candidate_count": 28215,
+      "fragment_count": 8105,
+      "split_reference_count": 3540,
+      "short_le_8_recall": 0.10412147505422993
+    },
+    "balanced": {
+      "note_precision": 0.17516974384643758,
+      "note_recall": 0.15673404329137539,
+      "onset_f1": 0.3969726906162218,
+      "onset_offset_f1": 0.1630718605077552,
+      "candidate_count": 28083,
+      "fragment_count": 8024,
+      "split_reference_count": 3508,
+      "short_le_8_recall": 0.10325379609544469,
+      "false_merge_count": 48,
+      "false_merge_rate": 0.0015847337317177854
+    },
+    "deltas": {
+      "fragmentation_reduction": 0.00999383096853794,
+      "note_precision_delta": 0.0006365278082392234,
+      "note_recall_delta": 0.00006268647414309214,
+      "onset_f1_delta": -0.0002454484666918888,
+      "onset_offset_f1_delta": 0.0003237214719195858,
+      "short_le_8_recall_delta": -0.0008676789587852424,
+      "candidate_count_change_rate": -0.004678362573099415
+    },
+    "timing": {
+      "total_decode_seconds": 17.01416049999534,
+      "postprocess_seconds": 0.574420499993721,
+      "postprocess_share": 0.03376131899037148
+    },
+    "quality_gate": {
+      "passed": false,
+      "checks": {
+        "fragmentation_reduction_at_least_0_20": false,
+        "note_precision_gain_at_least_0_005": false,
+        "onset_f1_drop_at_most_0_003": true,
+        "onset_offset_f1_drop_at_most_0_002": true,
+        "note_recall_drop_at_most_0_005": true,
+        "short_le_8_recall_drop_at_most_0_01": true,
+        "false_merge_rate_at_most_0_005": true,
+        "worst_song_onset_f1_drop_at_most_0_02": true,
+        "postprocess_share_below_0_05": true
+      },
+      "values": {
+        "fragmentation_reduction": 0.00999383096853794,
+        "note_precision_gain": 0.0006365278082392234,
+        "onset_f1_delta": -0.0002454484666918888,
+        "onset_offset_f1_delta": 0.0003237214719195858,
+        "note_recall_delta": 0.00006268647414309214,
+        "short_le_8_recall_delta": -0.0008676789587852424,
+        "false_merge_rate": 0.0015847337317177854,
+        "worst_song_onset_f1_delta": -0.0017075111457698078,
+        "postprocess_share": 0.03376131899037148
+      }
+    },
+    "clean": {
+      "note_precision": 0.1752722488092262,
+      "note_recall": 0.15673404329137539,
+      "onset_f1": 0.39708586132437335,
+      "onset_offset_f1": 0.1631198970713079,
+      "candidate_count": 28065,
+      "suppressed_candidate_count": 18,
+      "fragment_count": 8022,
+      "split_reference_count": 3506,
+      "short_le_8_recall": 0.10325379609544469,
+      "false_merge_count": 48,
+      "false_merge_rate": 0.0015847337317177854
+    },
+    "clean_deltas": {
+      "fragmentation_reduction": 0.010240592227020357,
+      "note_precision_delta": 0.0007390327710278533,
+      "note_recall_delta": 0.00006268647414309214,
+      "onset_f1_delta": -0.00013227775854035562,
+      "onset_offset_f1_delta": 0.0003717580354722638,
+      "short_le_8_recall_delta": -0.0008676789587852424,
+      "candidate_count_change_rate": -0.00531632110579479
+    },
+    "clean_timing": {
+      "total_decode_seconds": 17.051808700023685,
+      "postprocess_seconds": 0.6120687000220641,
+      "postprocess_share": 0.035894649699020724
+    },
+    "clean_safety_gate": {
+      "passed": true,
+      "checks": {
+        "onset_f1_drop_at_most_0_003": true,
+        "onset_offset_f1_drop_at_most_0_002": true,
+        "note_recall_drop_at_most_0_005": true,
+        "short_le_8_recall_drop_at_most_0_01": true,
+        "false_merge_rate_at_most_0_005": true,
+        "worst_song_onset_f1_drop_at_most_0_02": true,
+        "candidate_count_not_above_balanced": true,
+        "postprocess_share_below_0_05": true
+      },
+      "values": {
+        "onset_f1_delta": -0.00013227775854035562,
+        "onset_offset_f1_delta": 0.0003717580354722638,
+        "note_recall_delta": 0.00006268647414309214,
+        "short_le_8_recall_delta": -0.0008676789587852424,
+        "false_merge_rate": 0.0015847337317177854,
+        "worst_song_onset_f1_delta": -0.001618531737619222,
+        "candidate_count_delta_from_balanced": -18,
+        "postprocess_share": 0.035894649699020724
+      }
+    },
+    "selection_gate": {
+      "passed": false,
+      "balanced_quality_passed": false,
+      "clean_safety_evaluated": true,
+      "clean_safety_passed": true
+    }
+  },
+  "runtime": {
+    "checkpoint_reused_track_count": 8,
+    "onnx_generated_track_count": 0,
+    "metric_reuse": {
+      "grid_track_evaluation_count": 864,
+      "unique_result_signature_count": 49,
+      "reused_metric_evaluation_count": 815
+    }
+  },
+  "production_conclusion": {
+    "safe_default_profile": "preserve",
+    "experimental_profiles_execute_when_explicitly_selected": true,
+    "automatic_balanced_cleanup_verified_or_recommended": false,
+    "automatic_clean_suppression_verified_or_recommended": false,
+    "reason": "No closed-grid configuration passed both the balanced release gate and the clean safety gate."
+  },
+  "privacy": {
+    "path_free": true,
+    "contains_audio": false,
+    "contains_dataset_or_cache_paths": false,
+    "omitted_from_full_report": [
+      "grid_results",
+      "per_track_metrics",
+      "runtime_track_timings"
+    ]
+  }
+}

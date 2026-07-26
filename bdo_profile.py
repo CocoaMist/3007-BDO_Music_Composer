@@ -9,6 +9,11 @@ from typing import Any, Mapping, Sequence
 
 
 EVIDENCE_STATES = frozenset({"verified", "inferred", "approximate"})
+LIMIT_POLICY_KINDS = frozenset({
+    "wire_hard",
+    "tool_soft_guardrail",
+    "runtime_dynamic",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +45,30 @@ class InstrumentRule:
 
 
 @dataclass(frozen=True, slots=True)
+class LimitPolicy:
+    """Meaning and evidence for one numeric compatibility threshold.
+
+    Scalar limit attributes remain on :class:`BdoProfile` for caller
+    compatibility.  This sidecar prevents a workload guardrail from being
+    presented as a game-enforced entitlement.
+    """
+
+    value: int
+    kind: str
+    evidence: Evidence
+
+    def __post_init__(self) -> None:
+        if self.value <= 0:
+            raise ValueError(f"invalid limit value: {self.value}")
+        if self.kind not in LIMIT_POLICY_KINDS:
+            raise ValueError(f"unknown limit policy kind: {self.kind}")
+
+    @property
+    def is_hard(self) -> bool:
+        return self.kind == "wire_hard"
+
+
+@dataclass(frozen=True, slots=True)
 class BdoProfile:
     profile_id: str
     format_version: int
@@ -53,6 +82,30 @@ class BdoProfile:
     marnian_mode_offsets: Mapping[str, int]
     instruments: Mapping[int, InstrumentRule]
     evidence: Evidence
+    limit_policies: Mapping[str, LimitPolicy] = field(default_factory=dict)
+
+    def limit_policy(self, name: str) -> LimitPolicy:
+        """Return explicit semantics, with conservative legacy defaults."""
+
+        policy = self.limit_policies.get(str(name))
+        if policy is not None:
+            return policy
+        if name == "notes_per_track":
+            return LimitPolicy(
+                self.note_limit_per_track,
+                "wire_hard",
+                self.evidence,
+            )
+        if name == "notes_per_instrument":
+            return LimitPolicy(
+                self.note_limit_per_instrument,
+                "tool_soft_guardrail",
+                Evidence(
+                    "inferred",
+                    "legacy profile value; game account limit is runtime-dynamic",
+                ),
+            )
+        raise KeyError(name)
 
 
 def _evidence(payload: Mapping[str, Any], fallback_source: str) -> Evidence:
@@ -60,6 +113,30 @@ def _evidence(payload: Mapping[str, Any], fallback_source: str) -> Evidence:
         str(payload.get("status", "inferred")),
         str(payload.get("source", fallback_source)),
         str(payload["verified_at"]) if payload.get("verified_at") else None,
+    )
+
+
+def _limit_policy(
+    limits: Mapping[str, Any],
+    name: str,
+    *,
+    fallback_kind: str,
+    fallback_evidence: Evidence,
+) -> LimitPolicy:
+    policies = limits.get("policies", {})
+    raw = policies.get(name, {}) if isinstance(policies, Mapping) else {}
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"limits.policies.{name} must be an object")
+    raw_evidence = raw.get("evidence", {})
+    evidence = (
+        _evidence(raw_evidence, fallback_evidence.source)
+        if isinstance(raw_evidence, Mapping) and raw_evidence
+        else fallback_evidence
+    )
+    return LimitPolicy(
+        int(limits[name]),
+        str(raw.get("kind", fallback_kind)),
+        evidence,
     )
 
 
@@ -92,6 +169,24 @@ def load_bdo_profile(
         )
     limits = payload["limits"]
     drum = payload["drum_set"]
+    profile_evidence = _evidence(payload.get("evidence", {}), path.name)
+    limit_policies = {
+        "notes_per_track": _limit_policy(
+            limits,
+            "notes_per_track",
+            fallback_kind="wire_hard",
+            fallback_evidence=profile_evidence,
+        ),
+        "notes_per_instrument": _limit_policy(
+            limits,
+            "notes_per_instrument",
+            fallback_kind="tool_soft_guardrail",
+            fallback_evidence=Evidence(
+                "inferred",
+                "tool workload guardrail; game noteCount is runtime-dynamic",
+            ),
+        ),
+    }
     return BdoProfile(
         profile_id=str(payload["profile_id"]),
         format_version=int(payload["format_version"]),
@@ -104,8 +199,16 @@ def load_bdo_profile(
         drum_pitch_max=int(drum["pitch_max"]),
         marnian_mode_offsets={str(key): int(value) for key, value in payload["marnian_mode_offsets"].items()},
         instruments=instruments,
-        evidence=_evidence(payload.get("evidence", {}), path.name),
+        evidence=profile_evidence,
+        limit_policies=limit_policies,
     )
 
 
-__all__ = ["BdoProfile", "Evidence", "InstrumentRule", "load_bdo_profile"]
+__all__ = [
+    "BdoProfile",
+    "Evidence",
+    "InstrumentRule",
+    "LIMIT_POLICY_KINDS",
+    "LimitPolicy",
+    "load_bdo_profile",
+]

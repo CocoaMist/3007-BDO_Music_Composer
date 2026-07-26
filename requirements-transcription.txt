@@ -1,6 +1,6 @@
 -r requirements-pyside.txt
-# Optional source/development runtime. The Standard one-file release excludes
-# this stack deliberately; it is not an in-place extension mechanism for EXEs.
+# Source/development runtime matching the sole Windows one-file release.
+# It is not an in-place extension mechanism for an already-built EXE.
 # Install basic-pitch itself with scripts/install_transcription.ps1 because its
 # published dependency metadata still requests an unavailable TensorFlow build
 # on Python 3.12. The runtime uses its ONNX backend only.
@@ -12,4 +12,6 @@ resampy==0.4.2
 scikit-learn==1.9.0
 scipy==1.18.0
 setuptools<81
+soundfile==0.14.0
+soxr==1.1.0
 typing-extensions>=4.16

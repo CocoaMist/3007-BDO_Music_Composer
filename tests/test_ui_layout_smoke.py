@@ -31,6 +31,18 @@ class UiLayoutSmokeTests(unittest.TestCase):
             app.processEvents()
             assert app.property("bdoFixedDarkTheme") is True
             assert window._system_uses_dark_theme()
+            main_toolbar = window.findChild(QFrame, "Toolbar")
+            assert main_toolbar is not None
+            assert 38 <= main_toolbar.height() <= 45
+            window._show_workspace()
+            app.processEvents()
+            timeline_controls = window.findChild(
+                QFrame, "TimelineControlBar"
+            )
+            assert timeline_controls is not None
+            assert 40 <= timeline_controls.height() <= 47
+            window._show_home()
+            app.processEvents()
 
             splash = StartupSplash()
             splash.show()
@@ -70,14 +82,21 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert toast.isHidden()
 
             inspector = window.findChild(QFrame, "Inspector")
-            assert inspector is not None
+            assert inspector is None
+            performance_strip = window.findChild(QFrame, "PerformanceStrip")
+            assert performance_strip is not None
+            assert window.workspace_page.layout().count() == 2
             assert window.findChild(QFrame, "InfoBar") is None
             assert window.status_label.isHidden()
             assert window.inspector_text.isHidden()
+            assert not hasattr(window, "selected_volume")
+            assert not hasattr(window, "out_dir")
+            assert not hasattr(window, "open_output_button")
             assert not hasattr(window, "install_check")
             assert window.track_actions_button.menu() is not None
             assert len(window.track_actions_button.menu().actions()) == 4
-            assert window.transcription_tools_slot.isHidden()
+            assert not window.transcription_tools_slot.isHidden()
+            assert not window.transcription_entry_button.isHidden()
             assert not hasattr(window, "delete_track_button")
             reference = window.reference_audio
             assert isinstance(reference, ReferenceAudioController)
@@ -94,6 +113,11 @@ class UiLayoutSmokeTests(unittest.TestCase):
             fx_dialog.close()
 
             settings = SettingsDialog(window)
+            assert settings.game_art_button is not None
+            assert settings.game_art_worker is None
+            assert settings.output_dir.objectName() == "OutputDirectoryEdit"
+            assert settings.output_dir.text() == window.output_dir_path
+            assert settings.findChild(QWidget, "OpenOutputDirectoryButton") is not None
             settings.resize(settings.minimumSize())
             settings.show()
             app.processEvents()
@@ -132,7 +156,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             app.processEvents()
             toolbar = editor.findChild(QFrame, "EditorToolbar")
             assert toolbar is not None
-            assert toolbar.height() >= 38
+            assert 40 <= toolbar.height() <= 45
             workspace = editor.findChild(QFrame, "EditorWorkspace")
             assert workspace is not None
             workspace_left = workspace.mapTo(editor, QPoint(0, 0)).x()
@@ -145,6 +169,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert not hasattr(editor, "playback_timeline")
             top_inspector = editor.findChild(QFrame, "NoteInspectorTop")
             assert top_inspector is not None and top_inspector.isVisible()
+            assert top_inspector.height() == 38
             assert top_inspector.isAncestorOf(editor.velocity_toggle)
             assert editor.canvas.ROW_H == 20
             assert editor.canvas.KEY_W == 86
@@ -163,6 +188,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert editor.canvas.note_rect(editor.canvas.notes[0]).left() == editor.canvas.x_at_time(
                 editor.canvas.notes[0].start
             )
+            assert workspace.geometry().top() <= 100
             scroll_corner = editor.findChild(QWidget, "PianoScrollCorner")
             assert scroll_corner is not None and scroll_corner.size().width() == 12
             editor.articulation_mode_button.click()
@@ -261,7 +287,13 @@ class UiLayoutSmokeTests(unittest.TestCase):
                     self.committed_from = 0.0
                     self.played = True
                     self.status.state = "playing"
-                    return {"events": 1, "samples": 1, "cache_bytes": 64, "unverified": []}
+                    return {
+                        "events": 1,
+                        "samples": 1,
+                        "cache_bytes": 64,
+                        "unverified": [],
+                        "duration_ms": 1_234.0,
+                    }
 
                 def play(self):
                     self.played = True
@@ -342,6 +374,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             editor._poll_note_audition()
             assert fake.played
             assert not editor.audition_pending
+            assert editor.audition_stop_timer.remainingTime() > 1_000
             editor._stop_note_audition()
             fake.ready = False
             fake.played = False

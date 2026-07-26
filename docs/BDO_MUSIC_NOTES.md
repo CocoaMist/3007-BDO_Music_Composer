@@ -63,8 +63,12 @@ your own account and never commit or attach that file to a release.
 - MIDI channel 10, zero-based channel 9, is treated as percussion.
 - General MIDI programs are mapped to available BDO instruments.
 - Notes are merged by target BDO instrument.
-- Each BDO track is split at 730 notes.
-- Each instrument is capped at 10,000 notes.
+- Each physical BDO v9 track is split at 730 notes. This is a verified binary
+  chunk rule, not the player's total song allowance.
+- 10,000 notes per logical instrument is only a conservative tool workload and
+  review threshold. The exporter does not truncate at this value. The game UI
+  obtains the account's actual `noteCount` dynamically, so projects beyond the
+  threshold require an in-game capability check.
 - Sustain pedal CC64 can extend notes unless `--no-sustain` is used.
 - Multi-tempo MIDI can use `--flatten-tempo`, which sets the BDO header BPM to
   200 while preserving real-time note positions.

@@ -4,48 +4,50 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import wave
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 
+from bdo_audio_mixing import (
+    apply_articulation_preview_in_place,
+    prepare_sample_pcm,
+    preview_chord_intervals,
+)
+from bdo_audio_lifecycle import (
+    INSTANCE_LIMIT_RELEASE_MS,
+    InstanceTimelineItem,
+    VoiceLifecycle,
+    detect_active_signal_frames,
+    plan_instance_timeline,
+    sample_output_frames,
+    voice_lifecycle,
+)
+from bdo_instrument_samples import (
+    BDO_BANK_BY_ID,
+    WwiseContainerRotation,
+    bank_for_instrument,
+    preview_has_native_articulation,
+    preview_pitch_offset_semitones,
+    preview_route_ntype,
+    resolve_bdo_pitch,
+    row_instance_limit,
+    row_loop_points,
+    row_release_ms,
+    row_routes_ntype,
+    row_volume_gain,
+    sample_pitch_ratio,
+    select_zone_row,
+    select_zone_variants,
+)
+from bdo_midi import _GM_TO_BDO_DRUM as GM_TO_BDO_DRUM
+from bdo_track_effects import DEFAULT_TRACK_VOLUME, track_volume_preview_gain
+
 
 SAMPLE_RATE = 36000
-
-BDO_BANK_BY_ID = {
-    0x00: "midi_instrument_00_acousticguitar",
-    0x01: "midi_instrument_01_flute",
-    0x02: "midi_instrument_02_recorder",
-    0x04: "midi_instrument_04_handdrum",
-    0x05: "midi_instrument_05_piatticymbals",
-    0x06: "midi_instrument_06_harp",
-    0x07: "midi_instrument_07_piano",
-    0x08: "midi_instrument_08_violin",
-    0x0A: "midi_instrument_10_proguitar",
-    0x0B: "midi_instrument_11_proflute",
-    0x0D: "midi_instrument_13_prodrumset",
-    0x0E: "midi_instrument_14_probasselectric",
-    0x0F: "midi_instrument_15_probasscontra",
-    0x10: "midi_instrument_16_proharp",
-    0x11: "midi_instrument_17_propiano",
-    0x12: "midi_instrument_18_proviolin",
-    0x13: "midi_instrument_19_propandrum",
-    0x24: "midi_instrument_24_proguitarelectricclean",
-    0x25: "midi_instrument_25_proguitarelectricdrive",
-    0x26: "midi_instrument_26_proguitarelectricdist",
-    0x27: "midi_instrument_27_proclarinet",
-    0x28: "midi_instrument_28_prohorn",
-}
-
-GM_TO_BDO_DRUM = {
-    35: 48, 36: 48, 37: 49, 38: 50, 39: 50, 40: 50, 41: 51,
-    42: 54, 43: 53, 44: 56, 45: 55, 46: 58, 47: 57, 48: 59,
-    49: 61, 50: 60, 51: 62, 52: 61, 53: 62, 54: 62, 55: 61,
-    56: 62, 57: 61, 58: 62, 59: 62, 60: 60, 61: 61, 62: 61,
-    63: 63, 64: 64,
-}
 
 
 @dataclass(frozen=True)
@@ -53,6 +55,44 @@ class RenderResult:
     duration_ms: float
     notes_rendered: int
     missing_instruments: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class _RenderRequest:
+    start_ms: float
+    track_order: int
+    note_order: int
+    track: object
+    note: object
+    synth_mode: str
+
+
+@dataclass(frozen=True)
+class _PreparedVoice:
+    relative_start: int
+    velocity: int
+    playback_ratio: float
+    sample: np.ndarray
+    row: dict
+    lifecycle: VoiceLifecycle
+    loop_points: tuple[int, int] | None
+    instrument_id: int
+    ntype: int
+    native_articulation: bool
+    track_volume_gain: float
+    gain_scale: float = 1.0
+    count_note: bool = True
+
+
+@dataclass(frozen=True)
+class _PreparedEvent:
+    relative_start: int
+    audible_frames: int
+    voice_indices: tuple[int, ...]
+    instance_group_id: int = -1
+    instance_scope_id: int = -1
+    max_instances: int = 0
+    kill_newest: bool = False
 
 
 @lru_cache(maxsize=128)
@@ -77,53 +117,153 @@ def _read_wav(path_string: str) -> np.ndarray:
             np.interp(positions, np.arange(len(data)), data[:, 0]),
             np.interp(positions, np.arange(len(data)), data[:, 1]),
         )).astype(np.float32)
-    return data.astype(np.float32, copy=False)
+    prepared, _gain = prepare_sample_pcm(data)
+    return prepared
+
+
+@lru_cache(maxsize=128)
+def _wav_sample_rate(path_string: str) -> int:
+    with wave.open(str(Path(path_string)), "rb") as source:
+        return max(1, int(source.getframerate()))
+
+
+@lru_cache(maxsize=128)
+def _active_signal_frames(path_string: str) -> int:
+    return detect_active_signal_frames(_read_wav(path_string), SAMPLE_RATE)
 
 
 class BdoSampleMap:
-    def __init__(self, map_path: str | Path) -> None:
-        payload = json.loads(Path(map_path).read_text(encoding="utf-8"))
+    def __init__(
+        self,
+        map_path: str | Path,
+        audio_root: str | Path | None = None,
+    ) -> None:
+        mapping_path = Path(map_path)
+        payload = json.loads(mapping_path.read_text(encoding="utf-8"))
+        configured_root = (
+            Path(audio_root)
+            if audio_root
+            else Path(os.environ["BDO_AUDIO_ROOT"])
+            if os.environ.get("BDO_AUDIO_ROOT")
+            else None
+        )
         self.by_bank = {
-            bank: [row for row in rows if row.get("wav_exists")]
+            bank: [
+                self._resolve_row_path(
+                    row,
+                    mapping_path,
+                    configured_root,
+                )
+                for row in rows
+                if row.get("wav_exists")
+            ]
             for bank, rows in payload.get("banks", {}).items()
         }
 
-    def has_instrument(self, instrument_id: int) -> bool:
-        bank = BDO_BANK_BY_ID.get(instrument_id)
+    @staticmethod
+    def _resolve_row_path(
+        row: dict,
+        mapping_path: Path,
+        audio_root: Path | None,
+    ) -> dict:
+        raw_path = Path(str(row.get("wav_path", "") or ""))
+        if raw_path.is_absolute() or not raw_path.parts:
+            return row
+        candidates: list[Path] = []
+        if audio_root is not None:
+            candidates.extend((
+                audio_root / "乐器_WAV" / raw_path,
+                audio_root / raw_path,
+            ))
+        candidates.extend((
+            mapping_path.parent / raw_path,
+            Path.cwd() / raw_path,
+        ))
+        selected = next(
+            (candidate for candidate in candidates if candidate.is_file()),
+            candidates[0] if candidates else raw_path,
+        )
+        resolved = dict(row)
+        resolved["wav_path"] = str(selected)
+        return resolved
+
+    def has_instrument(
+        self, instrument_id: int, synth_mode: str = "basic"
+    ) -> bool:
+        bank = bank_for_instrument(instrument_id, synth_mode)
         return bool(bank and self.by_bank.get(bank))
 
-    def supported_pitches(self, instrument_id: int) -> frozenset[int]:
-        bank = BDO_BANK_BY_ID.get(instrument_id)
+    def supported_pitches(
+        self, instrument_id: int, synth_mode: str = "basic"
+    ) -> frozenset[int]:
+        bank = bank_for_instrument(instrument_id, synth_mode)
         return frozenset(
             pitch
             for row in self.by_bank.get(bank or "", [])
             for pitch in range(int(row["key_min"]), int(row["key_max"]) + 1)
         )
 
-    def choose(self, instrument_id: int, pitch: int, velocity: int) -> dict | None:
-        bank = BDO_BANK_BY_ID.get(instrument_id)
-        if instrument_id == 0x0D:
-            pitch = GM_TO_BDO_DRUM.get(pitch, pitch)
-        return self.choose_bank(bank or "", pitch, velocity)
+    def choose(
+        self,
+        instrument_id: int,
+        pitch: int,
+        velocity: int,
+        ntype: int = 0,
+        synth_mode: str = "basic",
+        variant_index: int = 0,
+    ) -> dict | None:
+        bank = bank_for_instrument(instrument_id, synth_mode)
+        route_ntype = preview_route_ntype(instrument_id, ntype)
+        resolved_pitch = resolve_bdo_pitch(
+            instrument_id,
+            pitch,
+            ntype,
+        )
+        return self.choose_bank(
+            bank or "",
+            resolved_pitch,
+            velocity,
+            route_ntype,
+            variant_index,
+        )
 
-    def choose_bank(self, bank: str, pitch: int, velocity: int) -> dict | None:
+    def choose_variants(
+        self,
+        instrument_id: int,
+        pitch: int,
+        velocity: int,
+        ntype: int = 0,
+        synth_mode: str = "basic",
+    ) -> tuple[dict, ...]:
+        bank = bank_for_instrument(instrument_id, synth_mode)
+        route_ntype = preview_route_ntype(instrument_id, ntype)
+        resolved_pitch = resolve_bdo_pitch(
+            instrument_id,
+            pitch,
+            ntype,
+        )
+        return select_zone_variants(
+            self.by_bank.get(bank or "", []),
+            resolved_pitch,
+            velocity,
+            route_ntype,
+        )
+
+    def choose_bank(
+        self,
+        bank: str,
+        pitch: int,
+        velocity: int,
+        ntype: int = 0,
+        variant_index: int = 0,
+    ) -> dict | None:
         rows = self.by_bank.get(bank, [])
-        if not rows:
-            return None
-        matches = [
-            row for row in rows
-            if int(row["key_min"]) <= pitch <= int(row["key_max"])
-            and int(row["velocity_min"]) <= velocity <= int(row["velocity_max"])
-        ]
-        if not matches:
-            return None
-        return min(
-            matches,
-            key=lambda row: (
-                abs(pitch - int(row["root_note"])),
-                abs(velocity - (int(row["velocity_min"]) + int(row["velocity_max"])) / 2),
-                int(row["source_id"]),
-            ),
+        return select_zone_row(
+            rows,
+            pitch,
+            velocity,
+            ntype,
+            variant_index,
         )
 
 
@@ -132,67 +272,402 @@ def _cached_sample_map(map_path: str) -> BdoSampleMap:
     return BdoSampleMap(map_path)
 
 
-def sample_map_covers(map_path: str | Path, instrument_ids: tuple[int, ...] | list[int]) -> bool:
+def sample_map_covers(
+    map_path: str | Path,
+    instrument_ids: tuple[int, ...] | list[int],
+) -> bool:
     sample_map = _cached_sample_map(str(map_path))
     return all(sample_map.has_instrument(instrument_id) for instrument_id in instrument_ids)
 
 
-def sample_map_supported_pitches(map_path: str | Path, instrument_id: int) -> frozenset[int]:
+def sample_map_supported_pitches(
+    map_path: str | Path,
+    instrument_id: int,
+    synth_mode: str = "basic",
+) -> frozenset[int]:
     """Return the exact MIDI keys with a Wwise source zone for an instrument."""
-    return _cached_sample_map(str(map_path)).supported_pitches(instrument_id)
+    return _cached_sample_map(str(map_path)).supported_pitches(
+        instrument_id, synth_mode
+    )
 
 
 def sample_map_supports_note(
-    map_path: str | Path, instrument_id: int, pitch: int, velocity: int
+    map_path: str | Path,
+    instrument_id: int,
+    pitch: int,
+    velocity: int,
+    ntype: int = 0,
+    synth_mode: str = "basic",
 ) -> bool:
     """Whether Wwise has an exact key-and-velocity zone for this note."""
-    return _cached_sample_map(str(map_path)).choose(instrument_id, pitch, velocity) is not None
+    return (
+        _cached_sample_map(str(map_path)).choose(
+            instrument_id,
+            pitch,
+            velocity,
+            ntype,
+            synth_mode,
+        )
+        is not None
+    )
 
 
-def _resample_for_note(sample: np.ndarray, root_note: int, target_note: int, max_frames: int) -> np.ndarray:
-    ratio = 2.0 ** ((target_note - root_note) / 12.0)
-    output_frames = min(max_frames, max(1, int(len(sample) / ratio)))
-    positions = np.arange(output_frames, dtype=np.float32) * ratio
-    return np.column_stack((
-        np.interp(positions, np.arange(len(sample)), sample[:, 0]),
-        np.interp(positions, np.arange(len(sample)), sample[:, 1]),
-    )).astype(np.float32)
+def _resample_for_note(
+    sample: np.ndarray,
+    playback_ratio: float,
+    max_frames: int,
+    start_output_frame: int = 0,
+    *,
+    loop_points: tuple[int, int] | None = None,
+) -> np.ndarray:
+    ratio = max(1.0e-9, float(playback_ratio))
+    start_frame = max(0, int(start_output_frame))
+    if loop_points is None:
+        available_frames = max(
+            0,
+            math.ceil(len(sample) / ratio) - start_frame,
+        )
+        output_frames = min(max(0, int(max_frames)), available_frames)
+    else:
+        output_frames = max(0, int(max_frames))
+    if output_frames <= 0:
+        return np.empty((0, 2), dtype=np.float32)
+    positions = (
+        np.arange(output_frames, dtype=np.float32)
+        + start_frame
+    ) * ratio
+    loop_start = loop_end = 0
+    if loop_points is None:
+        np.clip(
+            positions,
+            0.0,
+            max(0, len(sample) - 1),
+            out=positions,
+        )
+    else:
+        loop_start, loop_end = loop_points
+        loop_length = loop_end - loop_start
+        looping = positions >= loop_end
+        positions[looping] = loop_start + np.mod(
+            positions[looping] - loop_start,
+            loop_length,
+        )
+    indices = positions.astype(np.intp)
+    fractions = positions - indices
+    following = np.minimum(indices + 1, len(sample) - 1)
+    if loop_points is not None:
+        at_loop_boundary = (
+            (positions >= loop_start)
+            & (following >= loop_end)
+        )
+        following[at_loop_boundary] = loop_start
+    rendered = np.asarray(sample[indices], dtype=np.float32).copy()
+    rendered += (sample[following] - rendered) * fractions[:, None]
+    return rendered
 
 
-def render_preview(tracks: list, map_path: str | Path, output_path: str | Path, start_ms: float = 0.0) -> RenderResult:
-    sample_map = BdoSampleMap(map_path)
-    end_ms = max((note.start + note.dur * track.duration_scale for track in tracks for note in track.notes), default=start_ms)
-    frames = max(1, int(math.ceil(max(0.0, end_ms - start_ms) * SAMPLE_RATE / 1000.0)) + SAMPLE_RATE // 8)
-    mix = np.zeros((frames, 2), dtype=np.float32)
+def render_preview(
+    tracks: list,
+    map_path: str | Path,
+    output_path: str | Path,
+    start_ms: float = 0.0,
+    audio_root: str | Path | None = None,
+) -> RenderResult:
+    sample_map = BdoSampleMap(map_path, audio_root)
     missing: set[int] = set()
-    rendered = 0
+    requests: list[_RenderRequest] = []
+    prepared: list[_PreparedVoice] = []
+    prepared_events: list[_PreparedEvent] = []
+    container_rotation = WwiseContainerRotation()
 
-    for track in tracks:
-        if not sample_map.has_instrument(track.bdo_instrument_id):
+    for track_order, track in enumerate(tracks):
+        synth_mode = str(
+            getattr(track, "marnian_synth_mode", "basic") or "basic"
+        )
+        if not sample_map.has_instrument(
+            track.bdo_instrument_id, synth_mode
+        ):
             missing.add(track.bdo_instrument_id)
             continue
-        for note in track.notes:
-            if note.start + note.dur * track.duration_scale <= start_ms:
-                continue
-            velocity = max(1, min(127, round(note.vel * track.volume_scale)))
-            selected = sample_map.choose(track.bdo_instrument_id, note.pitch, velocity)
-            if selected is None:
-                missing.add(track.bdo_instrument_id)
-                continue
-            start_frame = max(0, round((note.start - start_ms) * SAMPLE_RATE / 1000.0))
-            if start_frame >= len(mix):
-                continue
-            note_frames = max(1, round(note.dur * track.duration_scale * SAMPLE_RATE / 1000.0))
-            sample = _read_wav(selected["wav_path"])
-            target_pitch = GM_TO_BDO_DRUM.get(note.pitch, note.pitch) if track.bdo_instrument_id == 0x0D else note.pitch
-            rendered_sample = _resample_for_note(sample, int(selected["root_note"]), target_pitch, note_frames)
-            end_frame = min(len(mix), start_frame + len(rendered_sample))
-            rendered_sample = rendered_sample[:end_frame - start_frame]
-            fade = min(len(rendered_sample), max(16, int(SAMPLE_RATE * 0.012)))
-            if fade:
-                rendered_sample[-fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)[:, None]
-            mix[start_frame:end_frame] += rendered_sample * (velocity / 127.0) * 0.72
-            rendered += 1
+        for note_order, note in enumerate(track.notes):
+            requests.append(_RenderRequest(
+                float(note.start),
+                track_order,
+                note_order,
+                track,
+                note,
+                synth_mode,
+            ))
+
+    requests.sort(
+        key=lambda request: (
+            request.start_ms,
+            request.track_order,
+            request.note_order,
+        )
+    )
+    for request in requests:
+        track = request.track
+        note = request.note
+        synth_mode = request.synth_mode
+        velocity = max(
+            1,
+            min(127, round(note.vel * track.volume_scale)),
+        )
+        ntype = int(
+            getattr(note, "ntype", 0)
+            or getattr(track, "articulation_type", 0)
+            or 0
+        )
+        variants = sample_map.choose_variants(
+            track.bdo_instrument_id,
+            note.pitch,
+            velocity,
+            ntype,
+            synth_mode,
+        )
+        if not variants:
+            missing.add(track.bdo_instrument_id)
+            continue
+        bank = bank_for_instrument(
+            track.bdo_instrument_id,
+            synth_mode,
+        ) or ""
+        selected = container_rotation.choose(bank, variants)
+        if selected is None:
+            missing.add(track.bdo_instrument_id)
+            continue
+        note_frames = max(
+            1,
+            round(
+                note.dur
+                * track.duration_scale
+                * SAMPLE_RATE
+                / 1000.0
+            )
+        )
+        wav_path = str(selected["wav_path"])
+        sample = _read_wav(wav_path)
+        route_ntype = preview_route_ntype(
+            track.bdo_instrument_id,
+            ntype,
+        )
+        target_pitch = resolve_bdo_pitch(
+            track.bdo_instrument_id,
+            note.pitch,
+            ntype,
+        )
+        native_sample_route = row_routes_ntype(
+            selected,
+            route_ntype,
+        )
+        native_articulation = preview_has_native_articulation(
+            track.bdo_instrument_id,
+            selected,
+            route_ntype,
+        )
+        resample_pitch = target_pitch + (
+            preview_pitch_offset_semitones(
+                ntype,
+                native_sample_route,
+            )
+        )
+        ratio = sample_pitch_ratio(selected, resample_pitch)
+        loop_points = row_loop_points(
+            selected,
+            len(sample),
+            source_sample_rate=_wav_sample_rate(wav_path),
+            output_sample_rate=SAMPLE_RATE,
+        )
+        lifecycle = voice_lifecycle(
+            track.bdo_instrument_id,
+            ntype,
+            note_frames,
+            sample_output_frames(
+                _active_signal_frames(wav_path),
+                ratio,
+            ),
+            SAMPLE_RATE,
+            native_articulation=native_sample_route,
+            sample_loops=loop_points is not None,
+            release_ms=row_release_ms(selected),
+        )
+        instance_limit = row_instance_limit(selected)
+        relative_start = round(
+            (note.start - start_ms) * SAMPLE_RATE / 1000.0
+        )
+        if relative_start + lifecycle.audible_frames <= 0:
+            continue
+        layer_specs = [(ratio, ntype, native_articulation, 1.0, True)]
+        layer_specs.extend(
+            (
+                ratio * (2.0 ** (semitones / 12.0)),
+                0,
+                False,
+                0.52,
+                False,
+            )
+            for semitones in preview_chord_intervals(
+                ntype,
+                native_articulation=native_articulation,
+            )
+        )
+        first_voice_index = len(prepared)
+        prepared.extend(
+            _PreparedVoice(
+                relative_start=relative_start,
+                velocity=velocity,
+                playback_ratio=layer_ratio,
+                sample=sample,
+                row=selected,
+                lifecycle=lifecycle,
+                loop_points=loop_points,
+                instrument_id=track.bdo_instrument_id,
+                ntype=layer_ntype,
+                native_articulation=layer_native,
+                track_volume_gain=track_volume_preview_gain(
+                    getattr(track, "bdo_track_volume", DEFAULT_TRACK_VOLUME)
+                ),
+                gain_scale=gain_scale,
+                count_note=count_note,
+            )
+            for (
+                layer_ratio,
+                layer_ntype,
+                layer_native,
+                gain_scale,
+                count_note,
+            ) in layer_specs
+        )
+        prepared_events.append(_PreparedEvent(
+            relative_start=relative_start,
+            audible_frames=lifecycle.audible_frames,
+            voice_indices=tuple(
+                range(first_voice_index, len(prepared))
+            ),
+            instance_group_id=(
+                instance_limit.group_id
+                if instance_limit.enforceable
+                else -1
+            ),
+            instance_scope_id=(
+                -1
+                if instance_limit.global_scope
+                else int(
+                    getattr(track, "track_id", request.track_order)
+                )
+            ),
+            max_instances=(
+                instance_limit.max_instances
+                if instance_limit.enforceable
+                else 0
+            ),
+            kill_newest=instance_limit.kill_newest,
+        ))
+
+    instance_release_frames = max(
+        1,
+        round(SAMPLE_RATE * INSTANCE_LIMIT_RELEASE_MS / 1000.0),
+    )
+    instance_plan = plan_instance_timeline(
+        [
+            InstanceTimelineItem(
+                start_frame=event.relative_start,
+                audible_frames=event.audible_frames,
+                group_id=event.instance_group_id,
+                scope_id=event.instance_scope_id,
+                max_instances=event.max_instances,
+                kill_newest=event.kill_newest,
+            )
+            for event in prepared_events
+        ],
+        instance_release_frames,
+    )
+    planned_voices: list[_PreparedVoice] = []
+    for event_index, event in enumerate(prepared_events):
+        if not instance_plan.accepted[event_index]:
+            continue
+        planned_lifecycle: VoiceLifecycle | None = None
+        if instance_plan.forced_release[event_index]:
+            planned_audible = instance_plan.audible_frames[event_index]
+            planned_lifecycle = VoiceLifecycle(
+                note_frames=(
+                    prepared[event.voice_indices[0]].lifecycle.note_frames
+                ),
+                audible_frames=planned_audible,
+                fade_out_frames=min(
+                    planned_audible,
+                    instance_release_frames,
+                ),
+            )
+        for voice_index in event.voice_indices:
+            voice = prepared[voice_index]
+            planned_voices.append(
+                replace(voice, lifecycle=planned_lifecycle)
+                if planned_lifecycle is not None
+                else voice
+            )
+    prepared = planned_voices
+    end_frame = max(
+        (
+            voice.relative_start + voice.lifecycle.audible_frames
+            for voice in prepared
+        ),
+        default=0,
+    )
+    frames = max(1, end_frame)
+    mix = np.zeros((frames, 2), dtype=np.float32)
+    rendered = 0
+    for voice in prepared:
+        start_frame = max(0, voice.relative_start)
+        age_frames = max(0, -voice.relative_start)
+        audible_remaining = max(
+            0,
+            voice.lifecycle.audible_frames - age_frames,
+        )
+        rendered_sample = _resample_for_note(
+            voice.sample,
+            voice.playback_ratio,
+            audible_remaining,
+            age_frames,
+            loop_points=voice.loop_points,
+        )
+        if rendered_sample.size == 0:
+            continue
+        sample_end = min(len(mix), start_frame + len(rendered_sample))
+        rendered_sample = rendered_sample[:sample_end - start_frame]
+        rendered_sample *= (
+            (voice.velocity / 127.0)
+            * voice.track_volume_gain
+            * row_volume_gain(voice.row)
+            * voice.gain_scale
+        )
+        ages = age_frames + np.arange(
+            len(rendered_sample), dtype=np.float32
+        )
+        apply_articulation_preview_in_place(
+            rendered_sample,
+            voice.instrument_id,
+            voice.ntype,
+            ages,
+            voice.lifecycle.note_frames,
+            SAMPLE_RATE,
+            native_articulation=voice.native_articulation,
+        )
+        if voice.lifecycle.fade_out_frames > 0:
+            fade = np.clip(
+                (
+                    voice.lifecycle.audible_frames
+                    - ages
+                    - 1.0
+                )
+                / voice.lifecycle.fade_out_frames,
+                0.0,
+                1.0,
+            )
+            rendered_sample *= fade[:, None]
+        mix[start_frame:sample_end] += rendered_sample
+        rendered += int(voice.count_note)
 
     peak = float(np.max(np.abs(mix))) if mix.size else 0.0
     if peak > 0.98:

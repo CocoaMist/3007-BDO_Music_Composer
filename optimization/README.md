@@ -37,6 +37,14 @@ model and never commit edits. The host validates source fingerprints, target
 scope, note wire values, supported BDO pitches, canonical drum routing,
 derived-track budgets, and the single global-effect-write rule.
 
+Imported projects can already contain an out-of-map pitch, unsupported manual
+articulation, or pre-normalization drum encoding. API v1 treats those values as
+bounded source debt: an optimizer may preserve their pitch/type multiset while
+cleaning timing or velocity, but may not add another incompatible value. A
+track-instrument change and every derived track are validated strictly. The UI
+reports preserved source debt and sends it to Conversion Check instead of
+misreporting it as an optimizer-package failure.
+
 Packages are copied to `%LOCALAPPDATA%\BDO Music Composer\optimizer_plugins`.
 `BDO_OPTIMIZER_DIR` and `BDO_OPTIMIZER_CACHE` are available for development and
 tests. Discovery reads manifests only. Code is imported lazily from a SHA-256

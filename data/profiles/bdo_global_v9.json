@@ -3,7 +3,26 @@
   "format_version": 9,
   "region": "global",
   "game_version": "2026.07",
-  "limits": {"notes_per_track": 730, "notes_per_instrument": 10000},
+  "limits": {
+    "notes_per_track": 730,
+    "notes_per_instrument": 10000,
+    "policies": {
+      "notes_per_track": {
+        "kind": "wire_hard",
+        "evidence": {
+          "status": "verified",
+          "source": "BDO v9 physical track structure and game-saved score corpus"
+        }
+      },
+      "notes_per_instrument": {
+        "kind": "tool_soft_guardrail",
+        "evidence": {
+          "status": "inferred",
+          "source": "tool workload review threshold; game musiccomposition.js receives account noteCount at runtime"
+        }
+      }
+    }
+  },
   "drum_set": {"instrument_id": 13, "pitch_min": 48, "pitch_max": 64},
   "marnian_mode_offsets": {"basic": 0, "stereo": 1, "super": 2, "superoct": 3},
   "evidence": {
@@ -15,8 +34,26 @@
     "0x00": {"pitch_min": 12, "pitch_max": 119, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
     "0x01": {"pitch_min": 12, "pitch_max": 107, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
     "0x02": {"pitch_min": 36, "pitch_max": 83, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
-    "0x04": {"pitch_min": null, "pitch_max": null, "evidence": {"status": "approximate", "source": "sample-only percussion mapping"}},
-    "0x05": {"pitch_min": null, "pitch_max": null, "evidence": {"status": "approximate", "source": "sample-only percussion mapping"}},
+    "0x04": {
+      "pitch_min": 60,
+      "pitch_max": 79,
+      "allowed_pitches": [60,65,66,67,72,73,74,77,78,79],
+      "evidence": {
+        "status": "verified",
+        "source": "PAZ meta v757 musiccomposition.js static note table; empty hand-drum lanes are disabled by the game UI",
+        "verified_at": "2026-07-26"
+      }
+    },
+    "0x05": {
+      "pitch_min": 60,
+      "pitch_max": 71,
+      "allowed_pitches": [60,65,71],
+      "evidence": {
+        "status": "verified",
+        "source": "PAZ meta v757 musiccomposition.js static note table; empty cymbal lanes are disabled by the game UI",
+        "verified_at": "2026-07-26"
+      }
+    },
     "0x06": {"pitch_min": 36, "pitch_max": 95, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
     "0x07": {"pitch_min": 12, "pitch_max": 107, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
     "0x08": {"pitch_min": 36, "pitch_max": 83, "evidence": {"status": "verified", "source": "hand-authored in-game range score"}},
