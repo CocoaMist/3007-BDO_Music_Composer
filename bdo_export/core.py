@@ -7,7 +7,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 import struct
 from typing import NamedTuple
-import warnings
 
 from bdo_codec import (
     BDO_VERSION,
@@ -40,10 +39,13 @@ from bdo_midi import (
     transpose_notes,
 )
 from bdo_midi.transforms import bounded_int, bounded_velocity
+from bdo_track_effects import (
+    DEFAULT_TRACK_VOLUME,
+    raw_track_settings,
+)
 
 
 MAX_NOTES_PER_INSTRUMENT = 10_000
-DEFAULT_TRACK_VOLUME = 70
 TRACK_SETTINGS = bytes(8)
 BDO_BPM_MIN = 1
 BDO_BPM_MAX = 200
@@ -69,15 +71,20 @@ def make_track_settings(
     delay: int = 0,
     chorus: tuple[int, int, int] | None = None,
 ) -> bytes:
-    settings = bytearray(8)
-    settings[1] = bounded_int(reverb, 0, 127, "reverb")
-    settings[3] = bounded_int(delay, 0, 127, "delay")
-    if chorus is not None:
-        feedback, depth, frequency = chorus
-        settings[5] = bounded_int(feedback, 0, 127, "chorus feedback")
-        settings[6] = bounded_int(depth, 0, 127, "chorus depth")
-        settings[7] = bounded_int(frequency, 0, 127, "chorus frequency")
-    return bytes(settings)
+    # This is a wire-level compatibility helper.  The current game authoring
+    # UI limits new values to 0..100, but imported v9 bytes must remain
+    # lossless up to 255.  UI authoring is validated by ``bdo_track_effects``.
+    feedback, depth, frequency = chorus or (0, 0, 0)
+    return bytes(raw_track_settings((
+        0,
+        reverb,
+        0,
+        delay,
+        0,
+        feedback,
+        depth,
+        frequency,
+    )))
 
 
 def _codec_note(note: object) -> BdoNote:
@@ -318,19 +325,12 @@ def channel_groups_to_bdo(
     if drum_id in notes_by_instrument:
         notes_by_instrument[drum_id] = normalize_drum_note_timing(notes_by_instrument[drum_id])
 
-    notes_dropped = 0
-    for instrument_id, instrument_notes in notes_by_instrument.items():
+    for instrument_notes in notes_by_instrument.values():
         instrument_notes.sort(key=lambda note: note.start)
-        if len(instrument_notes) <= MAX_NOTES_PER_INSTRUMENT:
-            continue
-        dropped = len(instrument_notes) - MAX_NOTES_PER_INSTRUMENT
-        del instrument_notes[MAX_NOTES_PER_INSTRUMENT:]
-        notes_dropped += dropped
-        name = BDO_INSTRUMENT_NAMES.get(instrument_id, f"0x{instrument_id:02x}")
-        warnings.warn(
-            f"{name}: {dropped} notes dropped (10k per-instrument limit)",
-            stacklevel=2,
-        )
+    # The native client supplies account ``noteCount`` at runtime.  The
+    # historical 10k value is a review threshold, never authority to truncate
+    # current editor data. Physical v9 tracks still split at 730 notes below.
+    notes_dropped = 0
 
     instrument_groups: list[tuple[int, list[list[_EncodedNote]]]] = [
         (instrument_id, split_notes(notes))

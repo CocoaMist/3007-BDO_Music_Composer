@@ -63,6 +63,42 @@ class HostAlgorithmDiscovery:
     diagnostics: tuple[str, ...]
 
 
+def _source_compatibility_diagnostics(request: OptimizationRequest) -> tuple[str, ...]:
+    """Describe imported game-map issues without treating them as plugin failures."""
+
+    pitch_issues = 0
+    drum_issues = 0
+    articulation_issues = 0
+    for track in request.tracks:
+        if track.track_id not in request.target_track_ids:
+            continue
+        supported = request.supported_pitches.get(track.instrument_id)
+        valid_ntypes = {
+            0,
+            *(ntype for ntype, _label in request.supported_articulations.get(track.instrument_id, ())),
+        }
+        for note in track.notes:
+            pitch_issues += int(bool(supported and note.pitch not in supported))
+            drum_issues += int(
+                track.is_percussion and (not 48 <= note.pitch <= 64 or note.ntype != 99)
+            )
+            articulation_issues += int(not track.is_percussion and note.ntype not in valid_ntypes)
+    diagnostics: list[str] = []
+    if pitch_issues:
+        diagnostics.append(
+            f"输入已有 {pitch_issues} 个音符超出当前乐器映射；优化仅保留，不会新增，请在转换检查中处理。"
+        )
+    if drum_issues:
+        diagnostics.append(
+            f"输入已有 {drum_issues} 个鼓音尚未规范为 BDO 48–64/type 99；优化仅保留，请在转换检查中处理。"
+        )
+    if articulation_issues:
+        diagnostics.append(
+            f"输入已有 {articulation_issues} 个未验证奏法；优化会保护人工值，不会复制或新增。"
+        )
+    return tuple(diagnostics)
+
+
 def discover_host_algorithms() -> HostAlgorithmDiscovery:
     discovery: BundleDiscovery = discover_optimizer_bundles()
     algorithms = [HostAlgorithmDescriptor(
@@ -184,6 +220,10 @@ def analyse_with_algorithm(
             tracks, bpm, time_sig, supported_articulations, safe_config, intensity, scope,
             valid_instrument_ids,
         )
+        preview = replace(
+            preview,
+            diagnostics=preview.diagnostics + _source_compatibility_diagnostics(request),
+        )
         return OptimizationSession(descriptor, original_fingerprint, list(tracks), request, preview)
 
     base_tracks = list(tracks)
@@ -209,6 +249,10 @@ def analyse_with_algorithm(
         raise TypeError("optimizer plugin returned an incompatible preview object")
     if preview.algorithm_id != descriptor.algorithm_id or preview.algorithm_version != descriptor.version:
         raise InvalidOptimizationPreview("preview algorithm identity does not match manifest")
+    preview = replace(
+        preview,
+        diagnostics=preview.diagnostics + _source_compatibility_diagnostics(request),
+    )
     validate_preview(request, preview)
     return OptimizationSession(descriptor, original_fingerprint, base_tracks, request, preview)
 

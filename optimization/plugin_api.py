@@ -319,14 +319,20 @@ def preview_from_tracks(
     )
 
 
-def _validate_note(note: NoteSnapshot, instrument_id: int, percussion: bool,
-                   supported_pitches: dict[int, frozenset[int]],
-                   supported_articulations: dict[int, tuple[tuple[int, str], ...]],
-                   preserved_ntypes: frozenset[int] = frozenset()) -> None:
+def _validate_note_shape(note: NoteSnapshot) -> None:
+    """Validate host/wire invariants which can never be grandfathered."""
+
     if not 0 <= note.pitch <= 127 or not 1 <= note.vel <= 127 or not 0 <= note.ntype <= 255:
         raise InvalidOptimizationPreview("note pitch, velocity, or ntype is outside the wire range")
     if not math.isfinite(note.start) or not math.isfinite(note.dur) or note.start < 0 or note.dur <= 0:
         raise InvalidOptimizationPreview("note timing must be finite, non-negative, and non-zero")
+
+
+def _validate_note(note: NoteSnapshot, instrument_id: int, percussion: bool,
+                   supported_pitches: dict[int, frozenset[int]],
+                   supported_articulations: dict[int, tuple[tuple[int, str], ...]],
+                   preserved_ntypes: frozenset[int] = frozenset()) -> None:
+    _validate_note_shape(note)
     if percussion and (not 48 <= note.pitch <= 64 or note.ntype != 99):
         raise InvalidOptimizationPreview("derived drum notes require BDO pitch 48..64 and ntype=99")
     supported = supported_pitches.get(instrument_id)
@@ -339,6 +345,68 @@ def _validate_note(note: NoteSnapshot, instrument_id: int, percussion: bool,
         raise InvalidOptimizationPreview(
             f"ntype {note.ntype} is unsupported for BDO instrument {instrument_id}"
         )
+
+
+def _assert_legacy_note_issues_not_increased(
+    source: TrackSnapshot,
+    notes: tuple[NoteSnapshot, ...],
+    instrument_id: int,
+    request: OptimizationRequest,
+) -> None:
+    """Allow an optimizer to preserve, but never invent, imported map issues.
+
+    Imported MIDI can legitimately reach the editor before conversion checks
+    have normalized its game pitch range or drum representation.  Those source
+    issues must not make the optimizer unusable.  They are compared as bounded
+    multisets so timing/velocity cleanup is still possible, while a plugin
+    cannot add another unsupported pitch, articulation, or drum encoding.
+    """
+
+    for note in notes:
+        _validate_note_shape(note)
+
+    supported = request.supported_pitches.get(instrument_id)
+    valid_ntypes = {
+        0,
+        *(ntype for ntype, _label in request.supported_articulations.get(instrument_id, ())),
+    }
+
+    before_pitch = Counter(
+        note.pitch for note in source.notes if supported and note.pitch not in supported
+    )
+    after_pitch = Counter(
+        note.pitch for note in notes if supported and note.pitch not in supported
+    )
+    if any(count > before_pitch[pitch] for pitch, count in after_pitch.items()):
+        pitch = next(
+            pitch for pitch, count in after_pitch.items() if count > before_pitch[pitch]
+        )
+        raise InvalidOptimizationPreview(
+            f"pitch {pitch} is unsupported for BDO instrument {instrument_id}"
+        )
+
+    before_ntype = Counter(note.ntype for note in source.notes if note.ntype not in valid_ntypes)
+    after_ntype = Counter(note.ntype for note in notes if note.ntype not in valid_ntypes)
+    if any(count > before_ntype[ntype] for ntype, count in after_ntype.items()):
+        raise InvalidOptimizationPreview(
+            "preview may not duplicate or invent unsupported manual articulations"
+        )
+
+    if source.is_percussion:
+        before_drum = Counter(
+            (note.pitch, note.ntype)
+            for note in source.notes
+            if not 48 <= note.pitch <= 64 or note.ntype != 99
+        )
+        after_drum = Counter(
+            (note.pitch, note.ntype)
+            for note in notes
+            if not 48 <= note.pitch <= 64 or note.ntype != 99
+        )
+        if any(count > before_drum[key] for key, count in after_drum.items()):
+            raise InvalidOptimizationPreview(
+                "preview may not add noncanonical drum pitches or note types"
+            )
 
 
 def _validate_instrument(request: OptimizationRequest, instrument_id: int, percussion: bool) -> None:
@@ -454,16 +522,17 @@ def validate_preview(request: OptimizationRequest, preview: OptimizationPreview)
     for track_id, notes in replacement_notes.items():
         track = source[track_id]
         proposed_note_total += len(notes) - len(track.notes)
-        preserved_ntypes = frozenset(note.ntype for note in track.notes)
-        valid_ntypes = {0, *(ntype for ntype, _label in request.supported_articulations.get(final_instruments[track_id], ()))}
-        before_invalid = Counter(note.ntype for note in track.notes if note.ntype not in valid_ntypes)
-        after_invalid = Counter(note.ntype for note in notes if note.ntype not in valid_ntypes)
-        if any(count > before_invalid[ntype] for ntype, count in after_invalid.items()):
-            raise InvalidOptimizationPreview("preview may not duplicate or invent unsupported manual articulations")
-        for note in notes:
-            _validate_note(
-                note, final_instruments[track_id], track.is_percussion,
-                request.supported_pitches, request.supported_articulations, preserved_ntypes,
+        if final_instruments[track_id] != track.instrument_id:
+            # Changing the instrument is a new compatibility decision, so all
+            # resulting notes must be valid for the newly selected instrument.
+            for note in notes:
+                _validate_note(
+                    note, final_instruments[track_id], track.is_percussion,
+                    request.supported_pitches, request.supported_articulations,
+                )
+        else:
+            _assert_legacy_note_issues_not_increased(
+                track, notes, final_instruments[track_id], request,
             )
     if proposed_note_total > max(source_note_total, request.limits.max_song_notes):
         raise InvalidOptimizationPreview("preview exceeds the host song-note limit")

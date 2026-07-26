@@ -43,7 +43,9 @@ class WpfSidecarTests(unittest.TestCase):
             imported = wpf_sidecar.dispatch("import_bdo", {"score_path": str(out_path)})["project"]
             self.assertEqual(imported["owner_id"], 123)
             self.assertEqual(imported["tracks"][0]["notes"][0], [60, 90, 0.0, 400.0, 7])
-            self.assertEqual(imported["source_bdo_path"], str(out_path.resolve()))
+            self.assertEqual(imported["path_policy"], "project-relative-v1")
+            self.assertEqual(imported["source_bdo_path"], "")
+            self.assertNotIn(str(Path(directory).resolve()), str(imported))
 
     def test_optimizer_preview_and_apply_use_snapshot_fingerprint(self) -> None:
         project = self.project()

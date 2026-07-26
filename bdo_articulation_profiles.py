@@ -97,6 +97,10 @@ PROFILES = tuple(
 # audible behavior has not yet passed an A/B validation.  These entries are
 # deliberately suggestion-only and never override a more specific profile.
 _UNVERIFIED_NTYPES = {
+    # Drum-set type 99 selects the game's canonical percussion Event.  It is
+    # a routing marker rather than a DSP articulation; audible A/B remains
+    # unverified and it must never be auto-applied to imported GM notes.
+    0x0D: (99,),
     0x0A: (15,),
     0x0B: (1, 3, 15),
     0x0E: (16,),

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Iterable
@@ -51,6 +52,8 @@ class OptimizerConfig:
     allow_track_creation: bool = True
     confirmed_melody_phrases: frozenset[int] = frozenset()
     beam_width: int = 8
+    # Workload/arrangement guardrail only. The game supplies the account's
+    # actual noteCount dynamically and this value is not an export entitlement.
     max_notes_per_instrument: int = 10000
     verified_articulations: frozenset[tuple[int, int]] = frozenset()
     lyric_events: list[dict] = field(default_factory=list)
@@ -130,6 +133,14 @@ class _Candidate:
     ntype: int
     confidence: float
     reason: str
+
+
+@dataclass(frozen=True)
+class _EnsembleTrackFacts:
+    low: int
+    high: int
+    average_pitch: float
+    onset_keys: frozenset[tuple[int, int]]
 
 
 @dataclass(frozen=True)
@@ -315,6 +326,23 @@ def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
 
 
+def _has_nearby_time(
+    sorted_times: list[float],
+    value: float,
+    tolerance: float,
+) -> bool:
+    """Return whether the nearest sorted timestamp is inside tolerance."""
+
+    if not sorted_times:
+        return False
+    insertion = bisect_left(sorted_times, float(value))
+    return any(
+        abs(sorted_times[index] - value) <= tolerance
+        for index in (insertion - 1, insertion)
+        if 0 <= index < len(sorted_times)
+    )
+
+
 def _supports(supported: set[int], ntype: int) -> bool:
     return ntype in supported
 
@@ -350,20 +378,20 @@ def _note_groups_by_start(notes: Iterable, tolerance_ms: float = 12.0) -> dict[i
 def _dedupe_notes(notes: list, report: TrackOptimizationReport) -> list:
     notes = sorted(notes, key=lambda n: (n.start, n.pitch, -n.vel, -n.dur))
     result = []
-    seen: dict[tuple[int, int, int], object] = {}
+    seen: dict[tuple[int, int, int], tuple[int, object]] = {}
     for note in notes:
         key = (round(note.start / 5.0), note.pitch, int(getattr(note, "ntype", 0)))
-        existing = seen.get(key)
-        if existing is None:
-            seen[key] = note
+        seen_item = seen.get(key)
+        if seen_item is None:
+            seen[key] = (len(result), note)
             result.append(note)
             continue
+        index, existing = seen_item
         report.duplicate_notes_removed += 1
         if note.vel > existing.vel or note.dur > existing.dur:
             replacement = existing._replace(vel=max(existing.vel, note.vel), dur=max(existing.dur, note.dur))
-            index = result.index(existing)
             result[index] = replacement
-            seen[key] = replacement
+            seen[key] = (index, replacement)
     return sorted(result, key=lambda n: (n.start, n.pitch))
 
 
@@ -883,13 +911,17 @@ def _detect_real_techniques(track, notes: list, role: TrackRole, supported: set[
     if family == "keys" and any(int(item.get("control", -1)) == 64 and int(item.get("value", 0)) >= 64 for item in controls):
         if notes:
             candidates.append(_candidate(track_id, (0,), "piano_pedal", .98, "检测到原始 MIDI CC64 踏板事件", inst_id, notes, supported))
+    median_velocity = (
+        sorted(int(item.vel) for item in notes)[len(notes) // 2]
+        if notes
+        else 0
+    )
     for index, note in enumerate(notes):
         nxt = notes[index + 1] if index + 1 < len(notes) else None
         gap = (nxt.start - (note.start + note.dur)) if nxt else beat
         ioi = (nxt.start - note.start) if nxt else beat
         detached = nxt is not None and note.dur / max(1.0, ioi) <= .45 and gap >= beat * .06
         gate_ratio = note.dur / max(1.0, ioi)
-        median_velocity = sorted(int(item.vel) for item in notes)[len(notes) // 2]
         if nxt and -.08 * beat <= gap <= .06 * beat and family in {"strings", "wind", "brass", "synth"}:
             candidates.append(_candidate(track_id, (index,), "legato", .86, "相邻音无可听断点且声部连续", inst_id, notes, supported))
         if nxt and .78 <= gate_ratio <= .98 and gap >= 0 and family in {"strings", "wind", "brass", "keys"}:
@@ -1038,27 +1070,60 @@ def _apply_technique_edits(notes: list, selected: list[TechniqueCandidate], leve
     return sorted(result, key=lambda item: (item.start, item.pitch))
 
 
-def _ensemble_issues(track, tracks: list, role: TrackRole) -> list[str]:
+def _ensemble_track_facts(tracks: list) -> dict[int, _EnsembleTrackFacts]:
+    """Build immutable pair-comparison facts once for the whole song."""
+
+    facts: dict[int, _EnsembleTrackFacts] = {}
+    for track in tracks:
+        notes = list(track.notes)
+        if not notes:
+            continue
+        pitches = [int(note.pitch) for note in notes]
+        facts[id(track)] = _EnsembleTrackFacts(
+            min(pitches),
+            max(pitches),
+            sum(pitches) / len(pitches),
+            frozenset(
+                (round(float(note.start) / 12.0), int(note.pitch))
+                for note in notes
+            ),
+        )
+    return facts
+
+
+def _ensemble_issues(
+    track,
+    tracks: list,
+    role: TrackRole,
+    facts: dict[int, _EnsembleTrackFacts] | None = None,
+) -> list[str]:
     if not track.notes or role == TrackRole.PERCUSSION:
         return []
+    facts = facts if facts is not None else _ensemble_track_facts(tracks)
+    track_facts = facts[id(track)]
     issues = []
-    low, high = min(note.pitch for note in track.notes), max(note.pitch for note in track.notes)
-    avg = sum(note.pitch for note in track.notes) / len(track.notes)
+    low, high = track_facts.low, track_facts.high
+    avg = track_facts.average_pitch
+    onset_keys = track_facts.onset_keys
     for other in tracks:
         if other is track or not other.notes or getattr(other, "is_percussion", False):
             continue
-        other_low, other_high = min(note.pitch for note in other.notes), max(note.pitch for note in other.notes)
+        other_facts = facts[id(other)]
+        other_low, other_high = other_facts.low, other_facts.high
         overlap = max(0, min(high, other_high) - max(low, other_low) + 1)
         union = max(high, other_high) - min(low, other_low) + 1
-        onset_keys = {(round(note.start / 12), note.pitch) for note in track.notes}
-        other_keys = {(round(note.start / 12), note.pitch) for note in other.notes}
+        other_keys = other_facts.onset_keys
         doubling = len(onset_keys & other_keys) / max(1, min(len(onset_keys), len(other_keys)))
         if overlap / max(1, union) >= .7 and doubling < .2:
             issues.append(f"与 {other.display_name} 音区高度重叠，存在织体遮蔽风险")
         if doubling >= .45:
             issues.append(f"与 {other.display_name} 存在明显同度加倍，作为配器层保留")
     if role == TrackRole.BASS:
-        melodies = [other for other in tracks if other.notes and sum(n.pitch for n in other.notes) / len(other.notes) < avg]
+        melodies = [
+            other
+            for other in tracks
+            if other.notes and facts[id(other)].average_pitch < avg
+        ]
         if melodies:
             issues.append("低音平均音区高于其他旋律层，可能发生声部交叉")
     return list(dict.fromkeys(issues))
@@ -1248,9 +1313,16 @@ def _collect_ensemble_suggestions(tracks: list, context: SongContext,
                     (int(melody.track_id), int(track.track_id)),
                 ))
     if bass and drums and bass.notes and drums.notes:
-        kick_starts = [float(note.start) for note in drums.notes if note.pitch in {35, 36, 48}]
+        kick_starts = sorted(
+            float(note.start)
+            for note in drums.notes
+            if note.pitch in {35, 36, 48}
+        )
         if kick_starts:
-            aligned = sum(any(abs(float(note.start) - start) <= 45.0 for start in kick_starts) for note in bass.notes)
+            aligned = sum(
+                _has_nearby_time(kick_starts, float(note.start), 45.0)
+                for note in bass.notes
+            )
             if aligned / len(bass.notes) < .3:
                 suggestions.append(EnsembleSuggestion(
                     82, "鼓与贝斯的主要起音联系较弱；建议在段落重拍建立少量共同锚点",
@@ -1399,10 +1471,17 @@ def _lyric_masking_issue(track, all_tracks: list, role: TrackRole, lyric: LyricC
         return None
     melody_low, melody_high = min(n.pitch for n in primary.notes), max(n.pitch for n in primary.notes)
     overlap = sum(melody_low - 3 <= note.pitch <= melody_high + 3 for note in track.notes) / len(track.notes)
-    lyric_times = [token.time for token in lyric.tokens if token.time is not None]
+    lyric_times = sorted(
+        float(token.time)
+        for token in lyric.tokens
+        if token.time is not None
+    )
     if not lyric_times:
         return None
-    competing = sum(any(abs(note.start - time) <= 45.0 for time in lyric_times) for note in track.notes) / len(track.notes)
+    competing = sum(
+        _has_nearby_time(lyric_times, float(note.start), 45.0)
+        for note in track.notes
+    ) / len(track.notes)
     if overlap >= .45 and competing >= .35:
         return "歌词密集处与主旋律同音区、同起点竞争；建议错开节奏、降力度或短时留白"
     return None
@@ -1441,6 +1520,7 @@ def optimize_tracks(tracks: list, bpm: int, supported_articulations: dict[int, l
         merged_counts[instrument_id] = merged_counts.get(instrument_id, 0) + len(item.notes)
     optimized_tracks = []
     reports = []
+    ensemble_facts = _ensemble_track_facts(tracks)
     for track in tracks:
         track_id = int(track.track_id)
         role = song_context.track_roles.get(track_id, TrackRole.ORNAMENT)
@@ -1458,7 +1538,12 @@ def optimize_tracks(tracks: list, bpm: int, supported_articulations: dict[int, l
         original_note_count = len(notes)
         was_humanized = False
         supported = {ntype for ntype, _label in supported_articulations.get(track.bdo_instrument_id, [])}
-        report.ensemble_issues = _ensemble_issues(track, tracks, role)
+        report.ensemble_issues = _ensemble_issues(
+            track,
+            tracks,
+            role,
+            ensemble_facts,
+        )
         masking = _lyric_masking_issue(track, tracks, role, lyric_context)
         if masking:
             report.ensemble_issues.append(masking)
@@ -1468,7 +1553,10 @@ def optimize_tracks(tracks: list, bpm: int, supported_articulations: dict[int, l
             if outside:
                 report.warnings.append(f"{outside} 个音超出目标乐器的游戏/采样键位，未自动夹音")
         if merged_counts.get(int(track.bdo_instrument_id), 0) > config.max_notes_per_instrument:
-            report.warnings.append("相同 BDO 乐器合并后超过 10000 音符，自动编曲不会继续加倍")
+            report.warnings.append(
+                "相同 BDO 乐器合并后超过工具的 10000 音符处理阈值，"
+                "自动编曲不会继续加倍；该阈值不是游戏账号配额"
+            )
         if int(track.bdo_instrument_id) in {0x24, 0x25, 0x26}:
             invalid_fx = sum(
                 int(getattr(note, "ntype", 0)) == 25 and not 36 <= note.pitch <= 43 for note in notes

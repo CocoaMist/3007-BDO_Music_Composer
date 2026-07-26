@@ -10,6 +10,28 @@ import project_paths
 
 
 class ProjectPathsTests(unittest.TestCase):
+    def test_user_data_dir_uses_override_then_local_app_data(self) -> None:
+        with tempfile.TemporaryDirectory() as folder_name:
+            root = Path(folder_name)
+            override = root / "portable-user-data"
+            with patch.dict(
+                os.environ,
+                {
+                    "BDO_USER_DATA_DIR": str(override),
+                    "LOCALAPPDATA": str(root / "local"),
+                },
+            ):
+                self.assertEqual(project_paths._user_data_dir(), override)
+            with patch.dict(
+                os.environ,
+                {"LOCALAPPDATA": str(root / "local")},
+            ):
+                os.environ.pop("BDO_USER_DATA_DIR", None)
+                self.assertEqual(
+                    project_paths._user_data_dir(),
+                    root / "local" / "BDO Music Composer",
+                )
+
     def test_transcription_cache_uses_explicit_override_first(self) -> None:
         with tempfile.TemporaryDirectory() as folder_name:
             expected = Path(folder_name) / "custom-cache"

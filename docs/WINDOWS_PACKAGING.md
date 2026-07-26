@@ -1,0 +1,79 @@
+# Windows packaging
+
+BDO Music Composer has one Windows one-file package:
+`dist\BDO-Music-Composer.exe`. The package uses
+`packaging/windows/BDOMusicComposer.spec` and includes Basic Pitch `nmp.onnx`,
+ONNX Runtime CPU, SoundFile/libsndfile, soxr/libsoxr, and the scientific
+dependencies required by the embedded transcription mode. There is no
+dependency-light edition, separately named transcription executable, or
+alternate build spec.
+
+The executable uses the same UI, project schema, editor model, export path, and
+user cache location as a source checkout. It never contains reference audio,
+extracted game audio, Owner IDs, autosaves, exported scores, or transcription
+evidence caches.
+
+## Build
+
+Use Python 3.12 and install the build/runtime dependencies into the repository
+virtual environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+powershell -ExecutionPolicy Bypass -File scripts\install_transcription.ps1
+powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
+```
+
+The output is always `dist\BDO-Music-Composer.exe`. Loading a reference audio
+file and entering transcription mode exposes its bundled analysis capability.
+Alternate TensorFlow, TFLite, and Core ML backends/models are excluded. ONNX
+Runtime's CPU provider is validated before PyInstaller starts.
+After packaging, the build runs two frozen-process checks: a synthetic Basic
+Pitch ONNX/CPU inference and the real PySide main window offscreen for at least
+ten seconds. The GUI check uses a disposable `BDO_USER_DATA_DIR`, so it cannot
+read or overwrite the maintainer's projects, autosaves, caches, or settings.
+The directory is created before launch, and both GUI-subsystem processes use
+explicit wait/exit-code handling; ordinary PowerShell invocation is not
+accepted because it can return before a windowed executable exits.
+
+## License inventory
+
+Before every build, `scripts/audit_transcription_licenses.py` walks the installed
+runtime dependency closure starting from the pinned transcription stack. It:
+
+1. records exact distribution names and versions;
+2. records active runtime dependencies while excluding the deliberately unused
+   non-ONNX Basic Pitch backends;
+3. copies license, copyright, copying, and notice files available in installed
+   wheel metadata;
+4. hashes the bundled ONNX model and ONNX Runtime native libraries; and
+5. produces a canonical inventory digest.
+
+The generated report is temporary build input and is embedded under
+`licenses/transcription`; it is not committed as a machine-specific artifact.
+Missing metadata stays visible as unresolved instead of being guessed.
+
+## Public-release gate
+
+Public distribution is currently blocked. Passing `-PublicRelease` to the same
+`build.ps1` makes it require all of the following:
+
+- `public_release_cleared` is explicitly true in
+  `packaging/transcription_release_policy.json`;
+- the policy contains the digest of the exact dependency inventory being
+  built;
+- the inventory has no unresolved package license metadata; and
+- reviewer identity and UTC review time are recorded.
+
+The policy must only be changed after reviewing the actual model, Python wheels,
+native libraries, and all required notice texts. A successful build without
+`-PublicRelease` is local evaluation only and is not evidence that
+redistribution is cleared.
+
+After clearance, a public candidate still requires the normal clean-build,
+artifact inspection, full test suite, and playback smoke test; the build itself
+enforces the frozen ten-second startup check. Generated `build/`, `dist/`, and
+audit output must remain outside Git.
+The frozen executable writes runtime config, autosaves, logs, and default
+exports under `%LOCALAPPDATA%\BDO Music Composer` (or `BDO_USER_DATA_DIR`);
+those files must never appear in the inspected `dist` artifact.

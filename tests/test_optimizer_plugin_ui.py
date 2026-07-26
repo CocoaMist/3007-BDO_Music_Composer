@@ -21,7 +21,10 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
 
             app = QApplication([])
             translations = install_localizer(app, "zh_CN")
-            track = TrackState(1, [Note(60, 80, 0, 400, 0)], 0, False, "melody", 0x0B)
+            # Pitch 89 is outside instrument 0x0B's verified game range.  It
+            # must remain a conversion-check warning instead of disabling the
+            # optimizer dialog (the original user-visible regression).
+            track = TrackState(1, [Note(89, 80, 0, 400, 0)], 0, False, "melody", 0x0B)
             parent = QWidget()
             parent.tracks = [track]
             parent.bpm_override = 0
@@ -35,6 +38,7 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
             assert dialog.algorithm_combo.count() >= 1
             assert dialog.intensity_combo.count() == 3
             assert not dialog.apply_button.isEnabled()
+            assert dialog.summary_label.text() == "选择算法和强度，然后分析优化。"
             assert not hasattr(dialog, "style_combo")
             assert not hasattr(dialog, "lyric_combo")
             assert not hasattr(dialog, "marnian_check")
@@ -61,6 +65,7 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
             dialog.intensity_combo.setCurrentIndex(0)
             assert dialog.session is None
             assert not dialog.apply_button.isEnabled()
+            assert dialog.summary_label.text() == "设置已更新，点击分析优化刷新预览。"
             dialog.close()
             from pyside_bdo_gui import MidiNoteEditorDialog
             editor = MidiNoteEditorDialog(parent, track, 120, 4)

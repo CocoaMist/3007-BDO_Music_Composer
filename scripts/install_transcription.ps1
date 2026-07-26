@@ -28,7 +28,7 @@ Invoke-Pip -PipArgs @("install", "--upgrade", "pip", "setuptools<81")
 Invoke-Pip -PipArgs @("install", "--no-deps", "basic-pitch==0.4.0")
 Invoke-Pip -PipArgs @("install", "-r", $Requirements)
 
-& $Python -c "from pathlib import Path; import basic_pitch, onnxruntime; model = Path(basic_pitch.build_icassp_2022_model_path(basic_pitch.FilenameSuffix.onnx)); assert basic_pitch.ONNX_PRESENT and model.is_file() and 'CPUExecutionProvider' in onnxruntime.get_available_providers()"
+& $Python -c "from pathlib import Path; import basic_pitch, onnxruntime, soundfile, soxr; model = Path(basic_pitch.build_icassp_2022_model_path(basic_pitch.FilenameSuffix.onnx)); assert basic_pitch.ONNX_PRESENT and model.is_file() and 'CPUExecutionProvider' in onnxruntime.get_available_providers() and soundfile.available_formats() and callable(soxr.ResampleStream)"
 if ($LASTEXITCODE -ne 0) {
     throw "Transcription runtime validation failed with exit code $LASTEXITCODE"
 }

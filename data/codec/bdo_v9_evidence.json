@@ -16,8 +16,82 @@
     "note_type": {"width_bits": 8, "roundtrip_range": [0, 255], "semantic_status": "instrument-specific evidence required"},
     "velocity_a": {"width_bits": 8, "game_range": [0, 127], "status": "verified"},
     "velocity_b": {"width_bits": 8, "game_range": [0, 127], "status": "roundtrip verified; independent audible meaning unresolved"},
-    "track_volume": {"width_bits": 8, "observed_values": [70, 100], "status": "roundtrip verified; full game behavior matrix pending"},
-    "track_settings": {"bytes": 8, "status": "roundtrip verified; per-byte game behavior matrix pending"}
+    "track_volume": {
+      "width_bits": 8,
+      "observed_values": [70, 100],
+      "authoring_range": [0, 100],
+      "authoring_default": 70,
+      "authoring_step": 1,
+      "status": "roundtrip and game UI range/default verified; audible gain curve pending"
+    },
+    "track_settings": {
+      "bytes": 8,
+      "authoring_range": [0, 100],
+      "inferred_layout": [
+        "instrument_reverb_send",
+        "master_reverb_time",
+        "instrument_delay_send",
+        "master_delay_feedback",
+        "instrument_chorus_send",
+        "master_chorus_feedback",
+        "master_chorus_lfo_depth",
+        "master_chorus_lfo_frequency"
+      ],
+      "status": "roundtrip and XML authoring hierarchy verified; byte-to-semantic mapping and audible DSP require one-variable game save/A-B validation"
+    }
+  },
+  "authoring_ui": {
+    "meta_version": 757,
+    "musiccomposition_js_sha256": "714f2fa753997ae397a509b0010b2a892d79a2fb551e1513021fdd98b2038a23",
+    "musiccomposition_html_sha256": "6e25e5876941eb57bcc0892a920022afd39ef44d7667410468bd6d6400e9fa1e",
+    "effect_defaults": [0, 0, 0, 0, 0, 0, 0, 0],
+    "editor_contract": {
+      "status": "verified authoring JS/HTML behavior; not a BDO v9 binary-field claim",
+      "bpm": {
+        "minimum": 1,
+        "default": 120,
+        "static_fallback_maximum": 200,
+        "effective_maximum_source": "runtime FromClient_SetMusicLimit(max_bpm)"
+      },
+      "meters": [
+        {"label": "3/4", "xml_beat": 3},
+        {"label": "4/4", "xml_beat": 4},
+        {"label": "6/8", "xml_beat": 6}
+      ],
+      "meter_binary_status": "XML stores only beat=3/4/6; v9 denominator interpretation still requires controlled save differentials",
+      "grid_divisions": [4, 8, 16, 32, 64],
+      "grid_default_division": 4,
+      "internal_snap_division": 64,
+      "zoom_percent": {"minimum": 20, "maximum": 200, "step": 10},
+      "runtime_limits": {
+        "fields": ["codeCount", "noteCount", "max_bpm"],
+        "note_count_scope": "active instrument in the authoring UI",
+        "code_count_usage": "maximum editable measure span",
+        "serialized_in_score_xml": false
+      },
+      "transport_xml": {
+        "header_fields": ["bpm", "newbpm", "startTime"],
+        "pause_resume": "stop native playback, then submit the score XML again with startTime",
+        "binary_status": "native bridge behavior only; no additional v9 fields inferred"
+      },
+      "generated_note_xml": {
+        "fields": ["audioIndex", "length", "startTime", "offVelocity", "onVelocity", "noteNo", "articulationIndex"],
+        "time_unit": "milliseconds",
+        "audio_index": 0
+      },
+      "mute_behavior": "set instrument volume to zero; no independent mute field is serialized",
+      "view_state_serialized_in_score_xml": false,
+      "not_present_in_reviewed_authoring_resources": [
+        "pan",
+        "solo",
+        "loop",
+        "metronome",
+        "undo",
+        "redo",
+        "independent_track_mute"
+      ]
+    },
+    "status": "verified field names, hierarchy, range, defaults, save/load and preview XML path; DSP scaling unknown"
   },
   "probe_matrix": {
     "instrument_baselines": 26,

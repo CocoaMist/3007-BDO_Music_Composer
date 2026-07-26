@@ -84,11 +84,13 @@ def _project_from_midi(midi_path: str) -> dict[str, Any]:
             "bdo_source_note_records": [],
             "notes": [[n.pitch, n.vel, round(n.start, 3), round(n.dur, 3), n.ntype] for n in notes],
         })
-    source = str(Path(midi_path).resolve())
     return {
         "schema_version": CURRENT_PROJECT_SCHEMA,
-        "original_midi_path": source,
-        "source_midi_path": source,
+        "path_policy": "project-relative-v1",
+        "original_midi_path": "",
+        "source_midi_path": "",
+        "reference_audio_path": "",
+        "reference_audio_attached": False,
         "output_name": Path(midi_path).stem,
         "owner_id": 0,
         "char_name": "MIDI",
@@ -146,9 +148,12 @@ def _project_from_bdo(score_path: str) -> dict[str, Any]:
         })
     return {
         "schema_version": CURRENT_PROJECT_SCHEMA,
+        "path_policy": "project-relative-v1",
         "original_midi_path": "",
         "source_midi_path": "",
-        "source_bdo_path": str(source_path),
+        "source_bdo_path": "",
+        "reference_audio_path": "",
+        "reference_audio_attached": False,
         "output_name": source_path.name,
         "owner_id": int(snapshot.owner_id),
         "char_name": snapshot.character_name_1 or snapshot.character_name_2 or "BDO",

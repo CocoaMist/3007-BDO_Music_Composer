@@ -7,9 +7,11 @@ choices, or to explain a suggestion in the preview.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
+import heapq
 from types import SimpleNamespace
 from typing import Protocol
 
@@ -18,6 +20,17 @@ from bdo_lyrics import lyric_onset_match
 
 _MAJOR = {0, 2, 4, 5, 7, 9, 11}
 _MINOR = {0, 2, 3, 5, 7, 8, 10}
+
+_CHORD_PATTERNS = (
+    ("major7", frozenset({0, 4, 7, 11})),
+    ("dominant7", frozenset({0, 4, 7, 10})),
+    ("minor7", frozenset({0, 3, 7, 10})),
+    ("half_diminished7", frozenset({0, 3, 6, 10})),
+    ("major", frozenset({0, 4, 7})),
+    ("minor", frozenset({0, 3, 7})),
+    ("diminished", frozenset({0, 3, 6})),
+    ("sus4", frozenset({0, 5, 7})),
+)
 
 
 @dataclass(frozen=True)
@@ -139,10 +152,34 @@ def _phrase_numbers(notes: list, phrase_break_ms: float) -> tuple[int, ...]:
 
 def _roles(notes: list, beat_ms: float) -> tuple[str, ...]:
     """Classify event role conservatively; chord events are accompaniment."""
+    # Keep roles aligned to the caller's order while counting nearby onsets in
+    # one sorted sliding window.  The former per-note full scan made ordinary
+    # optimizer analysis quadratic on long tracks.
+    nearby_onset_counts = [0] * len(notes)
+    ordered = sorted(
+        enumerate(notes),
+        key=lambda item: (float(item[1].start), item[0]),
+    )
+    left = 0
+    right = 0
+    for ordered_index, (source_index, note) in enumerate(ordered):
+        start = float(note.start)
+        while (
+            left < len(ordered)
+            and start - float(ordered[left][1].start) > 12.0
+        ):
+            left += 1
+        right = max(right, ordered_index)
+        while (
+            right < len(ordered)
+            and float(ordered[right][1].start) - start <= 12.0
+        ):
+            right += 1
+        nearby_onset_counts[source_index] = right - left
+
     result = []
     for index, note in enumerate(notes):
-        same_onset = sum(abs(other.start - note.start) <= 12.0 for other in notes)
-        if same_onset >= 2:
+        if nearby_onset_counts[index] >= 2:
             result.append("chord")
             continue
         nearby = notes[max(0, index - 2):index + 3]
@@ -159,25 +196,47 @@ def _roles(notes: list, beat_ms: float) -> tuple[str, ...]:
 
 def _harmony_windows(notes: list) -> tuple[HarmonyWindow, ...]:
     """Analyse vertical harmony including notes sustained from earlier attacks."""
-    windows = []
-    starts = []
-    for note in sorted(notes, key=lambda item: (item.start, item.pitch)):
+    ordered_notes = sorted(notes, key=lambda item: (item.start, item.pitch))
+    starts: list[float] = []
+    for note in ordered_notes:
         if not starts or abs(float(note.start) - starts[-1]) > 12.0:
             starts.append(float(note.start))
+
+    # Sweep active notes across the monotonically increasing window probes.
+    # Counts preserve duplicate pitches while the pitch-class projection and
+    # bass selection exactly match the previous full-list comprehension.
+    windows = []
+    active_ends: list[tuple[float, int, int]] = []
+    active_pitches: Counter[int] = Counter()
+    source_index = 0
+    serial = 0
     for start in starts:
-        group = [note for note in notes if float(note.start) <= start + 12.0 < float(note.start + note.dur)]
-        pcs = frozenset(note.pitch % 12 for note in group)
+        probe = start + 12.0
+        while (
+            source_index < len(ordered_notes)
+            and float(ordered_notes[source_index].start) <= probe
+        ):
+            note = ordered_notes[source_index]
+            pitch = int(note.pitch)
+            heapq.heappush(
+                active_ends,
+                (float(note.start + note.dur), serial, pitch),
+            )
+            active_pitches[pitch] += 1
+            source_index += 1
+            serial += 1
+        while active_ends and active_ends[0][0] <= probe:
+            _end, _serial, pitch = heapq.heappop(active_ends)
+            active_pitches[pitch] -= 1
+            if active_pitches[pitch] <= 0:
+                del active_pitches[pitch]
+
+        pcs = frozenset(pitch % 12 for pitch in active_pitches)
         root, quality = None, None
         if len(pcs) >= 3:
-            bass_pc = min(group, key=lambda note: note.pitch).pitch % 12
+            bass_pc = min(active_pitches) % 12
             for candidate in (bass_pc, *(pc for pc in sorted(pcs) if pc != bass_pc)):
-                patterns = (
-                    ("major7", {0, 4, 7, 11}), ("dominant7", {0, 4, 7, 10}),
-                    ("minor7", {0, 3, 7, 10}), ("half_diminished7", {0, 3, 6, 10}),
-                    ("major", {0, 4, 7}), ("minor", {0, 3, 7}),
-                    ("diminished", {0, 3, 6}), ("sus4", {0, 5, 7}),
-                )
-                match = next((name for name, intervals in patterns if {
+                match = next((name for name, intervals in _CHORD_PATTERNS if {
                     (candidate + interval) % 12 for interval in intervals
                 }.issubset(pcs)), None)
                 if match:
@@ -204,7 +263,20 @@ def is_non_chord_tone(note, context: TheoryContext) -> bool:
     """Return true only for a tonal note outside a simultaneous chord window."""
     if not context.tonal:
         return False
-    window = next((item for item in context.harmony if abs(item.start - note.start) <= 12.0), None)
+    index = max(0, bisect_left(
+        context.harmony,
+        float(note.start) - 12.0,
+        key=lambda item: item.start,
+    ) - 1)
+    window = None
+    for candidate_index in range(index, len(context.harmony)):
+        candidate = context.harmony[candidate_index]
+        delta = float(candidate.start) - float(note.start)
+        if delta > 12.0:
+            break
+        if abs(delta) <= 12.0:
+            window = candidate
+            break
     return bool(window and window.root is not None and note.pitch % 12 not in window.pitch_classes)
 
 
@@ -309,8 +381,13 @@ def _style_tags(tracks: list, roles: dict[int, TrackRole], syncopation: float,
         scores["jazz_swing"] += min(.82, .4 + (swing_ratio - 1.0) * .25)
     if syncopation >= .28 and TrackRole.BASS in roles.values():
         scores["funk"] += min(.78, .35 + syncopation)
-    avg_duration = [float(note.dur) for track in tracks for note in track.notes]
-    if avg_duration and sum(avg_duration) / len(avg_duration) >= 700:
+    duration_sum = 0.0
+    duration_count = 0
+    for track in tracks:
+        for note in track.notes:
+            duration_sum += float(note.dur)
+            duration_count += 1
+    if duration_count and duration_sum / duration_count >= 700:
         scores["ambient"] += .48
     if not scores:
         scores["neutral"] = .5
@@ -322,13 +399,34 @@ def analyse_song(tracks: list, bpm: int, time_sig: int, phrase_break_ms: float =
                  lyric_events: list[dict] | None = None) -> SongContext:
     """Build deterministic cross-track context, optionally enriched by model priors."""
     beat_ms = 60000.0 / max(1, min(240, int(bpm or 120)))
+    ordered_track_notes = {
+        id(track): sorted(
+            track.notes,
+            key=lambda note: (note.start, note.pitch),
+        )
+        for track in tracks
+    }
+    ordered_track_starts = {
+        track_key: [float(note.start) for note in notes]
+        for track_key, notes in ordered_track_notes.items()
+    }
     all_notes = sorted(
-        [note for track in tracks if not getattr(track, "is_percussion", False) for note in track.notes],
+        [
+            note
+            for track in tracks
+            if not getattr(track, "is_percussion", False)
+            for note in ordered_track_notes[id(track)]
+        ],
         key=lambda note: (note.start, note.pitch),
     )
     global_theory = analyse_music(all_notes, bpm, time_sig, phrase_break_ms)
     contexts = {
-        int(track.track_id): analyse_music(sorted(track.notes, key=lambda n: (n.start, n.pitch)), bpm, time_sig, phrase_break_ms)
+        int(track.track_id): analyse_music(
+            ordered_track_notes[id(track)],
+            bpm,
+            time_sig,
+            phrase_break_ms,
+        )
         for track in tracks
     }
     roles = _assign_track_roles(tracks, beat_ms, lyric_events)
@@ -344,12 +442,18 @@ def analyse_song(tracks: list, bpm: int, time_sig: int, phrase_break_ms: float =
     edges = (0.0, *boundaries, song_end + 1.0)
     segment_roles: dict[int, list[TrackRole]] = {int(track.track_id): [] for track in tracks}
     for start, end in zip(edges, edges[1:]):
-        proxies = [SimpleNamespace(
-            track_id=int(track.track_id),
-            notes=[note for note in track.notes if start <= note.start < end],
-            is_percussion=bool(getattr(track, "is_percussion", False)),
-            bdo_instrument_id=int(getattr(track, "bdo_instrument_id", -1)),
-        ) for track in tracks]
+        proxies = []
+        for track in tracks:
+            track_key = id(track)
+            starts = ordered_track_starts[track_key]
+            first = bisect_left(starts, start)
+            last = bisect_left(starts, end, lo=first)
+            proxies.append(SimpleNamespace(
+                track_id=int(track.track_id),
+                notes=ordered_track_notes[track_key][first:last],
+                is_percussion=bool(getattr(track, "is_percussion", False)),
+                bdo_instrument_id=int(getattr(track, "bdo_instrument_id", -1)),
+            ))
         local_lyrics = [event for event in lyric_events or [] if start <= float(event.get("time", 0.0)) < end]
         local_roles = _assign_track_roles(proxies, beat_ms, local_lyrics)
         for track in tracks:

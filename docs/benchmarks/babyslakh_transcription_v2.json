@@ -1,0 +1,85 @@
+{
+  "dataset": {
+    "record": "https://zenodo.org/records/4603844",
+    "license": "CC BY 4.0",
+    "archive_md5": "ea1797fc57689a0e33c759c17a2292f5"
+  },
+  "algorithm_version": "hpss-fast-stream-30s-2s-1024-512-k9:v2",
+  "algorithm_parameters": {
+    "block_seconds": 30.0,
+    "overlap_seconds": 2.0,
+    "n_fft": 1024,
+    "hop_length": 512,
+    "kernel_size": 9,
+    "power": 2.0,
+    "margin": 1.0,
+    "evidence_dtype": "<f2"
+  },
+  "tuning_track_ids": [
+    "Track00001",
+    "Track00002",
+    "Track00003",
+    "Track00004",
+    "Track00005",
+    "Track00006",
+    "Track00007",
+    "Track00008",
+    "Track00009",
+    "Track00010",
+    "Track00011",
+    "Track00012"
+  ],
+  "holdout_track_ids": [
+    "Track00013",
+    "Track00014",
+    "Track00015",
+    "Track00016",
+    "Track00017",
+    "Track00018",
+    "Track00019",
+    "Track00020"
+  ],
+  "selected_config": {
+    "frame_harmonic_weight": 0.55,
+    "onset_harmonic_weight": 0.25,
+    "onset_threshold": 0.55,
+    "frame_threshold": 0.25,
+    "min_note_len_frames": 5
+  },
+  "tuning_metrics": {
+    "note_precision": 0.16638566699052895,
+    "note_recall": 0.165191221976403,
+    "onset_f1": 0.4214160919581798,
+    "onset_offset_f1": 0.16228394546766145
+  },
+  "holdout": {
+    "standard": {
+      "note_precision": 0.1587150939564288,
+      "note_recall": 0.11746744692312881,
+      "onset_f1": 0.3442917875967766,
+      "onset_offset_f1": 0.13215932218190898
+    },
+    "mixed_enhanced": {
+      "note_precision": 0.16541473478124757,
+      "note_recall": 0.14868540608894126,
+      "onset_f1": 0.3897696089807378,
+      "onset_offset_f1": 0.15437567268939748
+    },
+    "runtime_ratio": 1.9667809991945806,
+    "standard_seconds": 46.966773900028784,
+    "mixed_enhanced_seconds": 92.37335850004456,
+    "peak_working_set_mib": 414.21875,
+    "timing_scope": "fingerprint, streaming decode/resample, HPSS, ONNX, fusion, note decode, evidence validation/hash/publish",
+    "memory_scope": "independent pre-warmed process during full analyses"
+  },
+  "quality_gate": {
+    "passed": true,
+    "checks": {
+      "onset_offset_f1_gain_at_least_0_02": true,
+      "onset_f1_drop_at_most_0_01": true,
+      "precision_drop_at_most_0_01": true,
+      "runtime_ratio_at_most_2_2": true,
+      "working_set_at_most_512_mib": true
+    }
+  }
+}

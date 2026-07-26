@@ -8,6 +8,7 @@ several notes (melisma) as well as several syllables sharing a rhythmic note.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass
 from enum import StrEnum
 import math
@@ -52,6 +53,30 @@ class LyricContext:
 
 
 _PUNCTUATION = set("，。！？；：、,.!?;:")
+
+
+def _nearest_sorted_index(
+    values: list[float],
+    target: float,
+    low: int = 0,
+) -> int:
+    """Return the first nearest index at or after ``low`` in sorted values."""
+
+    if not values:
+        return -1
+    low = max(0, min(len(values) - 1, int(low)))
+    insertion = bisect_left(values, float(target), lo=low)
+    candidates = []
+    if insertion > low:
+        candidates.append(insertion - 1)
+    if insertion < len(values):
+        candidates.append(insertion)
+    if not candidates:
+        return len(values) - 1
+    return min(
+        candidates,
+        key=lambda index: (abs(values[index] - target), index),
+    )
 
 
 def lyric_tokens(events: list[dict]) -> tuple[LyricToken, ...]:
@@ -106,7 +131,11 @@ def lyric_onset_match(notes: list, events: list[dict], beat_ms: float) -> float:
     if not starts or not times:
         return 0.0
     tolerance = max(45.0, beat_ms * .22)
-    distances = [min(abs(start - time) for start in starts) for time in times]
+    distances = [
+        abs(starts[index] - time)
+        for time in times
+        if (index := _nearest_sorted_index(starts, time)) >= 0
+    ]
     coverage = sum(distance <= tolerance for distance in distances) / len(distances)
     accuracy = sum(math.exp(-distance / tolerance) for distance in distances) / len(distances)
     return .65 * coverage + .35 * accuracy
@@ -136,6 +165,7 @@ def align_lyrics(events: list[dict], notes: list, beat_ms: float,
     requested = LyricExpressionMode(mode)
     tokens = lyric_tokens(events)
     notes = sorted(notes, key=lambda note: (note.start, -note.pitch))
+    note_starts = [float(note.start) for note in notes]
     effective = _effective_mode(requested, tokens, notes)
     warnings: list[str] = []
     if not tokens:
@@ -147,8 +177,7 @@ def align_lyrics(events: list[dict], notes: list, beat_ms: float,
     anchors: list[int] = []
     for token_index, token in enumerate(tokens):
         if token.time is not None:
-            candidates = range(cursor, len(notes))
-            index = min(candidates, key=lambda item: abs(float(notes[item].start) - token.time), default=len(notes) - 1)
+            index = _nearest_sorted_index(note_starts, token.time, cursor)
         else:
             index = round(token_index * max(0, len(notes) - 1) / max(1, len(tokens) - 1))
             index = max(cursor, index)
@@ -177,4 +206,3 @@ def align_lyrics(events: list[dict], notes: list, beat_ms: float,
     if effective == LyricExpressionMode.CALL_RESPONSE:
         warnings.append("问答表达需要第二旋律轨；当前版本只规划分句，不自动迁移主旋律")
     return LyricContext(effective, primary_track_id, tokens, tuple(alignments), confidence, tuple(warnings))
-

@@ -17,6 +17,7 @@ class DenseProjectUiTests(unittest.TestCase):
             """
             from PySide6.QtCore import QPoint, QPointF, Qt
             from PySide6.QtWidgets import QApplication
+            from bdo_transcription import TranscriptionCandidate
             from pyside_bdo_gui import (
                 MidiNoteEditorDialog, MidiToBdoWindow, Note, ReferenceAudioController,
                 TimelineCanvas, TrackState,
@@ -41,17 +42,23 @@ class DenseProjectUiTests(unittest.TestCase):
             actions = {action for _rect, action, _track in timeline.hit_regions}
             assert "shorten" not in actions
             assert "lengthen" not in actions
-            assert "fx" not in actions
+            assert "fx" in actions
             normal_lane = next(
                 rect for rect, action, track in timeline.hit_regions
                 if action == "lane" and track is tracks[0]
             )
             normal_controls = [
                 rect for rect, action, track in timeline.hit_regions
-                if action in {"mute", "solo"} and track is tracks[0]
+                if action in {"mute", "solo", "fx"} and track is tracks[0]
             ]
-            assert len(normal_controls) == 2
-            assert all(abs(rect.center().y() - normal_lane.center().y()) < 0.01 for rect in normal_controls)
+            normal_volume = next(
+                rect for rect, action, track in timeline.hit_regions
+                if action == "track_volume" and track is tracks[0]
+            )
+            assert len(normal_controls) == 3
+            assert len({round(rect.center().y(), 3) for rect in normal_controls}) == 1
+            assert normal_controls[0].center().y() < normal_lane.center().y()
+            assert normal_volume.center().y() > normal_lane.center().y()
 
             marnian = TrackState(999, tracks[0].notes, 0, False, "marnian", 0x14)
             timeline.set_tracks([marnian])
@@ -66,7 +73,8 @@ class DenseProjectUiTests(unittest.TestCase):
             ]
             assert {action for _rect, action, _track in timeline.hit_regions} >= {"mute", "solo", "fx"}
             assert len(marnian_controls) == 3
-            assert all(abs(rect.center().y() - marnian_lane.center().y()) < 0.01 for rect in marnian_controls)
+            assert len({round(rect.center().y(), 3) for rect in marnian_controls}) == 1
+            assert marnian_controls[0].center().y() < marnian_lane.center().y()
             timeline.set_tracks(tracks)
             app.processEvents()
             initial_audio_lane = next(
@@ -151,12 +159,67 @@ class DenseProjectUiTests(unittest.TestCase):
             editor.resize(1180, 720)
             editor.show()
             app.processEvents()
+            editor.canvas.grab()
+            roll_background_key = editor.canvas._background_cache.cacheKey()
+            editor.canvas.grab()
+            assert (
+                editor.canvas._background_cache.cacheKey()
+                == roll_background_key
+            )
             visible_first = editor.canvas.visible_note_indices()
             visible_second = editor.canvas.visible_note_indices()
             assert visible_first is visible_second
             assert 0 < len(visible_first) < len(dense_notes) // 10
             assert 0 < len(editor.canvas.visible_ghost_notes()) < len(ghost_notes) // 10
             assert editor.canvas.content_end_ms == dense_notes[-1].start + dense_notes[-1].dur
+
+            # One song-long candidate must not widen every later viewport
+            # query to the full candidate list.  The block-max-end index
+            # should inspect only the long-note block and the local blocks.
+            transcription_candidates = [
+                TranscriptionCandidate(
+                    60, 90, 0.0, 300000.0, 0.9,
+                    candidate_id="candidate-long",
+                ),
+                *[
+                    TranscriptionCandidate(
+                        40 + index % 48,
+                        80,
+                        float(index * 25),
+                        10.0,
+                        0.7,
+                        candidate_id=f"candidate-{index}",
+                    )
+                    for index in range(1, 12000)
+                ],
+            ]
+            editor.canvas.set_transcription_review(
+                tuple(transcription_candidates),
+                lambda candidate: candidate.candidate_id,
+            )
+            query_left = 290000.0
+            query_right = 291000.0
+            visible_candidates = editor.canvas._visible_candidate_pairs(
+                query_left,
+                query_right,
+            )
+            visible_ids = {
+                candidate_id
+                for candidate_id, _candidate in visible_candidates
+            }
+            assert "candidate-long" in visible_ids
+            assert 1 < len(visible_candidates) < 100
+            pixel_margin_ms = 4.0 / editor.canvas.px_per_ms
+            assert all(
+                candidate.start_ms <= query_right
+                and candidate.start_ms + candidate.duration_ms
+                >= query_left - pixel_margin_ms
+                for _candidate_id, candidate in visible_candidates
+            )
+            assert (
+                editor.canvas._last_candidate_query_inspections
+                <= editor.canvas.CANDIDATE_QUERY_BLOCK_SIZE * 4
+            )
 
             class WheelEvent:
                 def __init__(self, x):

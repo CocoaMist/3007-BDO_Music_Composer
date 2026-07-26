@@ -1,5 +1,13 @@
+import ast
+from pathlib import Path
 import unittest
 
+from bdo_transcription import (
+    BACKEND_CHECK_FAILED_MESSAGE,
+    BACKEND_MODULE_LOAD_FAILED_MESSAGE,
+    FROZEN_BACKEND_UNAVAILABLE_MESSAGE,
+    SOURCE_BACKEND_UNAVAILABLE_MESSAGE,
+)
 from i18n import LANGUAGES, LANGUAGE_CHOICES, TRANSLATIONS, detect_language_from_timezone, trf
 
 
@@ -46,7 +54,7 @@ class TranslationCatalogTests(unittest.TestCase):
             "开启参考音频分析与候选音符审阅",
             "分析参考音频",
             "识别结果仅作为候选，不会自动写入当前轨道",
-            "写入草稿",
+            "写入当前轨草稿",
             "清除候选",
             "扒谱分析未改变任何正式音符",
             "仅播放参考音频",
@@ -61,6 +69,110 @@ class TranslationCatalogTests(unittest.TestCase):
                 self.assertIn("3", rendered)
                 self.assertIn("1", rendered)
                 self.assertIn("2", rendered)
+
+    def test_embedded_transcription_editor_is_translated(self):
+        required = {
+            "扒谱",
+            "扒谱模式",
+            "载入参考音频",
+            "卸载参考音频",
+            "分析整首",
+            "重新分析区间",
+            "置信度",
+            "仅已拒绝",
+            "证据轮廓",
+            "清除 A–B",
+            "音频位置对齐播放头",
+            "将播放头设为第一拍",
+            "审阅撤销",
+            "审阅重做",
+            "拒绝",
+            "恢复",
+            "写入当前轨草稿",
+            "显式复制到…",
+            "清除本次暂存",
+            "存在未提交候选草稿",
+            "当前仍有未提交候选草稿。请先应用，或撤销/清除本次暂存后再更换音频、调整偏移或重新分析。",
+            "选择扒谱目标轨",
+            "请选择一条旋律乐器轨后进入扒谱模式。",
+            "当前没有可用的旋律乐器轨，请先新建乐器轨。",
+            "循环区间",
+            "循环播放 A–B 时间区间",
+            "正在从缓存证据重新解码 A–B；不会再次运行模型。",
+            "扒谱候选已作为一个工程操作写入；可整批撤销。",
+            "区间重解码失败：{error}",
+            FROZEN_BACKEND_UNAVAILABLE_MESSAGE,
+            SOURCE_BACKEND_UNAVAILABLE_MESSAGE,
+            BACKEND_CHECK_FAILED_MESSAGE,
+            BACKEND_MODULE_LOAD_FAILED_MESSAGE,
+        }
+        for language, catalog in TRANSLATIONS.items():
+            with self.subTest(language=language):
+                self.assertTrue(required.issubset(catalog))
+                self.assertTrue(all(catalog[source] != source for source in required))
+                routed = catalog[
+                    "已路由 {count} 个 · 越界 {invalid} · 已满足 {duplicates}"
+                ].format(count=4, invalid=1, duplicates=2)
+                applied = catalog[
+                    "已应用 {created} 个音符 · 已满足 {satisfied} · "
+                    "保留失效 {invalid} · 孤立 {orphaned}"
+                ].format(created=4, satisfied=2, invalid=1, orphaned=3)
+                for number in ("4", "1", "2"):
+                    self.assertIn(number, routed)
+                for number in ("4", "2", "1", "3"):
+                    self.assertIn(number, applied)
+                interval_error = catalog[
+                    "区间重解码失败：{error}"
+                ].format(error="boom")
+                self.assertIn("boom", interval_error)
+
+    def test_every_chinese_transcription_widget_literal_is_catalogued(self):
+        source_path = (
+            Path(__file__).resolve().parents[1] / "transcription_editor_qt.py"
+        )
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        source_literals = {
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and any("\u4e00" <= character <= "\u9fff" for character in node.value)
+        }
+        self.assertTrue(source_literals)
+        for language, catalog in TRANSLATIONS.items():
+            with self.subTest(language=language):
+                self.assertTrue(source_literals.issubset(catalog))
+
+    def test_every_localized_piano_roll_literal_is_catalogued(self):
+        source_path = Path(__file__).resolve().parents[1] / "pyside_bdo_gui.py"
+        tree = ast.parse(source_path.read_text(encoding="utf-8-sig"))
+        source_literals = set()
+        for node in ast.walk(tree):
+            if (
+                not isinstance(node, ast.Call)
+                or not node.args
+                or not isinstance(node.args[0], ast.Constant)
+                or not isinstance(node.args[0].value, str)
+            ):
+                continue
+            function = node.func
+            function_name = (
+                function.id
+                if isinstance(function, ast.Name)
+                else function.attr
+                if isinstance(function, ast.Attribute)
+                else ""
+            )
+            source = node.args[0].value
+            if function_name in {"tr", "trf", "_tr"} and any(
+                "\u4e00" <= character <= "\u9fff"
+                for character in source
+            ):
+                source_literals.add(source)
+        self.assertTrue(source_literals)
+        for language, catalog in TRANSLATIONS.items():
+            with self.subTest(language=language):
+                self.assertTrue(source_literals.issubset(catalog))
 
     def test_parameterized_text_formats_without_a_localizer(self):
         self.assertEqual(

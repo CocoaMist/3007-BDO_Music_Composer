@@ -6,6 +6,13 @@ from dataclasses import dataclass
 from typing import Callable, Mapping, Sequence
 
 from bdo_profile import BdoProfile
+from bdo_track_effects import (
+    GAME_PERCENT_MAX,
+    TRACK_CHORUS_SEND_INDEX,
+    TRACK_DELAY_SEND_INDEX,
+    TRACK_REVERB_SEND_INDEX,
+    raw_track_settings,
+)
 
 
 SEVERITIES = ("error", "warning", "info")
@@ -65,6 +72,53 @@ def validate_tracks(
             ))
             continue
         merged.setdefault(serialized_id, []).append(track)
+
+        try:
+            game_volume = int(getattr(track, "bdo_track_volume", 70))
+        except (TypeError, ValueError, OverflowError):
+            game_volume = -1
+        if not 0 <= game_volume <= 255:
+            issues.append(ValidationIssue(
+                "track.volume_wire_range", "error",
+                "轨道游戏音量不是有效的 v9 字节。",
+                track_id, evidence=evidence, evidence_status=status,
+            ))
+        elif game_volume > GAME_PERCENT_MAX:
+            issues.append(ValidationIssue(
+                "track.volume_legacy_range", "warning",
+                f"轨道音量 {game_volume} 超过当前游戏编辑范围 0–100；"
+                "未编辑时会原样保留。",
+                track_id, evidence=evidence, evidence_status="verified",
+            ))
+
+        try:
+            raw_settings = raw_track_settings(
+                getattr(track, "bdo_track_settings", (0,) * 8)
+            )
+        except ValueError:
+            raw_settings = None
+            issues.append(ValidationIssue(
+                "track.effects_wire_shape", "error",
+                "轨道效果设置不是有效的 8 字节 v9 数据。",
+                track_id, evidence=evidence, evidence_status=status,
+            ))
+        if raw_settings is not None:
+            legacy_sends = tuple(
+                raw_settings[index]
+                for index in (
+                    TRACK_REVERB_SEND_INDEX,
+                    TRACK_DELAY_SEND_INDEX,
+                    TRACK_CHORUS_SEND_INDEX,
+                )
+                if raw_settings[index] > GAME_PERCENT_MAX
+            )
+            if legacy_sends:
+                issues.append(ValidationIssue(
+                    "track.effects_legacy_range", "warning",
+                    "轨道效果发送量含超过当前游戏编辑范围 0–100 的导入值；"
+                    "未编辑项会原样保留。",
+                    track_id, evidence=evidence, evidence_status="inferred",
+                ))
 
         if instrument_id not in profile.instruments:
             issues.append(ValidationIssue(
@@ -191,12 +245,63 @@ def validate_tracks(
                 evidence=profile.evidence.source,
                 evidence_status=profile.evidence.status,
             ))
-        if count > profile.note_limit_per_instrument:
+            volumes: set[int] = set()
+            for track in sources:
+                try:
+                    volumes.add(int(getattr(track, "bdo_track_volume", 70)))
+                except (TypeError, ValueError, OverflowError):
+                    continue
+            if len(volumes) > 1:
+                issues.append(ValidationIssue(
+                    "tracks.volume_conflict", "error",
+                    f"同一游戏乐器的 {len(sources)} 条轨道使用了不同音量；"
+                    "游戏只保存一个乐器音量，请先统一。",
+                    evidence=profile.evidence.source,
+                    evidence_status="verified",
+                ))
+            send_values: set[tuple[int, int, int]] = set()
+            for track in sources:
+                try:
+                    settings = raw_track_settings(
+                        getattr(track, "bdo_track_settings", (0,) * 8)
+                    )
+                except ValueError:
+                    continue
+                send_values.add((
+                    settings[TRACK_REVERB_SEND_INDEX],
+                    settings[TRACK_DELAY_SEND_INDEX],
+                    settings[TRACK_CHORUS_SEND_INDEX],
+                ))
+            if len(send_values) > 1:
+                issues.append(ValidationIssue(
+                    "tracks.effects_conflict", "error",
+                    f"同一游戏乐器的 {len(sources)} 条轨道使用了不同效果发送量；"
+                    "游戏只保存一组发送量，请先统一。",
+                    evidence=profile.evidence.source,
+                    evidence_status="inferred",
+                ))
+        capacity_policy = profile.limit_policy("notes_per_instrument")
+        if count > capacity_policy.value:
+            if capacity_policy.is_hard:
+                severity = "error"
+                message = (
+                    f"乐器 0x{instrument_id:02X} 合并后有 {count} 个音符，"
+                    f"超过已验证上限 {capacity_policy.value}。"
+                )
+            else:
+                severity = "warning"
+                message = (
+                    f"乐器 0x{instrument_id:02X} 合并后有 {count} 个音符，"
+                    f"超过工具保守审阅阈值 {capacity_policy.value}；"
+                    "导出器不会因此截断，但游戏实际 noteCount 由账号能力运行时下发，"
+                    "请在游戏内确认。"
+                )
             issues.append(ValidationIssue(
-                "capacity.instrument", "error",
-                f"乐器 0x{instrument_id:02X} 合并后有 {count} 个音符，超过上限 {profile.note_limit_per_instrument}；导出会丢弃尾部音符。",
-                evidence=profile.evidence.source,
-                evidence_status=profile.evidence.status,
+                "capacity.instrument",
+                severity,
+                message,
+                evidence=capacity_policy.evidence.source,
+                evidence_status=capacity_policy.evidence.status,
             ))
     active_note_count = sum(
         len(track.notes) for track in tracks if int(track.track_id) in context.active_track_ids
@@ -214,6 +319,29 @@ def validate_tracks(
             f"导出会写入全局效果：reverb={context.effects[0]}, delay={context.effects[1]}, chorus={context.effects[2]}。",
             evidence=profile.evidence.source,
             evidence_status=profile.evidence.status,
+        ))
+    chorus_values = context.effects[2] or (0, 0, 0)
+    try:
+        master_values = tuple(
+            int(value)
+            for value in (context.effects[0], context.effects[1], *chorus_values)
+        )
+    except (TypeError, ValueError, OverflowError):
+        master_values = (-1,)
+    if any(value < 0 or value > 255 for value in master_values):
+        issues.append(ValidationIssue(
+            "export.global_effects_wire_range", "error",
+            "主效果包含无效的 v9 字节。",
+            evidence=profile.evidence.source,
+            evidence_status=profile.evidence.status,
+        ))
+    elif any(value > GAME_PERCENT_MAX for value in master_values):
+        issues.append(ValidationIssue(
+            "export.global_effects_legacy_range", "warning",
+            "主效果含超过当前游戏编辑范围 0–100 的导入值；"
+            "未编辑项会原样保留。",
+            evidence=profile.evidence.source,
+            evidence_status="inferred",
         ))
     return tuple(issues)
 
