@@ -6,12 +6,338 @@ from __future__ import annotations
 from bisect import bisect_left
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Iterable
+import re
+from string import Formatter
+from typing import Callable, Iterable, Mapping
 
 from bdo_articulation_profiles import profile_for
 from bdo_lyrics import LyricContext, LyricExpressionMode, align_lyrics
 from bdo_music_theory import ContextClassifier, SongContext, TheoryContext, TrackRole, analyse_music, analyse_song, is_non_chord_tone
 from bdo_techniques import EditOperation, RealizationKind, TECHNIQUE_PROFILES, TechniqueCandidate, instrument_family
+
+
+Translator = Callable[[str], str]
+FormatTranslator = Callable[..., str]
+
+
+def _template_fields(template: str) -> frozenset[str]:
+    return frozenset(
+        field_name
+        for _literal, field_name, _format_spec, _conversion in Formatter().parse(template)
+        if field_name
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class OptimizationTextSpec:
+    """Stable source template plus non-translatable runtime values."""
+
+    template: str
+    values: tuple[tuple[str, object], ...] = ()
+
+    def __post_init__(self) -> None:
+        names = tuple(name for name, _value in self.values)
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate optimizer text value")
+        fields = _template_fields(self.template)
+        if fields != frozenset(names):
+            raise ValueError(
+                "optimizer text placeholders do not match values: "
+                f"{sorted(fields)} != {sorted(names)}"
+            )
+
+    @classmethod
+    def create(
+        cls,
+        template: str,
+        values: Mapping[str, object] | None = None,
+    ) -> "OptimizationTextSpec":
+        return cls(template, tuple((values or {}).items()))
+
+    def source_text(self) -> str:
+        return self.template.format(**dict(self.values))
+
+    def render(
+        self,
+        translate: Translator | None = None,
+        *,
+        format_translate: FormatTranslator | None = None,
+    ) -> str:
+        source = self.source_text()
+        if translate is None and format_translate is None:
+            return source
+        values = dict(self.values)
+        if format_translate is not None:
+            try:
+                return str(format_translate(self.template, **values))
+            except (IndexError, KeyError, TypeError, ValueError):
+                return source
+        translated = translate(self.template) if translate is not None else self.template
+        if _template_fields(translated) != _template_fields(self.template):
+            return source
+        try:
+            return translated.format(**values)
+        except (IndexError, KeyError, TypeError, ValueError):
+            return source
+
+
+def _text(
+    template: str,
+    values: Mapping[str, object] | None = None,
+    *,
+    translate: Translator | None = None,
+    format_translate: FormatTranslator | None = None,
+) -> str:
+    return OptimizationTextSpec.create(template, values).render(
+        translate,
+        format_translate=format_translate,
+    )
+
+
+_ROLE_LABELS = {
+    "primary_melody": "主旋律",
+    "secondary_melody": "副旋律",
+    "harmony": "和声",
+    "bass": "低音",
+    "rhythm": "节奏",
+    "percussion": "打击乐",
+    "pad": "铺底",
+    "ornament": "装饰声部",
+    "fx": "音效",
+    "melody": "旋律",
+    "chord": "和弦",
+    "bass_riff": "低音动机",
+}
+
+_KEY_MODE_LABELS = {"major": "大调", "minor": "小调"}
+
+_LYRIC_MODE_LABELS = {
+    "auto": "自动",
+    "syllabic": "一字一音",
+    "legato": "连贯",
+    "melismatic": "一字多音",
+    "spoken": "节奏念唱",
+    "call_response": "问答",
+}
+
+_REASON_SUFFIXES = frozenset({
+    "句尾保守降级",
+    "非和弦音降级",
+    "低音/节奏型匹配",
+    "非旋律角色降级",
+    "强拍支撑",
+    "旋律折返，滑音降级",
+    "超出该奏法常用音区",
+    "乐器资料标记为不适用于当前织体",
+    "与该奏法的演奏语境不完全匹配",
+})
+
+
+def _known_reason_suffixes(value: str) -> tuple[str, ...] | None:
+    """Split a generated suffix list without splitting commas inside a label."""
+
+    remaining = value
+    result: list[str] = []
+    ordered = sorted(_REASON_SUFFIXES, key=len, reverse=True)
+    while remaining:
+        matched = next(
+            (
+                suffix
+                for suffix in ordered
+                if remaining == suffix or remaining.startswith(suffix + "，")
+            ),
+            None,
+        )
+        if matched is None:
+            return None
+        result.append(matched)
+        remaining = remaining[len(matched):]
+        if remaining.startswith("，"):
+            remaining = remaining[1:]
+    return tuple(result)
+
+
+def _fixed_label(
+    value: str,
+    labels: Mapping[str, str],
+    translate: Translator | None,
+    format_translate: FormatTranslator | None,
+) -> str:
+    if translate is None and format_translate is None:
+        return value
+    source = labels.get(value, value)
+    return _text(
+        source,
+        translate=translate,
+        format_translate=format_translate,
+    )
+
+
+_DYNAMIC_BUILTIN_TEXT = (
+    (
+        re.compile(r"^乐理分析：(?P<key_root>-?\d+) (?P<key_mode>\S+) 调性置信度 (?P<confidence>\d+%)$"),
+        "乐理分析：{key_root} {key_mode} 调性置信度 {confidence}",
+        ("key_mode",),
+    ),
+    (
+        re.compile(r"^CC11 表情曲线净变化 (?P<delta>[+-]\d+)$"),
+        "CC11 表情曲线净变化 {delta}",
+        (),
+    ),
+    (
+        re.compile(r"^短促、分离且(?P<detail>两音动机重复|重复音)的节奏 riff$"),
+        "短促、分离且{detail}的节奏 riff",
+        ("detail",),
+    ),
+    (
+        re.compile(r"^与 (?P<track_name>[\s\S]+) 音区高度重叠，存在织体遮蔽风险$"),
+        "与 {track_name} 音区高度重叠，存在织体遮蔽风险",
+        (),
+    ),
+    (
+        re.compile(r"^与 (?P<track_name>[\s\S]+) 存在明显同度加倍，作为配器层保留$"),
+        "与 {track_name} 存在明显同度加倍，作为配器层保留",
+        (),
+    ),
+    (
+        re.compile(r"^(?P<track_name>[\s\S]+) 与主旋律同节奏、同音区竞争；建议降低活动密度或错开起音$"),
+        "{track_name} 与主旋律同节奏、同音区竞争；建议降低活动密度或错开起音",
+        (),
+    ),
+    (
+        re.compile(r"^新增 Track (?P<track_id>\d+)，以乐器 0x(?P<instrument_id>[0-9A-Fa-f]+) 对主旋律作(?P<shift>[+-]\d+)半音加倍$"),
+        "新增 Track {track_id}，以乐器 0x{instrument_id:02X} 对主旋律作{shift:+d}半音加倍",
+        (),
+    ),
+    (
+        re.compile(r"^Track (?P<track_id>\d+)（(?P<role>[^）]+)）整体移调 (?P<shift>[+-]\d+) 半音，减少与主旋律的音区遮蔽$"),
+        "Track {track_id}（{role}）整体移调 {shift:+d} 半音，减少与主旋律的音区遮蔽",
+        ("role",),
+    ),
+    (
+        re.compile(r"^歌词连续表达：延长 (?P<count>\d+) 个主旋律音的衔接，未改变音高或音符数$"),
+        "歌词连续表达：延长 {count} 个主旋律音的衔接，未改变音高或音符数",
+        (),
+    ),
+    (
+        re.compile(r"^歌词节奏念唱：收短 (?P<count>\d+) 个共享音，保留旋律音高$"),
+        "歌词节奏念唱：收短 {count} 个共享音，保留旋律音高",
+        (),
+    ),
+    (
+        re.compile(r"^(?P<count>\d+) 个音超出目标乐器的游戏/采样键位，未自动夹音$"),
+        "{count} 个音超出目标乐器的游戏/采样键位，未自动夹音",
+        (),
+    ),
+    (
+        re.compile(r"^(?P<count>\d+) 个电吉他 FX 音不在 C2-G2 触发区$"),
+        "{count} 个电吉他 FX 音不在 C2-G2 触发区",
+        (),
+    ),
+)
+
+
+def _localized_builtin_text(
+    value: str,
+    translate: Translator | None,
+    format_translate: FormatTranslator | None,
+) -> str:
+    """Translate host-authored optimizer copy while protecting captured data."""
+
+    if translate is None and format_translate is None:
+        return value
+    for pattern, template, fixed_fields in _DYNAMIC_BUILTIN_TEXT:
+        match = pattern.fullmatch(value)
+        if match is None:
+            continue
+        values: dict[str, object] = dict(match.groupdict())
+        for field_name in fixed_fields:
+            if field_name == "role":
+                values[field_name] = _fixed_label(
+                    str(values[field_name]), _ROLE_LABELS, translate, format_translate
+                )
+            elif field_name == "key_mode":
+                values[field_name] = _fixed_label(
+                    str(values[field_name]), _KEY_MODE_LABELS, translate, format_translate
+                )
+            elif field_name == "detail":
+                values[field_name] = _text(
+                    str(values[field_name]),
+                    translate=translate,
+                    format_translate=format_translate,
+                )
+        if "track_id" in values:
+            values["track_id"] = int(str(values["track_id"]))
+        if "instrument_id" in values:
+            values["instrument_id"] = int(str(values["instrument_id"]), 16)
+        if "shift" in values:
+            values["shift"] = int(str(values["shift"]))
+        if "count" in values:
+            values["count"] = int(str(values["count"]))
+        return _text(
+            template,
+            values,
+            translate=translate,
+            format_translate=format_translate,
+        )
+    semicolon_parts = value.split("；")
+    parsed_suffix_groups = [
+        _known_reason_suffixes(part)
+        for part in semicolon_parts[1:]
+    ]
+    if len(semicolon_parts) > 1 and all(
+        group is not None for group in parsed_suffix_groups
+    ):
+        suffix_parts = [
+            part
+            for group in parsed_suffix_groups
+            for part in (group or ())
+        ]
+        return "; ".join([
+            _localized_builtin_text(semicolon_parts[0], translate, format_translate),
+            ", ".join(
+                _localized_builtin_text(part, translate, format_translate)
+                for part in suffix_parts
+            ),
+        ])
+    direct_suffixes = _known_reason_suffixes(value)
+    if direct_suffixes and len(direct_suffixes) > 1:
+        return ", ".join(
+            _localized_builtin_text(part, translate, format_translate)
+            for part in direct_suffixes
+        )
+    return _text(
+        value,
+        translate=translate,
+        format_translate=format_translate,
+    )
+
+
+def _localized_theory_context(
+    value: str,
+    translate: Translator | None,
+    format_translate: FormatTranslator | None,
+) -> str:
+    if translate is None and format_translate is None:
+        return value
+    parts = value.split(" · ")
+    rendered: list[str] = []
+    for part in parts:
+        if part in _ROLE_LABELS:
+            rendered.append(_fixed_label(part, _ROLE_LABELS, translate, format_translate))
+        elif part in {"强拍", "弱拍"}:
+            rendered.append(_localized_builtin_text(part, translate, format_translate))
+        elif part.endswith(" 调性"):
+            mode = part.removesuffix(" 调性")
+            rendered.append(_text(
+                "{mode} 调性",
+                {"mode": _fixed_label(mode, _KEY_MODE_LABELS, translate, format_translate)},
+                translate=translate,
+                format_translate=format_translate,
+            ))
+        else:
+            rendered.append(part)
+    return " · ".join(rendered)
 
 
 class OptimizationLevel(StrEnum):
@@ -189,25 +515,59 @@ class OptimizationResult:
             or bool(self.effect_suggestion and self.effect_suggestion.writable and self.effect_suggestion.changed)
         )
 
-    def simple_summary_text(self) -> str:
+    def simple_summary_text(
+        self,
+        translate: Translator | None = None,
+        *,
+        format_translate: FormatTranslator | None = None,
+    ) -> str:
         articulations = sum(report.articulations_added for report in self.reports)
         humanized = sum(report.humanized_notes for report in self.reports)
-        lines = [f"奏法 {articulations} 处 · 轻微自然化 {humanized} 个音符"]
+        lines = [_text(
+            "奏法 {articulations} 处 · 轻微自然化 {humanized} 个音符",
+            {"articulations": articulations, "humanized": humanized},
+            translate=translate,
+            format_translate=format_translate,
+        )]
         if self.effect_suggestion:
             effect = self.effect_suggestion
             chorus_before = effect.current_chorus or (0, 0, 0)
             chorus_after = effect.suggested_chorus or (0, 0, 0)
-            lines.append(
-                f"效果：混响 {effect.current_reverb}→{effect.suggested_reverb} · "
-                f"延迟 {effect.current_delay}→{effect.suggested_delay} · "
-                f"合唱 {chorus_before}→{chorus_after}"
-            )
+            lines.append(_text(
+                "效果：混响 {reverb_before}→{reverb_after} · "
+                "延迟 {delay_before}→{delay_after} · "
+                "合唱 {chorus_before}→{chorus_after}",
+                {
+                    "reverb_before": effect.current_reverb,
+                    "reverb_after": effect.suggested_reverb,
+                    "delay_before": effect.current_delay,
+                    "delay_after": effect.suggested_delay,
+                    "chorus_before": chorus_before,
+                    "chorus_after": chorus_after,
+                },
+                translate=translate,
+                format_translate=format_translate,
+            ))
         for suggestion in self.ensemble_suggestions[:3]:
-            lines.append(f"注意：{suggestion.message}")
+            lines.append(_text(
+                "注意：{message}",
+                {"message": _localized_builtin_text(
+                    suggestion.message, translate, format_translate
+                )},
+                translate=translate,
+                format_translate=format_translate,
+            ))
         return "\n".join(lines)
 
-    def summary_text(self) -> str:
-        lines = ["MIDI 优化报告"]
+    def summary_text(
+        self,
+        translate: Translator | None = None,
+        *,
+        format_translate: FormatTranslator | None = None,
+    ) -> str:
+        lines = [_localized_builtin_text(
+            "MIDI 优化报告", translate, format_translate
+        )]
         total_removed = sum(r.duplicate_notes_removed for r in self.reports)
         total_trimmed = sum(r.overlaps_trimmed for r in self.reports)
         total_quantized = sum(r.notes_quantized for r in self.reports)
@@ -216,69 +576,239 @@ class OptimizationResult:
         total_suggestions = sum(r.suggestions_only for r in self.reports)
         total_added = sum(r.notes_added for r in self.reports)
         total_humanized = sum(r.humanized_notes for r in self.reports)
-        lines.append(
-            f"总计：去重 {total_removed}，修重叠 {total_trimmed}，量化 {total_quantized}，"
-            f"力度润色 {total_velocity}，奏法 {total_art}，新增/拆分音 {total_added}"
-        )
+        lines.append(_text(
+            "总计：去重 {removed}，修重叠 {trimmed}，量化 {quantized}，"
+            "力度润色 {velocity}，奏法 {articulations}，新增/拆分音 {added}",
+            {
+                "removed": total_removed,
+                "trimmed": total_trimmed,
+                "quantized": total_quantized,
+                "velocity": total_velocity,
+                "articulations": total_art,
+                "added": total_added,
+            },
+            translate=translate,
+            format_translate=format_translate,
+        ))
         if self.song_context:
-            styles = "、".join(f"{tag.name} {tag.confidence:.0%}" for tag in self.song_context.styles)
-            tonal = (
-                f"{self.song_context.key_root} {self.song_context.key_mode} {self.song_context.tonal_confidence:.0%}"
-                if self.song_context.tonal else "调性不稳定"
+            styles = ", ".join(
+                f"{tag.name} {tag.confidence:.0%}"
+                for tag in self.song_context.styles
             )
-            lines.append(f"全曲上下文：{tonal} · 风格 {styles or 'neutral'}")
+            if translate is None and format_translate is None:
+                styles = "、".join(
+                    f"{tag.name} {tag.confidence:.0%}"
+                    for tag in self.song_context.styles
+                )
+            if self.song_context.tonal:
+                mode = _fixed_label(
+                    str(self.song_context.key_mode),
+                    _KEY_MODE_LABELS,
+                    translate,
+                    format_translate,
+                )
+                tonal = _text(
+                    "{key_root} {key_mode} {confidence}",
+                    {
+                        "key_root": self.song_context.key_root,
+                        "key_mode": mode,
+                        "confidence": f"{self.song_context.tonal_confidence:.0%}",
+                    },
+                    translate=translate,
+                    format_translate=format_translate,
+                )
+            else:
+                tonal = _localized_builtin_text(
+                    "调性不稳定", translate, format_translate
+                )
+            lines.append(_text(
+                "全曲上下文：{tonal} · 风格 {styles}",
+                {"tonal": tonal, "styles": styles or "neutral"},
+                translate=translate,
+                format_translate=format_translate,
+            ))
         if self.lyric_context:
             lyric = self.lyric_context
-            lines.append(
-                f"歌词：{len(lyric.tokens)} 个音节/文本单元 · {len(lyric.alignments)} 个对齐 · "
-                f"{lyric.mode.value} · 置信度 {lyric.confidence:.0%}"
+            lyric_mode = _fixed_label(
+                str(lyric.mode.value),
+                _LYRIC_MODE_LABELS,
+                translate,
+                format_translate,
             )
-            lines.extend(f"  - {warning}" for warning in lyric.warnings)
-        lines.append(f"游戏安全自然化：{total_humanized} 个音符")
+            lines.append(_text(
+                "歌词：{tokens} 个音节/文本单元 · {alignments} 个对齐 · "
+                "{mode} · 置信度 {confidence}",
+                {
+                    "tokens": len(lyric.tokens),
+                    "alignments": len(lyric.alignments),
+                    "mode": lyric_mode,
+                    "confidence": f"{lyric.confidence:.0%}",
+                },
+                translate=translate,
+                format_translate=format_translate,
+            ))
+            lines.extend(
+                f"  - {_localized_builtin_text(warning, translate, format_translate)}"
+                for warning in lyric.warnings
+            )
+        lines.append(_text(
+            "游戏安全自然化：{count} 个音符",
+            {"count": total_humanized},
+            translate=translate,
+            format_translate=format_translate,
+        ))
         if self.effect_suggestion:
             effect = self.effect_suggestion
-            lines.append(
-                f"游戏效果：Reverb {effect.current_reverb}->{effect.suggested_reverb} · "
-                f"Delay {effect.current_delay}->{effect.suggested_delay} · "
-                f"Chorus {effect.current_chorus or (0, 0, 0)}->{effect.suggested_chorus or (0, 0, 0)} · "
-                f"置信度 {effect.confidence:.0%}"
+            lines.append(_text(
+                "游戏效果：Reverb {reverb_before}->{reverb_after} · "
+                "Delay {delay_before}->{delay_after} · "
+                "Chorus {chorus_before}->{chorus_after} · 置信度 {confidence}",
+                {
+                    "reverb_before": effect.current_reverb,
+                    "reverb_after": effect.suggested_reverb,
+                    "delay_before": effect.current_delay,
+                    "delay_after": effect.suggested_delay,
+                    "chorus_before": effect.current_chorus or (0, 0, 0),
+                    "chorus_after": effect.suggested_chorus or (0, 0, 0),
+                    "confidence": f"{effect.confidence:.0%}",
+                },
+                translate=translate,
+                format_translate=format_translate,
+            ))
+            lines.extend(
+                f"  - {_localized_builtin_text(reason, translate, format_translate)}"
+                for reason in effect.reasons
             )
-            lines.extend(f"  - {reason}" for reason in effect.reasons)
         for suggestion in self.ensemble_suggestions:
-            lines.append(f"  - 配器建议：{suggestion.message}")
+            lines.append(_text(
+                "  - 配器建议：{message}",
+                {"message": _localized_builtin_text(
+                    suggestion.message, translate, format_translate
+                )},
+                translate=translate,
+                format_translate=format_translate,
+            ))
         if total_suggestions:
-            lines.append(f"仅建议奏法 {total_suggestions}（未写入工程）")
+            lines.append(_text(
+                "仅建议奏法 {count}（未写入工程）",
+                {"count": total_suggestions},
+                translate=translate,
+                format_translate=format_translate,
+            ))
         lines.append("")
         for report in self.reports:
             status = "已优化" if report.changed else "无变化"
-            lines.append(
-                f"[{status}/{report.scope}] Track {report.track_id}: {report.display_name} · "
-                f"{report.before_notes}->{report.after_notes} notes"
-            )
+            status = _localized_builtin_text(status, translate, format_translate)
+            scope = _localized_builtin_text(report.scope, translate, format_translate)
+            track_name = report.display_name
+            generated_suffix = " · 自动八度加倍"
+            if (
+                (translate is not None or format_translate is not None)
+                and report.scope == "自动编曲新增"
+                and track_name.endswith(generated_suffix)
+            ):
+                track_name = _text(
+                    "{track_name} · 自动八度加倍",
+                    {"track_name": track_name.removesuffix(generated_suffix)},
+                    translate=translate,
+                    format_translate=format_translate,
+                )
+            lines.append(_text(
+                "[{status}/{scope}] Track {track_id}: {track_name} · "
+                "{before_notes}->{after_notes} notes",
+                {
+                    "status": status,
+                    "scope": scope,
+                    "track_id": report.track_id,
+                    "track_name": track_name,
+                    "before_notes": report.before_notes,
+                    "after_notes": report.after_notes,
+                },
+                translate=translate,
+                format_translate=format_translate,
+            ))
             if report.role:
-                lines.append(f"  角色：{report.role}")
-            detail = (
-                f"  去重 {report.duplicate_notes_removed} · 重叠 {report.overlaps_trimmed} · "
-                f"短音 {report.short_notes_extended} · 量化 {report.notes_quantized} · "
-                f"力度 {report.velocities_changed} · 奏法 {report.articulations_added}"
-            )
-            lines.append(detail)
+                role = _fixed_label(
+                    report.role, _ROLE_LABELS, translate, format_translate
+                )
+                lines.append(_text(
+                    "  角色：{role}",
+                    {"role": role},
+                    translate=translate,
+                    format_translate=format_translate,
+                ))
+            lines.append(_text(
+                "  去重 {duplicates} · 重叠 {overlaps} · 短音 {short_notes} · "
+                "量化 {quantized} · 力度 {velocities} · 奏法 {articulations}",
+                {
+                    "duplicates": report.duplicate_notes_removed,
+                    "overlaps": report.overlaps_trimmed,
+                    "short_notes": report.short_notes_extended,
+                    "quantized": report.notes_quantized,
+                    "velocities": report.velocities_changed,
+                    "articulations": report.articulations_added,
+                },
+                translate=translate,
+                format_translate=format_translate,
+            ))
             if report.articulation_counts:
                 counts = ", ".join(f"type {ntype}: {count}" for ntype, count in sorted(report.articulation_counts.items()))
-                lines.append(f"  奏法分布：{counts}")
+                lines.append(_text(
+                    "  奏法分布：{counts}",
+                    {"counts": counts},
+                    translate=translate,
+                    format_translate=format_translate,
+                ))
             if report.suggestions_only:
-                lines.append(f"  仅建议 {report.suggestions_only} · 跳过候选 {report.articulation_candidates_skipped}")
+                lines.append(_text(
+                    "  仅建议 {suggestions} · 跳过候选 {skipped}",
+                    {
+                        "suggestions": report.suggestions_only,
+                        "skipped": report.articulation_candidates_skipped,
+                    },
+                    translate=translate,
+                    format_translate=format_translate,
+                ))
             for suggestion in report.suggestions:
                 state = "已加入预览" if suggestion.applied else "仅建议"
-                theory = f" · {suggestion.theory_context}" if suggestion.theory_context else ""
-                lines.append(
-                    f"  - [{state}] {suggestion.technique} · {suggestion.confidence:.0%} · "
-                    f"{suggestion.evidence} · {suggestion.reason}{theory}"
+                state = _localized_builtin_text(state, translate, format_translate)
+                technique = _localized_builtin_text(
+                    suggestion.technique, translate, format_translate
                 )
+                evidence = _localized_builtin_text(
+                    suggestion.evidence, translate, format_translate
+                )
+                reason = _localized_builtin_text(
+                    suggestion.reason, translate, format_translate
+                )
+                theory = _localized_theory_context(
+                    suggestion.theory_context, translate, format_translate
+                )
+                lines.append(_text(
+                    "  - [{state}] {technique} · {confidence} · "
+                    "{evidence} · {reason}{theory}",
+                    {
+                        "state": state,
+                        "technique": technique,
+                        "confidence": f"{suggestion.confidence:.0%}",
+                        "evidence": evidence,
+                        "reason": reason,
+                        "theory": f" · {theory}" if theory else "",
+                    },
+                    translate=translate,
+                    format_translate=format_translate,
+                ))
             for warning in report.warnings:
-                lines.append(f"  - {warning}")
+                lines.append(f"  - {_localized_builtin_text(warning, translate, format_translate)}")
             for issue in report.ensemble_issues:
-                lines.append(f"  - 配器：{issue}")
+                lines.append(_text(
+                    "  - 配器：{issue}",
+                    {"issue": _localized_builtin_text(
+                        issue, translate, format_translate
+                    )},
+                    translate=translate,
+                    format_translate=format_translate,
+                ))
             for candidate in report.technique_candidates:
                 state = {
                     RealizationKind.NATIVE_BDO: "BDO 原生",
@@ -286,11 +816,32 @@ class OptimizationResult:
                     RealizationKind.SUGGESTION_ONLY: "仅建议",
                 }[candidate.realization]
                 profile = TECHNIQUE_PROFILES[candidate.technique_id]
-                lines.append(
-                    f"  - 技法 {profile.name} · {candidate.confidence:.0%} · {state} · {candidate.reason}"
-                )
+                lines.append(_text(
+                    "  - 技法 {technique} · {confidence} · {state} · {reason}",
+                    {
+                        "technique": _localized_builtin_text(
+                            profile.name, translate, format_translate
+                        ),
+                        "confidence": f"{candidate.confidence:.0%}",
+                        "state": _localized_builtin_text(
+                            state, translate, format_translate
+                        ),
+                        "reason": _localized_builtin_text(
+                            candidate.reason, translate, format_translate
+                        ),
+                    },
+                    translate=translate,
+                    format_translate=format_translate,
+                ))
         for change in self.arrangement_changes:
-            lines.append(f"[编配] {change}")
+            lines.append(_text(
+                "[编配] {change}",
+                {"change": _localized_builtin_text(
+                    change, translate, format_translate
+                )},
+                translate=translate,
+                format_translate=format_translate,
+            ))
         return "\n".join(lines)
 
 

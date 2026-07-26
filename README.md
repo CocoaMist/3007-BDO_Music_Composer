@@ -100,7 +100,9 @@ MIDI/BDO/空白工程 → 编排 ↔ 音频辅助扒谱 → 游戏音色对照 �
 ### 界面与发布
 
 - 界面支持简体中文、英语、日语和韩语。
-- 可选择根据系统时区自动切换语言，也可以手动固定语言。
+- 可跟随系统界面语言自动选择；未支持的系统语言回退英语，也可以手动固定语言。
+- 世界服术语、动态数据不翻译边界和发布检查见
+  [本地化与地区术语](docs/LOCALIZATION.md)。
 - 支持使用 PyInstaller 构建便携式 Windows 单文件程序。
 - 软件不包含联网、遥测、账号登录或文件上传功能；MIDI、Owner ID、音源和导出文件均在本地处理。
 
@@ -293,7 +295,9 @@ Primary entry points:
 - `bdo_codec/` — independent BDO v9 lossless codec, validation, and CLI.
 - `i18n.py` — runtime localization catalogs.
 
-See [Architecture](docs/ARCHITECTURE.md), [AI Context](docs/AI_CONTEXT.md), and [Project Structure](docs/PROJECT_STRUCTURE.md) for deeper documentation.
+See [Architecture](docs/ARCHITECTURE.md), [AI Context](docs/AI_CONTEXT.md),
+[Localization](docs/LOCALIZATION.md), and [Project Structure](docs/PROJECT_STRUCTURE.md)
+for deeper documentation.
 The optional, review-only DeepSeek direction and its privacy boundary are
 documented in [DeepSeek integration direction](docs/DEEPSEEK_INTEGRATION.md);
 no cloud or local LLM runtime is currently built into the application.

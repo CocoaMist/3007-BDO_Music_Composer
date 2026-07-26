@@ -16,8 +16,14 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
         script = textwrap.dedent(
             """
             from PySide6.QtWidgets import QApplication, QWidget
-            from i18n import install_localizer
-            from pyside_bdo_gui import MidiOptimizeDialog, Note, TrackState
+            from i18n import install_localizer, trf
+            from pyside_bdo_gui import (
+                MidiOptimizeDialog,
+                Note,
+                TrackState,
+                _optimizer_diagnostic_value,
+                _optimizer_host_message_value,
+            )
 
             app = QApplication([])
             translations = install_localizer(app, "zh_CN")
@@ -42,15 +48,81 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
             assert not hasattr(dialog, "style_combo")
             assert not hasattr(dialog, "lyric_combo")
             assert not hasattr(dialog, "marnian_check")
+            dialog._analysis_error = (
+                "song exceeds the optimizer note limit",
+                True,
+                True,
+            )
+            dialog._render_analysis_failure()
+            assert "曲目超过优化器音符上限" in dialog.summary_label.text()
             dialog.show()
             app.processEvents()
             translations.set_language("en_US")
             assert dialog.analyse_button.text() == "Analyze Optimization"
+            assert "exceeds the optimizer note limit" in dialog.summary_label.text()
+            diagnostic = trf(
+                "算法包：{item}",
+                item=_optimizer_diagnostic_value(
+                    "bad.bdoopt: unsafe bundle path: ../payload.py"
+                ),
+            )
+            assert "unsafe path" in diagnostic
+            assert "../payload.py" in diagnostic
             translations.set_language("ja_JP")
             assert dialog.analyse_button.text() == "最適化を解析"
+            assert "ノート数上限" in dialog.summary_label.text()
+            diagnostic = trf(
+                "算法包：{item}",
+                item=_optimizer_diagnostic_value(
+                    "bad.bdoopt: unsafe bundle path: ../payload.py"
+                ),
+            )
+            assert "安全でないパス" in diagnostic
             translations.set_language("ko_KR")
             assert dialog.analyse_button.text() == "최적화 분석"
+            assert "음표 수 제한" in dialog.summary_label.text()
+            diagnostic = trf(
+                "算法包：{item}",
+                item=_optimizer_diagnostic_value(
+                    "bad.bdoopt: unsafe bundle path: ../payload.py"
+                ),
+            )
+            assert "안전하지 않은 경로" in diagnostic
+            # Third-party exception text is opaque even when it happens to
+            # equal a recognized host validation message.
+            dialog._analysis_error = (
+                "song exceeds the optimizer note limit",
+                False,
+                False,
+            )
+            dialog._render_analysis_failure()
+            translations.set_language("ja_JP")
+            assert "song exceeds the optimizer note limit" in dialog.summary_label.text()
+            assert "song exceeds the optimizer note limit" in dialog.report_text.toPlainText()
+            # Host preview validation remains structured, including dynamic
+            # track/instrument values; only actual plugin exceptions stay raw.
+            dialog._analysis_error = (
+                "operation writes outside target scope: 9",
+                False,
+                True,
+            )
+            dialog._render_analysis_failure()
+            assert "対象範囲外のトラック9" in dialog.summary_label.text()
+            pitch_error = str(_optimizer_host_message_value(
+                "pitch 100 is unsupported for BDO instrument 11"
+            ))
+            assert "音高100" in pitch_error
+            assert "BDO楽器11" in pitch_error
+            translations.set_language("ko_KR")
+            assert "대상 범위 밖의 트랙 9" in dialog.summary_label.text()
+            pitch_error = str(_optimizer_host_message_value(
+                "pitch 100 is unsupported for BDO instrument 11"
+            ))
+            assert "음높이 100" in pitch_error
+            assert "BDO 악기 11" in pitch_error
             translations.set_language("zh_CN")
+            assert "目标范围外的轨道：9" in dialog.summary_label.text()
+            dialog._invalidate_preview()
             dialog._analyse()
             worker = dialog.analysis_worker
             assert worker is not None
@@ -60,6 +132,14 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
             assert dialog.session is not None
             assert dialog.analysis_worker is None
             assert dialog.apply_button.isEnabled()
+            translations.set_language("en_US")
+            assert "edit operations" in dialog.summary_label.text()
+            assert "Totals:" in dialog.report_text.toPlainText()
+            translations.set_language("ja_JP")
+            assert "変更操作" in dialog.summary_label.text()
+            translations.set_language("ko_KR")
+            assert "수정 작업" in dialog.summary_label.text()
+            translations.set_language("zh_CN")
             result = dialog.optimized_tracks()
             assert len(result) == 1
             dialog.intensity_combo.setCurrentIndex(0)

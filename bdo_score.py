@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -66,6 +67,26 @@ class ScoreDiffEntry:
     expected: object
     actual: object
     message: str
+    message_template: str = ""
+    message_values: tuple[tuple[str, object], ...] = ()
+
+    def localized_message(
+        self,
+        translate: Callable[[str], str] | None = None,
+        format_translate: Callable[..., str] | None = None,
+    ) -> str:
+        """Render fixed report copy without translating score-owned values."""
+
+        translator = translate or (lambda source: source)
+        if not self.message_template:
+            return translator(self.message)
+        values = dict(self.message_values)
+        try:
+            if format_translate is not None:
+                return str(format_translate(self.message_template, **values))
+            return translator(self.message_template).format(**values)
+        except (IndexError, KeyError, TypeError, ValueError):
+            return self.message
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,12 +98,32 @@ class ScoreDiff:
     def identical(self) -> bool:
         return not self.differences
 
-    def summary(self) -> str:
+    def summary(
+        self,
+        translate: Callable[[str], str] | None = None,
+        format_translate: Callable[..., str] | None = None,
+    ) -> str:
+        translator = translate or (lambda source: source)
+
+        def formatted(source: str, **values: object) -> str:
+            if format_translate is not None:
+                return format_translate(source, **values)
+            return translator(source).format(**values)
+
         if self.identical:
-            return f"谱面结构与音符一致（时间容差 {self.time_tolerance_ms:g} ms）。"
-        lines = [f"发现 {len(self.differences)} 项差异："]
+            return formatted(
+                "谱面结构与音符一致（时间容差 {tolerance:g} ms）。",
+                tolerance=self.time_tolerance_ms,
+            )
+        lines = [formatted("发现 {count} 项差异：", count=len(self.differences))]
         lines.extend(
-            f"- {item.path}: {item.message} ({item.expected!r} -> {item.actual!r})"
+            formatted(
+                "- {path}: {message} ({expected!r} -> {actual!r})",
+                path=item.path,
+                message=item.localized_message(translate, format_translate),
+                expected=item.expected,
+                actual=item.actual,
+            )
             for item in self.differences
         )
         return "\n".join(lines)
@@ -186,6 +227,8 @@ def compare_scores(
                     differences.append(ScoreDiffEntry(
                         f"{note_prefix}.{field_name}", left_value, right_value,
                         f"时间差超过 {time_tolerance_ms:g} ms",
+                        "时间差超过 {tolerance:g} ms",
+                        (("tolerance", time_tolerance_ms),),
                     ))
     return ScoreDiff(tuple(differences), time_tolerance_ms)
 

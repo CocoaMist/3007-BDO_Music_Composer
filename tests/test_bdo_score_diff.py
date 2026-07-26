@@ -73,6 +73,34 @@ class BdoScoreDiffTests(unittest.TestCase):
         self.assertTrue(any(item.path == "tracks.instrument_order" for item in result.differences))
         self.assertFalse(any(item.path.endswith(".pitch") for item in result.differences))
 
+    def test_diff_summary_localizes_templates_but_not_score_values(self) -> None:
+        baseline = snapshot_from_bytes(score(60, 0.0))
+        changed = snapshot_from_bytes(score(60, 2.0))
+        result = compare_scores(baseline, changed)
+        translations = {
+            "发现 {count} 项差异：": "Found {count} differences:",
+            "- {path}: {message} ({expected!r} -> {actual!r})": (
+                "- {path}: {message} ({expected!r} -> {actual!r})"
+            ),
+            "时间差超过 {tolerance:g} ms": (
+                "Time difference exceeds {tolerance:g} ms"
+            ),
+        }
+
+        def translate(source: str) -> str:
+            return translations.get(source, source)
+
+        localized = result.summary(
+            translate,
+            lambda source, **values: translate(source).format(**values),
+        )
+
+        self.assertIn("Found 1 differences:", localized)
+        self.assertIn("Time difference exceeds 0.001 ms", localized)
+        self.assertIn("tracks[0x0B#1].notes[0].start_ms", localized)
+        self.assertNotIn("差异", localized)
+        self.assertIn("发现 1 项差异", result.summary())
+
 
 if __name__ == "__main__":
     unittest.main()

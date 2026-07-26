@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 
 BDO_INSTRUMENTS = {
     "beginner_guitar": 0x00,
@@ -41,31 +43,66 @@ BDO_INSTRUMENT_NAMES = {
     0x06: "新手专用：竖琴",
     0x07: "新手专用：钢琴",
     0x08: "新手专用：小提琴",
-    0x0A: "弗罗凯特拉：原声吉他",
-    0x0B: "弗罗凯特拉：长笛",
-    0x0D: "弗罗凯特拉：架子鼓套装",
-    0x0E: "玛勒尼斯：贝斯",
-    0x0F: "弗罗凯特拉：肯特拉贝斯",
-    0x10: "弗罗凯特拉：竖琴",
-    0x11: "弗罗凯特拉：钢琴",
-    0x12: "弗罗凯特拉：小提琴",
-    0x13: "弗罗凯特拉：手碟",
+    0x0A: "弗洛凯斯特拉：原声吉他",
+    0x0B: "弗洛凯斯特拉：长笛",
+    0x0D: "弗洛凯斯特拉：架子鼓套装",
+    0x0E: "玛尔尼贝斯",
+    0x0F: "弗洛凯斯特拉：低音提琴",
+    0x10: "弗洛凯斯特拉：竖琴",
+    0x11: "弗洛凯斯特拉：钢琴",
+    0x12: "弗洛凯斯特拉：小提琴",
+    0x13: "弗洛凯斯特拉：手碟",
     0x14: "玛勒尼斯：玛勒尼恩 - 波纹行星",
     0x18: "玛勒尼斯：玛勒尼恩 - 幻象树",
     0x1C: "玛勒尼斯：玛勒尼恩 - 秘密笔记",
     0x20: "玛勒尼斯：玛勒尼恩 - 三明治",
     0x24: "玛勒尼斯：电吉他 - 银色水波",
     0x25: "玛勒尼斯：电吉他 - 高速路",
-    0x26: "玛勒尼斯：电吉他 - 赫赛德兰",
-    0x27: "弗罗凯特拉：单簧管",
-    0x28: "弗罗凯特拉：圆号",
+    0x26: "玛勒尼斯：电吉他 - 赫克赛格莱姆",
+    0x27: "弗洛凯斯特拉：单簧管",
+    0x28: "弗洛凯斯特拉：圆号",
 }
+
+
+InstrumentNameTranslator = Callable[[str], str]
+
+
+def localized_bdo_instrument_name(
+    instrument_id: int,
+    translate: InstrumentNameTranslator,
+) -> str:
+    """Translate one fixed BDO catalog name without touching user music data.
+
+    The canonical Chinese label is the exact-source localization key. Unknown
+    IDs use a language-neutral fallback and are not passed to ``translate``.
+    Callers remain responsible for leaving imported track names unchanged.
+    """
+
+    numeric_id = int(instrument_id)
+    source_name = BDO_INSTRUMENT_NAMES.get(numeric_id)
+    if source_name is None:
+        if 0 <= numeric_id <= 0xFF:
+            return f"BDO 0x{numeric_id:02X}"
+        return f"BDO {numeric_id}"
+    return translate(source_name)
+
+
+def localized_bdo_instrument_names(
+    translate: InstrumentNameTranslator,
+) -> dict[int, str]:
+    """Return a deterministic localized copy of the fixed instrument map."""
+
+    return {
+        instrument_id: localized_bdo_instrument_name(instrument_id, translate)
+        for instrument_id in BDO_INSTRUMENT_NAMES
+    }
+
 
 DEFAULT_INSTRUMENT = BDO_INSTRUMENTS["piano"]
 BDO_NOTE_MIN = 12
 BDO_NOTE_MAX = 119
 
-_GM_PROGRAM_NAMES = (
+GM_PROGRAM_NAMES = (
     "原声大钢琴", "明亮原声钢琴", "电钢琴", "酒吧钢琴", "电钢琴 1", "电钢琴 2", "羽管键琴", "击弦古钢琴",
     "钢片琴", "钟琴", "音乐盒", "颤音琴", "马林巴", "木琴", "管钟", "扬琴",
     "拉杆风琴", "打击风琴", "摇滚风琴", "教堂风琴", "簧风琴", "手风琴", "口琴", "探戈手风琴",
@@ -117,7 +154,19 @@ _GM_TO_BDO_DRUM = {
 
 
 def gm_program_name(program: int) -> str:
-    return _GM_PROGRAM_NAMES[program] if 0 <= program < 128 else f"Program {program}"
+    return GM_PROGRAM_NAMES[program] if 0 <= program < 128 else f"Program {program}"
+
+
+def localized_gm_program_name(
+    program: int,
+    translate: InstrumentNameTranslator,
+) -> str:
+    """Localize a generated GM fallback once, before it becomes project data."""
+
+    numeric_program = int(program)
+    if 0 <= numeric_program < len(GM_PROGRAM_NAMES):
+        return translate(GM_PROGRAM_NAMES[numeric_program])
+    return f"GM Program {numeric_program}"
 
 
 def gm_to_bdo_instrument(program: int, is_percussion: bool = False) -> int:
@@ -141,6 +190,9 @@ def gm_to_bdo_instrument(program: int, is_percussion: bool = False) -> int:
 
 __all__ = [
     "BDO_INSTRUMENTS", "BDO_INSTRUMENT_NAMES", "BDO_NOTE_MIN", "BDO_NOTE_MAX",
+    "GM_PROGRAM_NAMES",
+    "InstrumentNameTranslator", "localized_bdo_instrument_name",
+    "localized_bdo_instrument_names", "localized_gm_program_name",
     "DEFAULT_INSTRUMENT", "_GM_TO_BDO_DRUM", "gm_program_name",
     "gm_to_bdo_instrument",
 ]

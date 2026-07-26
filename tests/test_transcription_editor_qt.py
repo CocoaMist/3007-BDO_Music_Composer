@@ -381,6 +381,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
                 staging_count=3,
             )
             assert len(panel.copy_to_track_menu.actions()) == 1
+            assert panel.copy_to_track_menu.actions()[0].property("i18nSkipText")
             assert panel.copy_to_track_button.isEnabled()
             assert panel.clear_staging_button.isEnabled()
             assert panel.staging_label.text() == "暂存 3"
@@ -422,6 +423,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             """
             from types import SimpleNamespace
 
+            from PySide6.QtCore import Qt
             from PySide6.QtWidgets import QApplication
 
             from transcription_editor_qt import TranscriptionEditorPanel
@@ -643,9 +645,12 @@ class TranscriptionEditorQtTests(unittest.TestCase):
     def test_compact_command_strip_fits_all_supported_locales(self) -> None:
         completed = _run_offscreen(
             """
+            from types import SimpleNamespace
+
+            from PySide6.QtCore import Qt
             from PySide6.QtWidgets import QApplication
 
-            from i18n import install_localizer
+            from i18n import install_localizer, tr
             from transcription_editor_qt import TranscriptionEditorPanel
 
             app = QApplication([])
@@ -655,16 +660,54 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             panel.show()
             app.processEvents()
 
+            panel.set_audio_loaded(True, display_name="Play")
+            panel.set_harmony_analysis(SimpleNamespace(
+                global_key=SimpleNamespace(
+                    root_pc=0,
+                    mode="major",
+                    confidence=0.84,
+                    alternatives=(SimpleNamespace(
+                        root_pc=9,
+                        mode="minor",
+                        confidence=0.61,
+                    ),),
+                ),
+                chord_segments=(),
+                conflicts=(),
+                key_locked=False,
+            ))
+
             melody_labels = {
                 "zh_CN": "旋律线",
                 "en_US": "Melody lines",
                 "ja_JP": "メロディライン",
                 "ko_KR": "멜로디 라인",
             }
+            alternative_prefixes = {
+                "zh_CN": "备选：",
+                "en_US": "Alternatives:",
+                "ja_JP": "候補：",
+                "ko_KR": "대안:",
+            }
             for language in ("zh_CN", "en_US", "ja_JP", "ko_KR"):
                 localizer.set_language(language)
                 app.processEvents()
+                for index in range(panel.cleanup_profile_combo.count()):
+                    profile = panel.cleanup_profile_combo.itemData(index)
+                    assert (
+                        panel.cleanup_profile_combo.itemData(
+                            index,
+                            Qt.ItemDataRole.ToolTipRole,
+                        )
+                        == localizer.translate(
+                            panel.CLEANUP_PROFILE_TOOLTIPS[profile]
+                        )
+                    )
                 assert panel.melody_lines_button.text() == melody_labels[language]
+                assert panel.audio_button.toolTip() == "Play"
+                assert panel.assist_panel.harmony_summary.key_label.toolTip().startswith(
+                    alternative_prefixes[language]
+                )
                 assert panel.minimumSizeHint().width() <= 920, (
                     language,
                     panel.minimumSizeHint().width(),
@@ -685,12 +728,34 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             assert panel.cleanup_profile_caption.text() == "Fragments"
             assert panel.cleanup_profile_combo.itemText(0) == "Keep"
             assert panel.melody_lines_button.text() == "Melody lines"
-            assert panel.spectrogram_checkbox.text() == "Spectrum"
+            assert panel.spectrogram_checkbox.text() == "Spectrogram"
             assert (
                 localizer.translate("原始声谱图")
                 == "Raw spectrogram"
             )
             assert panel.analyze_button.toolTip() == "Load an MP3/WAV reference first"
+
+            # Cached idle/backend messages must not write an old locale back
+            # after a later control-state refresh.
+            panel.set_status(tr("尚未分析"))
+            localizer.set_language("ja_JP")
+            panel.set_analysis_busy(False)
+            assert panel.status_label.text() == "未解析"
+            panel.set_analysis_available(
+                False,
+                tr("请先载入 MP3/WAV 参考音频"),
+            )
+            localizer.set_language("ko_KR")
+            panel.set_analysis_busy(False)
+            assert panel.status_label.text() == "먼저 MP3/WAV 참조 오디오를 불러오세요"
+            assert panel.analyze_button.toolTip() == panel.status_label.text()
+            panel.set_cleanup_profile("balanced")
+            assert (
+                panel.cleanup_profile_mark.toolTip()
+                == localizer.translate(
+                    panel.CLEANUP_PROFILE_TOOLTIPS["balanced"]
+                )
+            )
 
             panel.close()
             app.processEvents()
