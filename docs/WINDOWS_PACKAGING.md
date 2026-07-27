@@ -63,9 +63,8 @@ native library in the complete executable.
 
 ## Public-release gate
 
-Public distribution is currently blocked by the remaining exact-artifact
-review. Passing `-PublicRelease` to the same
-`build.ps1` makes it require all of the following:
+The v0.3.0 exact-artifact review is recorded in the checked-in policy. Passing
+`-PublicRelease` to the same `build.ps1` requires all of the following:
 
 - `public_release_cleared` is explicitly true in
   `packaging/transcription_release_policy.json`;
@@ -75,9 +74,10 @@ review. Passing `-PublicRelease` to the same
 - reviewer identity and UTC review time are recorded.
 
 The policy must only be changed after reviewing the actual model, Python wheels,
-native libraries, and all required notice texts. A successful build without
-`-PublicRelease` is local evaluation only and is not evidence that
-redistribution is cleared.
+native libraries, and all required notice texts. Any dependency change produces
+a different digest and blocks a public build until it is reviewed again. A
+successful build without `-PublicRelease` is local evaluation only and is not
+evidence that redistribution is cleared.
 
 After clearance, a public candidate still requires the normal clean-build,
 artifact inspection, full test suite, and playback smoke test; the build itself

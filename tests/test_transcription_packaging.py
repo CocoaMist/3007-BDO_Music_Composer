@@ -116,7 +116,7 @@ class TranscriptionPackagingTests(unittest.TestCase):
             ).exists()
         )
 
-    def test_checked_in_policy_blocks_public_release(self) -> None:
+    def test_checked_in_policy_approves_only_the_reviewed_inventory(self) -> None:
         policy = json.loads(
             (
                 PROJECT_ROOT
@@ -127,13 +127,24 @@ class TranscriptionPackagingTests(unittest.TestCase):
         self.assertEqual(policy["product"], "BDO Music Composer")
         self.assertEqual(policy["artifact"], "BDO-Music-Composer.exe")
         self.assertNotIn("edition", policy)
+        self.assertTrue(policy["public_release_cleared"])
+        self.assertRegex(
+            policy["approved_inventory_sha256"],
+            r"^[0-9a-f]{64}$",
+        )
         inventory = {
-            "inventory_sha256": "test-digest",
+            "inventory_sha256": policy["approved_inventory_sha256"],
             "unresolved_packages": [],
         }
-        blockers = release_blockers(policy, inventory)
-        self.assertIn("public_release_cleared is not true", blockers)
-        self.assertIn("approved_inventory_sha256 is empty", blockers)
+        self.assertEqual((), release_blockers(policy, inventory))
+        mismatched = {
+            "inventory_sha256": "0" * 64,
+            "unresolved_packages": [],
+        }
+        self.assertIn(
+            "installed dependency inventory is not the approved digest",
+            release_blockers(policy, mismatched),
+        )
 
     def test_missing_distribution_remains_visible_and_unresolved(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -159,6 +170,27 @@ class TranscriptionPackagingTests(unittest.TestCase):
                 output_dir / "transcription-dependency-inventory.json"
             ).read_text(encoding="utf-8")
             self.assertNotIn(str(output_dir.resolve()), inventory_text)
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("onnxruntime") is not None,
+        "ONNX Runtime is not installed",
+    )
+    def test_onnxruntime_third_party_notices_are_bundled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            inventory = build_inventory(
+                Path(directory),
+                roots=("onnxruntime",),
+            )
+            package = next(
+                item
+                for item in inventory["packages"]
+                if item.get("normalized_name") == "onnxruntime"
+            )
+            notice_names = {
+                Path(item["path"]).name
+                for item in package["license_files"]
+            }
+            self.assertIn("ThirdPartyNotices.txt", notice_names)
 
     def test_self_test_argument_is_dispatched_before_conversion_cli(self) -> None:
         with (

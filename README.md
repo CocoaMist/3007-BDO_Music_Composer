@@ -238,12 +238,10 @@ alternate models remain excluded. Every build generates an exact
 dependency/license inventory from the active environment and embeds it with
 the notices.
 
-The Basic Pitch model evidence is documented, but the sole executable is
-**not yet cleared for public distribution** because the remaining native and
-transitive notice set has not been approved.
-`build.ps1 -PublicRelease` is fail-closed against
-`packaging/transcription_release_policy.json` until a reviewer approves the
-exact inventory digest and all required notices. See
+The Basic Pitch model evidence and the exact native/transitive notice review
+for v0.3.0 are recorded in `packaging/transcription_release_policy.json`.
+`build.ps1 -PublicRelease` remains fail-closed to that approved inventory
+digest, so any dependency or artifact change requires a new review. See
 [Windows packaging](docs/WINDOWS_PACKAGING.md).
 
 The executable never embeds extracted game audio, personal settings, Owner IDs,
