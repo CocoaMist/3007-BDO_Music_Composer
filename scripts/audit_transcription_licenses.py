@@ -58,7 +58,10 @@ NON_ONNX_BACKEND_DISTRIBUTIONS = frozenset(
 )
 
 _LICENSE_NAME = re.compile(
-    r"^(?:licen[cs]e|copying|notice|copyright|authors?)(?:[._-].*)?$",
+    (
+        r"^(?:licen[cs]e|copying|notices?|copyright|authors?|"
+        r"third[._ -]*party[._ -]*notices?)(?:[._-].*)?$"
+    ),
     re.IGNORECASE,
 )
 

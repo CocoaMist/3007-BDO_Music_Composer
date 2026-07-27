@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Clear the v0.3.0 public build for its exact reviewed dependency inventory,
+  include ONNX Runtime's complete `ThirdPartyNotices.txt`, and keep future
+  dependency changes fail-closed behind a new digest review.
+
 - 重做程序内致谢与引用：按自动扒谱/科学计算、应用运行/打包、格式研究/协作
   分类列出直接及发行关键依赖，每项显示许可证或使用边界并提供可点击 GitHub
   链接；补充 Basic Pitch ICASSP 2022 论文引用。核对 Basic Pitch 0.4.0 官方

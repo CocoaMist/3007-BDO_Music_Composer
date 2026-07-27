@@ -40,10 +40,11 @@ exact build environment it:
    the exact inventory digest.
 
 Basic Pitch model evidence is therefore available and consistent with
-Apache-2.0 redistribution. This finding does **not** by itself clear the whole
-Windows executable: ONNX Runtime, Qt/PySide6, libsndfile, libsoxr, LLVM-derived
-components, and other native/transitive artifacts still require their own
-complete notice review under `packaging/transcription_release_policy.json`.
+Apache-2.0 redistribution. This finding did **not** by itself clear the whole
+Windows executable. The separate v0.3.0 review of ONNX Runtime, Qt/PySide6,
+libsndfile, libsoxr, LLVM-derived components, and other native/transitive
+artifacts is recorded in `packaging/transcription_release_policy.json`; any
+changed inventory requires a new review.
 
 ## Academic citation
 
