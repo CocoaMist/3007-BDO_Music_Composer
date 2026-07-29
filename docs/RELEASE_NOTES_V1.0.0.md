@@ -1,46 +1,76 @@
 # BDO Music Composer v1.0.0
 
-这是首个稳定主版本。它把当前编辑模型、BDO v9 导出、工程持久化、近似试听、
-音频辅助扒谱、多语言界面和公开发行安全门收拢为一套完整的 Windows 工作流。
+This is the first stable major release of BDO Music Composer. It brings the
+live editor model, BDO v9 export, project persistence, approximate audio
+preview, audio-assisted transcription, multilingual UI, and public-release
+safety gates together in one complete Windows workflow.
 
-## 主要更新
+> [!NOTE]
+> v1.0.0 is the first public major release. Core workflows have passed the
+> automated and frozen-application checks listed below, but minor bugs or
+> environment-specific compatibility issues may still appear. They are being
+> actively investigated and fixed. Please report reproducible problems through
+> [GitHub Issues](https://github.com/CocoaMist/3007-BDO_Music_Composer/issues).
 
-- 重新设计主页与共享工具栏，加入紧凑的本地角色身份入口、项目/曲谱乐器摘要、
-  原创主页场景，并修复页面切换缝隙与多语言布局截断。
-- 多轨时间轴把阻断导出的错误精确标到对应轨道；重复乐器以非阻断注意色提示，
-  仅在状态变化时显示全局信息框，不再常驻额外错误横幅。
-- 修复钢琴卷帘框选遮盖画布的问题，并补充自定义绘制状态隔离回归测试。
-- 未配置本地游戏样本时提供有界的内置通用 MIDI 近似音色，可在自动、本地 BDO
-  和内置音源间切换；不会把后备音色冒充游戏原声。
-- 统一实时/离线试听的音量、奏法、样本路由、Seek、暂停和有界声部生命周期，
-  优化高负载插值与 Reverb/Delay/Chorus 热路径。
-- 导出与自动保存改用不可变快照、单写入者共并和同目录原子替换，主页发现只读
-  有界安全索引，避免后台工作与编辑态竞态或破坏用户目标文件。
-- 关闭程序时显式停止参考音频解码、清空媒体源并断开平台音频输出，保证无声卡
-  或音频设备不可用的 Windows 环境也能完整退出；开始试听前也会检测输出设备，
-  无设备时立即给出提示，不再进入可能阻塞的平台音频后端。
-- 完善简体中文、繁体中文、英语、日语和韩语界面，并新增密集时间轴、钢琴卷帘、
-  10 万音符查询和音频效果的可复现性能/回归基线。
-- 固定 Windows/Python 3.12.10 完整依赖闭包；公开构建使用确定性的 schema-2
-  许可证库存并在依赖、模型或原生库摘要变化时自动阻止发行。
+## Highlights
 
-## 验证
+- Redesigned the home page and shared toolbar with a compact local character
+  identity entry, project/score instrument summaries, and original home-page
+  artwork. Page-transition seams and multilingual layout clipping were also
+  fixed.
+- Export-blocking problems are now marked directly on the affected instrument
+  tracks. Duplicate instruments use a non-blocking attention color, while the
+  global information panel appears only when status changes instead of leaving
+  a permanent error banner above the timeline.
+- Fixed the piano-roll marquee selection overlay obscuring the canvas and added
+  a regression test for custom painter-state isolation.
+- Added bounded, built-in generic MIDI approximation sounds for systems without
+  local game samples. Users can switch between automatic selection, local BDO
+  samples, and the built-in source; fallback sounds are never presented as
+  authentic in-game audio.
+- Unified volume, articulation, sample routing, seeking, pause behavior, and
+  bounded voice lifecycles across real-time and offline preview. High-load
+  interpolation and Reverb/Delay/Chorus hot paths were optimized.
+- Export and autosave now use immutable snapshots, single-writer coalescing,
+  and same-directory atomic replacement. Home-page discovery reads only a
+  bounded, privacy-safe index, preventing background work from racing the live
+  editor or damaging user-owned destination files.
+- Application shutdown now explicitly stops reference-audio decoding, clears
+  the media source, and detaches the platform audio output. Preview also checks
+  for an output device before entering the Windows audio backend, allowing
+  systems without an available audio device to fail fast and exit cleanly.
+- Completed Simplified Chinese, Traditional Chinese, English, Japanese, and
+  Korean UI coverage, with reproducible regression/performance baselines for
+  dense timelines, piano rolls, 100,000-note queries, and audio effects.
+- Pinned the complete Windows/Python 3.12.10 dependency closure. Public builds
+  use a deterministic schema-2 license inventory and fail closed whenever a
+  dependency, model, or native-library digest changes.
 
-- 748 项单元/界面/编解码/导出/音频回归通过，1 项按预期跳过。
-- 关键入口 `py_compile` 通过。
-- 冻结 Basic Pitch ONNX/CPU 推理自检通过。
-- 同一冻结 EXE 的隔离 10 秒 GUI 启动检查通过。
-- 许可证库存：schema 2，37 个运行时包，0 个未解决项。
-- 库存 SHA-256：`68fa9a2c6dd12608ff7ebe80a3a57be65efdf989a6cf55eca19cc70e732bf23b`。
-- `BDO-Music-Composer.exe`：182,813,391 字节。
-- EXE SHA-256：`9353bff6913f4146bc3a3c37f560b9d2ae27956e0db309bb48a443e2b9d48bc1`。
+## Verification
 
-## 使用说明
+- 748 unit, UI, codec, export, and audio regression tests passed; 1 test was
+  skipped as expected.
+- `py_compile` passed for the primary entry points.
+- The frozen Basic Pitch ONNX/CPU inference self-test passed.
+- The same frozen executable passed an isolated 10-second GUI startup check.
+- License inventory: schema 2, 37 runtime packages, 0 unresolved entries.
+- Inventory SHA-256:
+  `68fa9a2c6dd12608ff7ebe80a3a57be65efdf989a6cf55eca19cc70e732bf23b`.
+- `BDO-Music-Composer.exe`: 182,813,391 bytes.
+- Executable SHA-256:
+  `9353bff6913f4146bc3a3c37f560b9d2ae27956e0db309bb48a443e2b9d48bc1`.
 
-- 本项目是非官方社区工具，与 Pearl Abyss 无隶属、授权或支持关系，不分发游戏资源。
-- EXE 尚未进行代码签名，Windows SmartScreen 可能显示未知发布者；请只从本仓库
-  的 GitHub Releases 下载并核对上述 SHA-256。
-- 内置音源、游戏效果和奏法试听仍是近似预览；没有游戏内 A/B 证据时不会标记为已验证。
-- 实验性扒谱碎音整理继续保持显式选择，安全默认仍为 `preserve`。
-- Owner ID、角色名、工程、参考音频、游戏音源、自动保存和导出文件只在本地处理，
-  不包含在源码或发行物中。
+## Important notes
+
+- This is an unofficial community tool. It is not affiliated with, endorsed by,
+  or supported by Pearl Abyss, and it does not distribute game assets.
+- The executable is not code-signed, so Windows SmartScreen may show an unknown
+  publisher warning. Download it only from this repository's GitHub Releases
+  page and verify the SHA-256 above.
+- Built-in sounds, game effects, and articulation playback remain approximate
+  previews. They are not described as verified without in-game A/B evidence.
+- Experimental transcription fragment cleanup remains an explicit opt-in;
+  `preserve` is still the safe default.
+- Owner IDs, character names, projects, reference audio, local game samples,
+  autosaves, and exported scores remain on the user's computer and are not
+  included in the source repository or release artifact.
