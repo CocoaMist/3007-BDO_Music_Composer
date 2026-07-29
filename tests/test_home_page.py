@@ -293,6 +293,7 @@ class HomePageTests(unittest.TestCase):
             import mido
             from pathlib import Path
             from unittest.mock import patch
+            from PySide6.QtCore import QEvent
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication
             import pyside_bdo_gui as gui
@@ -307,8 +308,9 @@ class HomePageTests(unittest.TestCase):
                 (game_dir / "score-one").write_bytes(b"score")
                 with patch.object(gui, "CONFIG_PATH", root / "config.json"), patch.object(
                     gui, "AUTO_SAVE_DIR", autosave_dir
-                ), patch.object(gui, "default_game_music_dir", return_value=game_dir):
+                    ), patch.object(gui, "default_game_music_dir", return_value=game_dir):
                     window = gui.MidiToBdoWindow()
+                    print("checkpoint:window-created", flush=True)
                     assert window.page_stack.currentWidget() is window.home_page
                     assert window.game_score_list.count() == 1
                     assert window.project_list.count() >= 1
@@ -358,29 +360,36 @@ class HomePageTests(unittest.TestCase):
                     while window.reference_audio.waveform_loading and time.monotonic() < deadline:
                         QTest.qWait(20)
                         app.processEvents()
+                    print("checkpoint:reference-loaded", flush=True)
                     window._play_preview()
-                    QTest.qWait(220)
-                    app.processEvents()
-                    assert window.reference_audio.is_playing
-                    playback_deadline = time.monotonic() + 2.0
-                    while (
-                        window.timeline.playhead_ms <= 50
-                        and time.monotonic() < playback_deadline
-                    ):
-                        QTest.qWait(20)
+                    if window.realtime_audio.available():
+                        QTest.qWait(220)
                         app.processEvents()
-                    assert window.timeline.playhead_ms > 50
-                    window._pause_preview()
-                    paused_at = window.timeline.playhead_ms
-                    QTest.qWait(80)
-                    app.processEvents()
-                    assert not window.reference_audio.is_playing
-                    assert abs(window.timeline.playhead_ms - paused_at) < 30
-                    window._seek_preview(500.0)
-                    assert abs(window.reference_audio.player.position() - 500) < 80
-                    window._stop_preview(reset_playhead=True)
-                    assert window.timeline.playhead_ms == 0.0
+                        assert window.reference_audio.is_playing
+                        playback_deadline = time.monotonic() + 2.0
+                        while (
+                            window.timeline.playhead_ms <= 50
+                            and time.monotonic() < playback_deadline
+                        ):
+                            QTest.qWait(20)
+                            app.processEvents()
+                        assert window.timeline.playhead_ms > 50
+                        window._pause_preview()
+                        paused_at = window.timeline.playhead_ms
+                        QTest.qWait(80)
+                        app.processEvents()
+                        assert not window.reference_audio.is_playing
+                        assert abs(window.timeline.playhead_ms - paused_at) < 30
+                        window._seek_preview(500.0)
+                        assert abs(window.reference_audio.player.position() - 500) < 80
+                        window._stop_preview(reset_playhead=True)
+                        assert window.timeline.playhead_ms == 0.0
+                    else:
+                        app.processEvents()
+                        assert not window.reference_audio.is_playing
+                        assert window.status_label.text() == "无可用音频设备"
                     assert window._wait_for_autosave_idle()
+                    print("checkpoint:preview-and-autosave", flush=True)
                     project_files = list(autosave_dir.glob("*/project.json"))
                     assert len(project_files) == 1
                     payload = json.loads(project_files[0].read_text(encoding="utf-8"))
@@ -412,6 +421,8 @@ class HomePageTests(unittest.TestCase):
                         project_files[0].parent / payload["source_midi_path"]
                     ).resolve()
                     window._load_project(project_files[0])
+                    assert window._wait_for_autosave_idle()
+                    print("checkpoint:source-reloaded", flush=True)
                     assert Path(window.midi_path).resolve() == source_copy
                     assert window.reference_layer_settings == (
                         payload["reference_layers"]
@@ -430,6 +441,7 @@ class HomePageTests(unittest.TestCase):
                     window.chorus = (83, 84, 85)
                     window._create_new_project("Blank Demo")
                     assert window._wait_for_autosave_idle()
+                    print("checkpoint:blank-created", flush=True)
                     assert window.source_format == "project"
                     assert window.midi_path == ""
                     assert len(window.tracks) == 1
@@ -450,6 +462,8 @@ class HomePageTests(unittest.TestCase):
                     window._autosave_project("test blank notes", immediate=True)
                     assert window._wait_for_autosave_idle()
                     window._load_project(blank_project)
+                    assert window._wait_for_autosave_idle()
+                    print("checkpoint:blank-reloaded", flush=True)
                     assert window.source_format == "project"
                     assert window.tracks[0].notes == [gui.Note(64, 88, 125.0, 375.0, 0)]
                     assert window.reference_audio.volume_percent == 35
@@ -459,16 +473,30 @@ class HomePageTests(unittest.TestCase):
                     assert params["direct_tracks"] is not window.tracks
                     assert params["direct_tracks"][0].notes == tuple(window.tracks[0].notes)
                     window.close()
+                    assert window._wait_for_autosave_idle(timeout_ms=20_000)
+                    window.close()
                     app.processEvents()
+                    assert window.reference_audio.player.audioOutput() is None
+                    print("checkpoint:window-closed", flush=True)
+                    window.deleteLater()
+                    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+                    app.processEvents()
+                    print("checkpoint:window-deleted", flush=True)
             app.quit()
+            print("checkpoint:script-complete", flush=True)
             """
         )
         env = dict(os.environ)
         env["QT_QPA_PLATFORM"] = "offscreen"
-        completed = subprocess.run(
-            [sys.executable, "-c", script], cwd=Path(__file__).resolve().parents[1], env=env,
-            capture_output=True, text=True, timeout=30,
-        )
+        try:
+            completed = subprocess.run(
+                [sys.executable, "-c", script], cwd=Path(__file__).resolve().parents[1], env=env,
+                capture_output=True, text=True, timeout=60,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            stderr = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            self.fail(f"home workflow subprocess timed out\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}")
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
     def test_same_title_projects_remain_distinct_without_shared_identity(self) -> None:

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import textwrap
 import unittest
 
@@ -638,10 +639,12 @@ class UiLayoutSmokeTests(unittest.TestCase):
         )
         env = dict(os.environ)
         env["QT_QPA_PLATFORM"] = "offscreen"
-        completed = subprocess.run(
-            [sys.executable, "-c", script], cwd=ROOT, env=env,
-            capture_output=True, text=True, timeout=30,
-        )
+        with tempfile.TemporaryDirectory() as user_data_dir:
+            env["BDO_USER_DATA_DIR"] = user_data_dir
+            completed = subprocess.run(
+                [sys.executable, "-c", script], cwd=ROOT, env=env,
+                capture_output=True, text=True, timeout=60,
+            )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
 

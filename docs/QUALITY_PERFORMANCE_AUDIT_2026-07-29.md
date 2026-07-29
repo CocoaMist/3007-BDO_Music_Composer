@@ -17,7 +17,7 @@
 - 转录 ONNX/CPU 自检：通过。
 - `build.ps1 -PublicRelease`：通过；冻结 ONNX/CPU 推理与隔离的 10 秒 GUI 启动检查均通过。
 - 许可证精确库存：schema 2、37 个运行时包、0 个未解决项，连续两次生成同一 SHA-256 `68fa9a2c6dd12608ff7ebe80a3a57be65efdf989a6cf55eca19cc70e732bf23b`。
-- v1.0.0 EXE：182,812,385 字节，SHA-256 `6ded1245bb97a17b10de9ee398d9cd5126176cd1979ed3f44d7e5b8c72bba631`；未签名状态在发行说明中明确披露。
+- v1.0.0 EXE：182,813,391 字节，SHA-256 `9353bff6913f4146bc3a3c37f560b9d2ae27956e0db309bb48a443e2b9d48bc1`；未签名状态在发行说明中明确披露。
 - 生成目录追踪检查：`out`、`auto_save`、`dist`、`build`、`sample_cache` 均未被 Git 跟踪。
 
 ## 已修复问题

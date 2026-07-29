@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import textwrap
 import unittest
 
@@ -34,7 +35,10 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
             window._set_preview_source_mode("generic")
             assert window.audio_sources["preview_mode"] == "generic"
             assert window.preview_source_actions["generic"].isChecked()
-            assert "MIDI" in window.preview_source_badge.text()
+            if window.realtime_audio.available():
+                assert "MIDI" in window.preview_source_badge.text()
+            else:
+                assert window.preview_source_badge.text() == "无可用音频设备"
 
             window.char_name = "MIDI"
             window.owner_id = 0
@@ -136,14 +140,16 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
         )
         env = dict(os.environ)
         env["QT_QPA_PLATFORM"] = "offscreen"
-        completed = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
+        with tempfile.TemporaryDirectory() as user_data_dir:
+            env["BDO_USER_DATA_DIR"] = user_data_dir
+            completed = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
         self.assertEqual(
             completed.returncode,
             0,

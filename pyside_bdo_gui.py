@@ -13159,6 +13159,14 @@ class ReferenceAudioController(QObject):
         self._pending_project_position_ms = None
         self.player.stop()
 
+    def shutdown(self) -> None:
+        """Release multimedia backends before the owning window is destroyed."""
+
+        self.set_audio_path(None, notify=False)
+        # A source-less QMediaPlayer can still retain the platform audio backend.
+        # Detach it explicitly so headless/no-device Windows processes can exit.
+        self.player.setAudioOutput(None)
+
     def project_to_audio(self, project_ms: float) -> float:
         return float(project_ms) - self._project_offset_ms
 
@@ -23231,6 +23239,14 @@ class MidiToBdoWindow(QMainWindow):
                 tr("当前没有可试听轨道，请取消静音或 Solo。"),
             )
             return
+        if not self.realtime_audio.available():
+            # QAudioSink construction can block inside the Windows backend when
+            # the machine has no output device.  Fail before starting either
+            # the real-time engine or the reference QMediaPlayer.
+            self.status_label.setText(tr("无可用音频设备"))
+            self.show_toast(tr("无可用音频设备"), kind="warning")
+            self._sync_preview_state()
+            return
         if start_ms >= self.timeline._timeline_end_ms() - 1:
             start_ms = 0.0
             self.timeline.set_playhead(0.0)
@@ -24111,8 +24127,8 @@ class MidiToBdoWindow(QMainWindow):
             return
         if self.active_transcription_editor is not None:
             self.active_transcription_editor.release_transcription_resources()
-        self.reference_audio.set_audio_path(None, notify=False)
         self._stop_preview()
+        self.reference_audio.shutdown()
         self.realtime_audio.stop()
         self.workspace_close_pending = False
         super().closeEvent(event)

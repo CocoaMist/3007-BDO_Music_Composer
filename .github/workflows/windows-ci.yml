@@ -2,6 +2,8 @@ name: Windows CI
 
 on:
   push:
+    branches:
+      - master
   pull_request:
   workflow_dispatch:
 
@@ -46,6 +48,13 @@ jobs:
       - name: Compile primary entry points
         shell: pwsh
         run: .\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
+
+      - name: Run headless lifecycle gate
+        shell: pwsh
+        run: |
+          $env:BDO_USER_DATA_DIR = Join-Path $env:RUNNER_TEMP "bdo-music-composer-lifecycle"
+          New-Item -ItemType Directory -Force -Path $env:BDO_USER_DATA_DIR | Out-Null
+          .\.venv\Scripts\python.exe -m unittest -v tests.test_home_page.HomePageTests.test_window_starts_on_home_with_three_collections
 
       - name: Run full regression suite
         shell: pwsh
