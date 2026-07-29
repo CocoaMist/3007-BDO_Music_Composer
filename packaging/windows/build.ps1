@@ -102,9 +102,8 @@ assert callable(soxr.ResampleStream)
     }
     else {
         Write-Warning (
-            "Building the sole BDO Music Composer package for local " +
-            "evaluation. The checked-in license policy does not yet " +
-            "authorize public distribution."
+            "Building for local evaluation. Use -PublicRelease to require " +
+            "the checked-in exact-inventory public-release gate."
         )
     }
 

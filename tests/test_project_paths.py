@@ -55,6 +55,7 @@ class ProjectPathsTests(unittest.TestCase):
                 {"LOCALAPPDATA": str(local_app_data)},
             ):
                 os.environ.pop("BDO_TRANSCRIPTION_CACHE", None)
+                os.environ.pop("BDO_USER_DATA_DIR", None)
                 self.assertEqual(
                     project_paths._transcription_cache_dir(),
                     local_app_data

@@ -15,11 +15,11 @@ evidence caches.
 
 ## Build
 
-Use Python 3.12 and install the build/runtime dependencies into the repository
-virtual environment:
+Use CPython 3.12.10 and install the build/runtime dependencies into the
+repository virtual environment:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\.venv\Scripts\python.exe -m pip install --constraint constraints-windows-py312.txt -r requirements-build.txt
 powershell -ExecutionPolicy Bypass -File scripts\install_transcription.ps1
 powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ```
@@ -35,6 +35,19 @@ read or overwrite the maintainer's projects, autosaves, caches, or settings.
 The directory is created before launch, and both GUI-subsystem processes use
 explicit wait/exit-code handling; ordinary PowerShell invocation is not
 accepted because it can return before a windowed executable exits.
+
+## Reproducible dependency set
+
+`requirements-pyside.txt`, `requirements-transcription.txt`, and
+`requirements-build.txt` describe the direct dependency groups.
+`constraints-windows-py312.txt` pins their complete Windows/CPython 3.12.10
+version closure, including PySide6, the ONNX/scientific stack, and PyInstaller.
+The source setup command and `scripts/install_transcription.ps1` both apply the
+same constraints. Update the constraint file only as one reviewed dependency
+change: run the full suite and frozen self-tests, regenerate the license
+inventory, and record its newly approved digest before creating another public
+build. Version equality alone is not clearance because the inventory also
+hashes notice files, the ONNX model, and native libraries.
 
 ## License inventory
 
@@ -63,11 +76,12 @@ native library in the complete executable.
 
 ## Public-release gate
 
-The v0.3.0 exact-artifact review is recorded in the checked-in policy. Passing
+The v1.0.0 exact-artifact review is recorded in the checked-in policy. Passing
 `-PublicRelease` to the same `build.ps1` requires all of the following:
 
 - `public_release_cleared` is explicitly true in
   `packaging/transcription_release_policy.json`;
+- the generated inventory schema matches the schema recorded by that approval;
 - the policy contains the digest of the exact dependency inventory being
   built;
 - the inventory has no unresolved package license metadata; and
@@ -78,6 +92,14 @@ native libraries, and all required notice texts. Any dependency change produces
 a different digest and blocks a public build until it is reviewed again. A
 successful build without `-PublicRelease` is local evaluation only and is not
 evidence that redistribution is cleared.
+
+The published v0.3.0 artifact retains its historical schema-1 approval record.
+Schema 1 could include `*.py` and environment-generated `*.pyc` files from
+importable packages whose directory happened to be named `licenses`, making a
+rebuild digest depend on bytecode state. Audit schema 2 excludes those runtime
+modules. The v1.0.0 policy approves the resulting deterministic schema-2
+inventory only; the old digest remains historical release evidence rather than
+being silently rewritten.
 
 After clearance, a public candidate still requires the normal clean-build,
 artifact inspection, full test suite, and playback smoke test; the build itself

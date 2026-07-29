@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 from dataclasses import replace
+from io import StringIO
 import json
 from pathlib import Path
 import subprocess
@@ -8,12 +10,16 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
+import atomic_io
 from bdo_codec import (
-    BdoDocument, BdoHeader, BdoInstrumentGroup, BdoNote, BdoTrack,
+    BDO_VERSION, HEADER_SIZE, BdoDocument, BdoHeader, BdoInstrumentGroup, BdoNote, BdoTrack,
     BdoTrackSettings, UnsafeOpaqueDataError, decode_score, document_from_dict,
     document_matches_logical_tracks, document_to_dict, encode_score, validate_score,
+    score_instrument_ids, write_score,
 )
+from bdo_codec.__main__ import main as codec_main
 from bdo_codec.ice import decrypt, encrypt
 from pyside_bdo_gui import Note, channel_groups_to_bdo
 
@@ -50,6 +56,50 @@ class IceCodecTests(unittest.TestCase):
 
 
 class ScoreCodecTests(unittest.TestCase):
+    def test_instrument_summary_skips_identity_and_note_decoding(self) -> None:
+        encoded = encode_score(
+            document_with((BdoNote(60, 11, 90, 73, 0.25, 123.0),)),
+            mode="canonical",
+        )
+        with patch(
+            "bdo_codec.codec._decode_name",
+            side_effect=AssertionError("private name decoder must not run"),
+        ):
+            self.assertEqual(score_instrument_ids(encoded), (0x11,))
+
+        self.assertEqual(
+            score_instrument_ids(
+                encode_score(
+                    replace(
+                        document_with(()),
+                        header=replace(
+                            document_with(()).header,
+                            owner_id=0xFFFFFFFF,
+                            character_name_1="Private Character",
+                        ),
+                    ),
+                    mode="canonical",
+                )
+            ),
+            (0x11,),
+        )
+
+    def test_instrument_summary_rejects_excessive_aggregate_track_count(self) -> None:
+        plaintext = bytearray(HEADER_SIZE)
+        plaintext.extend(b"\x00")
+        plaintext.extend((2).to_bytes(2, "little"))
+        plaintext.extend((1).to_bytes(2, "little"))
+        plaintext.extend((12).to_bytes(2, "little"))
+        plaintext.extend((0x11).to_bytes(2, "little"))
+        plaintext.extend(b"\x00" * 8)
+        plaintext.extend((0).to_bytes(2, "little"))
+        plaintext.extend((4_096).to_bytes(2, "little"))
+        plaintext.extend(b"\x00" * (-len(plaintext) % 8))
+        oversized = BDO_VERSION.to_bytes(4, "little") + encrypt(bytes(plaintext))
+
+        with self.assertRaisesRegex(ValueError, "catalog safety limit"):
+            score_instrument_ids(oversized)
+
     def test_all_note_types_and_wire_fields_roundtrip(self) -> None:
         notes = tuple(
             BdoNote(index % 128, index, index % 128, (127 - index) % 128,
@@ -144,7 +194,9 @@ class ScoreCodecTests(unittest.TestCase):
         encoded, _summary = channel_groups_to_bdo(
             120, 4, [(source, 0, False)], instrument_map={0: 0x11}, preserve_note_types=True,
         )
-        group = decode_score(encoded).groups[0]
+        document = decode_score(encoded)
+        self.assertEqual(len(document.groups), 1)
+        group = document.groups[0]
         self.assertEqual([len(track.notes) for track in group.tracks], [730, 1, 0])
 
     def test_cli_roundtrip_and_private_redaction(self) -> None:
@@ -164,6 +216,52 @@ class ScoreCodecTests(unittest.TestCase):
             self.assertEqual(inspect.returncode, 0, inspect.stderr)
             self.assertNotIn("Name", inspect.stdout)
             self.assertIn("<redacted>", inspect.stdout)
+
+    def test_write_score_failure_preserves_existing_destination(self) -> None:
+        document = document_with((BdoNote(60, 0, 90, 90, 0.0, 100.0),))
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "score"
+            write_score(path, document, mode="canonical")
+            encoded = path.read_bytes()
+            self.assertEqual(decode_score(encoded).header.owner_id, 12345)
+
+            path.write_bytes(b"known-good")
+            with patch.object(atomic_io.os, "replace", side_effect=OSError("busy")):
+                with self.assertRaises(OSError):
+                    write_score(path, document, mode="canonical")
+            self.assertEqual(path.read_bytes(), b"known-good")
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
+
+    def test_cli_output_failure_preserves_existing_destination(self) -> None:
+        document = document_with((BdoNote(60, 0, 90, 90, 0.0, 100.0),))
+        encoded = encode_score(document, mode="canonical")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            score_path = root / "input-score"
+            json_path = root / "input.json"
+            score_path.write_bytes(encoded)
+            json_path.write_text(
+                json.dumps(document_to_dict(document, include_private=True)),
+                encoding="utf-8",
+            )
+
+            commands = (
+                ["decode", str(score_path), str(root / "decoded.json")],
+                ["encode", str(json_path), str(root / "encoded-score")],
+                ["roundtrip", str(score_path), str(root / "roundtrip-score")],
+            )
+            for command in commands:
+                with self.subTest(command=command[0]):
+                    target = Path(command[-1])
+                    target.write_bytes(b"known-good")
+                    with patch.object(atomic_io.os, "replace", side_effect=OSError("busy")):
+                        with redirect_stderr(StringIO()):
+                            self.assertEqual(codec_main(command), 2)
+                    self.assertEqual(target.read_bytes(), b"known-good")
+                    self.assertEqual(
+                        list(target.parent.glob(f".{target.name}.*.tmp")),
+                        [],
+                    )
 
 
 if __name__ == "__main__":

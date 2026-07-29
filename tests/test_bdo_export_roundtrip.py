@@ -18,6 +18,26 @@ from pyside_bdo_gui import BDO_ARTICULATIONS, copy_export_to_game  # noqa: E402
 
 
 class BdoExportRoundTripTests(unittest.TestCase):
+    def test_same_game_instrument_is_one_performer_group(self) -> None:
+        data, _summary = channel_groups_to_bdo(
+            120,
+            4,
+            [
+                ([Note(60, 90, 0.0, 100.0, 0)], 0, False),
+                ([Note(64, 90, 200.0, 100.0, 0)], 1, False),
+            ],
+            instrument_map={0: 0x11, 1: 0x11},
+            preserve_note_types=True,
+        )
+
+        document = decode_score(data)
+
+        self.assertEqual(len(document.groups), 1)
+        self.assertEqual(
+            sum(len(track.notes) for track in document.groups[0].tracks),
+            2,
+        )
+
     def test_soft_10k_review_threshold_never_truncates_editor_notes(self) -> None:
         notes = [
             Note(60, 90, float(index), 1.0, 0)

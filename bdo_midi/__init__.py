@@ -1,14 +1,19 @@
 """Independent MIDI import and transformation package."""
 
 from .instruments import (
+    BDO_ENSEMBLE_PLAYER_LIMIT,
     BDO_INSTRUMENT_NAMES,
     BDO_INSTRUMENTS,
     BDO_NOTE_MAX,
     BDO_NOTE_MIN,
     DEFAULT_INSTRUMENT,
+    MARNIAN_SYNTH_INSTRUMENT_IDS,
+    MARNIAN_SYNTH_MODE_OFFSETS,
     _GM_TO_BDO_DRUM,
     gm_program_name,
     gm_to_bdo_instrument,
+    performance_instrument_id,
+    unique_performance_instrument_ids,
 )
 from .model import ChannelGroup, Note
 from .parser import DEFAULT_BPM, DEFAULT_TIME_SIGNATURE, parse_midi
@@ -28,11 +33,14 @@ from .transforms import (
 )
 
 __all__ = [
-    "BDO_INSTRUMENT_NAMES", "BDO_INSTRUMENTS", "BDO_NOTE_MAX", "BDO_NOTE_MIN",
+    "BDO_ENSEMBLE_PLAYER_LIMIT", "BDO_INSTRUMENT_NAMES", "BDO_INSTRUMENTS",
+    "BDO_NOTE_MAX", "BDO_NOTE_MIN",
     "BDO_VEL_LEVELS", "ChannelGroup", "DEFAULT_BPM", "DEFAULT_INSTRUMENT",
     "DEFAULT_TIME_SIGNATURE", "DRUM_NOTE_MAX_DURATION_MS", "DRUM_NOTE_TYPE",
-    "DRUM_ROLL_PITCHES", "Note", "_GM_TO_BDO_DRUM", "clamp_notes",
+    "DRUM_ROLL_PITCHES", "MARNIAN_SYNTH_INSTRUMENT_IDS",
+    "MARNIAN_SYNTH_MODE_OFFSETS", "Note", "_GM_TO_BDO_DRUM", "clamp_notes",
     "floor_velocity", "gm_program_name", "gm_to_bdo_instrument",
     "layered_velocity", "map_drum_notes", "normalize_drum_note_timing",
-    "parse_midi", "rescale_velocity", "stepped_velocity", "transpose_notes",
+    "parse_midi", "performance_instrument_id", "rescale_velocity",
+    "stepped_velocity", "transpose_notes", "unique_performance_instrument_ids",
 ]

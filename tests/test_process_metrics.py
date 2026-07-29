@@ -36,7 +36,7 @@ class ProcessMetricsTests(unittest.TestCase):
         script = textwrap.dedent(
             """
             from PySide6.QtWidgets import QApplication, QFrame
-            from pyside_bdo_gui import MidiToBdoWindow
+            from pyside_bdo_gui import MidiToBdoWindow, Note, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -45,10 +45,47 @@ class ProcessMetricsTests(unittest.TestCase):
             app.processEvents()
             strip = window.findChild(QFrame, "PerformanceStrip")
             assert strip is not None
-            assert strip.height() == 25
+            assert strip.height() == 30
             assert window.process_cpu_label.text().startswith("CPU ")
             assert window.process_ram_label.text().startswith("RAM ")
             assert "XRUN" in window.audio_load_label.text()
+            assert "乐器 0" in window.ensemble_metric_label.text()
+            assert "0/5 人" in window.ensemble_metric_label.text()
+
+            window.tracks = [
+                TrackState(
+                    1, [Note(60, 90, 0.0, 100.0, 0)], 0, False,
+                    "Marnian basic", 0x14,
+                    marnian_synth_mode="basic",
+                ),
+                TrackState(
+                    2, [Note(64, 90, 0.0, 100.0, 0)], 0, False,
+                    "Marnian stereo", 0x14,
+                    marnian_synth_mode="stereo",
+                ),
+                TrackState(
+                    3, [Note(67, 90, 0.0, 100.0, 0)], 0, False,
+                    "Piano", 0x11,
+                ),
+            ]
+            window._update_ensemble_metric()
+            assert "乐器 2" in window.ensemble_metric_label.text()
+            assert "2/5 人" in window.ensemble_metric_label.text()
+            assert window.ensemble_metric_label.property("ensembleState") == "ok"
+
+            window.tracks = [
+                TrackState(
+                    index, [Note(60, 90, 0.0, 100.0, 0)], 0, False,
+                    f"Track {index}", instrument_id,
+                )
+                for index, instrument_id in enumerate(
+                    (0x00, 0x01, 0x02, 0x04, 0x05, 0x06), start=1
+                )
+            ]
+            window._update_ensemble_metric()
+            assert "乐器 6" in window.ensemble_metric_label.text()
+            assert "超过 5 人" in window.ensemble_metric_label.text()
+            assert window.ensemble_metric_label.property("ensembleState") == "over"
             window.close()
             app.processEvents()
             app.quit()

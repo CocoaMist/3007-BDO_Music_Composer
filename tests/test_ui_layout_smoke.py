@@ -15,13 +15,14 @@ class UiLayoutSmokeTests(unittest.TestCase):
     def test_primary_windows_fit_at_supported_minimum_sizes(self) -> None:
         script = textwrap.dedent(
             """
-            from PySide6.QtCore import QPoint, Qt
+            from PySide6.QtCore import QPoint, Qt, QTimer
             from PySide6.QtTest import QTest
-            from PySide6.QtWidgets import QApplication, QFrame, QListWidget, QScrollArea, QStackedWidget, QWidget
+            from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QFrame, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget, QStyleOptionViewItem, QTextBrowser, QWidget
             from pyside_bdo_gui import (
-                GlobalToast, MidiNoteEditorDialog, MidiToBdoWindow, Note,
-                ReferenceAudioController, SettingsDialog, StartupSplash,
-                TrackFxDialog, TrackState,
+                EnsembleCapacityBadge, GlobalToast, HOME_INSTRUMENT_IDS_ROLE, HomeEntry,
+                HomeEntryDelegate, MidiNoteEditorDialog, MidiToBdoWindow, Note,
+                MasterEffectsDialog, ReferenceAudioController,
+                SettingsDialog, StartupSplash, TrackFxDialog, TrackState,
             )
 
             app = QApplication([])
@@ -33,22 +34,169 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert window._system_uses_dark_theme()
             main_toolbar = window.findChild(QFrame, "Toolbar")
             assert main_toolbar is not None
-            assert 38 <= main_toolbar.height() <= 45
+            assert 50 <= main_toolbar.height() <= 60
+            ensemble_badge = window.findChild(
+                EnsembleCapacityBadge, "EnsembleCapacityBadge"
+            )
+            assert ensemble_badge is not None
+            assert ensemble_badge.player_count == 0
+            assert not ensemble_badge.is_over_limit
+            assert ensemble_badge.size().width() == 36
+            assert ensemble_badge.size().height() == 36
+            assert not ensemble_badge._icon.isNull()
+            assert ensemble_badge.toolTip()
+            page_switch_paint_states = []
+            window.page_stack.currentChanged.connect(
+                lambda _index: page_switch_paint_states.append(
+                    window.updatesEnabled()
+                )
+            )
             window._show_workspace()
             app.processEvents()
+            assert window.toolbar_master_effects_btn.isVisible()
+            workspace_anchor_positions = (
+                ensemble_badge.mapTo(window, QPoint(0, 0)).x(),
+                window.toolbar_settings_btn.mapTo(window, QPoint(0, 0)).x(),
+                window.convert_button.mapTo(window, QPoint(0, 0)).x(),
+            )
             timeline_controls = window.findChild(
                 QFrame, "TimelineControlBar"
             )
             assert timeline_controls is not None
-            assert 40 <= timeline_controls.height() <= 47
+            assert 47 <= timeline_controls.height() <= 53
+            assert window.timeline._lane_height() == 68
             window._show_home()
             app.processEvents()
+            assert not window.toolbar_master_effects_btn.isVisible()
+            assert window.project_toolbar_group.isVisible()
+            assert not window.convert_button.isEnabled()
+            assert workspace_anchor_positions == (
+                ensemble_badge.mapTo(window, QPoint(0, 0)).x(),
+                window.toolbar_settings_btn.mapTo(window, QPoint(0, 0)).x(),
+                window.convert_button.mapTo(window, QPoint(0, 0)).x(),
+            )
+            assert page_switch_paint_states
+            assert not any(page_switch_paint_states)
+
+            home_shell = window.findChild(QFrame, "HomeShell")
+            home_stack = window.findChild(QStackedWidget, "HomeLibraryStack")
+            home_actions = window.findChildren(QPushButton, "HomeQuickAction")
+            assert home_shell is not None and home_stack is not None
+            assert window.home_backdrop is home_shell
+            assert window.home_backdrop.has_artwork
+            assert not window.home_backdrop._cover.isNull()
+            assert len(home_actions) == 3
+            assert home_stack.currentIndex() == 0
+            assert window.home_project_nav.isChecked()
+            assert not window.home_game_nav.isChecked()
+            assert window.project_list.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+            assert window.game_score_list.horizontalScrollBarPolicy() == Qt.ScrollBarAlwaysOff
+            assert window.project_list.height() >= 200
+            window.project_list.clear()
+            window._add_home_entry(
+                window.project_list,
+                HomeEntry(
+                    "project", "Instrument probe",
+                    __import__("pathlib").Path("C:/virtual/project.json"),
+                    "2026-07-29 12:00", 1.0,
+                    instrument_ids=(0x0B, 0x11),
+                ),
+            )
+            instrument_probe = window.project_list.item(0)
+            assert instrument_probe.data(HOME_INSTRUMENT_IDS_ROLE) == (0x0B, 0x11)
+            assert instrument_probe.data(Qt.UserRole)["required_players"] == 2
+            app.processEvents()
+            assert ensemble_badge.player_count == 2
+            assert isinstance(window.project_list.itemDelegate(), HomeEntryDelegate)
+            row_option = QStyleOptionViewItem()
+            row_option.initFrom(window.project_list)
+            row_hint = window.project_list.itemDelegate().sizeHint(
+                row_option, window.project_list.model().index(0, 0)
+            )
+            assert row_hint.height() >= 56
+            assert "C:/virtual" not in instrument_probe.toolTip()
+            assert instrument_probe.toolTip().count("\\n") <= 1
+            window._add_home_entry(
+                window.project_list,
+                HomeEntry(
+                    "project",
+                    "Long project title " * 18,
+                    __import__("pathlib").Path("C:/virtual/long/project.json"),
+                    "2026-07-29 12:01", 2.0,
+                    instrument_ids=(0x0B,),
+                ),
+            )
+            long_item = window.project_list.item(window.project_list.count() - 1)
+            long_hint = window.project_list.itemDelegate().sizeHint(
+                row_option, window.project_list.indexFromItem(long_item)
+            )
+            assert long_hint.height() > row_hint.height()
+            window.project_list.setCurrentRow(1)
+            app.processEvents()
+            assert ensemble_badge.player_count == 1
+            window.project_list.setCurrentRow(0)
+            app.processEvents()
+            assert ensemble_badge.player_count == 2
+            assert window.home_instrument_art.pixmap_for(0x0B) is not None
+            if not window.project_open_button.isEnabled():
+                probe_item = QListWidgetItem("Layout probe")
+                probe_item.setData(Qt.UserRole, {
+                    "kind": "project",
+                    "path": "C:/virtual/project.json",
+                    "label": "Layout probe",
+                })
+                window.project_list.addItem(probe_item)
+                window.project_list.setCurrentItem(probe_item)
+                app.processEvents()
+            assert window.project_open_button.isEnabled()
+            window.home_search.setText("__no_visible_home_match__")
+            app.processEvents()
+            assert not window.project_open_button.isEnabled()
+            window.home_search.clear()
+            app.processEvents()
+            assert window.project_open_button.isEnabled()
+            home_rect = window.home_page.contentsRect()
+            shell_top_left = home_shell.mapTo(window.home_page, QPoint(0, 0))
+            shell_rect = home_shell.rect().translated(shell_top_left)
+            assert shell_rect.left() == home_rect.left()
+            assert shell_rect.right() == home_rect.right()
+            assert shell_rect.top() == home_rect.top()
+            assert shell_rect.bottom() == home_rect.bottom()
+            assert window.home_sidebar.geometry().topLeft() == QPoint(0, 0)
+            assert window.home_sidebar.height() == home_shell.height()
+            assert 560 <= window.home_sidebar.width() <= 620
+            assert window.home_sidebar.width() < home_shell.width()
+            action_rects = [
+                action.rect().translated(action.mapTo(window.home_page, QPoint(0, 0)))
+                for action in home_actions
+            ]
+            assert all(home_rect.contains(rect) for rect in action_rects)
+            assert not any(
+                action_rects[left].intersects(action_rects[right])
+                for left in range(len(action_rects))
+                for right in range(left + 1, len(action_rects))
+            )
+            window.home_game_nav.click()
+            app.processEvents()
+            assert home_stack.currentIndex() == 1
+            assert window.home_game_nav.isChecked()
+            window.home_project_nav.click()
+            app.processEvents()
+            assert home_stack.currentIndex() == 0
 
             splash = StartupSplash()
             splash.show()
             app.processEvents()
             assert splash.size().width() == 470
             assert splash.size().height() == 734
+            splash_margins = splash.layout().contentsMargins()
+            assert splash_margins.left() == splash_margins.right() == 0
+            assert splash_margins.top() == splash_margins.bottom() == 0
+            assert splash.artwork.size() == splash.size()
+            assert splash.property("uiSurface") == "startup"
+            splash_card = splash.findChild(QFrame, "StartupSplashCard")
+            assert splash_card is not None
+            assert splash_card.property("uiRole") == "startupCanvas"
             assert splash.windowFlags() & Qt.WindowStaysOnTopHint
             assert splash.MINIMUM_VISIBLE_MS >= 1400
             assert splash.artwork.has_artwork
@@ -69,11 +217,19 @@ class UiLayoutSmokeTests(unittest.TestCase):
             app.processEvents()
             assert splash.isHidden()
 
-            toast = window.show_toast("测试提示", duration_ms=80)
+            toast = window.show_toast(
+                "测试提示", kind="warning", duration_ms=80
+            )
             app.processEvents()
             assert isinstance(toast, GlobalToast)
             assert toast.isVisible()
             assert toast.message.text() == "测试提示"
+            assert toast.property("toastKind") == "warning"
+            assert toast.marker.text() == "!"
+            toast_margins = toast.layout().contentsMargins()
+            assert toast_margins.top() == toast_margins.bottom() == 8
+            assert toast.height() <= 44
+            assert toast.y() == main_toolbar.geometry().bottom() + 9
             assert 0 <= toast.x() <= window.width() - toast.width()
             QTest.qWait(190)
             assert toast.opacity.opacity() > 0.9
@@ -130,8 +286,22 @@ class UiLayoutSmokeTests(unittest.TestCase):
             pages = settings.findChild(QStackedWidget, "SettingsPages")
             assert nav is not None and pages is not None
             assert nav.count() == pages.count() == 3
+            settings_header = settings.findChild(QFrame, "SettingsHeader")
+            assert settings_header is not None
+            assert settings_header.property("uiRole") == "dialogHeader"
+            assert settings.settings_footer.property("uiRole") == "dialogFooter"
+            assert settings.settings_buttons.property("uiRole") == "dialogButtonRow"
+            settings_footer_margins = settings.settings_footer.layout().contentsMargins()
+            assert settings_footer_margins.left() == settings_footer_margins.right() == 24
+            assert settings_footer_margins.top() == settings_footer_margins.bottom() == 10
+            settings_sections = settings.findChildren(QFrame, "SettingsSection")
+            assert settings_sections
+            assert all(
+                section.property("uiRole") == "settingsSection"
+                for section in settings_sections
+            )
             assert [nav.item(index).text() for index in range(nav.count())] == [
-                "通用与导出", "MIDI 与力度", "音源与效果"
+                "通用与导出", "MIDI 与力度", "音源与外观"
             ]
             for index in range(nav.count()):
                 nav.setCurrentRow(index)
@@ -143,8 +313,54 @@ class UiLayoutSmokeTests(unittest.TestCase):
                 assert active_scroll.widget().minimumSizeHint().width() <= active_scroll.viewport().width()
             settings.close()
 
+            thanks_checked = {"value": False}
+            def inspect_thanks_dialog():
+                thanks = app.activeModalWidget()
+                assert isinstance(thanks, QDialog)
+                assert thanks.objectName() == "ThanksDialog"
+                thanks_header = thanks.findChild(QFrame, "ThanksHeader")
+                thanks_body = thanks.findChild(QFrame, "ThanksTextPanel")
+                thanks_text = thanks.findChild(QTextBrowser, "ThanksText")
+                thanks_buttons = thanks.findChild(QDialogButtonBox, "ThanksButtons")
+                thanks_footer = thanks.findChild(QFrame, "ThanksFooter")
+                assert thanks_header is not None and thanks_body is not None
+                assert thanks_text is not None and thanks_buttons is not None
+                assert thanks_footer is not None
+                assert thanks_header.property("uiRole") == "dialogHeader"
+                assert thanks_body.property("uiRole") == "dialogBody"
+                assert thanks_buttons.property("uiRole") == "dialogButtonRow"
+                thanks_footer_margins = thanks_footer.layout().contentsMargins()
+                assert thanks_footer_margins.left() == thanks_footer_margins.right() == 24
+                assert thanks_footer_margins.top() == thanks_footer_margins.bottom() == 10
+                thanks_checked["value"] = True
+                thanks.accept()
+            QTimer.singleShot(0, inspect_thanks_dialog)
+            window._show_acknowledgements()
+            assert thanks_checked["value"]
+
+            master_effects = MasterEffectsDialog(
+                window, window._current_master_effects()
+            )
+            master_effects.resize(master_effects.minimumSize())
+            master_effects.show()
+            app.processEvents()
+            assert master_effects.objectName() == "MasterEffectsDialog"
+            assert master_effects.minimumSizeHint().width() <= master_effects.width()
+            assert master_effects.findChild(QWidget, "MasterReverbTime") is not None
+            assert master_effects.findChild(QWidget, "MasterDelayFeedback") is not None
+            assert master_effects.findChild(QWidget, "MasterChorusFeedback") is not None
+            master_effects.close()
+
             track = TrackState(1, [Note(60, 96, 0, 400, 0)], 0, False, "lead", 0x0B)
+            track.color = "#b77bd3"
             window.tracks = [track]
+            window._show_workspace()
+            window._on_track_changed()
+            assert ensemble_badge.player_count == 1
+            window._switch_main_page(window.home_page, home=True)
+            assert ensemble_badge.player_count == 2
+            window._show_workspace()
+            assert ensemble_badge.player_count == 1
             editor = MidiNoteEditorDialog(window, track, 120, 4)
             assert window.realtime_status_timer.interval() == 16
             assert editor.playback_timer.interval() == 16
@@ -166,20 +382,27 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert toolbar.isAncestorOf(editor.apply_button)
             assert toolbar.isAncestorOf(editor.cancel_button)
             assert toolbar.isAncestorOf(editor.confirm_button)
+            assert editor.apply_button.property("kind") == "secondary"
             assert not hasattr(editor, "playback_timeline")
             top_inspector = editor.findChild(QFrame, "NoteInspectorTop")
             assert top_inspector is not None and top_inspector.isVisible()
             assert top_inspector.height() == 38
             assert top_inspector.isAncestorOf(editor.velocity_toggle)
-            assert editor.canvas.ROW_H == 20
+            assert editor.canvas.ROW_H == 24
             assert editor.canvas.KEY_W == 86
             assert editor.canvas.BLACK_KEY_X == 8
             assert editor.canvas.BLACK_KEY_W == 48
+            assert editor.canvas._editable_note_base_color().name().lower() == track.color.lower()
             inspector_height = top_inspector.height()
             assert editor.note_mode_button.height() == editor.articulation_mode_button.height() == editor.grid_mode_button.height()
             assert editor.note_controls.isVisible()
             assert not editor.articulation_controls.isVisible()
             assert not editor.grid_controls.isVisible()
+            assert editor.quantize_quick.isVisible()
+            assert editor.quantize_combo.currentText() == "1/4"
+            assert editor.quantize_ms() == editor.canvas.beat_ms
+            assert editor.ghost_opacity_slider.value() == 24
+            assert editor.canvas._ghost_opacity == 0.24
             assert editor.pitch_scroll.width() == 12
             assert editor.time_scroll.height() == 12
             grid_rect = editor.canvas.grid_rect()
@@ -198,12 +421,25 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert not editor.note_controls.isVisible()
             editor.canvas.selected = {0}
             editor.refresh_fields()
+            # Keep this broad layout smoke independent of the real asynchronous
+            # audio worker.  Dedicated editor/audio tests cover articulation
+            # audition with a controlled engine below.
+            editor.note_preview_box.setChecked(False)
             editor.articulation_buttons[3].click()
             assert editor.canvas.notes[0].ntype == 3
+            editor.note_preview_box.setChecked(True)
             editor.grid_mode_button.click()
             app.processEvents()
             assert top_inspector.height() == inspector_height
             assert editor.grid_controls.isVisible()
+            assert [
+                editor.quantize_combo.itemText(index)
+                for index in range(editor.quantize_combo.count())
+            ] == ["1/4", "1/8", "1/16", "1/32", "1/64"]
+            editor.quantize_combo.setCurrentIndex(0)
+            app.processEvents()
+            assert editor.quantize_ms() == editor.canvas.beat_ms
+            editor.quantize_combo.setCurrentIndex(2)
             assert not editor.note_controls.isVisible()
             editor_toast = getattr(editor, "_global_toast", None)
             assert isinstance(editor_toast, GlobalToast)

@@ -49,6 +49,10 @@ class ValidationIssue:
     fix_id: str | None = None
     message_template: str = ""
     message_values: MessageValues = ()
+    # Group-level issues such as same-instrument merge/capacity conflicts do
+    # not have one primary track.  Preserve their exact lane membership so UI
+    # surfaces can mark every affected track without parsing display names.
+    related_track_ids: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if self.severity not in SEVERITIES:
@@ -76,6 +80,7 @@ def _issue(
     evidence: str = "",
     evidence_status: str = "inferred",
     fix_id: str | None = None,
+    related_track_ids: tuple[int, ...] = (),
 ) -> ValidationIssue:
     """Build an issue whose Chinese message remains backward compatible.
 
@@ -97,6 +102,7 @@ def _issue(
         fix_id,
         template,
         message_values,
+        tuple(int(track_id) for track_id in related_track_ids),
     )
 
 
@@ -300,7 +306,11 @@ def validate_tracks(
                     evidence=evidence, evidence_status=status,
                 ))
             rule = profile.instruments.get(instrument_id)
-            if rule is None or (rule.pitch_min is None and not rule.allowed_pitches):
+            if (
+                rule is None
+                or rule.evidence.status != "verified"
+                or (rule.pitch_min is None and not rule.allowed_pitches)
+            ):
                 issues.append(_issue(
                     "pitch.range_unverified", "warning",
                     "当前乐器缺少经过验证的完整游戏音域。",
@@ -366,6 +376,27 @@ def validate_tracks(
                 track_id=track_id, note_indices=tuple(range(len(notes))),
                 evidence=evidence, evidence_status=status,
             ))
+        if articulation is None and rule is not None:
+            unsupported_note_types = sorted({
+                int(note.ntype)
+                for note in notes
+                if int(note.ntype) not in rule.articulations
+            })
+            for note_type in unsupported_note_types:
+                note_indices = tuple(
+                    index
+                    for index, note in enumerate(notes)
+                    if int(note.ntype) == note_type
+                )
+                issues.append(_issue(
+                    "articulation.note_unsupported", "error",
+                    "FX type {articulation} 不属于当前乐器。",
+                    values={"articulation": note_type},
+                    track_id=track_id,
+                    note_indices=note_indices,
+                    evidence=evidence,
+                    evidence_status=status,
+                ))
         if instrument_id in context.sample_only_percussion_ids and notes:
             issues.append(_issue(
                 "percussion.sample_only", "warning",
@@ -377,6 +408,7 @@ def validate_tracks(
     for instrument_id, sources in sorted(merged.items()):
         count = sum(len(track.notes) for track in sources)
         source_names = ", ".join(str(track.display_name) for track in sources)
+        source_track_ids = tuple(int(track.track_id) for track in sources)
         if len(sources) > 1:
             issues.append(_issue(
                 "tracks.merge", "info",
@@ -388,6 +420,7 @@ def validate_tracks(
                 },
                 evidence=profile.evidence.source,
                 evidence_status=profile.evidence.status,
+                related_track_ids=source_track_ids,
             ))
             volumes: set[int] = set()
             for track in sources:
@@ -403,6 +436,7 @@ def validate_tracks(
                     values={"track_count": len(sources)},
                     evidence=profile.evidence.source,
                     evidence_status="verified",
+                    related_track_ids=source_track_ids,
                 ))
             send_values: set[tuple[int, int, int]] = set()
             for track in sources:
@@ -425,6 +459,7 @@ def validate_tracks(
                     values={"track_count": len(sources)},
                     evidence=profile.evidence.source,
                     evidence_status="inferred",
+                    related_track_ids=source_track_ids,
                 ))
         capacity_policy = profile.limit_policy("notes_per_instrument")
         if count > capacity_policy.value:
@@ -453,6 +488,7 @@ def validate_tracks(
                 },
                 evidence=capacity_policy.evidence.source,
                 evidence_status=capacity_policy.evidence.status,
+                related_track_ids=source_track_ids,
             ))
     active_note_count = sum(
         len(track.notes) for track in tracks if int(track.track_id) in context.active_track_ids

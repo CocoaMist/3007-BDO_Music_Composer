@@ -20,7 +20,7 @@ BDO Music Composer is an unofficial PySide6 MIDI editor and Black Desert music-s
 .\.venv\Scripts\python.exe main.py
 
 # Full regression suite
-.\.venv\Scripts\python.exe -m unittest discover -s tests -q
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -q
 
 # Syntax check for primary entry points
 .\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
@@ -31,7 +31,10 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 
 ## Architectural boundaries
 
-- `pyside_bdo_gui.py`: UI widgets, mutable editor state, autosave, conversion orchestration. It is large; keep new domain logic out when a focused module exists.
+- `pyside_bdo_gui.py`: UI widgets, mutable editor state, and Qt worker lifecycle. It is large; keep new domain logic out when a focused module exists.
+- `export_workflow.py`: immutable editor-export snapshots plus atomic output/game-directory publication.
+- `project_persistence.py`: immutable autosave snapshots and background-safe serialization; `home_catalog.py` owns bounded home-page discovery and reads only its small safe index.
+- `atomic_io.py`: shared same-directory temporary-write/copy primitives. User-owned destinations must not be truncated in place.
 - `optimization/`: pure-ish, extensible optimization subsystem. `builtin.py` is the production pipeline and `registry.py` is the extension boundary. Game-safe mode must preserve structural invariants.
 - `bdo_midi_optimizer.py`: compatibility facade only; do not add new algorithm logic here.
 - `bdo_music_theory.py`, `bdo_techniques.py`, `bdo_articulation_profiles.py`, `bdo_lyrics.py`: analysis and semantic recommendations.
@@ -95,7 +98,11 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 - Do not commit `out/`, `auto_save/`, `dist/`, `build/`, `.pyside_bdo_gui.json`, ZIP releases, or extracted game assets.
 - BDO score files may expose Owner ID and character name. Treat them as private.
 - Mapping/manifests may contain machine-local source paths. Do not add new personal paths; use configuration or environment variables.
-- Do not invent a license or upstream permission. Public release is blocked until the maintainer adds a root `LICENSE` and verifies vendored-code licensing.
+- Do not invent a license or upstream permission. The root `LICENSE` covers only
+  original project code; third-party terms remain in `THIRD_PARTY_NOTICES.md`.
+  Public builds must pass the exact-inventory gate in
+  `packaging/transcription_release_policy.json`, and any dependency change
+  requires a new maintainer review.
 
 ## Style
 

@@ -1,11 +1,12 @@
 # Localization and regional terminology
 
-The desktop UI has four maintained locales. Simplified Chinese is the exact-source
+The desktop UI has five maintained locales. Simplified Chinese is the exact-source
 catalog language; the other catalogs must keep the same key and placeholder set.
 
 | Locale | Intended audience | Game terminology baseline |
 |---|---|---|
 | `zh_CN` | Simplified Chinese UI | Project source copy; game names remain fixed catalog data |
+| `zh_TW` | Traditional Chinese UI | Taiwan desktop terminology; game names remain fixed catalog data |
 | `en_US` | NA/EU and the fallback for other regions | Official NA/EU Music Album terminology |
 | `ja_JP` | Japan | Official Japanese Music Album terminology |
 | `ko_KR` | Korea | Official Korean Music Album terminology |
@@ -13,6 +14,11 @@ catalog language; the other catalogs must keep the same key and placeholder set.
 Automatic selection follows the operating-system UI locale when it is one of the
 supported languages. Unknown locales use English. Users can always pin a locale
 in Settings; the stored locale codes remain stable.
+
+`zh_TW` is generated from the complete Simplified Chinese source-key set after
+all fixed UI and General MIDI names are registered. A deterministic built-in
+phrase table applies Taiwan desktop terms before character conversion, so source
+and frozen builds do not need a runtime OpenCC dependency.
 
 ## Locked product terms
 
@@ -70,7 +76,7 @@ Before publishing a build:
 
 1. Verify equal catalog key sets and equal placeholder signatures.
 2. Switch a live main window, Settings dialog, note editor, conversion check, and
-   transcription editor through all four locales.
+   transcription editor through all five locales.
 3. Confirm dynamic names survive every switch byte-for-byte.
 4. Check the minimum supported window sizes with the longest English/Japanese/
    Korean labels and confirm tooltips/accessibility names remain available in

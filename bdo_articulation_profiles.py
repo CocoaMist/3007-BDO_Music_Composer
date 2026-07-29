@@ -46,7 +46,7 @@ PROFILES = (
     ArticulationProfile(frozenset({0x0E}), 22, "拍弦", EvidenceLevel.VERIFIED, True, _SOURCE_GUITAR),
     ArticulationProfile(frozenset({0x0E}), 23, "滑音上升", EvidenceLevel.VERIFIED, True, _SOURCE_GUITAR),
     ArticulationProfile(frozenset({0x0E}), 24, "X-音符", EvidenceLevel.VERIFIED, True, _SOURCE_GUITAR),
-    ArticulationProfile(frozenset({0x0B, 0x12, 0x27, 0x28}), 2, "短促断奏", EvidenceLevel.VERIFIED, True, _SOURCE_STRINGS),
+    ArticulationProfile(frozenset({0x0B, 0x12}), 2, "短促断奏", EvidenceLevel.VERIFIED, True, _SOURCE_STRINGS),
     ArticulationProfile(frozenset({0x0B, 0x12, 0x27, 0x28}), 4, "半音颤音", EvidenceLevel.VERIFIED, True, _SOURCE_STRINGS),
     ArticulationProfile(frozenset({0x12}), 5, "全音颤音", EvidenceLevel.VERIFIED, True, _SOURCE_STRINGS),
     ArticulationProfile(frozenset({0x10}), 9, "大调和弦", EvidenceLevel.VERIFIED, True, _SOURCE_HARP),
@@ -68,29 +68,32 @@ _MUSICAL_CONTEXT = {
     (0x0A, 3): (("melody", "connected"), ("chord", "cadence"), (40, 88), "medium"),
     (0x0A, 12): (("melody", "connected"), ("chord", "cadence"), (40, 88), "medium"),
     (0x0E, 13): (("bass_riff", "rhythm"), ("melody", "cadence"), (28, 62), "low"),
-    (0x0E, 14): (("melody", "sparse"), ("chord",), (60, 100), "medium"),
-    (0x0E, 22): (("bass_riff", "accent"), ("melody",), (28, 70), "medium"),
-    (0x0B, 2): (("rhythm", "melody"), ("chord", "cadence"), (48, 96), "low"),
-    (0x0B, 4): (("melody", "ornament"), ("chord",), (55, 100), "medium"),
-    (0x12, 5): (("melody", "ornament"), ("chord",), (48, 96), "medium"),
-    (0x10, 16): (("scale_run",), ("chord", "cadence"), (48, 100), "high"),
-    (0x11, 11): (("harmony_hold",), ("staccato",), (21, 108), "low"),
-    (0x27, 26): (("melody", "sustain"), ("phrase_boundary",), (48, 96), "medium"),
-    (0x27, 27): (("melody", "sustain"), ("phrase_boundary",), (48, 96), "medium"),
-    (0x27, 28): (("melody", "sustain"), ("phrase_boundary",), (48, 96), "medium"),
+    (0x0E, 14): (("melody", "sparse"), ("chord",), (60, 64), "medium"),
+    (0x0E, 22): (("bass_riff", "accent"), ("melody",), (28, 64), "medium"),
+    (0x0B, 2): (("rhythm", "melody"), ("chord", "cadence"), (48, 88), "low"),
+    (0x0B, 4): (("melody", "ornament"), ("chord",), (55, 88), "medium"),
+    (0x12, 5): (("melody", "ornament"), ("chord",), (48, 88), "medium"),
+    (0x10, 16): (("scale_run",), ("chord", "cadence"), (48, 90), "high"),
+    (0x11, 11): (("harmony_hold",), ("staccato",), (21, 107), "low"),
+    (0x27, 26): (("melody", "sustain"), ("phrase_boundary",), (48, 95), "medium"),
+    (0x27, 27): (("melody", "sustain"), ("phrase_boundary",), (48, 95), "medium"),
+    (0x27, 28): (("melody", "sustain"), ("phrase_boundary",), (48, 95), "medium"),
 }
 
 PROFILES = tuple(
     ArticulationProfile(
-        profile.instrument_ids, profile.ntype, profile.technique, profile.evidence,
+        frozenset({instrument_id}), profile.ntype, profile.technique, profile.evidence,
         profile.auto_apply, profile.source,
-        *(next((_MUSICAL_CONTEXT[(instrument_id, profile.ntype)] for instrument_id in profile.instrument_ids
-                if (instrument_id, profile.ntype) in _MUSICAL_CONTEXT), ((), (), None, "low"))),
+        *_MUSICAL_CONTEXT.get(
+            (instrument_id, profile.ntype),
+            ((), (), None, "low"),
+        ),
         # A registered ntype mapping is not a game A/B validation.  The latter
         # must be recorded explicitly before generated note types are written.
         bdo_verified=False,
     )
     for profile in PROFILES
+    for instrument_id in sorted(profile.instrument_ids)
 )
 
 # Keep the registry exhaustive even where the game mapping is known but its

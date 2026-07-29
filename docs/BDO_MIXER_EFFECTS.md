@@ -17,6 +17,47 @@ PAZ meta 哈希为
 `5bf64283d48aaee328486f027e41af13fbe10375ab18b7db324d9a4e539bdb81`。
 没有导出或签入游戏文件；以上哈希和字段结构足以复核版本。
 
+2026-07-29 再次对同一 v757 meta 的 8,310 个归档路径表做了只读索引，
+共检查 759,865 条路径且无缺失归档。40 个 `midi_instrument*.bnk` 位于
+`PAD07706`–`PAD07711`，现有映射覆盖 40 banks、3,579 个音区行与 1,465 个
+唯一媒体源。另发现：
+
+- `gamecommondata/audioreverbpreset.xml`
+  (`sha256=7270d964e037bb0a4b8ed09d84677cbd9bde07199cdd5ec0c42313e6a5c5b996`)；
+- `gamecommondata/audioreverbpreset_remaster.xml`
+  (`sha256=8dfda91f8fb4fb426e38378abecac13dc41d22e4997ef589d4bd44b637410f72`)。
+
+两份文件各含 9 个环境 `ReverbPreset`，以及 221/206 个 BGM
+`MusicStatePreset`。它们没有 composer、Aux/Bus ID、Delay 或 Chorus 字段，
+只能证明世界环境/BGM 的另一套混响状态机制，不能用于换算作曲器参数。
+路径中还存在通用 `effect_N_N.bnk` 与 `environment*.bnk`，但命名和位置不能
+证明它们属于作曲器共享效果链，因此未接入工具。
+
+共享 `sound2022/windows/init.bnk` 位于 `PAD07705`，解包后为 46,066 bytes，
+`sha256=1add410a6a2459ed3a5e2ec730d2fc9eb4565cec45ffb350f6338c70e3b613df`，
+BKHD 为 Wwise v145。HIRC 包含 117 Audio Bus、45 Aux Bus、34 FX ShareSet 与
+11 FX Custom；插件类型可识别出 RoomVerb、Stereo Delay、Delay、Flanger、
+Meter 与 Peak Limiter。固定/曲线块中能看到：
+
+进一步交叉检查 40 个 `midi_instrument*.bnk` 的 HIRC 原始引用后，确认所有作曲
+乐器都指向同三条共享 AuxBus：
+
+- `121ef8f5` → RoomVerb ShareSet `cf841d41`；
+- `15826347` → Stereo Delay ShareSet `2f24d5de`；
+- `d62c1941` → Flanger ShareSet `fcbaa4ab`（承担界面 Chorus 类效果）。
+
+这是 **bank-derived verified topology**。关联固定/曲线块显示：
+
+- 此 RoomVerb 的 `0–100` RTPC 曲线映射到 Decay `0.2–8.0 s`；
+- 两个 Delay 对象约为 `100 ms / 4% feedback` 与
+  `250 ms / 15% feedback`；
+- Flanger 使用约 `10 ms` 基础延迟，并带 `0–100 → -1..+1 feedback`、
+  `0–0.3 Hz LFO frequency`、`30–100% LFO depth` 三条 RTPC 曲线。
+
+这证明作曲乐器共用上述三总线及算法形态，但对象仍只有哈希 ID/ParamID；目前
+没有客户端调用证据把 v9 八字节逐项绑定到具体 RTPC 输入。因此总线拓扑与曲线
+是直接证据，八字节到 RTPC 的最终运行时绑定仍是推断边界。
+
 ## 已确认的 authoring 模型
 
 游戏发送给客户端的是一份 XML：
@@ -71,18 +112,46 @@ v9 每个物理轨道保存八个 setting bytes。现有曲谱差分工具与 XM
 
 同一乐器超过 730 个音符时会拆成多个物理轨；其音量与八字节设置必须在这些
 块中重复。工具内部有多条同乐器轨道时，游戏最终只对应一个乐器条目，冲突的
-Volume/Aux 值不能静默择一，应在导出前要求合并或选择。
+Volume/Aux 值不能静默择一。导入现在会拒绝同组物理块的 Volume/八字节冲突，
+也会拒绝不同乐器组的 Master 五字节冲突；导出继续拒绝同乐器不同设置。
 
 ## 试听与兼容边界
 
 - 游戏 UI 把 XML 传给原生客户端 `ToClient_RequestToPlayMusic`；JS 本身没有
   DSP、参数单位或 Wwise bus scaling。
-- 当前乐器 SoundBank 只能证明采样、Event、父链增益和部分 Aux/Bus 引用，
-  不能证明上述 `0–100` 如何映射到混响时长、延迟时间或 Chorus LFO。
+- 当前乐器 SoundBank 已证明三条共享 AuxBus 与 RoomVerb/Delay/Flanger 曲线，
+  但仍不能证明 v9 八字节在客户端运行时逐项写入哪一个 RTPC。
 - 在取得共享效果 bank、运行时 RTPC 值和游戏 A/B 前，实时试听应保持
   “近似/未校准”标签。精确保存字段与近似试听必须是两个独立承诺。
 - Wire byte 可容纳 `0–255`，但本工具新建/编辑值应限制在游戏 authoring
   范围 `0–100`；导入旧曲谱的 `101–255` 应原样保留并提示，不得静默截断。
+  优化器插件同样只能生成 `0–100` 的效果写操作。
+
+## 工具中的近似试听
+
+`bdo_preview_effects.py` 按已确认的层级实现三条有界本地总线：每条轨道分别
+把 PCM 送入 Reverb、Delay、Chorus；五个共享参数只配置对应主效果。所有环形
+缓冲和路由 scratch 均在播放前分配，音频回调不读文件、不解析 JSON，也不按
+工程规模分配内存。Stop/Seek 会清除近似效果尾音。
+
+本地算法使用反馈梳状混响（0.2–8 s 有界曲线）、固定 250 ms 反馈延迟和
+10 ms 基础调制延迟合唱。混响与 Flanger LFO/深度曲线采用上述 bank 范围；
+feedback 在本地轻量处理器中限制在绝对值 0.85 以内以避免失稳。Stereo Delay
+的 ParamID 语义与八字节运行时绑定仍未闭环，**不能**称作 1:1。界面因此固定
+显示“未校准近似”，而 v9 导出仍由
+`bdo_track_effects.py` 原样保留/写回八字节设置，不消费这些预览换算。
+
+## 工具界面与状态边界
+
+- 时间轴每个乐器行的“轨道 FX”只编辑 Reverb、Delay、Chorus 三个 Aux
+  Send；它不会修改五个共享主效果参数。
+- 工作区工具栏的“全局效果”打开独立主效果窗口，只编辑整首曲子共享的
+  Reverb Time、Delay Feedback 与三项 Chorus/Flanger 参数；常规“设置”页面
+  不再承载歌曲效果。
+- 两层修改均作为工程操作进入撤销、转换检查、近似试听刷新和自动保存，但
+  各自只写自己拥有的字段。主效果保存在工程/曲谱中，不写入应用级偏好。
+- 新建空白工程或直接导入 MIDI 时主效果从全零开始；打开 BDO 曲谱或已有工程
+  时才恢复该曲自身的主效果，避免上一首曲子的状态串入下一首。
 
 ## 可继续落实的游戏机制
 

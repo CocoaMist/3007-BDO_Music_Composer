@@ -63,6 +63,38 @@ BDO_INSTRUMENT_NAMES = {
     0x28: "弗洛凯斯特拉：圆号",
 }
 
+BDO_ENSEMBLE_PLAYER_LIMIT = 5
+MARNIAN_SYNTH_INSTRUMENT_IDS = frozenset({0x14, 0x18, 0x1C, 0x20})
+MARNIAN_SYNTH_MODE_OFFSETS = {
+    "basic": 0,
+    "stereo": 1,
+    "super": 2,
+    "superoct": 3,
+}
+
+
+def performance_instrument_id(serialized_id: int) -> int:
+    """Map a wire ID to the physical instrument selected by a performer."""
+
+    numeric_id = int(serialized_id)
+    for base_id in MARNIAN_SYNTH_INSTRUMENT_IDS:
+        if base_id <= numeric_id <= base_id + 3:
+            return base_id
+    return numeric_id
+
+
+def unique_performance_instrument_ids(instrument_ids) -> tuple[int, ...]:
+    """Preserve score order while collapsing sound modes of one instrument."""
+
+    result: list[int] = []
+    seen: set[int] = set()
+    for raw_id in instrument_ids:
+        instrument_id = performance_instrument_id(int(raw_id))
+        if instrument_id not in seen:
+            seen.add(instrument_id)
+            result.append(instrument_id)
+    return tuple(result)
+
 
 InstrumentNameTranslator = Callable[[str], str]
 
@@ -189,10 +221,13 @@ def gm_to_bdo_instrument(program: int, is_percussion: bool = False) -> int:
 
 
 __all__ = [
-    "BDO_INSTRUMENTS", "BDO_INSTRUMENT_NAMES", "BDO_NOTE_MIN", "BDO_NOTE_MAX",
+    "BDO_ENSEMBLE_PLAYER_LIMIT", "BDO_INSTRUMENTS", "BDO_INSTRUMENT_NAMES",
+    "BDO_NOTE_MIN", "BDO_NOTE_MAX", "MARNIAN_SYNTH_INSTRUMENT_IDS",
+    "MARNIAN_SYNTH_MODE_OFFSETS",
     "GM_PROGRAM_NAMES",
     "InstrumentNameTranslator", "localized_bdo_instrument_name",
     "localized_bdo_instrument_names", "localized_gm_program_name",
     "DEFAULT_INSTRUMENT", "_GM_TO_BDO_DRUM", "gm_program_name",
-    "gm_to_bdo_instrument",
+    "gm_to_bdo_instrument", "performance_instrument_id",
+    "unique_performance_instrument_ids",
 ]

@@ -489,8 +489,8 @@ def validate_preview(request: OptimizationRequest, preview: OptimizationPreview)
             if request.scope != "global":
                 raise InvalidOptimizationPreview("single-track optimization may not write global effects")
             values = (operation.reverb, operation.delay, *(operation.chorus or (0, 0, 0)))
-            if any(not 0 <= int(value) <= 127 for value in values):
-                raise InvalidOptimizationPreview("effect values must be in [0, 127]")
+            if any(not 0 <= int(value) <= 100 for value in values):
+                raise InvalidOptimizationPreview("effect values must be in [0, 100]")
             continue
         if isinstance(operation, CreateTrack):
             if request.scope != "global":

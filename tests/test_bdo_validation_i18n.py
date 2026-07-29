@@ -258,6 +258,7 @@ class ValidationLocalizationTests(unittest.TestCase):
     def test_all_validation_branches_have_translatable_structured_messages(self) -> None:
         issues = self._all_branch_issues()
         expected_codes = {
+            "articulation.note_unsupported",
             "articulation.unsupported",
             "capacity.instrument",
             "drum.remap",
@@ -310,6 +311,23 @@ class ValidationLocalizationTests(unittest.TestCase):
         localized = localized_validation_message(merge, lambda text: ENGLISH[text])
         self.assertIn("merge 2 tracks", localized)
         self.assertIn("旋律 {A}, Bass 100%", localized)
+
+    def test_unsupported_per_note_articulation_points_to_exact_notes(self) -> None:
+        track = Track(
+            1,
+            [
+                Note(60, 90, 0, 100, 0),
+                Note(64, 90, 100, 100, 255),
+                Note(67, 90, 200, 100, 255),
+            ],
+            0x11,
+        )
+        issue = next(
+            item for item in self._validate([track])
+            if item.code == "articulation.note_unsupported"
+        )
+        self.assertEqual((1, 2), issue.note_indices)
+        self.assertIn("type 255", issue.message)
 
     def test_placeholder_mismatch_falls_back_without_losing_values(self) -> None:
         track = Track(1, [Note(60, 90, 0, 100, 0)], 0x11, bdo_track_volume=118)

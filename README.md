@@ -1,6 +1,6 @@
 # BDO Music Composer
 
-Current release candidate: **v0.3.0**
+Current stable release: **v1.0.0**
 
 <p align="center">
   <img src="assets/icons/app_icon.png" width="160" alt="BDO Music Composer icon">
@@ -29,8 +29,8 @@ MIDI/BDO/空白工程 → 编排 ↔ 音频辅助扒谱 → 游戏音色对照 �
 - 在可缩放时间轴中查看全部轨道；每条轨道直接提供与游戏一致的 `0–100`
   音量控件，并支持静音、独奏、乐器分配和播放定位。输出目录已集中到设置页，
   时间轴底边只保留性能指标。
-- 主页可置顶本地示例工程；维护者当前安装的“淘金小镇 · 示例”明确标注 MIDI 来源为 MidiShow，并已清除 Owner ID、角色名、歌词、外部绝对路径和扒谱审阅。由于未验证该 MIDI 的再分发授权，它只安装在本机用户数据目录，不随源码或安装包发布。
-- 26 个 BDO 乐器共用一套只读编辑适配：打开钢琴卷帘时按已验证音域或样本建议聚焦；架子鼓使用原生 48–64 鼓件标签并避免把 BDO 鼓音再次当作 GM 重映射。时间轴默认使用 12 组原创 AI 辅助乐器族图标，并以原创暗色音乐厅作为低对比背景；也可从设置选择用户本地图片目录覆盖。内置图片不含游戏素材，生成与处理记录见 [assets/README.md](assets/README.md)。“游戏图”只从用户自己的 PAZ 解密白名单 CSS 与乐器 sprite，在 Local AppData 生成 26 张本地缓存图。未知 PAZ 版本、越界坐标或缓存校验失败会拒绝导入，游戏图片不进入工程、Git 或安装包。
+- 主页可置顶本地示例工程，并以游戏式乐器图标摘要标注项目和游戏曲谱使用的实体乐器；1–5 种乐器显示独奏/合奏人数，超过五种则明确显示游戏合奏人数上限。主页结构扫描不会解码 Owner ID、角色名、歌词或音符。维护者当前安装的“淘金小镇 · 示例”明确标注 MIDI 来源为 MidiShow，并已清除 Owner ID、角色名、歌词、外部绝对路径和扒谱审阅。由于未验证该 MIDI 的再分发授权，它只安装在本机用户数据目录，不随源码或安装包发布。
+- 26 个 BDO 乐器共用一套只读编辑适配：打开钢琴卷帘时按已验证音域或样本建议聚焦；架子鼓使用原生 48–64 鼓件标签并避免把 BDO 鼓音再次当作 GM 重映射。时间轴默认使用 12 组原创 AI 辅助乐器族图标，并以原创暗色音乐厅作为低对比背景；主页使用原创 AI 辅助山谷音乐工坊场景和左侧半透明功能层。也可从设置选择用户本地图片目录覆盖时间轴乐器图。内置图片不含游戏素材，生成与处理记录见 [assets/README.md](assets/README.md)。“游戏图”只从用户自己的 PAZ 解密白名单 CSS 与乐器 sprite，在 Local AppData 生成 26 张本地缓存图。未知 PAZ 版本、越界坐标或缓存校验失败会拒绝导入，游戏图片不进入工程、Git 或安装包。
 - 自动保存当前工程，保留轨道映射、编辑后的音符、奏法、力度策略和导出设置。
 
 ### 音符编辑
@@ -75,10 +75,19 @@ MIDI/BDO/空白工程 → 编排 ↔ 音频辅助扒谱 → 游戏音色对照 �
 - 支持轨道级和音符级奏法，并在导出时保存 `ntype`。
 - 支持玛勒尼斯乐器的 Basic、Stereo、Super 和 Super Octave 音源模式。
 - 转换检查会提示音域越界、未知打击乐映射、无效 FX、轨道合并和容量问题。
+- 多轨时间轴会把阻止导出的错误标到对应乐器轨道（红色），把相同乐器导出
+  合并标为非阻断注意项（琥珀色）；悬停显示原因，点击标记可定位完整转换检查。
+  状态发生变化时仅用全局信息框短暂提醒，不在时间轴上方常驻额外提示栏。
 
 ### 游戏音源试听
 
 - 使用用户自行提取的 Wwise WAV 样本进行低延迟实时试听。
+- 未配置游戏样本时，时间轴、钢琴卷帘和琴键试听会使用有界的通用 MIDI
+  音色，并明确标注“非游戏原声”。工具栏状态可直接切换“自动 / 锁定本地
+  BDO / 锁定内置通用 MIDI”，设置页提供同一选项。内置后备按钢琴、拨弦、
+  竖琴、弓弦、木管、铜管、贝斯、手碟和合成器分族合成，并为 BDO 48–64
+  鼓件生成不同的确定性 one-shot；游戏候选 A/B 仍要求真实本地游戏样本，
+  不会用通用音色冒充游戏效果。
 - 样本在播放前预载和解码，实时音频回调不读取磁盘文件。
 - 支持精确事件帧调度、播放定位、有界声部池和输出限幅；优先使用游戏样本原生
   36 kHz 输出，并按 HIRC 音量、Release、循环、播放列表和实例限制近似游戏行为。
@@ -86,6 +95,8 @@ MIDI/BDO/空白工程 → 编排 ↔ 音频辅助扒谱 → 游戏音色对照 �
 - 实时与离线试听都读取独立的游戏轨道音量；当前采用有界线性预览，游戏的
   Wwise 音量曲线仍待 A/B。轨道 Aux Send 与主效果会准确保存，但不会伪造未经
   验证的本地 Reverb / Delay / Chorus DSP。
+- 每条乐器行的“轨道 FX”只控制该乐器发送量；工作区工具栏的“全局效果”只
+  控制整首曲子共享的五个主参数。两层分别撤销和保存，不写入常规应用设置。
 - 未经游戏内 A/B 验证的 DSP 和奏法会明确标记为近似效果。
 
 ### BDO v9 曲谱导出
@@ -99,11 +110,14 @@ MIDI/BDO/空白工程 → 编排 ↔ 音频辅助扒谱 → 游戏音色对照 �
 
 ### 界面与发布
 
-- 界面支持简体中文、英语、日语和韩语。
+- 界面支持简体中文、繁体中文、英语、日语和韩语。
 - 可跟随系统界面语言自动选择；未支持的系统语言回退英语，也可以手动固定语言。
 - 世界服术语、动态数据不翻译边界和发布检查见
   [本地化与地区术语](docs/LOCALIZATION.md)。
 - 支持使用 PyInstaller 构建便携式 Windows 单文件程序。
+- 主页以紧凑的单行身份入口显示当前角色名，状态点和悬停说明呈现 Owner ID 配置状态；身份缺失时启动后以非阻塞提示提醒，
+  最终导出仍由 Owner ID 强校验兜底。未载入参考音频时，时间轴参考层缩为
+  34 px 单行，载入或分析后自动展开。
 - 软件不包含联网、遥测、账号登录或文件上传功能；MIDI、Owner ID、音源和导出文件均在本地处理。
 
 ### Optimizer packages
@@ -142,13 +156,14 @@ in-game evidence workflow.
 
 ## Quick start from source
 
-Requirements: Windows, Python 3.12 recommended, and a working audio device for preview.
+Requirements: Windows, Python 3.12.10 for the reproducible release environment,
+and a working audio device for preview.
 
 ```powershell
-git clone <your-repository-url>
-cd BDO_Music_Composer
+git clone https://github.com/CocoaMist/3007-BDO_Music_Composer.git
+cd 3007-BDO_Music_Composer
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-pyside.txt
+.\.venv\Scripts\python.exe -m pip install --constraint constraints-windows-py312.txt -r requirements-pyside.txt
 powershell -ExecutionPolicy Bypass -File scripts\install_transcription.ps1
 .\.venv\Scripts\python.exe main.py
 ```
@@ -197,7 +212,7 @@ local timeline-art cache without adding game assets to this repository:
 The importer is not a general PAZ unpacker. It reads only the composition CSS
 and instrument sprite, validates version, paths, sizes, CSS crop coordinates,
 PNG bounds, and cache hashes, then writes 26 `instrument_XX.png` tiles. The
-desktop shortcut is **设置 → 音源与效果 → 游戏图**; it performs the same import
+desktop shortcut is **设置 → 音源与外观 → 游戏图**; it performs the same import
 on a worker and selects the returned cache automatically. A newer PAZ meta
 version is rejected by default; `--allow-unverified-meta-version` is an explicit
 local override that retains all structural checks. Never upload the generated
@@ -206,7 +221,7 @@ cache or include it in a build, project, ZIP, or release.
 ## Tests
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -q
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -q
 .\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
 ```
 
@@ -217,7 +232,7 @@ BDO v9 structure, Marnian mode IDs, and localization catalogs.
 ## Build the Windows executable
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\.venv\Scripts\python.exe -m pip install --constraint constraints-windows-py312.txt -r requirements-build.txt
 powershell -ExecutionPolicy Bypass -File scripts\install_transcription.ps1
 powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ```
@@ -239,7 +254,7 @@ dependency/license inventory from the active environment and embeds it with
 the notices.
 
 The Basic Pitch model evidence and the exact native/transitive notice review
-for v0.3.0 are recorded in `packaging/transcription_release_policy.json`.
+for v1.0.0 are recorded in `packaging/transcription_release_policy.json`.
 `build.ps1 -PublicRelease` remains fail-closed to that approved inventory
 digest, so any dependency or artifact change requires a new review. See
 [Windows packaging](docs/WINDOWS_PACKAGING.md).
@@ -249,6 +264,8 @@ autosaves, transcription caches, reference audio, or exported scores.
 At runtime, the frozen application writes its config, autosaves, logs, and
 default exports under `%LOCALAPPDATA%\BDO Music Composer` (override with
 `BDO_USER_DATA_DIR`), so the `dist` folder remains a distributable-only folder.
+Source launches use the same user-data boundary, so tests and normal development
+runs do not place autosaves, configuration, or exports in the repository.
 
 ## Architecture at a glance
 
@@ -279,7 +296,9 @@ flowchart LR
 Primary entry points:
 
 - `main.py` — unified application entry point.
-- `pyside_bdo_gui.py` — desktop UI, editor state, export orchestration, and autosave.
+- `pyside_bdo_gui.py` — desktop UI, editor state, and Qt worker lifecycle.
+- `export_workflow.py` / `atomic_io.py` — immutable export snapshots and atomic score publication.
+- `project_persistence.py` / `home_catalog.py` — background autosave serialization and bounded project discovery.
 - `optimization/` — extensible optimization package, built-in pipeline, and algorithm registry.
 - `bdo_midi_optimizer.py` — backward-compatible facade for older integrations.
 - `bdo_midi/` — independent MIDI parser, immutable note model, instrument maps, and transforms.
@@ -324,7 +343,7 @@ Run this before publishing:
 git status --short
 git ls-files out auto_save dist build
 git grep -n -I -E "(C:\\Users\\|OPENAI_API_KEY|api[_-]?key|password)"
-.\.venv\Scripts\python.exe -m unittest discover -s tests -q
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -q
 ```
 
 ## Attribution and research citations

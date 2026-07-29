@@ -15,7 +15,7 @@ bdo_codec  -> BDO v9 document model, binary encoding, and ICE
 Install dependencies in the project virtualenv:
 
 ```powershell
-& .\.venv\Scripts\python.exe -m pip install -r requirements-pyside.txt
+& .\.venv\Scripts\python.exe -m pip install --constraint constraints-windows-py312.txt -r requirements-pyside.txt
 ```
 
 Run the local wrapper:
@@ -63,6 +63,13 @@ your own account and never commit or attach that file to a release.
 - MIDI channel 10, zero-based channel 9, is treated as percussion.
 - General MIDI programs are mapped to available BDO instruments.
 - Notes are merged by target BDO instrument.
+- Homepage ensemble metadata counts physical instruments, not serialized track
+  groups: duplicate editor tracks and physical 730-note chunks do not add a
+  performer, and Marnian Basic/Stereo/Super/Super Octave IDs fold back to their
+  one selectable instrument. Ensemble playback uses a normal party and is capped
+  at five players. A score with more than five physical instruments is therefore
+  marked over the in-game ensemble limit instead of claiming that an 8- or
+  10-person ensemble is possible.
 - Each physical BDO v9 track is split at 730 notes. This is a verified binary
   chunk rule, not the player's total song allowance.
 - 10,000 notes per logical instrument is only a conservative tool workload and

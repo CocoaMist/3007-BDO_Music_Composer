@@ -122,7 +122,10 @@ VALIDATION_SOURCES = {
 
 class TranslationCatalogTests(unittest.TestCase):
     def test_supported_languages_are_declared(self):
-        self.assertEqual([code for code, _label in LANGUAGES], ["zh_CN", "en_US", "ja_JP", "ko_KR"])
+        self.assertEqual(
+            [code for code, _label in LANGUAGES],
+            ["zh_CN", "zh_TW", "en_US", "ja_JP", "ko_KR"],
+        )
         self.assertEqual(LANGUAGE_CHOICES[0][0], "auto")
         self.assertEqual(LANGUAGE_CHOICES[0][1], "自动（跟随系统）")
 
@@ -140,6 +143,10 @@ class TranslationCatalogTests(unittest.TestCase):
         cases = {
             ("China Standard Time", 480): "zh_CN",
             ("Asia/Shanghai", 480): "zh_CN",
+            ("Taipei Standard Time", 480): "zh_TW",
+            ("Asia/Taipei", 480): "zh_TW",
+            ("Hong Kong Standard Time", 480): "zh_TW",
+            ("Asia/Hong_Kong", 480): "zh_TW",
             ("Tokyo Standard Time", 540): "ja_JP",
             ("Asia/Tokyo", 540): "ja_JP",
             ("Korea Standard Time", 540): "ko_KR",
@@ -161,9 +168,37 @@ class TranslationCatalogTests(unittest.TestCase):
         for language, catalog in TRANSLATIONS.items():
             with self.subTest(language=language):
                 self.assertTrue(required.issubset(catalog))
-                self.assertTrue(all(catalog[source] != source for source in required))
+                if language == "zh_TW":
+                    self.assertTrue(all(catalog[source] for source in required))
+                else:
+                    self.assertTrue(all(catalog[source] != source for source in required))
 
-    def test_non_chinese_catalogs_have_identical_source_coverage(self):
+    def test_traditional_chinese_uses_taiwan_desktop_terms(self):
+        catalog = TRANSLATIONS["zh_TW"]
+        expected = {
+            "导入 MIDI": "匯入 MIDI",
+            "打开工程": "開啟專案",
+            "界面语言": "介面語言",
+            "设置": "設定",
+            "游戏曲谱": "遊戲樂譜",
+            "轨道 FX 设置每轨发送；此页设置共享主效果。": (
+                "音軌 FX 設定每軌發送；此頁設定共享主效果。"
+            ),
+            "游戏参数 · 本地 FX 试听为未校准近似": (
+                "遊戲參數 · 本機 FX 試聽為未校準近似"
+            ),
+            "延迟反馈：控制回声返回延迟线的比例；越高，重复越多。本地试听固定约 250 ms。": (
+                "延遲回授：控制回聲返回延遲線的比例；越高，重複越多。本機試聽固定約 250 ms。"
+            ),
+            "合唱反馈：控制调制延迟的反馈强度；越高，梳状与旋动感越明显。": (
+                "合唱回授：控制調變延遲的回授強度；越高，梳狀與旋動感越明顯。"
+            ),
+        }
+        for source, translated in expected.items():
+            with self.subTest(source=source):
+                self.assertEqual(catalog[source], translated)
+
+    def test_translated_catalogs_have_identical_source_coverage(self):
         key_sets = {language: set(catalog) for language, catalog in TRANSLATIONS.items()}
         baseline = key_sets["en_US"]
         for language, keys in key_sets.items():
@@ -378,7 +413,10 @@ class TranslationCatalogTests(unittest.TestCase):
         for language, catalog in TRANSLATIONS.items():
             with self.subTest(language=language):
                 self.assertTrue(required.issubset(catalog))
-                self.assertTrue(all(catalog[source] != source for source in required))
+                if language == "zh_TW":
+                    self.assertTrue(all(catalog[source] for source in required))
+                else:
+                    self.assertTrue(all(catalog[source] != source for source in required))
                 rendered = catalog[
                     "已写入草稿 {accepted} 个 · 跳过重复 {duplicates} · 越界 {invalid}"
                 ].format(accepted=3, duplicates=1, invalid=2)
@@ -425,7 +463,10 @@ class TranslationCatalogTests(unittest.TestCase):
         for language, catalog in TRANSLATIONS.items():
             with self.subTest(language=language):
                 self.assertTrue(required.issubset(catalog))
-                self.assertTrue(all(catalog[source] != source for source in required))
+                if language == "zh_TW":
+                    self.assertTrue(all(catalog[source] for source in required))
+                else:
+                    self.assertTrue(all(catalog[source] != source for source in required))
                 routed = catalog[
                     "已路由 {count} 个 · 越界 {invalid} · 已满足 {duplicates}"
                 ].format(count=4, invalid=1, duplicates=2)

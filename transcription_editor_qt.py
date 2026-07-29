@@ -1326,6 +1326,7 @@ class TranscriptionEditorPanel(QWidget):
     write_current_track_requested = Signal()
     copy_to_track_requested = Signal(int)
     clear_staging_requested = Signal()
+    advanced_controls_expanded_changed = Signal(bool)
     diagnostic_evidence_expanded_changed = Signal(bool)
     assist_expanded_changed = Signal(bool)
     key_edit_requested = Signal(object)
@@ -1381,6 +1382,7 @@ class TranscriptionEditorPanel(QWidget):
         self._copy_allowed = False
         self._assist_available = False
         self._melody_lines_available = False
+        self._advanced_controls_expanded = False
         self._suspected_fragment_count = 0
         self._idle_status = trv("载入参考音频后可开始整首分析")
 
@@ -1498,15 +1500,15 @@ class TranscriptionEditorPanel(QWidget):
         analysis.addWidget(self.cleanup_profile_group, 0, 5)
         self._refresh_cleanup_profile_cue()
 
-        confidence_caption = QLabel(
+        self.confidence_caption = QLabel(
             tr("弱显"),
             self.analysis_bar,
         )
-        confidence_caption.setToolTip(
+        self.confidence_caption.setToolTip(
             tr("只调整低置信候选的透明度，不隐藏或禁用候选。")
         )
-        confidence_caption.setMaximumWidth(42)
-        analysis.addWidget(confidence_caption, 0, 6)
+        self.confidence_caption.setMaximumWidth(42)
+        analysis.addWidget(self.confidence_caption, 0, 6)
         self.confidence_slider = QSlider(Qt.Horizontal, self.analysis_bar)
         self.confidence_slider.setRange(0, 100)
         self.confidence_slider.setValue(30)
@@ -1514,11 +1516,13 @@ class TranscriptionEditorPanel(QWidget):
         self.confidence_slider.setAccessibleName(
             tr("低置信候选透明度")
         )
-        self.confidence_slider.setToolTip(confidence_caption.toolTip())
+        self.confidence_slider.setToolTip(
+            self.confidence_caption.toolTip()
+        )
         self.confidence_slider.valueChanged.connect(
             self._confidence_slider_changed,
         )
-        confidence_caption.setBuddy(self.confidence_slider)
+        self.confidence_caption.setBuddy(self.confidence_slider)
         analysis.addWidget(self.confidence_slider, 0, 7)
         self.confidence_label = QLabel("30%", self.analysis_bar)
         self.confidence_label.setFixedWidth(40)
@@ -1673,6 +1677,22 @@ class TranscriptionEditorPanel(QWidget):
         guide_tools = QHBoxLayout(self.guide_tools_bar)
         guide_tools.setContentsMargins(0, 0, 0, 0)
         guide_tools.setSpacing(6)
+        self.advanced_toggle_button = QToolButton(self.analysis_bar)
+        self.advanced_toggle_button.setObjectName(
+            "TranscriptionAdvancedToggle"
+        )
+        self.advanced_toggle_button.setText(tr("高级"))
+        self.advanced_toggle_button.setAccessibleName(
+            tr("高级扒谱选项")
+        )
+        self.advanced_toggle_button.setToolTip(tr("高级扒谱选项"))
+        _responsive_control_width(self.advanced_toggle_button, 72, 108)
+        self.advanced_toggle_button.setCheckable(True)
+        self.advanced_toggle_button.setArrowType(Qt.RightArrow)
+        self.advanced_toggle_button.toggled.connect(
+            self.set_advanced_controls_expanded,
+        )
+        guide_tools.addWidget(self.advanced_toggle_button)
         guide_tools.addWidget(self.melody_lines_button)
         guide_tools.addWidget(self.diagnostic_toggle_button)
         guide_tools.addWidget(self.frame_checkbox)
@@ -1883,6 +1903,7 @@ class TranscriptionEditorPanel(QWidget):
             self.show_suppressed_changed,
         )
         self._forward_assist_signals()
+        self.set_advanced_controls_expanded(False)
         self.set_diagnostic_evidence_expanded(False)
         self.set_action_state(
             write_enabled=False,
@@ -1950,6 +1971,34 @@ class TranscriptionEditorPanel(QWidget):
         )
         for source, destination in forwards:
             source.connect(destination)
+
+    @property
+    def advanced_controls_expanded(self) -> bool:
+        return self._advanced_controls_expanded
+
+    def set_advanced_controls_expanded(self, expanded: bool) -> None:
+        expanded = bool(expanded)
+        self._advanced_controls_expanded = expanded
+        blocked = self.advanced_toggle_button.blockSignals(True)
+        self.advanced_toggle_button.setChecked(expanded)
+        self.advanced_toggle_button.blockSignals(blocked)
+        self.advanced_toggle_button.setArrowType(
+            Qt.DownArrow if expanded else Qt.RightArrow
+        )
+        for widget in (
+            self.analysis_mode_combo,
+            self.sensitivity_combo,
+            self.cleanup_profile_group,
+            self.confidence_caption,
+            self.confidence_slider,
+            self.confidence_label,
+            self.reference_opacity_button,
+            self.align_audio_button,
+            self.beat_origin_button,
+            self.clear_range_button,
+        ):
+            widget.setVisible(expanded)
+        self.advanced_controls_expanded_changed.emit(expanded)
 
     def set_diagnostic_evidence_expanded(self, expanded: bool) -> None:
         expanded = bool(expanded)

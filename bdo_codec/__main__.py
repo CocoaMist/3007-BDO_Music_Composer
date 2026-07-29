@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 import sys
 
+from atomic_io import atomic_write_bytes
+
 from . import (
     compare_score_documents, decode_score, document_from_dict, document_to_dict,
     encode_score, read_score, validate_score,
@@ -19,7 +21,7 @@ def _write_json(path: Path | None, payload: object) -> None:
     if path is None:
         print(text)
     else:
-        path.write_text(text + "\n", encoding="utf-8")
+        atomic_write_bytes(path, (text + "\n").encode("utf-8"))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -56,7 +58,10 @@ def main(argv: list[str] | None = None) -> int:
             print("Warning: reversible JSON contains Owner ID and character names.", file=sys.stderr)
         elif args.command == "encode":
             payload = json.loads(args.input.read_text(encoding="utf-8"))
-            args.output.write_bytes(encode_score(document_from_dict(payload), mode="canonical"))
+            atomic_write_bytes(
+                args.output,
+                encode_score(document_from_dict(payload), mode="canonical"),
+            )
         elif args.command == "validate":
             issues = validate_score(read_score(args.input))
             _write_json(None, [asdict(issue) for issue in issues])
@@ -65,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
             source = args.input.read_bytes()
             encoded = encode_score(decode_score(source), mode="lossless")
             if args.output is not None:
-                args.output.write_bytes(encoded)
+                atomic_write_bytes(args.output, encoded)
             if args.verify_bytes and encoded != source:
                 print("roundtrip byte comparison failed", file=sys.stderr)
                 return 1

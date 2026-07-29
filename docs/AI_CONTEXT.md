@@ -7,7 +7,7 @@ This document helps an AI agent find the correct subsystem without scanning ever
 | User request | Read first | Likely edit |
 |---|---|---|
 | Main window/timeline UI | `TimelineCanvas`, `MidiToBdoWindow._build_*`, `fluent_theme.py` | `pyside_bdo_gui.py`, `fluent_theme.py` |
-| Home page/unified projects | `scan_game_scores`, `scan_local_projects`, `MidiToBdoWindow._build_home_page` | `pyside_bdo_gui.py`, `i18n.py` |
+| Home page/unified projects | bounded scanners and safe project index, `MidiToBdoWindow._build_home_page` | `home_catalog.py`, `project_persistence.py`, `pyside_bdo_gui.py`, `i18n.py` |
 | Open/edit a BDO v9 score | `read_bdo_score`, `track_states_from_bdo_score`, `MidiToBdoWindow._load_bdo_info` | `bdo_score.py`, `pyside_bdo_gui.py` |
 | Piano-roll behavior | `PianoRollCanvas`, `MidiNoteEditorDialog` | `pyside_bdo_gui.py` |
 | Instrument-specific editor lanes/roles | verified vs preview vs recommended boundaries | `bdo_instrument_adaptation.py`, `pyside_bdo_gui.py` |
@@ -40,7 +40,7 @@ This document helps an AI agent find the correct subsystem without scanning ever
 | Sample selection/instrument ranges | canonical bank routing, renderer and mapping | `bdo_instrument_samples.py`, `bdo_sample_renderer.py` |
 | BDO v9 codec/binary format | `docs/BDO_V9_CODEC.md`, codec tests | `bdo_codec/` |
 | MIDI import / mappings | MIDI parser tests | `bdo_midi/` |
-| MIDI/editor-to-BDO adaptation | export round-trip tests | `bdo_export/` |
+| MIDI/editor-to-BDO adaptation | immutable export snapshot, atomic publication, export round-trip tests | `export_workflow.py`, `atomic_io.py`, `bdo_export/` |
 | Game rules / conversion issues | profile + validation tests | `bdo_profile.py`, `bdo_validation.py`, `data/profiles/` |
 | BDO score inspection / comparison | score snapshot tests | `bdo_score.py`, `scripts/inspect_bdo.py` |
 | Audio A/B research | coverage/alignment tests | `bdo_audio_research.py`, `bdo_experiments.py` |
@@ -81,6 +81,9 @@ Do not promote an inference to “verified” without game evidence.
 - `OptimizationRequest` / `OptimizationPreview`: stable optimizer-package API.
 - `discover_host_algorithms`: unified built-in and `.bdoopt` discovery boundary.
 - `BdoRealtimeAudioEngine`: preload, event schedule, voice pool, Qt output.
+- `PreviewEffectProcessor`: preallocated, explicitly uncalibrated local
+  Reverb/Delay/Chorus preview; exact export bytes remain in
+  `bdo_track_effects.py`.
 - `VoiceLifecycle` / `voice_lifecycle`: Qt-free formal-note, audible-tail, and
   fade boundary shared by real-time playback, seeking, audition, and offline
   rendering. Recovered Wwise release and loop metadata override legacy
@@ -133,6 +136,11 @@ Do not promote an inference to “verified” without game evidence.
 ## Common traps
 
 - Re-reading the source MIDI during export discards manual editor changes.
+- Never pass mutable `TrackState` or note-list containers into `ConvertWorker`;
+  freeze them before starting the thread. Keep the worker referenced until its
+  `finished` signal and make close wait rather than destroying a live `QThread`.
+- User-owned score/project destinations must be replaced through `atomic_io`;
+  direct `write_bytes`/`copy2` can truncate the last known-good file.
 - `duration_scale` must be folded into note durations before serialization.
 - A BDO drum track is not a normal melodic track; avoid double GM remapping.
 - Never append transcription output directly to `TrackState`. Write-to-Draft
@@ -235,6 +243,9 @@ Do not promote an inference to “verified” without game evidence.
   paths. Recovery sources use canonicalized project-relative references; reject
   `..` and symlink escapes. Absolute reads exist only for pre-policy project
   compatibility and must be sanitized by the next autosave.
+- Autosave JSON encoding and disk I/O belong to the single coalescing writer,
+  not the GUI timer callback. Home discovery reads `project.index.json` or a
+  bounded legacy prefix and applies its item limit before metadata parsing.
 - `sys._MEIPASS` is read-only/temporary from the app's perspective; do not write exports there.
 - Qt widgets can store non-ASCII dynamic properties incorrectly on some Windows locale paths; localization keeps source strings in Python `WeakKeyDictionary` storage.
 - One-file PyInstaller launches a parent and child process; stop both during startup tests before rebuilding.
@@ -266,7 +277,9 @@ must point at private local evidence and must never copy its inputs into Git.
 .\.venv\Scripts\python.exe -m unittest tests.test_bdo_realtime_audio -v
 ```
 
-Look for exact event frames, seek voice restoration, bounded voices, preload deduplication, and limiter stability.
+Look for exact event frames, seek voice restoration, bounded voices, preload
+deduplication, allocation-free effect routing, reset tails, and limiter
+stability.
 
 ### Transcription
 
@@ -354,11 +367,12 @@ Check scope isolation, pitch/count invariants, deterministic humanization, and p
 
 ### Localization
 
-Run `tests.test_i18n_catalog`, then create an offscreen `QApplication`, switch `Localizer` through all four locales, and inspect main/settings/editor widgets.
+Run `tests.test_i18n_catalog`, then create an offscreen `QApplication`, switch `Localizer` through all five locales, and inspect main/settings/editor widgets.
 
 ## Public-release checklist
 
-- Add and review a root `LICENSE`.
+- Verify the existing root `LICENSE` still covers only original project code,
+  and keep third-party terms in `THIRD_PARTY_NOTICES.md`.
 - Confirm source archives and binaries contain no historical `midi2bdo` or `_ice` modules.
 - Remove tracked `out/` scores and any Owner IDs from Git history.
 - Do not publish extracted game audio or PAZ contents.

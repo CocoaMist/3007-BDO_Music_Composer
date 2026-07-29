@@ -9,6 +9,8 @@ from pathlib import Path
 import struct
 from typing import Iterable
 
+from atomic_io import atomic_write_bytes
+
 from . import ice
 from .model import (
     BDO_VERSION, HEADER_SIZE, MAX_NOTES_PER_TRACK, NAME_FIELD_SIZE,
@@ -24,6 +26,8 @@ VERSION_RECORD = struct.Struct("<I")
 HEADER_NAMES_OFFSET = 8
 HEADER_BPM_OFFSET = HEADER_NAMES_OFFSET + NAME_FIELD_SIZE * 2
 HEADER_TAG_OFFSET = HEADER_BPM_OFFSET + 4
+CATALOG_MAX_INSTRUMENT_GROUPS = 256
+CATALOG_MAX_PHYSICAL_TRACKS = 4_096
 
 
 def _fail(message: str, offset: int | None = None) -> BdoDecodeError:
@@ -189,6 +193,78 @@ def decode_score(data: bytes) -> BdoDocument:
         _source_opaque_tracks=document._source_opaque_tracks,
         _trailing_offset=document._trailing_offset,
     )
+
+
+def score_instrument_ids(data: bytes) -> tuple[int, ...]:
+    """Read only the score's structural instrument markers.
+
+    ICE is an independent-block cipher, so the home catalog can decrypt the
+    fixed group headers and track prefixes without decoding identity fields or
+    materializing note records.  The returned IDs preserve score order and are
+    deduplicated for compact UI summaries.
+    """
+
+    if len(data) < 4:
+        raise _fail("BDO score is shorter than the version field")
+    version = VERSION_RECORD.unpack_from(data)[0]
+    if version != BDO_VERSION:
+        raise _fail(
+            f"unsupported BDO score version {version}; expected {BDO_VERSION}"
+        )
+    ciphertext = data[4:]
+    if not ciphertext or len(ciphertext) % 8:
+        raise _fail("encrypted BDO payload must be non-empty and 8-byte aligned", 4)
+    if len(ciphertext) < HEADER_SIZE + 3:
+        raise _fail("encrypted BDO payload is shorter than the fixed header")
+
+    def plaintext_slice(offset: int, size: int) -> bytes:
+        end = offset + size
+        if offset < 0 or size < 0 or end > len(ciphertext):
+            raise _fail("score structure exceeds encrypted payload", offset + 4)
+        block_start = (offset // 8) * 8
+        block_end = ((end + 7) // 8) * 8
+        decrypted = ice.decrypt(ciphertext[block_start:block_end])
+        local_start = offset - block_start
+        return decrypted[local_start:local_start + size]
+
+    offset = HEADER_SIZE
+    group_header = plaintext_slice(offset, 3)
+    if group_header[0] != 0:
+        raise _fail("unexpected instrument group marker", offset + 4)
+    instrument_count = struct.unpack_from("<H", group_header, 1)[0]
+    if instrument_count > CATALOG_MAX_INSTRUMENT_GROUPS:
+        raise _fail("instrument group count exceeds catalog safety limit", offset + 5)
+    offset += 3
+
+    ordered_ids: list[int] = []
+    seen_ids: set[int] = set()
+    physical_track_count = 0
+    for _group_index in range(instrument_count):
+        track_count = struct.unpack("<H", plaintext_slice(offset, 2))[0]
+        offset += 2
+        physical_track_count += track_count
+        if physical_track_count > CATALOG_MAX_PHYSICAL_TRACKS:
+            raise _fail("track count exceeds catalog safety limit", offset + 2)
+        for _track_index in range(track_count):
+            track_offset = offset
+            raw_prefix = plaintext_slice(track_offset, TRACK_PREFIX.size)
+            data_size, marker, _raw_settings, _note_count = TRACK_PREFIX.unpack(
+                raw_prefix
+            )
+            if data_size < 12:
+                raise _fail(
+                    "track data_size is smaller than its fixed body",
+                    track_offset + 4,
+                )
+            track_end = track_offset + 2 + data_size
+            if track_end > len(ciphertext):
+                raise _fail("track data_size exceeds payload", track_offset + 4)
+            instrument_id = marker & 0xFF
+            if instrument_id not in seen_ids:
+                seen_ids.add(instrument_id)
+                ordered_ids.append(instrument_id)
+            offset = track_end
+    return tuple(ordered_ids)
 
 
 def _validate_byte(value: int, path: str) -> None:
@@ -362,7 +438,7 @@ def read_score(path: str | Path) -> BdoDocument:
 
 
 def write_score(path: str | Path, document: BdoDocument, *, mode: str = "lossless") -> None:
-    Path(path).write_bytes(encode_score(document, mode=mode))
+    atomic_write_bytes(path, encode_score(document, mode=mode))
 
 
 def validate_score(document: BdoDocument) -> tuple[CodecIssue, ...]:
@@ -540,7 +616,8 @@ def document_from_dict(payload: dict) -> BdoDocument:
 
 
 __all__ = [
-    "TRACK_PREFIX", "NOTE_RECORD", "decode_score", "encode_score", "build_plaintext",
+    "TRACK_PREFIX", "NOTE_RECORD", "decode_score", "score_instrument_ids",
+    "encode_score", "build_plaintext",
     "read_score", "write_score", "validate_score", "compare_score_documents",
     "document_to_dict", "document_from_dict",
 ]

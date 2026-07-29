@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Sequence
 
+from atomic_io import atomic_write_bytes
 from bdo_profile import EVIDENCE_STATES
 
 
@@ -34,7 +35,10 @@ class AbExperimentRecord:
 
 def write_experiment_records(path: Path, records: Sequence[AbExperimentRecord]) -> None:
     payload = {"schema_version": 1, "experiments": [asdict(item) for item in records]}
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_bytes(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
+    )
 
 
 def read_experiment_records(path: Path) -> tuple[AbExperimentRecord, ...]:

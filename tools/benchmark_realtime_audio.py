@@ -13,6 +13,7 @@ import argparse
 import json
 import math
 import os
+import platform
 import statistics
 import sys
 import threading
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import PySide6
 from PySide6.QtCore import QCoreApplication
 
 
@@ -53,6 +55,11 @@ Track = namedtuple(
     "duration_scale articulation_type notes",
 )
 
+EFFECT_REVERB_SEND = 0.35
+EFFECT_DELAY_SEND = 0.25
+EFFECT_CHORUS_SEND = 0.20
+EFFECT_AUTHORING_VALUE = 50
+
 
 def _percentile(values: list[float], fraction: float) -> float:
     if not values:
@@ -65,6 +72,8 @@ def build_synthetic_engine(
     voices: int,
     seconds: float,
     sample_rate: int = 36_000,
+    *,
+    effect_preview: bool = False,
 ) -> BdoRealtimeAudioEngine:
     """Create a device-free, loop-backed workload requiring no local samples."""
     voice_count = max(1, min(256, int(voices)))
@@ -94,6 +103,14 @@ def build_synthetic_engine(
             fade_out_frames=max(1, round(sample_rate * 0.012)),
             loop_start_frame=0,
             loop_end_frame=sample_frames,
+            reverb_send=EFFECT_REVERB_SEND if effect_preview else 0.0,
+            delay_send=EFFECT_DELAY_SEND if effect_preview else 0.0,
+            chorus_send=EFFECT_CHORUS_SEND if effect_preview else 0.0,
+            reverb_time=EFFECT_AUTHORING_VALUE if effect_preview else 0,
+            delay_feedback=EFFECT_AUTHORING_VALUE if effect_preview else 0,
+            chorus_feedback=EFFECT_AUTHORING_VALUE if effect_preview else 0,
+            chorus_lfo_depth=EFFECT_AUTHORING_VALUE if effect_preview else 0,
+            chorus_lfo_frequency=EFFECT_AUTHORING_VALUE if effect_preview else 0,
         )
         for index in range(voice_count)
     ]
@@ -116,7 +133,24 @@ def build_synthetic_engine(
         engine._track_meter_ids = list(range(16))
         engine._track_peaks = np.zeros(16, dtype=np.float32)
         engine._track_block_peaks = np.zeros(16, dtype=np.float32)
+        engine._configure_preview_effects(events)
     return engine
+
+
+def enable_effect_preview(engine: BdoRealtimeAudioEngine) -> None:
+    """Apply one stable, intentionally approximate all-effects workload."""
+
+    with engine._lock:
+        for event in engine._events:
+            event.reverb_send = EFFECT_REVERB_SEND
+            event.delay_send = EFFECT_DELAY_SEND
+            event.chorus_send = EFFECT_CHORUS_SEND
+            event.reverb_time = EFFECT_AUTHORING_VALUE
+            event.delay_feedback = EFFECT_AUTHORING_VALUE
+            event.chorus_feedback = EFFECT_AUTHORING_VALUE
+            event.chorus_lfo_depth = EFFECT_AUTHORING_VALUE
+            event.chorus_lfo_frequency = EFFECT_AUTHORING_VALUE
+        engine._configure_preview_effects(engine._events)
 
 
 def _configure_offline_worker(
@@ -424,7 +458,14 @@ def main() -> int:
         action="store_true",
         help="diagnostic baseline that keeps same-source tiles only",
     )
+    parser.add_argument(
+        "--effects",
+        action="store_true",
+        help="enable a stable local reverb/delay/chorus stress workload",
+    )
     args = parser.parse_args()
+    if args.effects and args.mode != "offline":
+        parser.error("--effects currently requires --mode offline")
     app = QCoreApplication.instance() or QCoreApplication([])
     use_synthetic = args.synthetic or not args.audio_root
     tracks = _actual_tracks(args.voices, args.seconds, args.workload)
@@ -434,6 +475,7 @@ def main() -> int:
             args.voices,
             args.seconds,
             args.sample_rate,
+            effect_preview=args.effects,
         )
     else:
         engine = BdoRealtimeAudioEngine(
@@ -454,6 +496,9 @@ def main() -> int:
             )
             prepare_ms = (time.perf_counter() - started) * 1000.0
 
+    if args.effects and not use_synthetic:
+        enable_effect_preview(engine)
+
     try:
         if args.mode == "offline":
             result = run_offline_benchmark(
@@ -473,6 +518,23 @@ def main() -> int:
         "events_prepared": len(engine._events),
         "unique_samples": len({id(event.sample) for event in engine._events}),
         "cross_source_arena": bool(engine._sample_arena is not None),
+        "effects": bool(args.effects),
+        "effect_workload": (
+            {
+                "reverb_send": EFFECT_REVERB_SEND,
+                "delay_send": EFFECT_DELAY_SEND,
+                "chorus_send": EFFECT_CHORUS_SEND,
+                "authoring_values": EFFECT_AUTHORING_VALUE,
+            }
+            if args.effects
+            else None
+        ),
+        "environment": {
+            "platform": platform.platform(),
+            "python": platform.python_version(),
+            "pyside": PySide6.__version__,
+            "numpy": np.__version__,
+        },
     })
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

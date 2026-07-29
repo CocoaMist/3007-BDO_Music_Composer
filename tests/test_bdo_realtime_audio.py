@@ -18,6 +18,7 @@ from bdo_audio_lifecycle import (
     sample_output_frames,
     voice_lifecycle,
 )
+from bdo_preview_effects import PreviewEffectSettings
 from bdo_realtime_audio import (
     AudioEngineError,
     BdoRealtimeAudioEngine,
@@ -478,6 +479,65 @@ class RealtimeAudioTests(unittest.TestCase):
         self.assertGreater(status.render_p95_ms, 0.0)
         self.assertGreater(status.render_p95_load, 0.0)
 
+    def test_warmed_effect_callback_has_no_io_or_numpy_buffer_allocation(
+        self,
+    ) -> None:
+        sample = _Sample(
+            np.ones((8_192, 2), dtype=np.float32) * 0.01,
+            48_000,
+            8_192,
+        )
+        event = _Event(
+            0,
+            sample,
+            1.0,
+            0.5,
+            audible_frames=8_192,
+            reverb_send=0.5,
+            delay_send=0.4,
+            chorus_send=0.3,
+            reverb_time=60,
+            delay_feedback=40,
+            chorus_feedback=30,
+            chorus_lfo_depth=50,
+            chorus_lfo_frequency=45,
+        )
+        self.engine._commit_project(
+            [event],
+            {},
+            sample.pcm.nbytes,
+            ["approximate FX"],
+            8_192,
+            start_ms=0.0,
+        )
+        self.engine._playing = True
+        self.engine._ensure_render_buffers(1_024)
+        self.engine._render_locked(64)
+
+        with (
+            patch("builtins.open", side_effect=AssertionError("callback file I/O")),
+            patch(
+                "bdo_realtime_audio.json.loads",
+                side_effect=AssertionError("callback JSON parse"),
+            ),
+            patch(
+                "bdo_realtime_audio.wave.open",
+                side_effect=AssertionError("callback WAV decode"),
+            ),
+            patch(
+                "bdo_realtime_audio.np.empty",
+                side_effect=AssertionError("callback scratch allocation"),
+            ),
+            patch(
+                "bdo_realtime_audio.np.zeros",
+                side_effect=AssertionError("callback scratch allocation"),
+            ),
+        ):
+            rendered = self.engine._render_locked(1_024)
+
+        self.assertGreater(float(np.max(np.abs(rendered))), 0.0)
+        self.assertTrue(self.engine._preview_effects.active)
+
     def test_voice_pool_is_capped_at_256(self) -> None:
         sample = _Sample(np.ones((4, 2), dtype=np.float32), 48_000, 4)
         for _ in range(300):
@@ -569,12 +629,12 @@ class RealtimeAudioTests(unittest.TestCase):
         self.assertIsNotNone(selected)
         self.assertEqual(selected[0], "midi_instrument_synth_saw_super")
 
-    def test_hand_authored_game_ranges_are_enforced(self) -> None:
+    def test_only_verified_hand_authored_game_ranges_are_enforced(self) -> None:
         self.assertEqual((min(BDO_EDITOR_PITCH_RANGES[0x0A]), max(BDO_EDITOR_PITCH_RANGES[0x0A])), (36, 88))
         self.assertEqual((min(BDO_EDITOR_PITCH_RANGES[0x0E]), max(BDO_EDITOR_PITCH_RANGES[0x0E])), (28, 64))
         self.assertEqual((min(BDO_EDITOR_PITCH_RANGES[0x0F]), max(BDO_EDITOR_PITCH_RANGES[0x0F])), (28, 64))
         self.assertEqual((min(BDO_EDITOR_PITCH_RANGES[0x12]), max(BDO_EDITOR_PITCH_RANGES[0x12])), (43, 88))
-        self.assertEqual((min(BDO_EDITOR_PITCH_RANGES[0x13]), max(BDO_EDITOR_PITCH_RANGES[0x13])), (45, 88))
+        self.assertNotIn(0x13, BDO_EDITOR_PITCH_RANGES)
 
     def test_project_preload_deduplicates_sources_before_parallel_decode(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
@@ -1165,6 +1225,298 @@ class RealtimeAudioTests(unittest.TestCase):
                 scalar_pcm,
                 rtol=4.0e-6,
                 atol=2.0e-6,
+            )
+            np.testing.assert_allclose(
+                tiled._track_peaks,
+                scalar._track_peaks,
+                rtol=4.0e-6,
+                atol=2.0e-6,
+            )
+            self.assertEqual(
+                [(voice.position, voice.age_frames) for voice in tiled._voices],
+                [(voice.position, voice.age_frames) for voice in scalar._voices],
+            )
+        finally:
+            tiled.stop()
+            scalar.stop()
+
+    def test_linear_voice_tiles_preserve_independent_effect_sends(self) -> None:
+        frames = 1_024
+        phase = np.arange(4_096, dtype=np.float32)
+        mono = np.sin(phase * (2.0 * np.pi * 220.0 / 48_000)) * 0.006
+        sample = _Sample(
+            np.column_stack((mono, mono)),
+            48_000,
+            len(mono),
+            len(mono),
+        )
+
+        def configured_engine() -> BdoRealtimeAudioEngine:
+            engine = BdoRealtimeAudioEngine(
+                None,
+                {"paz_root": "", "audio_root": ""},
+            )
+            engine._sample_rate = 48_000
+            engine._track_meter_ids = list(range(8))
+            engine._track_peaks = np.zeros(8, dtype=np.float32)
+            engine._track_block_peaks = np.zeros(8, dtype=np.float32)
+            for index in range(48):
+                engine._start_voice(
+                    sample,
+                    float(index % 31),
+                    0.58 + index * 0.006,
+                    0.004 + (index % 5) * 0.001,
+                    age_frames=256 + index,
+                    track_slot=index % 8,
+                    audible_frames=16_384,
+                    loop_start_frame=0,
+                    loop_end_frame=4_096,
+                    start_frame=index,
+                    reverb_send=(index % 3) * 0.2,
+                    delay_send=(index % 4) * 0.15,
+                    chorus_send=(index % 5) * 0.1,
+                )
+            engine._preview_effects.configure(
+                PreviewEffectSettings(50, 45, 40, 55, 35),
+                reverb_send=True,
+                delay_send=True,
+                chorus_send=True,
+            )
+            engine._playing = True
+            engine._duration_frames = 16_384
+            return engine
+
+        tiled = configured_engine()
+        scalar = configured_engine()
+        try:
+            tiled._ensure_render_buffers(frames)
+            with (
+                patch(
+                    "bdo_realtime_audio.np.empty",
+                    side_effect=AssertionError("callback scratch allocation"),
+                ),
+                patch.object(
+                    tiled,
+                    "_mix_single_voice",
+                    wraps=tiled._mix_single_voice,
+                ) as tiled_scalar_mix,
+            ):
+                tiled_pcm = tiled._render_locked(frames).copy()
+            with (
+                patch(
+                    "bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
+                    1_000,
+                ),
+                patch.object(
+                    scalar,
+                    "_mix_single_voice",
+                    wraps=scalar._mix_single_voice,
+                ) as scalar_mix,
+            ):
+                scalar_pcm = scalar._render_locked(frames).copy()
+
+            self.assertEqual(tiled_scalar_mix.call_count, 0)
+            self.assertEqual(scalar_mix.call_count, 48)
+            np.testing.assert_allclose(
+                tiled_pcm,
+                scalar_pcm,
+                rtol=4.0e-6,
+                atol=2.0e-6,
+            )
+            np.testing.assert_allclose(
+                tiled._track_peaks,
+                scalar._track_peaks,
+                rtol=4.0e-6,
+                atol=2.0e-6,
+            )
+            self.assertEqual(
+                [(voice.position, voice.age_frames) for voice in tiled._voices],
+                [(voice.position, voice.age_frames) for voice in scalar._voices],
+            )
+        finally:
+            tiled.stop()
+            scalar.stop()
+
+    def test_equivalent_voice_groups_preserve_weighted_effect_sends(self) -> None:
+        frames = 1_024
+        phase = np.arange(4_096, dtype=np.float32)
+        mono = np.sin(phase * (2.0 * np.pi * 220.0 / 48_000)) * 0.004
+        sample = _Sample(
+            np.column_stack((mono, mono * 0.9)),
+            48_000,
+            len(mono),
+            len(mono),
+        )
+
+        def configured_engine() -> BdoRealtimeAudioEngine:
+            engine = BdoRealtimeAudioEngine(
+                None,
+                {"paz_root": "", "audio_root": ""},
+            )
+            engine._sample_rate = 48_000
+            engine._track_meter_ids = list(range(8))
+            engine._track_peaks = np.zeros(8, dtype=np.float32)
+            engine._track_block_peaks = np.zeros(8, dtype=np.float32)
+            for index in range(128):
+                engine._start_voice(
+                    sample,
+                    17.0,
+                    0.73,
+                    0.001 + (index % 7) * 0.0003,
+                    age_frames=256,
+                    track_slot=index % 8,
+                    audible_frames=16_384,
+                    loop_start_frame=0,
+                    loop_end_frame=4_096,
+                    start_frame=0,
+                    reverb_send=(index % 3) * 0.2,
+                    delay_send=(index % 4) * 0.15,
+                    chorus_send=(index % 5) * 0.1,
+                )
+            engine._preview_effects.configure(
+                PreviewEffectSettings(50, 45, 40, 55, 35),
+                reverb_send=True,
+                delay_send=True,
+                chorus_send=True,
+            )
+            engine._playing = True
+            engine._duration_frames = 16_384
+            return engine
+
+        grouped = configured_engine()
+        scalar = configured_engine()
+        try:
+            grouped._ensure_render_buffers(frames)
+            with patch.object(
+                grouped,
+                "_mix_single_voice",
+                wraps=grouped._mix_single_voice,
+            ) as grouped_mix:
+                grouped_pcm = grouped._render_locked(frames).copy()
+            with (
+                patch(
+                    "bdo_realtime_audio.EQUIVALENT_VOICE_GROUP_THRESHOLD",
+                    1_000,
+                ),
+                patch(
+                    "bdo_realtime_audio.EQUIVALENT_EFFECT_VOICE_GROUP_THRESHOLD",
+                    1_000,
+                ),
+                patch(
+                    "bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
+                    1_000,
+                ),
+                patch.object(
+                    scalar,
+                    "_mix_single_voice",
+                    wraps=scalar._mix_single_voice,
+                ) as scalar_mix,
+            ):
+                scalar_pcm = scalar._render_locked(frames).copy()
+
+            self.assertEqual(grouped_mix.call_count, 1)
+            self.assertEqual(scalar_mix.call_count, 128)
+            np.testing.assert_allclose(
+                grouped_pcm,
+                scalar_pcm,
+                rtol=8.0e-6,
+                atol=3.0e-6,
+            )
+            np.testing.assert_allclose(
+                grouped._track_peaks,
+                scalar._track_peaks,
+                rtol=4.0e-6,
+                atol=2.0e-6,
+            )
+            self.assertEqual(
+                [(voice.position, voice.age_frames) for voice in grouped._voices],
+                [(voice.position, voice.age_frames) for voice in scalar._voices],
+            )
+        finally:
+            grouped.stop()
+            scalar.stop()
+
+    def test_equivalent_probe_keeps_unrelated_singletons_on_tile_path(self) -> None:
+        frames = 1_024
+        phase = np.arange(4_096, dtype=np.float32)
+        mono = np.sin(phase * (2.0 * np.pi * 220.0 / 48_000)) * 0.004
+        sample = _Sample(
+            np.column_stack((mono, mono * 0.9)),
+            48_000,
+            len(mono),
+            len(mono),
+        )
+
+        def configured_engine() -> BdoRealtimeAudioEngine:
+            engine = BdoRealtimeAudioEngine(
+                None,
+                {"paz_root": "", "audio_root": ""},
+            )
+            engine._sample_rate = 48_000
+            engine._track_meter_ids = list(range(8))
+            engine._track_peaks = np.zeros(8, dtype=np.float32)
+            engine._track_block_peaks = np.zeros(8, dtype=np.float32)
+            for index in range(128):
+                duplicate = index < 2
+                engine._start_voice(
+                    sample,
+                    17.0 if duplicate else 17.0 + index * 0.25,
+                    0.73 if duplicate else 0.73 + index * 0.001,
+                    0.001 + (index % 7) * 0.0003,
+                    age_frames=256,
+                    track_slot=index % 8,
+                    audible_frames=16_384,
+                    loop_start_frame=0,
+                    loop_end_frame=4_096,
+                    start_frame=0,
+                    reverb_send=0.35,
+                    delay_send=0.25,
+                    chorus_send=0.20,
+                )
+            engine._preview_effects.configure(
+                PreviewEffectSettings(50, 45, 40, 55, 35),
+                reverb_send=True,
+                delay_send=True,
+                chorus_send=True,
+            )
+            engine._playing = True
+            engine._duration_frames = 16_384
+            return engine
+
+        tiled = configured_engine()
+        scalar = configured_engine()
+        try:
+            tiled._ensure_render_buffers(frames)
+            with patch.object(
+                tiled,
+                "_mix_single_voice",
+                wraps=tiled._mix_single_voice,
+            ) as tiled_mix:
+                tiled_pcm = tiled._render_locked(frames).copy()
+            with (
+                patch(
+                    "bdo_realtime_audio.EQUIVALENT_EFFECT_VOICE_GROUP_THRESHOLD",
+                    1_000,
+                ),
+                patch(
+                    "bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
+                    1_000,
+                ),
+                patch.object(
+                    scalar,
+                    "_mix_single_voice",
+                    wraps=scalar._mix_single_voice,
+                ) as scalar_mix,
+            ):
+                scalar_pcm = scalar._render_locked(frames).copy()
+
+            self.assertEqual(tiled_mix.call_count, 1)
+            self.assertEqual(scalar_mix.call_count, 128)
+            np.testing.assert_allclose(
+                tiled_pcm,
+                scalar_pcm,
+                rtol=8.0e-6,
+                atol=3.0e-6,
             )
             np.testing.assert_allclose(
                 tiled._track_peaks,

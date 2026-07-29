@@ -4,10 +4,27 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from pyside_bdo_gui import classify_audio_source, displayed_audio_source
+from pyside_bdo_gui import (
+    audio_source_config,
+    classify_audio_source,
+    displayed_audio_source,
+    preview_source_mode,
+)
 
 
 class AudioSourceSettingsTests(unittest.TestCase):
+    def test_preview_mode_defaults_and_fails_closed_to_auto(self) -> None:
+        self.assertEqual(preview_source_mode({}), "auto")
+        self.assertEqual(preview_source_mode({"preview_mode": "generic"}), "generic")
+        self.assertEqual(preview_source_mode({"preview_mode": "BDO"}), "bdo")
+        self.assertEqual(preview_source_mode({"preview_mode": "unknown"}), "auto")
+        self.assertEqual(
+            audio_source_config(
+                {"audio_sources": {"preview_mode": "unknown"}}
+            )["preview_mode"],
+            "auto",
+        )
+
     def test_display_prefers_portable_pack_then_preserves_raw_root(self) -> None:
         self.assertEqual(
             displayed_audio_source(
