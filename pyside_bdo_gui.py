@@ -15,13 +15,10 @@ import logging
 import math
 import os
 import re
-import shutil
 import sys
-import tempfile
 import threading
 import time
 import traceback
-import unicodedata
 from pathlib import Path
 
 import numpy as np
@@ -38,15 +35,12 @@ from project_paths import (
     SAMPLE_PACK_CACHE_DIR,
     USER_DATA_DIR,
     WWISE_MIDI_MAP_PATH,
+    user_documents_dir,
 )
-WRITABLE_ROOT = (
-    USER_DATA_DIR
-    if (
-        getattr(sys, "frozen", False)
-        or os.environ.get("BDO_STARTUP_SELF_TEST") == "1"
-    )
-    else ROOT
-)
+# Source and frozen launches share the same user-writable boundary.  Keeping
+# autosaves/configuration beside the source tree made ordinary test and
+# developer runs pollute the repository and could expose private project data.
+WRITABLE_ROOT = USER_DATA_DIR
 DEFAULT_OUTDIR = WRITABLE_ROOT / "out" / "bdo"
 DEFAULT_MIDI_DIR = ROOT / "samples"
 CONFIG_PATH = WRITABLE_ROOT / ".pyside_bdo_gui.json"
@@ -58,14 +52,23 @@ CRASH_LOG_PATH = DEFAULT_OUTDIR / "crash.log"
 REFERENCE_AUDIO_RESYNC_THRESHOLD_MS = 1250.0
 REFERENCE_AUDIO_RESYNC_COOLDOWN_S = 5.0
 TIMELINE_BACKGROUND_IMAGE = ASSETS_DIR / "ui" / "timeline_background_v2.png"
+HOME_BACKGROUND_IMAGE = (
+    ASSETS_DIR / "ui" / "home" / "home_mountain_workshop_v1.jpg"
+)
 STARTUP_ART_IMAGE = ASSETS_DIR / "ui" / "loading_conductor_lineart.png"
-TIMELINE_BACKGROUND_OPACITY = 0.42
+SHAI_ENSEMBLE_MARK_IMAGE = ASSETS_DIR / "icons" / "shai_ensemble_mark.png"
+TIMELINE_BACKGROUND_OPACITY = 0.24
 TRANSCRIPTION_REVIEW_QUEUE_LIMIT = 240
 DEFAULT_AUDIO_SOURCES = {
     "paz_root": os.environ.get("BDO_PAZ_ROOT", ""),
     "audio_root": os.environ.get("BDO_AUDIO_ROOT", ""),
     "sample_pack": "",
+    # ``auto`` prefers a user-supplied local BDO pack and otherwise uses the
+    # bundled procedural GM renderer.  The mode is UI policy only; it never
+    # changes score export or copies samples into a project.
+    "preview_mode": "auto",
 }
+PREVIEW_SOURCE_MODES = frozenset({"auto", "bdo", "generic"})
 
 
 def _session_candidate_annotations(
@@ -159,7 +162,7 @@ _OPTIMIZER_HOST_MESSAGE_SOURCES = {
     "single-track optimization may not write global effects": (
         "单轨优化不得写入全局效果"
     ),
-    "effect values must be in [0, 127]": "效果值必须在 [0, 127] 范围内",
+    "effect values must be in [0, 100]": "效果值必须在 [0, 100] 范围内",
     "single-track optimization may not create tracks": (
         "单轨优化不得创建轨道"
     ),
@@ -376,9 +379,11 @@ try:
         QEasingCurve,
         QEvent,
         QEventLoop,
+        QFile,
         QObject,
         QPointF,
         QPropertyAnimation,
+        QRect,
         QRectF,
         QSize,
         Qt,
@@ -387,10 +392,11 @@ try:
         QUrl,
         Signal,
     )
-    from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShortcut
+    from PySide6.QtGui import QActionGroup, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShortcut
     from PySide6.QtMultimedia import QAudioDecoder, QAudioFormat, QAudioOutput, QMediaPlayer
     from PySide6.QtWidgets import (
         QApplication,
+        QButtonGroup,
         QCheckBox,
         QComboBox,
         QDialog,
@@ -418,6 +424,9 @@ try:
         QSlider,
         QSpinBox,
         QStackedWidget,
+        QStyle,
+        QStyledItemDelegate,
+        QStyleOptionViewItem,
         QTextBrowser,
         QTextEdit,
         QVBoxLayout,
@@ -431,6 +440,7 @@ except ModuleNotFoundError as exc:
     ) from exc
 
 from bdo_midi import (  # noqa: E402
+    BDO_ENSEMBLE_PLAYER_LIMIT,
     BDO_INSTRUMENT_NAMES,
     BDO_NOTE_MAX,
     BDO_NOTE_MIN,
@@ -438,17 +448,14 @@ from bdo_midi import (  # noqa: E402
     _GM_TO_BDO_DRUM,
     gm_to_bdo_instrument,
     parse_midi,
+    unique_performance_instrument_ids,
 )
 from bdo_midi.instruments import (  # noqa: E402
     localized_bdo_instrument_name,
     localized_bdo_instrument_names,
     localized_gm_program_name,
 )
-from bdo_export import (  # noqa: E402
-    MAX_NOTES_PER_INSTRUMENT,
-    channel_groups_to_bdo,
-    midi_to_bdo,
-)
+from bdo_export import channel_groups_to_bdo  # noqa: E402
 from optimization import OptimizerConfig  # noqa: E402
 from optimization.plugin_api import InvalidOptimizationPreview, OptimizationIntensity  # noqa: E402
 from optimization.plugin_host import (  # noqa: E402
@@ -483,8 +490,7 @@ from bdo_instrument_lane_art_qt import (  # noqa: E402
     paint_instrument_header_background,
 )
 from bdo_audio_research import sample_coverage_for_tracks  # noqa: E402
-from bdo_score import compare_scores, encode_score, read_bdo_score, read_score  # noqa: E402
-from bdo_codec import document_matches_logical_tracks, score_summary  # noqa: E402
+from bdo_score import compare_scores, read_bdo_score, read_score  # noqa: E402
 from bdo_validation import (  # noqa: E402
     ValidationContext,
     ValidationIssue,
@@ -502,6 +508,30 @@ from project_schema import (  # noqa: E402
     resolve_project_file_reference,
 )
 from editor_commands import ProjectCommandStack, ProjectSnapshot  # noqa: E402
+from export_workflow import (  # noqa: E402
+    MARNIAN_SYNTH_INSTRUMENT_IDS,
+    MARNIAN_SYNTH_MODE_OFFSETS,
+    execute_export,
+    freeze_export_tracks,
+    install_export_to_game,
+    serialized_bdo_instrument_id,
+)
+from atomic_io import atomic_copy_file, atomic_write_bytes  # noqa: E402
+from home_catalog import (  # noqa: E402
+    HomeEntry,
+    IncrementalHomeScan,
+    home_timestamp as _home_timestamp,
+    scan_game_scores,
+    scan_local_projects,
+)
+from project_persistence import (  # noqa: E402
+    AutosaveRequest,
+    freeze_project_tracks,
+    new_project_id,
+    normalize_project_id,
+    rename_project,
+    write_autosave,
+)
 from bdo_sample_renderer import (  # noqa: E402
     sample_map_covers,
     sample_map_supported_pitches,
@@ -747,10 +777,36 @@ def articulation_color(ntype: int | None) -> str:
     return color.name()
 
 
-def contrasting_text_color(color: str) -> str:
-    value = QColor(color)
-    luminance = 0.299 * value.red() + 0.587 * value.green() + 0.114 * value.blue()
-    return "#161816" if luminance >= 150 else "#f7f4ec"
+# The game allows only one technique at a given onset.  Imported MIDI chords
+# can contain tiny timestamp jitter, so keep the same tolerance used by the
+# articulation/transpose algorithm lock instead of relying on exact floats.
+ARTICULATION_ONSET_TOLERANCE_MS = 12.0
+
+
+def same_onset_articulation_indices(
+    notes: list,
+    selected_indices: set[int],
+    tolerance_ms: float = ARTICULATION_ONSET_TOLERANCE_MS,
+) -> set[int]:
+    """Expand a selection to every note sharing one of its onsets."""
+
+    selected_starts = sorted({
+        float(notes[index].start)
+        for index in selected_indices
+        if 0 <= index < len(notes)
+    })
+    if not selected_starts:
+        return set()
+    tolerance = max(0.0, float(tolerance_ms))
+    matched: set[int] = set()
+    for index, note in enumerate(notes):
+        start = float(note.start)
+        insertion = bisect_left(selected_starts, start)
+        neighbors = selected_starts[max(0, insertion - 1) : insertion + 1]
+        if any(abs(start - selected_start) <= tolerance for selected_start in neighbors):
+            matched.add(index)
+    return matched
+
 
 BDO_DRUM_PITCH_NAMES = {
     48: "Kck",
@@ -774,21 +830,12 @@ BDO_DRUM_PITCH_NAMES = {
 BDO_DRUM_MIN = 48
 BDO_DRUM_MAX = 64
 BDO_SAMPLE_ONLY_PERCUSSION = {0x04, 0x05, 0x13}
-MARNIAN_SYNTH_INSTRUMENT_IDS = {0x14, 0x18, 0x1C, 0x20}
 MARNIAN_SYNTH_MODES = [
     ("单声道（Basic）", "basic"),
     ("双声（Stereo）", "stereo"),
     ("增强（Super）", "super"),
     ("超级增强（Super Octave）", "superoct"),
 ]
-MARNIAN_SYNTH_MODE_OFFSETS = {
-    "basic": 0,
-    "stereo": 1,
-    "super": 2,
-    "superoct": 3,
-}
-
-
 def track_uses_canonical_drum_lanes(track: "TrackState") -> bool:
     """Distinguish BDO 48–64/type-99 notes from imported GM drum keys."""
 
@@ -807,14 +854,6 @@ def track_uses_canonical_drum_lanes(track: "TrackState") -> bool:
     )
 
 
-def serialized_bdo_instrument_id(track: "TrackState") -> int:
-    """Resolve the actual game track ID, including Marnian source mode."""
-    instrument_id = int(track.bdo_instrument_id)
-    if instrument_id not in MARNIAN_SYNTH_INSTRUMENT_IDS:
-        return instrument_id
-    return instrument_id + MARNIAN_SYNTH_MODE_OFFSETS.get(track.marnian_synth_mode, 0)
-
-
 def source_time_signature_denominator(midi_path: str | Path) -> int:
     """Return the first MIDI meter denominator; BDO v9 only stores /4."""
     try:
@@ -823,37 +862,22 @@ def source_time_signature_denominator(midi_path: str | Path) -> int:
             for message in midi_track:
                 if message.type == "time_signature":
                     return int(message.denominator)
-    except (OSError, ValueError, TypeError):
-        pass
+    except Exception as exc:
+        raise ValueError(
+            trf(
+                "无法读取 MIDI 拍号，已阻止导出：{error}",
+                error=exc,
+            )
+        ) from exc
     return 4
 
-# Ranges recorded in the hand-authored ``list*`` in-game baseline scores. The
-# effective GUI range is the intersection of these limits and Wwise MIDI zones.
+# The checked-in profile is the sole game-legality source.  Wwise sample zones
+# answer a different question (whether local preview has an audible route) and
+# must never turn an approximate range into an editor/export hard boundary.
 BDO_EDITOR_PITCH_RANGES = {
-    0x00: range(12, 120),
-    0x01: range(12, 108),
-    0x02: range(36, 84),
-    0x06: range(36, 96),
-    0x07: range(12, 108),
-    0x08: range(36, 84),
-    0x0A: range(36, 89),
-    0x0B: range(48, 89),
-    0x0D: range(48, 65),
-    0x0E: range(28, 65),
-    0x0F: range(28, 65),
-    0x10: range(12, 91),
-    0x11: range(12, 108),
-    0x12: range(43, 89),
-    0x13: range(45, 89),
-    0x14: range(12, 101),
-    0x18: range(12, 101),
-    0x1C: range(12, 101),
-    0x20: range(12, 101),
-    0x24: range(24, 96),
-    0x25: range(24, 96),
-    0x26: range(24, 96),
-    0x27: range(24, 96),
-    0x28: range(24, 96),
+    instrument_id: adaptation.legal_pitches
+    for instrument_id, adaptation in instrument_editor_display_adaptations().items()
+    if adaptation.legal_pitches is not None
 }
 
 # Keep the context menu focused on musical function.  The source/region
@@ -869,10 +893,6 @@ BDO_INSTRUMENT_MENU_GROUPS = [
 ]
 
 
-def articulation_label(inst_id: int, ntype: int | None) -> str:
-    return str(articulation_display_value(inst_id, ntype))
-
-
 def articulation_display_value(inst_id: int, ntype: int | None) -> object:
     """Return a deferred fixed label suitable for nesting inside ``trf``."""
 
@@ -886,17 +906,6 @@ def articulation_display_value(inst_id: int, ntype: int | None) -> object:
                 ntype=ntype,
             )
     return f"type {ntype}"
-
-
-def articulation_usage_hint(ntype: int | None) -> str:
-    if ntype is None:
-        return tr("未指定奏法，导出时保留普通音符。")
-    return tr(
-        BDO_ARTICULATION_USAGE_HINTS.get(
-            ntype,
-            "该奏法的游戏内音色仍需人工验证。",
-        )
-    )
 
 
 def add_instrument_submenus(menu: QMenu, current_id: int, instrument_names: dict[int, str]) -> None:
@@ -999,16 +1008,6 @@ class GhostNoteProjection:
         return int(self.note.ntype)
 
 
-@dataclass(frozen=True)
-class HomeEntry:
-    kind: str
-    label: str
-    path: Path
-    detail: str
-    modified_at: float
-    version_count: int = 1
-
-
 def decode_marnian_instrument(instrument_id: int) -> tuple[int, str]:
     for base_id in MARNIAN_SYNTH_INSTRUMENT_IDS:
         for mode, offset in MARNIAN_SYNTH_MODE_OFFSETS.items():
@@ -1022,12 +1021,38 @@ def track_states_from_bdo_score(snapshot) -> list[TrackState]:
     grouped: dict[int, list] = {}
     for physical_track in snapshot.tracks:
         grouped.setdefault(int(physical_track.group_index), []).append(physical_track)
+    master_settings = {
+        (
+            int(track.settings[MASTER_REVERB_TIME_INDEX]),
+            int(track.settings[MASTER_DELAY_FEEDBACK_INDEX]),
+            int(track.settings[MASTER_CHORUS_FEEDBACK_INDEX]),
+            int(track.settings[MASTER_CHORUS_LFO_DEPTH_INDEX]),
+            int(track.settings[MASTER_CHORUS_LFO_FREQUENCY_INDEX]),
+        )
+        for track in snapshot.tracks
+        if len(track.settings) >= 8
+    }
+    if len(master_settings) > 1:
+        raise ValueError("BDO physical tracks contain conflicting master effect settings")
     states: list[TrackState] = []
     for track_id, group_index in enumerate(sorted(grouped)):
         physical_tracks = grouped[group_index]
         instrument_ids = {int(track.instrument_id) for track in physical_tracks}
         if len(instrument_ids) != 1:
             raise ValueError(f"BDO instrument group {group_index} contains mixed instrument IDs")
+        volumes = {int(track.volume) for track in physical_tracks}
+        if len(volumes) != 1:
+            raise ValueError(
+                f"BDO instrument group {group_index} contains conflicting volumes"
+            )
+        settings_values = {
+            tuple(int(value) for value in track.settings)
+            for track in physical_tracks
+        }
+        if len(settings_values) != 1:
+            raise ValueError(
+                f"BDO instrument group {group_index} contains conflicting effect settings"
+            )
         serialized_id = instrument_ids.pop()
         instrument_id, marnian_mode = decode_marnian_instrument(serialized_id)
         notes = [
@@ -1079,48 +1104,6 @@ def track_states_from_bdo_score(snapshot) -> list[TrackState]:
     return states
 
 
-def _home_timestamp(timestamp: float) -> str:
-    return time.strftime("%Y-%m-%d %H:%M", time.localtime(timestamp))
-
-
-def scan_game_scores(directory: Path, limit: int = 80) -> list[HomeEntry]:
-    """List score files without parsing private data embedded in BDO scores."""
-    if not directory.is_dir():
-        return []
-    entries: list[HomeEntry] = []
-    try:
-        candidates = [path for path in directory.iterdir() if path.is_file() and not path.name.startswith(".")]
-    except OSError:
-        return []
-    for path in candidates:
-        try:
-            stat = path.stat()
-        except OSError:
-            continue
-        entries.append(
-            HomeEntry("game", path.stem or path.name, path, _home_timestamp(stat.st_mtime), stat.st_mtime)
-        )
-    entries.sort(key=lambda item: item.modified_at, reverse=True)
-    return entries[:limit]
-
-
-def scan_local_projects(directory: Path, limit: int = 80) -> list[HomeEntry]:
-    """Read only safe project metadata; Owner ID and character name stay private."""
-    if not directory.is_dir():
-        return []
-    entries: list[HomeEntry] = []
-    for path in directory.glob("*/project.json"):
-        try:
-            stat = path.stat()
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            continue
-        label = str(payload.get("output_name") or path.parent.name).strip() or path.parent.name
-        entries.append(HomeEntry("project", label, path, _home_timestamp(stat.st_mtime), stat.st_mtime))
-    entries.sort(key=lambda item: item.modified_at, reverse=True)
-    return entries[:limit]
-
-
 def scan_example_projects(directory: Path, limit: int = 8) -> list[HomeEntry]:
     """Read small local manifests without loading full example projects."""
 
@@ -1155,20 +1138,14 @@ def scan_example_projects(directory: Path, limit: int = 8) -> list[HomeEntry]:
     return entries[:limit]
 
 
-def _home_project_group_key(label: str) -> str:
-    """Return a display-oriented key for grouping repeated project snapshots."""
-    normalized = unicodedata.normalize("NFKC", str(label)).strip().casefold()
-    return " ".join(normalized.split())
-
-
 def merge_home_project_entries(
     entries: list[HomeEntry], limit: int = 80,
 ) -> list[HomeEntry]:
-    """Collapse duplicate paths and same-title snapshots without deleting files.
+    """Deduplicate paths and annotate only explicitly related project versions.
 
-    A local project is preferred as the open target because it carries current
-    editor state; a recent MIDI/BDO entry is used only when no project snapshot
-    exists. The group timestamp still reflects the latest activity of any item.
+    A title is display data, never identity. Legacy projects without an ID stay
+    separate even when their names match; related snapshots remain individually
+    visible and openable instead of collapsing to one latest-only target.
     """
     by_path: dict[str, HomeEntry] = {}
     for entry in entries:
@@ -1182,27 +1159,33 @@ def merge_home_project_entries(
 
     groups: dict[str, list[HomeEntry]] = {}
     for entry in by_path.values():
-        key = _home_project_group_key(entry.label) or str(entry.path).casefold()
+        key = (
+            f"project:{entry.project_id}"
+            if entry.kind == "project" and entry.project_id
+            else f"path:{str(entry.path).casefold()}"
+        )
         groups.setdefault(key, []).append(entry)
 
     merged: list[HomeEntry] = []
     for members in groups.values():
         members.sort(key=lambda item: item.modified_at, reverse=True)
-        projects = [item for item in members if item.kind == "project"]
-        target = projects[0] if projects else members[0]
-        latest_at = members[0].modified_at
         version_count = len(members)
-        detail = _home_timestamp(latest_at)
-        if version_count > 1:
-            detail = trf("{time} · {count} 个版本", time=detail, count=version_count)
-        merged.append(HomeEntry(
-            target.kind,
-            target.label,
-            target.path,
-            detail,
-            latest_at,
-            version_count,
-        ))
+        for offset, member in enumerate(members):
+            version_index = version_count - offset
+            detail = _home_timestamp(member.modified_at)
+            if version_count > 1:
+                detail = trf(
+                    "{time} · 版本 {index}/{count}",
+                    time=detail,
+                    index=version_index,
+                    count=version_count,
+                )
+            merged.append(replace(
+                member,
+                detail=detail,
+                version_count=version_count,
+                version_index=version_index,
+            ))
     merged.sort(key=lambda item: item.modified_at, reverse=True)
     return merged[:limit]
 
@@ -1217,30 +1200,16 @@ def note_name(midi_note: int) -> str:
 def game_supported_pitches(
     instrument_id: int, synth_mode: str = "basic"
 ) -> frozenset[int] | None:
-    """Exact game-sample keys when decoded, otherwise a verified editor range."""
-    editor_range = BDO_EDITOR_PITCH_RANGES.get(instrument_id)
-    if BDO_SAMPLE_MAP_PATH.is_file():
-        try:
-            pitches = sample_map_supported_pitches(
-                BDO_SAMPLE_MAP_PATH, instrument_id, synth_mode
-            )
-            if pitches:
-                if editor_range is not None:
-                    return pitches.intersection(editor_range)
-                return pitches
-        except Exception:
-            pass
+    """Return verified game-editor pitches, independent of preview coverage."""
+
+    del synth_mode  # Game legality does not change with a local preview bank.
+    editor_range = BDO_EDITOR_PITCH_RANGES.get(int(instrument_id))
     return frozenset(editor_range) if editor_range is not None else None
 
 
 BDO_PROFILE = load_bdo_profile(
     PROFILES_DIR / "bdo_global_v9.json",
     articulation_map=BDO_ARTICULATIONS,
-    supported_pitch_map={
-        instrument_id: pitches
-        for instrument_id in BDO_EDITOR_PITCH_RANGES
-        if (pitches := game_supported_pitches(instrument_id))
-    },
 )
 
 
@@ -1276,40 +1245,67 @@ def game_pitch_range_value(
 
 
 def default_game_music_dir() -> Path:
-    return Path.home() / "Documents" / "Black Desert" / "music"
+    return user_documents_dir() / "Black Desert" / "music"
 
 
 def copy_export_to_game(out_path: Path, game_dir: Path) -> Path:
-    """Install one exported score, tolerating an output already in the game folder."""
-    game_dir.mkdir(parents=True, exist_ok=True)
-    installed = game_dir / out_path.name
-    try:
-        same_file = out_path.resolve() == installed.resolve()
-    except OSError:
-        same_file = False
-    if not same_file:
-        shutil.copy2(out_path, installed)
-    return installed
+    """Compatibility wrapper for the atomic export installer."""
+
+    return install_export_to_game(out_path, game_dir)
 
 
 def load_config() -> dict:
     if not CONFIG_PATH.exists():
         return {}
     try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except Exception:
+        payload = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("configuration root must be an object")
+        return payload
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
         return {}
 
 
 def save_config(config: dict) -> None:
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not isinstance(config, dict):
+        raise TypeError("configuration root must be a dictionary")
+    if CONFIG_PATH.is_file():
+        try:
+            existing = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            if not isinstance(existing, dict):
+                raise ValueError("configuration root must be an object")
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            backup = CONFIG_PATH.with_name(
+                f"{CONFIG_PATH.stem}.corrupt-{timestamp}{CONFIG_PATH.suffix}"
+            )
+            suffix = 2
+            while backup.exists():
+                backup = CONFIG_PATH.with_name(
+                    f"{CONFIG_PATH.stem}.corrupt-{timestamp}-{suffix}{CONFIG_PATH.suffix}"
+                )
+                suffix += 1
+            atomic_copy_file(CONFIG_PATH, backup)
+    encoded = json.dumps(config, ensure_ascii=False, indent=2).encode("utf-8")
+    atomic_write_bytes(CONFIG_PATH, encoded)
+
+
+def preview_source_mode(source_config: dict[str, str]) -> str:
+    """Return a supported persistent preview-source policy."""
+
+    value = str(source_config.get("preview_mode", "auto") or "auto").casefold()
+    return value if value in PREVIEW_SOURCE_MODES else "auto"
 
 
 def audio_source_config(config: dict) -> dict[str, str]:
     """Return persistent local source roots without copying game assets."""
     saved = config.get("audio_sources", {})
-    return {key: str(saved.get(key) or value) for key, value in DEFAULT_AUDIO_SOURCES.items()}
+    result = {
+        key: str(saved.get(key) or value)
+        for key, value in DEFAULT_AUDIO_SOURCES.items()
+    }
+    result["preview_mode"] = preview_source_mode(result)
+    return result
 
 
 def displayed_audio_source(source_config: dict[str, str]) -> str:
@@ -1497,6 +1493,186 @@ class PillButton(QPushButton):
             self.setIconSize(fluent_icon_size())
 
 
+class HomeIdentityBadge(QPushButton):
+    """Compact one-line export identity entry for the home brand row."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._primary = tr("设置演奏者")
+        self._secondary = tr("身份待完善")
+        self._identity_complete = False
+        self.setObjectName("HomeUserButton")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFixedHeight(30)
+        self.setMinimumWidth(104)
+        self.setMaximumWidth(148)
+        self.setText(self._primary)
+
+    def set_identity(self, name: str, owner_id: int) -> None:
+        character_name = str(name or "").strip()
+        owner_bound = bool(owner_id)
+        self._identity_complete = bool(character_name and owner_bound)
+        self._primary = character_name or tr("设置演奏者")
+        if owner_bound:
+            self._secondary = tr("Owner ID 已绑定")
+        elif character_name:
+            self._secondary = tr("Owner ID 未设置")
+        else:
+            self._secondary = tr("身份待完善")
+        self.setText(self._primary)
+        description = f"{self._primary} · {self._secondary}"
+        self.setToolTip(description)
+        self.setAccessibleName(description)
+        self.setProperty("identityMissing", not self._identity_complete)
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        return QSize(126, 30)
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        bounds = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if self.isDown() or self.underMouse() or self.hasFocus():
+            painter.setBrush(
+                QColor(43, 39, 32, 210)
+                if self.isDown()
+                else QColor(35, 33, 29, 176)
+            )
+            painter.setPen(QPen(QColor("#5b4c36"), 1))
+            painter.drawRoundedRect(bounds, 5.0, 5.0)
+
+        # A small neutral profile outline keeps the control recognizable
+        # without competing with the brand or looking like a second card.
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor("#9e8d72"), 1.2))
+        painter.drawEllipse(QRectF(11.0, 6.0, 6.0, 6.0))
+        painter.drawArc(QRectF(7.5, 12.0, 13.0, 10.0), 0, 180 * 16)
+        accent = QColor("#8ead77" if self._identity_complete else "#b8833d")
+        painter.setBrush(accent)
+        painter.setPen(QPen(QColor("#181817"), 1))
+        painter.drawEllipse(QRectF(18.0, 18.0, 6.0, 6.0))
+
+        primary_font = QFont(painter.font())
+        primary_font.setPointSize(9)
+        primary_font.setBold(self._identity_complete)
+        painter.setFont(primary_font)
+        primary_rect = QRectF(
+            30.0, 3.0, max(36.0, bounds.width() - 47.0), 24.0
+        )
+        painter.setPen(
+            QColor("#e3ddd2" if self._identity_complete else "#cdb38a")
+        )
+        painter.drawText(
+            primary_rect,
+            Qt.AlignLeft | Qt.AlignVCenter,
+            painter.fontMetrics().elidedText(
+                self._primary, Qt.ElideRight, int(primary_rect.width())
+            ),
+        )
+        painter.setPen(QColor("#6f6659"))
+        painter.drawText(
+            QRectF(bounds.right() - 16.0, 0.0, 12.0, bounds.height()),
+            Qt.AlignCenter,
+            "›",
+        )
+
+
+class EnsembleCapacityBadge(QWidget):
+    """Quiet Shai identity mark; exact capacity lives in contextual UI."""
+
+    def __init__(
+        self,
+        icon_path: Path = SHAI_ENSEMBLE_MARK_IMAGE,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("EnsembleCapacityBadge")
+        self.setFixedSize(36, 36)
+        self._player_count = 0
+        self._description_override = ""
+        source = QPixmap(str(icon_path))
+        self._icon = source.scaled(
+            30,
+            30,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        ) if not source.isNull() else QPixmap()
+        self._refresh_description()
+
+    @property
+    def player_count(self) -> int:
+        return self._player_count
+
+    @property
+    def is_over_limit(self) -> bool:
+        return self._player_count > BDO_ENSEMBLE_PLAYER_LIMIT
+
+    def set_player_count(
+        self,
+        player_count: int,
+        description_override: str = "",
+    ) -> None:
+        normalized = max(0, int(player_count))
+        normalized_description = str(description_override or "").strip()
+        if (
+            normalized == self._player_count
+            and normalized_description == self._description_override
+        ):
+            return
+        self._player_count = normalized
+        self._description_override = normalized_description
+        self._refresh_description()
+        self.update()
+
+    def _refresh_description(self) -> None:
+        if self._description_override:
+            description = self._description_override
+        elif self._player_count <= 0:
+            description = tr("当前工程没有需要演奏的实体乐器")
+        elif self.is_over_limit:
+            description = trf(
+                "当前工程预计 {count} 人演奏，超过 {limit} 人队伍上限",
+                count=self._player_count,
+                limit=BDO_ENSEMBLE_PLAYER_LIMIT,
+            )
+        else:
+            description = trf(
+                "当前工程预计 {count}/{limit} 人演奏；同一实体乐器只计一人",
+                count=self._player_count,
+                limit=BDO_ENSEMBLE_PLAYER_LIMIT,
+            )
+        self.setToolTip(description)
+        self.setAccessibleName(tr("工程演奏人数"))
+        self.setAccessibleDescription(description)
+
+    def retranslate_dynamic_content(self) -> None:
+        self._refresh_description()
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        active_color = QColor("#ef8178" if self.is_over_limit else "#d6aa52")
+
+        if not self._icon.isNull():
+            painter.save()
+            painter.setOpacity(0.9)
+            painter.drawPixmap(3, 3, self._icon)
+            painter.restore()
+
+        # Keep the persistent toolbar calm: a tiny status lamp carries only
+        # normal/over-limit state. Exact x/5 text remains in the workspace
+        # telemetry strip and the selected home card's tooltip.
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(
+            active_color if self._player_count > 0 else QColor("#514b40")
+        )
+        painter.drawEllipse(QRectF(27.0, 26.0, 6.0, 6.0))
+
+
 class LoadingSpinner(QWidget):
     """Small code-drawn indeterminate indicator with no image dependency."""
 
@@ -1560,7 +1736,7 @@ class StartupArtwork(QWidget):
     def __init__(self, image_path: Path, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("StartupArtwork")
-        self.setFixedSize(454, 718)
+        self.setFixedSize(470, 734)
         self._source = QPixmap(str(image_path))
         self._cover = QPixmap()
         self._refresh_cover()
@@ -1583,11 +1759,7 @@ class StartupArtwork(QWidget):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bounds = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        clip = QPainterPath()
-        clip.addRoundedRect(bounds, 7.0, 7.0)
-        painter.setClipPath(clip)
-        painter.fillRect(self.rect(), QColor("#eee7da"))
+        painter.fillRect(self.rect(), QColor("#151515"))
         if not self._cover.isNull():
             source_x = max(0, (self._cover.width() - self.width()) // 2)
             source_y = max(0, (self._cover.height() - self.height()) // 2)
@@ -1601,14 +1773,309 @@ class StartupArtwork(QWidget):
                     -source_y,
                 ),
             )
+        # Pull the bright sketch into the same dark tonal range as the home
+        # page and utility dialogs so startup does not flash a white card.
+        painter.fillRect(self.rect(), QColor(15, 15, 16, 54))
         shade = QLinearGradient(0.0, 0.0, 0.0, float(self.height()))
         shade.setColorAt(0.0, QColor(24, 22, 19, 0))
-        shade.setColorAt(0.72, QColor(24, 22, 19, 0))
-        shade.setColorAt(1.0, QColor(24, 22, 19, 118))
+        shade.setColorAt(0.62, QColor(18, 18, 19, 18))
+        shade.setColorAt(1.0, QColor(15, 15, 16, 188))
         painter.fillRect(self.rect(), shade)
-        painter.setClipping(False)
-        painter.setPen(QPen(QColor("#7b5a2c"), 1.0))
-        painter.drawRoundedRect(bounds, 7.0, 7.0)
+
+
+class HomeBackdrop(QFrame):
+    """Cached full-bleed home artwork with fixed readability gradients."""
+
+    def __init__(self, image_path: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("HomeShell")
+        self._source = QPixmap(str(image_path))
+        self._cover = QPixmap()
+        self._refresh_cover()
+
+    @property
+    def has_artwork(self) -> bool:
+        return not self._source.isNull()
+
+    def _refresh_cover(self) -> None:
+        if self._source.isNull() or self.width() <= 0 or self.height() <= 0:
+            self._cover = QPixmap()
+            return
+        self._cover = self._source.scaled(
+            self.size(),
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._refresh_cover()
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#111214"))
+        if not self._cover.isNull():
+            # Anchor the crop to the right so the character remains visible at
+            # every supported window aspect ratio.
+            source_x = max(0, self._cover.width() - self.width())
+            source_y = max(0, (self._cover.height() - self.height()) // 2)
+            painter.drawPixmap(
+                self.rect(),
+                self._cover,
+                self._cover.rect().adjusted(
+                    source_x,
+                    source_y,
+                    0,
+                    -source_y,
+                ),
+            )
+
+        # The illustration is intentionally prominent, but a light full-image
+        # wash keeps the bright valley from competing with every control in the
+        # functional layer.  The stronger left gradient below is reserved for
+        # text readability and fades gradually instead of forming a black wall.
+        painter.fillRect(self.rect(), QColor(14, 15, 15, 24))
+
+        readability = QLinearGradient(
+            0.0,
+            0.0,
+            float(self.width()),
+            0.0,
+        )
+        readability.setColorAt(0.0, QColor(8, 9, 10, 176))
+        readability.setColorAt(0.24, QColor(9, 10, 11, 158))
+        readability.setColorAt(0.46, QColor(10, 11, 12, 102))
+        readability.setColorAt(0.66, QColor(11, 12, 13, 46))
+        readability.setColorAt(1.0, QColor(11, 12, 13, 18))
+        painter.fillRect(self.rect(), readability)
+
+        vignette = QLinearGradient(
+            0.0,
+            0.0,
+            0.0,
+            float(self.height()),
+        )
+        vignette.setColorAt(0.0, QColor(8, 9, 10, 28))
+        vignette.setColorAt(0.58, QColor(8, 9, 10, 0))
+        vignette.setColorAt(1.0, QColor(8, 9, 10, 96))
+        painter.fillRect(self.rect(), vignette)
+
+
+HOME_INSTRUMENT_IDS_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+
+
+class HomeEntryDelegate(QStyledItemDelegate):
+    """Paint compact score rows with cached game-style instrument art."""
+
+    def __init__(
+        self,
+        artwork: InstrumentLaneArtwork,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.artwork = artwork
+
+    @staticmethod
+    def _row_fonts(base_font: QFont) -> tuple[QFont, QFont]:
+        label_font = QFont(base_font)
+        label_font.setBold(True)
+        detail_font = QFont(base_font)
+        if detail_font.pointSizeF() > 8.5:
+            detail_font.setPointSizeF(detail_font.pointSizeF() - 1.0)
+        return label_font, detail_font
+
+    @staticmethod
+    def _ensemble_text(instrument_count: int) -> str:
+        if instrument_count <= 0:
+            return ""
+        if instrument_count <= BDO_ENSEMBLE_PLAYER_LIMIT:
+            return trf("{count} 人", count=instrument_count)
+        return trf(
+            "上限 {limit} 人",
+            limit=BDO_ENSEMBLE_PLAYER_LIMIT,
+        )
+
+    def sizeHint(self, option, index) -> QSize:
+        styled = QStyleOptionViewItem(option)
+        self.initStyleOption(styled, index)
+        label, _separator, _detail = styled.text.partition("\n")
+        label_font, detail_font = self._row_fonts(styled.font)
+        available_width = self._available_content_width(option)
+        title_height = self._title_height(
+            label,
+            label_font,
+            available_width,
+        )
+        info_height = max(QFontMetrics(detail_font).height() + 2, 20)
+        inherited = super().sizeHint(styled, index)
+        return QSize(
+            inherited.width(),
+            max(68, 8 + title_height + 5 + info_height + 8),
+        )
+
+    def _available_content_width(self, option) -> int:
+        parent = self.parent()
+        if isinstance(parent, QListWidget):
+            width = parent.viewport().width()
+        else:
+            width = option.rect.width()
+        return max(220, int(width) - 22)
+
+    @staticmethod
+    def _title_text_flags() -> int:
+        return (
+            int(Qt.AlignmentFlag.AlignLeft)
+            | int(Qt.AlignmentFlag.AlignTop)
+            | int(Qt.TextFlag.TextWordWrap)
+            | int(Qt.TextFlag.TextWrapAnywhere)
+        )
+
+    @classmethod
+    def _title_height(cls, text: str, font: QFont, width: int) -> int:
+        metrics = QFontMetrics(font)
+        bounds = metrics.boundingRect(
+            QRect(0, 0, max(1, int(width)), 10_000),
+            cls._title_text_flags(),
+            text,
+        )
+        return max(metrics.height(), bounds.height())
+
+    def paint(self, painter: QPainter, option, index) -> None:
+        styled = QStyleOptionViewItem(option)
+        self.initStyleOption(styled, index)
+        text = styled.text
+        styled.text = ""
+        style = styled.widget.style() if styled.widget is not None else QApplication.style()
+        style.drawControl(
+            QStyle.ControlElement.CE_ItemViewItem,
+            styled,
+            painter,
+            styled.widget,
+        )
+
+        raw_ids = index.data(HOME_INSTRUMENT_IDS_ROLE)
+        instrument_ids = tuple(raw_ids) if isinstance(raw_ids, (list, tuple)) else ()
+        max_icons = 3
+        visible_ids = instrument_ids[:max_icons]
+        overflow = max(0, len(instrument_ids) - len(visible_ids))
+        icon_size = 20.0
+        icon_gap = 4.0
+        icon_slots = len(visible_ids) + int(overflow > 0)
+        icon_width = (
+            icon_slots * icon_size + max(0, icon_slots - 1) * icon_gap
+            if icon_slots
+            else 0.0
+        )
+
+        content = QRectF(option.rect).adjusted(12.0, 8.0, -10.0, -8.0)
+        player_text = self._ensemble_text(len(instrument_ids))
+        label_font, detail_font = self._row_fonts(styled.font)
+        player_font = detail_font
+        painter.save()
+        painter.setFont(player_font)
+        player_width = (
+            float(painter.fontMetrics().horizontalAdvance(player_text)) + 4.0
+            if player_text
+            else 0.0
+        )
+        painter.restore()
+        right_width = icon_width + player_width
+        if icon_slots and player_text:
+            right_width += 10.0
+        label, _separator, detail = text.partition("\n")
+        selected = bool(
+            option.state & QStyle.StateFlag.State_Selected
+        )
+
+        painter.save()
+        painter.setFont(label_font)
+        painter.setPen(QColor("#f1e9dc") if selected else QColor("#ddd8cf"))
+        label_height = float(self._title_height(
+            label,
+            label_font,
+            round(content.width()),
+        ))
+        title_rect = QRectF(
+            content.left(),
+            content.top(),
+            content.width(),
+            label_height,
+        )
+        painter.drawText(
+            title_rect,
+            self._title_text_flags(),
+            label,
+        )
+
+        painter.setFont(detail_font)
+        painter.setPen(QColor("#a99b82") if selected else QColor("#8d8982"))
+        detail_metrics = painter.fontMetrics()
+        info_top = title_rect.bottom() + 4.0
+        info_height = max(
+            float(detail_metrics.height() + 2),
+            icon_size,
+        )
+        detail_right = content.right() - right_width - (12.0 if right_width else 0.0)
+        detail_rect = QRectF(
+            content.left(),
+            info_top,
+            max(24.0, detail_right - content.left()),
+            info_height,
+        )
+        painter.drawText(
+            detail_rect,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            detail_metrics.elidedText(
+                detail,
+                Qt.TextElideMode.ElideRight,
+                max(0, round(detail_rect.width())),
+            ),
+        )
+
+        icon_x = content.right() - player_width - icon_width
+        if player_text:
+            icon_x -= 10.0 if icon_slots else 0.0
+        icon_y = info_top + (info_height - icon_size) * 0.5
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        for instrument_id in visible_ids:
+            target = QRectF(icon_x, icon_y, icon_size, icon_size)
+            image = self.artwork.pixmap_for(int(instrument_id))
+            if image is not None:
+                painter.setOpacity(0.78 if selected else 0.62)
+                painter.drawImage(target, image, QRectF(image.rect()))
+            else:
+                painter.setOpacity(0.74)
+                painter.setPen(QColor("#d7b15a"))
+                painter.drawText(
+                    target,
+                    Qt.AlignmentFlag.AlignCenter,
+                    f"{int(instrument_id):02X}",
+                )
+            icon_x += icon_size + icon_gap
+        if overflow:
+            painter.setOpacity(1.0)
+            painter.setPen(QColor("#c7b78f"))
+            painter.drawText(
+                QRectF(icon_x, icon_y, icon_size, icon_size),
+                Qt.AlignmentFlag.AlignCenter,
+                f"+{overflow}",
+            )
+        if player_text:
+            painter.setOpacity(1.0)
+            painter.setFont(player_font)
+            painter.setPen(QColor("#c6a55d") if selected else QColor("#9e8b65"))
+            painter.drawText(
+                QRectF(
+                    content.right() - player_width,
+                    info_top,
+                    player_width,
+                    info_height,
+                ),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                player_text,
+            )
+        painter.restore()
 
 
 class StartupSplash(QWidget):
@@ -1625,6 +2092,7 @@ class StartupSplash(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint,
         )
         self.setObjectName("StartupSplash")
+        self.setProperty("uiSurface", "startup")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(470, 734)
         self._shown_at = time.monotonic()
@@ -1632,9 +2100,11 @@ class StartupSplash(QWidget):
         self._finish_scheduled = False
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
         card = QFrame()
         card.setObjectName("StartupSplashCard")
+        card.setProperty("uiRole", "startupCanvas")
         outer.addWidget(card)
         card_layout = QGridLayout(card)
         card_layout.setContentsMargins(0, 0, 0, 0)
@@ -1645,6 +2115,7 @@ class StartupSplash(QWidget):
 
         content = QFrame()
         content.setObjectName("StartupOverlay")
+        content.setProperty("uiRole", "startupFooter")
         content.setFixedWidth(self.artwork.width())
         layout = QVBoxLayout(content)
         layout.setContentsMargins(22, 15, 22, 17)
@@ -1681,14 +2152,15 @@ class StartupSplash(QWidget):
             """
             QWidget#StartupSplash { background: transparent; }
             QFrame#StartupSplashCard {
-                background: #171614;
-                border: 1px solid #5b4527;
-                border-radius: 11px;
+                background: #151515;
+                border: 1px solid #4a3b27;
+                border-radius: 0;
             }
             QFrame#StartupOverlay {
-                background: rgba(20, 18, 15, 226);
+                background: rgba(21, 21, 21, 238);
                 border: 0;
-                border-top: 1px solid rgba(216, 155, 55, 120);
+                border-top: 1px solid #4a3b27;
+                border-radius: 0;
             }
             QLabel#StartupEyebrow {
                 color: #d89b37;
@@ -1777,24 +2249,31 @@ class GlobalToast(QFrame):
         "warning": "#f5a524",
         "error": "#ef8178",
     }
+    MARKERS = {
+        "info": "i",
+        "success": "✓",
+        "warning": "!",
+        "error": "×",
+    }
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
         self.setObjectName("GlobalToast")
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setMinimumWidth(280)
-        self.setMaximumWidth(540)
+        self.setMinimumWidth(270)
+        self.setMaximumWidth(620)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(13, 10, 15, 10)
-        layout.setSpacing(10)
-        self.marker = QLabel("●")
+        layout.setContentsMargins(12, 8, 16, 8)
+        layout.setSpacing(9)
+        self.marker = QLabel(self.MARKERS["info"])
         self.marker.setObjectName("ToastMarker")
-        self.marker.setAlignment(Qt.AlignmentFlag.AlignTop)
-        layout.addWidget(self.marker)
+        self.marker.setFixedSize(20, 20)
+        self.marker.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.marker, 0, Qt.AlignmentFlag.AlignVCenter)
         self.message = QLabel()
         self.message.setObjectName("ToastMessage")
         self.message.setWordWrap(True)
-        self.message.setMaximumWidth(460)
+        self.message.setMaximumWidth(540)
         layout.addWidget(self.message, stretch=1)
 
         self.opacity = QGraphicsOpacityEffect(self)
@@ -1807,27 +2286,41 @@ class GlobalToast(QFrame):
         self.hold_timer = QTimer(self)
         self.hold_timer.setSingleShot(True)
         self.hold_timer.timeout.connect(self.fade_out)
-        self.setStyleSheet(
-            """
-            QFrame#GlobalToast {
-                background: #28241e;
-                border: 1px solid #66502d;
-                border-radius: 7px;
-            }
-            QLabel#ToastMessage {
-                color: #f3eee6;
-                font-family: "Microsoft YaHei UI";
-                font-size: 11px;
-                font-weight: 700;
-            }
-            QLabel#ToastMarker {
-                font-family: "Microsoft YaHei UI";
-                font-size: 11px;
-            }
-            """
-        )
+        self._apply_kind_style("info")
         parent.installEventFilter(self)
         self.hide()
+
+    def _apply_kind_style(self, kind: str) -> None:
+        color = self.COLORS[kind]
+        self.setProperty("toastKind", kind)
+        self.setStyleSheet(
+            f"""
+            QFrame#GlobalToast {{
+                background: rgba(20, 22, 21, 242);
+                border: 0;
+                border-left: 3px solid {color};
+                border-bottom: 1px solid #453a2b;
+                border-radius: 1px;
+            }}
+            QLabel#ToastMessage {{
+                color: #e8e2d8;
+                background: transparent;
+                border: 0;
+                font-family: "Microsoft YaHei UI";
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            QLabel#ToastMarker {{
+                color: {color};
+                background: rgba(0, 0, 0, 48);
+                border: 1px solid {color};
+                border-radius: 2px;
+                font-family: "Microsoft YaHei UI";
+                font-size: 10px;
+                font-weight: 900;
+            }}
+            """
+        )
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.parent() and event.type() in {
@@ -1840,10 +2333,23 @@ class GlobalToast(QFrame):
     def show_message(self, text: str, kind: str = "info", duration_ms: int = 2600) -> None:
         if not text:
             return
+        resolved_kind = kind if kind in self.COLORS else "info"
         self.animation.stop()
         self.hold_timer.stop()
+        self._apply_kind_style(resolved_kind)
+        self.marker.setText(self.MARKERS[resolved_kind])
         self.message.setText(text)
-        self.marker.setStyleSheet(f"color: {self.COLORS.get(kind, self.COLORS['info'])};")
+        self.message.ensurePolished()
+        parent = self.parentWidget()
+        available_width = min(
+            540,
+            max(220, (parent.width() - 110) if parent is not None else 540),
+        )
+        natural_width = self.message.fontMetrics().horizontalAdvance(text) + 4
+        self.message.setFixedWidth(
+            max(220, min(available_width, natural_width))
+        )
+        self.setAccessibleName(text)
         self.opacity.setOpacity(0.0)
         self.show()
         self.adjustSize()
@@ -1883,7 +2389,12 @@ class GlobalToast(QFrame):
             content = parent.findChild(QWidget, "SettingsContent")
             y = (content.geometry().top() + 12) if content is not None else 84
         else:
-            y = 64 if parent.height() >= 180 else 16
+            toolbar = parent.findChild(QFrame, "Toolbar")
+            if toolbar is not None:
+                toolbar_top = toolbar.mapTo(parent, toolbar.rect().topLeft()).y()
+                y = toolbar_top + toolbar.height() + 8
+            else:
+                y = 16
         self.move(x, y)
 
 
@@ -1910,6 +2421,7 @@ class TimelineCanvas(QWidget):
     track_state_changed = Signal()
     instrument_changed = Signal(object)
     selected = Signal(object)
+    validation_requested = Signal(object)
     effects_requested = Signal(object)
     midi_tools_requested = Signal(object)
     note_editor_requested = Signal(object)
@@ -1917,11 +2429,24 @@ class TimelineCanvas(QWidget):
     time_range_changed = Signal(object)
     playhead_changed = Signal(float)
     TRACK_NOTE_QUERY_BLOCK_SIZE = 128
+    # The multi-track view is an overview, so its grid must remain quieter
+    # than the per-note piano roll.  Dense songs otherwise turn alternating
+    # measure bands into a high-contrast barcode at fit-to-song zoom.
+    GRID_MIN_TICK_SPACING_PX = 56.0
+    MEASURE_BANDING_MIN_WIDTH_PX = 72.0
+    KEYBOARD_SHORTCUT_HINT = (
+        "上下键选择轨道；M 静音；S 独奏；F 打开效果；"
+        "Enter 编辑音符；左右键调整轨道音量（Shift 5）"
+    )
 
     def __init__(self) -> None:
         super().__init__()
         self.tracks: list[TrackState] = []
         self.hit_regions: list[tuple[QRectF, str, object]] = []
+        self.track_validation_notices: dict[
+            int, dict[str, tuple[str, ...]]
+        ] = {}
+        self._validation_hover_track_id: int | None = None
         self.reference_audio: ReferenceAudioController | None = None
         self.zoom_factor = 1.0
         self.view_start_ms = 0.0
@@ -1962,6 +2487,12 @@ class TimelineCanvas(QWidget):
         self._timeline_end_cache = 1.0
         self.track_scroll.setObjectName("TimelineScroll")
         self.track_scroll.valueChanged.connect(self.update)
+        self.setObjectName("TimelineCanvas")
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName(tr("轨道时间轴"))
+        self.setToolTip(tr(self.KEYBOARD_SHORTCUT_HINT))
+        self.setStatusTip(tr(self.KEYBOARD_SHORTCUT_HINT))
+        self._update_accessible_track_state()
         self.setMouseTracking(True)
         self.setMinimumHeight(380)
 
@@ -1981,7 +2512,14 @@ class TimelineCanvas(QWidget):
 
     def set_tracks(self, tracks: list[TrackState]) -> None:
         self.tracks = tracks
+        if not any(track is self.selected_track for track in tracks):
+            self.selected_track = None
         valid_track_ids = {int(track.track_id) for track in tracks}
+        self.track_validation_notices = {
+            track_id: notice
+            for track_id, notice in self.track_validation_notices.items()
+            if track_id in valid_track_ids
+        }
         self.track_levels = {
             track_id: level for track_id, level in self.track_levels.items()
             if track_id in valid_track_ids
@@ -1991,7 +2529,71 @@ class TimelineCanvas(QWidget):
         self._clamp_view()
         self.setMinimumHeight(380)
         self._update_track_scrollbar()
+        self._update_accessible_track_state()
         self.update()
+
+    def set_validation_notices(
+        self,
+        notices: dict[int, dict[str, tuple[str, ...]]],
+    ) -> None:
+        """Apply export errors and non-blocking attention marks by track ID."""
+
+        valid_track_ids = {int(track.track_id) for track in self.tracks}
+        normalized: dict[int, dict[str, tuple[str, ...]]] = {}
+        for raw_track_id, raw_notice in notices.items():
+            track_id = int(raw_track_id)
+            if track_id not in valid_track_ids:
+                continue
+            errors = tuple(
+                str(message).strip()
+                for message in raw_notice.get("errors", ())
+                if str(message).strip()
+            )
+            attentions = tuple(
+                str(message).strip()
+                for message in raw_notice.get("attentions", ())
+                if str(message).strip()
+            )
+            if errors or attentions:
+                normalized[track_id] = {
+                    "errors": errors,
+                    "attentions": attentions,
+                }
+        if normalized == self.track_validation_notices:
+            return
+        self.track_validation_notices = normalized
+        self._validation_hover_track_id = None
+        self.setToolTip(tr(self.KEYBOARD_SHORTCUT_HINT))
+        self._update_accessible_track_state()
+        self.update()
+
+    def _track_validation_notice(
+        self,
+        track: TrackState,
+    ) -> dict[str, tuple[str, ...]]:
+        return self.track_validation_notices.get(
+            int(track.track_id),
+            {"errors": (), "attentions": ()},
+        )
+
+    def _track_validation_tooltip(self, track: TrackState) -> str:
+        notice = self._track_validation_notice(track)
+        sections: list[str] = []
+        errors = notice["errors"]
+        attentions = notice["attentions"]
+        if errors:
+            sections.append(
+                tr("导出错误") + "\n" + "\n".join(
+                    f"• {message}" for message in errors
+                )
+            )
+        if attentions:
+            sections.append(
+                tr("需要注意") + "\n" + "\n".join(
+                    f"• {message}" for message in attentions
+                )
+            )
+        return "\n\n".join(sections)
 
     def set_reference_audio(self, controller: "ReferenceAudioController") -> None:
         if self.reference_audio is controller:
@@ -2152,8 +2754,64 @@ class TimelineCanvas(QWidget):
         return index[3], index[4]
 
     def set_selected_track(self, track: TrackState | None) -> None:
+        self._select_track(track, emit=False)
+
+    def _select_track(
+        self,
+        track: TrackState | None,
+        *,
+        emit: bool,
+    ) -> None:
         self.selected_track = track
+        if emit and track is not None:
+            self.selected.emit(track)
+        self._ensure_selected_track_visible()
+        self._update_accessible_track_state()
         self.update()
+
+    def _selected_track_index(self) -> int | None:
+        return next(
+            (
+                index
+                for index, track in enumerate(self.tracks)
+                if track is self.selected_track
+            ),
+            None,
+        )
+
+    def _ensure_selected_track_visible(self) -> None:
+        index = self._selected_track_index()
+        if index is None or not self.track_scroll.isVisible():
+            return
+        lane_height = self._lane_height()
+        top = index * lane_height
+        bottom = top + lane_height
+        current = self.track_scroll.value()
+        page = max(lane_height, self.track_scroll.pageStep())
+        if top < current:
+            self.track_scroll.setValue(top)
+        elif bottom > current + page:
+            self.track_scroll.setValue(bottom - page)
+
+    def _update_accessible_track_state(self) -> None:
+        track = self.selected_track
+        if track is None:
+            self.setAccessibleDescription(tr(self.KEYBOARD_SHORTCUT_HINT))
+            return
+        validation_description = self._track_validation_tooltip(track)
+        self.setAccessibleDescription(
+            trf(
+                "当前轨道：{track}；音量 {volume}。{shortcuts}",
+                track=str(track.display_name),
+                volume=int(track.bdo_track_volume),
+                shortcuts=trv(self.KEYBOARD_SHORTCUT_HINT),
+            )
+            + (
+                "\n" + validation_description
+                if validation_description
+                else ""
+            )
+        )
 
     def set_conversion_transpose(self, semitones: int) -> None:
         semitones = int(semitones)
@@ -2189,7 +2847,7 @@ class TimelineCanvas(QWidget):
         measure_ms = beat_ms * max(1, self.time_sig)
         beat_pixels = grid_width * beat_ms / max(1.0, visible_duration)
         factor = 1
-        while beat_pixels * factor < 34.0:
+        while beat_pixels * factor < self.GRID_MIN_TICK_SPACING_PX:
             factor *= 2
         step_ms = beat_ms * factor
         first = self.beat_origin_ms + math.floor(
@@ -2214,6 +2872,17 @@ class TimelineCanvas(QWidget):
             ticks.append((value, is_major, label))
             value += step_ms
         return ticks
+
+    def _show_measure_banding(
+        self,
+        visible_duration: float,
+        grid_width: float,
+    ) -> bool:
+        measure_ms = (
+            60000.0 / max(1, self.bpm) * max(1, self.time_sig)
+        )
+        measure_width = grid_width * measure_ms / max(1.0, visible_duration)
+        return measure_width >= self.MEASURE_BANDING_MIN_WIDTH_PX
 
     def _note_has_conversion_problem(self, track: TrackState, pitch: int) -> bool:
         canonical_drum_lanes = track_uses_canonical_drum_lanes(track)
@@ -2282,7 +2951,7 @@ class TimelineCanvas(QWidget):
         self._scaled_background_size = self.size()
 
     def _lane_height(self) -> int:
-        return 58
+        return 68
 
     def _visible_track_row_range(self, grid_height: float) -> tuple[int, int]:
         lane_height = self._lane_height()
@@ -2298,11 +2967,20 @@ class TimelineCanvas(QWidget):
         # The workspace itself supplies separation from the fixed bars.  Keep
         # the painted track grid full-bleed inside it—no extra canvas gutter.
         area = QRectF(self.rect())
-        # Enough room for readable two-line track metadata and compact actions.
-        header_w = 320
+        # Keep the left column compact; pitch-range detail belongs in the
+        # inspector/conversion check rather than competing with row controls.
+        header_w = 296
         ruler_h = 34
         lane_h = self._lane_height()
         return area, header_w, ruler_h, lane_h
+
+    def _reference_audio_lane_height(self) -> int:
+        controller = self.reference_audio
+        if controller is None:
+            return 0
+        if controller.audio_path or controller.waveform_loading:
+            return self._lane_height()
+        return 34
 
     def _update_track_scrollbar(self) -> None:
         if not hasattr(self, "track_scroll"):
@@ -2312,7 +2990,7 @@ class TimelineCanvas(QWidget):
         grid_h = max(80, area.bottom() - grid_top)
         instrument_view_h = max(
             0,
-            grid_h - (lane_h if self.reference_audio is not None else 0),
+            grid_h - self._reference_audio_lane_height(),
         )
         content_h = lane_h * len(self.tracks)
         max_scroll = max(0, content_h - instrument_view_h)
@@ -2441,7 +3119,7 @@ class TimelineCanvas(QWidget):
         self.view_start_ms = max(0.0, min(self.view_start_ms, max_start))
 
     def _paint_canvas_background(self, painter: QPainter) -> None:
-        painter.fillRect(self.rect(), QColor("#141615"))
+        painter.fillRect(self.rect(), QColor("#1c1c1e"))
         if self.background_pixmap.isNull():
             return
         self._refresh_scaled_background()
@@ -2452,7 +3130,7 @@ class TimelineCanvas(QWidget):
         painter.setOpacity(TIMELINE_BACKGROUND_OPACITY)
         painter.drawPixmap(int(x), int(y), self._scaled_background)
         painter.restore()
-        painter.fillRect(target, QColor(12, 14, 13, 72))
+        painter.fillRect(target, QColor(17, 17, 18, 112))
 
     def _paint_timeline_shell(
         self,
@@ -2467,11 +3145,11 @@ class TimelineCanvas(QWidget):
         top = area.top()
         grid_left = left + header_w
         grid_top = top + ruler_h
-        painter.fillRect(QRectF(left, top, area.width(), ruler_h), QColor(32, 32, 32, 218))
+        painter.fillRect(QRectF(left, top, area.width(), ruler_h), QColor(44, 44, 48, 236))
         timeline_clip = QRectF(grid_left, grid_top, grid_w, grid_h)
-        painter.fillRect(QRectF(left, grid_top, header_w, grid_h), QColor(29, 29, 29, 206))
-        painter.fillRect(timeline_clip, QColor(21, 21, 21, 178))
-        painter.setPen(QPen(QColor("#343434"), 1))
+        painter.fillRect(QRectF(left, grid_top, header_w, grid_h), QColor(36, 36, 39, 226))
+        painter.fillRect(timeline_clip, QColor(28, 28, 30, 204))
+        painter.setPen(QPen(QColor("#735b2d"), 1))
         painter.drawLine(grid_left, top, grid_left, area.bottom())
         painter.drawLine(left, grid_top, area.right(), grid_top)
         return left, top, grid_left, grid_top
@@ -2499,30 +3177,29 @@ class TimelineCanvas(QWidget):
             (measure - self.beat_origin_ms) / measure_ms
         )
         visible_end = visible_start + visible_duration
-        while measure <= visible_end + measure_ms:
-            next_measure = measure + measure_ms
-            left_x = grid_left + (
-                (measure - visible_start) / visible_duration
-            ) * grid_w
-            right_x = grid_left + (
-                (next_measure - visible_start) / visible_duration
-            ) * grid_w
-            shade = (
-                QColor(25, 25, 25, 80)
-                if measure_index % 2
-                else QColor(17, 17, 17, 64)
-            )
-            painter.fillRect(
-                QRectF(
-                    left_x,
-                    grid_top,
-                    right_x - left_x,
-                    grid_h,
-                ),
-                shade,
-            )
-            measure = next_measure
-            measure_index += 1
+        if self._show_measure_banding(visible_duration, grid_w):
+            while measure <= visible_end + measure_ms:
+                next_measure = measure + measure_ms
+                # One very light band every two measures gives orientation
+                # without placing a dark stripe behind every bar.
+                if measure_index % 2:
+                    left_x = grid_left + (
+                        (measure - visible_start) / visible_duration
+                    ) * grid_w
+                    right_x = grid_left + (
+                        (next_measure - visible_start) / visible_duration
+                    ) * grid_w
+                    painter.fillRect(
+                        QRectF(
+                            left_x,
+                            grid_top,
+                            right_x - left_x,
+                            grid_h,
+                        ),
+                        QColor(138, 112, 67, 10),
+                    )
+                measure = next_measure
+                measure_index += 1
         ticks = self._visible_musical_ticks(
             visible_start,
             visible_duration,
@@ -2532,12 +3209,19 @@ class TimelineCanvas(QWidget):
             x = grid_left + (
                 (value - visible_start) / visible_duration
             ) * grid_w
-            painter.setPen(QPen(QColor("#3a3a3a" if is_major else "#292929"), 1))
+            painter.setPen(
+                QPen(
+                    QColor(74, 62, 43, 176)
+                    if is_major
+                    else QColor(49, 49, 53, 132),
+                    1,
+                )
+            )
             painter.drawLine(int(x), grid_top, int(x), grid_top + grid_h)
             if label:
-                painter.setPen(QColor("#8e8982" if is_major else "#5f5a54"))
+                painter.setPen(QColor("#d3bea0" if is_major else "#7e705e"))
                 painter.drawText(int(x + 6), top + 22, label)
-        painter.setPen(QColor("#a8a29e"))
+        painter.setPen(QColor("#ffedd4"))
         painter.drawText(left + 10, top + 22, tr("轨道"))
         return len(ticks)
 
@@ -2624,7 +3308,7 @@ class TimelineCanvas(QWidget):
         scroll_y = self.track_scroll.value() if self.track_scroll.isVisible() else 0
         instrument_grid_h = max(
             0.0,
-            grid_h - (lane_h if self.reference_audio is not None else 0),
+            grid_h - self._reference_audio_lane_height(),
         )
         first_row, last_row = self._visible_track_row_range(instrument_grid_h)
         painter.save()
@@ -2634,24 +3318,33 @@ class TimelineCanvas(QWidget):
             y = grid_top + row * lane_h - scroll_y
             active = not track.muted and (not any_solo or track.solo)
             focused = track is self.selected_track
-            lane_color = QColor(32, 32, 32, 174) if row % 2 else QColor(28, 28, 28, 166)
+            validation_notice = self._track_validation_notice(track)
+            validation_errors = validation_notice["errors"]
+            validation_attentions = validation_notice["attentions"]
+            has_validation_notice = bool(
+                validation_errors or validation_attentions
+            )
+            lane_color = QColor(38, 38, 41, 188) if row % 2 else QColor(32, 32, 35, 184)
             if not active:
-                lane_color = QColor(23, 23, 23, 190)
+                lane_color = QColor(27, 27, 29, 204)
             if focused:
-                lane_color = QColor(42, 36, 25, 202) if active else QColor(33, 29, 23, 202)
+                lane_color = QColor(46, 50, 38, 214) if active else QColor(35, 36, 32, 212)
             painter.setBrush(lane_color)
             painter.setPen(Qt.NoPen)
             painter.drawRect(QRectF(grid_left, y, grid_w, lane_h))
             painter.fillRect(
                 QRectF(left, y, header_w, lane_h),
-                QColor(48, 40, 26, 214) if focused else (QColor(34, 34, 34, 206) if active else QColor(25, 25, 25, 214)),
+                QColor(61, 67, 46, 226) if focused else (QColor(44, 44, 48, 220) if active else QColor(34, 34, 37, 222)),
             )
-            painter.fillRect(QRectF(left, y, 5, lane_h), QColor(track.color if active else "#4a4743"))
             if focused:
-                painter.fillRect(QRectF(left, y, 5, lane_h), QColor("#f5a524"))
-                painter.setPen(QPen(QColor("#d9a441"), 1))
+                painter.setPen(
+                    QPen(
+                        QColor("#d6b867" if self.hasFocus() else "#9b804a"),
+                        2 if self.hasFocus() else 1,
+                    )
+                )
                 painter.drawRect(QRectF(left + 0.5, y + 0.5, header_w + grid_w - 1, lane_h - 1))
-            painter.setPen(QPen(QColor("#2e2e2e"), 1))
+            painter.setPen(QPen(QColor("#3b3b3f"), 1))
             painter.drawLine(left, y + lane_h - 1, grid_left + grid_w, y + lane_h - 1)
 
             self.hit_regions.append((QRectF(left, y, header_w + grid_w, lane_h), "lane", track))
@@ -2676,6 +3369,68 @@ class TimelineCanvas(QWidget):
                     active=active,
                 )
 
+            # One lane has one visible severity. Export blockers always win;
+            # merge attention remains available in the tooltip/check dialog
+            # but never splits an error lane into competing red/amber states.
+            if validation_errors:
+                painter.fillRect(
+                    QRectF(left, y, header_w, lane_h),
+                    QColor(164, 54, 48, 27),
+                )
+                painter.fillRect(
+                    QRectF(left, y, 5.0, lane_h),
+                    QColor("#d9635d"),
+                )
+            elif validation_attentions:
+                painter.fillRect(
+                    QRectF(left, y, header_w, lane_h),
+                    QColor(184, 128, 47, 24),
+                )
+                painter.fillRect(
+                    QRectF(left, y, 5.0, lane_h),
+                    QColor("#d1a24d"),
+                )
+            else:
+                track_identity_color = QColor(
+                    track.color if active else "#4a4743"
+                )
+                painter.fillRect(
+                    QRectF(left, y, 3.0, lane_h),
+                    track_identity_color,
+                )
+
+            validation_badges: list[tuple[str, str, QColor, float]] = []
+            if validation_errors:
+                validation_badges.append(
+                    ("!", "error", QColor("#d9635d"), y + 7.0)
+                )
+            elif validation_attentions:
+                validation_badges.append(
+                    ("=", "attention", QColor("#d1a24d"), y + 7.0)
+                )
+            for marker, notice_kind, accent, badge_y in validation_badges:
+                badge_rect = QRectF(left + 8.0, badge_y, 18.0, 18.0)
+                badge_fill = QColor(accent)
+                badge_fill.setAlpha(42)
+                painter.setBrush(badge_fill)
+                painter.setPen(QPen(accent, 1))
+                painter.drawRoundedRect(badge_rect, 4.0, 4.0)
+                badge_font = painter.font()
+                badge_font.setPointSize(max(7, badge_font.pointSize() - 1))
+                badge_font.setBold(True)
+                painter.save()
+                painter.setFont(badge_font)
+                painter.setPen(QColor("#fff1dc"))
+                painter.drawText(badge_rect, Qt.AlignCenter, marker)
+                painter.restore()
+                self.hit_regions.append(
+                    (
+                        badge_rect,
+                        f"validation_{notice_kind}",
+                        track,
+                    )
+                )
+
             controls = [
                 ("M", "mute", 26),
                 ("S", "solo", 26),
@@ -2685,14 +3440,14 @@ class TimelineCanvas(QWidget):
             controls_width = sum(width for _label, _action, width in controls)
             controls_width += control_gap * max(0, len(controls) - 1)
             control_x = left + header_w - 20.0 - controls_width
-            control_y = y + 5.0
+            control_y = y + 8.0
             for label, action, width in controls:
-                rect = QRectF(control_x, control_y, width, 22)
+                rect = QRectF(control_x, control_y, width, 24)
                 checked = (action == "mute" and track.muted) or (action == "solo" and track.solo)
-                painter.fillRect(rect, QColor("#5d451e" if checked else "#2b2b2b"))
-                painter.setPen(QPen(QColor("#d9a441" if checked else "#484848"), 1))
+                painter.fillRect(rect, QColor("#5c4a28" if checked else "#242427"))
+                painter.setPen(QPen(QColor("#caa24f" if checked else "#4b4b50"), 1))
                 painter.drawRect(rect)
-                painter.setPen(QColor("#f3f1ea" if active else "#8a847d"))
+                painter.setPen(QColor("#ffedd4" if active else "#837a6f"))
                 painter.drawText(rect, Qt.AlignCenter, label)
                 self.hit_regions.append((rect, action, track))
                 control_x += width + control_gap
@@ -2702,13 +3457,23 @@ class TimelineCanvas(QWidget):
             # 0..100 (default 70), although imported score bytes may be above
             # 100.  Such raw values remain visible and untouched until the
             # user deliberately edits this slider.
-            volume_label_rect = QRectF(left + header_w - 129, y + 34, 25, 16)
-            volume_rect = QRectF(left + header_w - 101, y + 34, 50, 16)
-            volume_value_rect = QRectF(left + header_w - 48, y + 34, 26, 16)
-            painter.setPen(QColor("#8f8981" if active else "#625e59"))
-            painter.drawText(volume_label_rect, Qt.AlignCenter, tr("音量"))
-            painter.fillRect(volume_rect, QColor("#252525"))
-            painter.setPen(QPen(QColor("#4b4945"), 1))
+            volume_rect = QRectF(left + header_w - 101, y + 42, 50, 16)
+            volume_value_rect = QRectF(left + header_w - 48, y + 42, 26, 16)
+            volume_label = tr("音量")
+            volume_label_width = self._volume_label_width(
+                painter.fontMetrics(),
+                volume_label,
+            )
+            volume_label_rect = QRectF(
+                volume_rect.left() - volume_label_width - 4.0,
+                y + 42,
+                volume_label_width,
+                16,
+            )
+            painter.setPen(QColor("#a78e6a" if active else "#665e54"))
+            painter.drawText(volume_label_rect, Qt.AlignCenter, volume_label)
+            painter.fillRect(volume_rect, QColor("#1c1c1e"))
+            painter.setPen(QPen(QColor("#514a3e"), 1))
             painter.drawRect(volume_rect)
             raw_track_volume = int(track.bdo_track_volume)
             fill_width = max(
@@ -2724,18 +3489,18 @@ class TimelineCanvas(QWidget):
                     fill_width,
                     6.0,
                 ),
-                QColor("#d49a34" if active else "#665437"),
+                QColor("#83a543" if active else "#556042"),
             )
             handle_x = volume_rect.left() + 2.0 + fill_width
             painter.fillRect(
                 QRectF(handle_x - 1.0, volume_rect.top() + 3.0, 2.0, 10.0),
-                QColor("#f5c158" if active else "#81735d"),
+                QColor("#d9c07a" if active else "#81735d"),
             )
             painter.setPen(
                 QColor(
                     "#ef7772"
                     if not 0 <= raw_track_volume <= 100
-                    else ("#d7c6a5" if active else "#77716a")
+                    else ("#ffedd4" if active else "#77716a")
                 )
             )
             painter.drawText(
@@ -2746,7 +3511,7 @@ class TimelineCanvas(QWidget):
             self.hit_regions.append((volume_rect, "track_volume", track))
 
             meter_level = self.track_levels.get(int(track.track_id), 0.0) if active else 0.0
-            meter_rect = QRectF(left + header_w - 14, y + 7, 7, lane_h - 14)
+            meter_rect = QRectF(left + header_w - 14, y + 8, 7, lane_h - 16)
             segment_count = 10
             segment_gap = 1.0
             segment_height = (meter_rect.height() - segment_gap * (segment_count - 1)) / segment_count
@@ -2755,21 +3520,19 @@ class TimelineCanvas(QWidget):
             for segment in range(segment_count):
                 segment_y = meter_rect.bottom() - (segment + 1) * segment_height - segment * segment_gap
                 if segment < lit_segments:
-                    color = "#d05c4f" if segment >= 9 else ("#d8a33f" if segment >= 7 else "#4fa36a")
+                    color = "#d05c4f" if segment >= 9 else ("#caa24f" if segment >= 7 else "#83a543")
                 else:
-                    color = "#30302e"
+                    color = "#343438"
                 painter.fillRect(QRectF(meter_rect.left(), segment_y, meter_rect.width(), segment_height), QColor(color))
 
-            accent = QColor(track.color)
-            accent.setAlpha(230 if active else 75)
             # No nested horizontal gutter: the colored note region shares the
             # grid's exact left/right edge, while retaining a little vertical
             # breathing room between adjacent lanes.
-            region_rect = QRectF(grid_left, y + 7, grid_w, lane_h - 14)
-            region_bg = QColor(track.color)
-            region_bg.setAlpha(42 if active else 16)
+            region_rect = QRectF(grid_left, y + 9, grid_w, lane_h - 18)
+            region_bg = QColor("#253022" if focused and active else "#242427")
+            region_bg.setAlpha(152 if active else 116)
             painter.setBrush(region_bg)
-            painter.setPen(QPen(QColor(track.color), 1))
+            painter.setPen(QPen(QColor("#735b2d" if focused else "#3b3b3f"), 1))
             painter.drawRect(region_rect)
 
             if track.notes:
@@ -2777,7 +3540,8 @@ class TimelineCanvas(QWidget):
                 pitch_span = max(1, pitch_max - pitch_min)
                 painter.save()
                 painter.setClipRect(region_rect)
-                rects_by_color: dict[str, list[QRectF]] = {}
+                normal_rects: list[QRectF] = []
+                articulation_markers: dict[str, list[QRectF]] = {}
                 invalid_rects: list[QRectF] = []
                 ordered, note_lo, note_hi = self._visible_track_note_window(
                     track, visible_start, visible_end,
@@ -2792,47 +3556,66 @@ class TimelineCanvas(QWidget):
                     w = max(2.5, (scaled_dur / visible_duration) * region_rect.width())
                     pitch_pos = (note.pitch - pitch_min) / pitch_span
                     note_y = region_rect.top() + 6 + (1.0 - pitch_pos) * (region_rect.height() - 14)
-                    note_rect = QRectF(x, note_y, w, 4.5)
+                    note_rect = QRectF(x, note_y, w, 5.0)
                     if self._note_has_conversion_problem(track, note.pitch):
                         invalid_rects.append(note_rect)
                     else:
-                        dynamic_color = articulation_color(int(getattr(note, "ntype", 0)))
-                        rects_by_color.setdefault(dynamic_color, []).append(note_rect)
+                        normal_rects.append(note_rect)
+                        ntype = int(getattr(note, "ntype", 0))
+                        if ntype != 0:
+                            marker = QRectF(
+                                note_rect.left(),
+                                note_rect.top(),
+                                min(2.0, note_rect.width()),
+                                note_rect.height(),
+                            )
+                            articulation_markers.setdefault(
+                                articulation_color(ntype), []
+                            ).append(marker)
                 painter.setPen(Qt.NoPen)
-                for color, rects in rects_by_color.items():
+                if normal_rects:
+                    note_fill = QColor(track.color if active else "#566149")
+                    note_fill.setAlpha(232 if active else 112)
+                    painter.setBrush(note_fill)
+                    painter.drawRects(normal_rects)
+                for color, markers in articulation_markers.items():
                     painter.setBrush(QColor(color))
-                    painter.drawRects(rects)
+                    painter.drawRects(markers)
                 if invalid_rects:
                     painter.setBrush(QColor("#d94a4a"))
                     painter.setPen(QPen(QColor("#ffb1a8"), 1))
                     painter.drawRects(invalid_rects)
                 painter.restore()
 
-            painter.setPen(QColor("#f3f1ea" if active else "#8a847d"))
+            title_left = left + (34.0 if has_validation_notice else 12.0)
+            title_right = left + header_w - 114.0
+            title_width = max(0.0, title_right - title_left)
+            painter.setPen(QColor("#ffedd4" if active else "#8a847d"))
             painter.drawText(
-                QRectF(left + 12, y + 5, header_w - 126, 22),
+                QRectF(title_left, y + 8, title_width, 24),
                 Qt.AlignLeft | Qt.AlignVCenter,
-                painter.fontMetrics().elidedText(track.display_name, Qt.ElideRight, header_w - 132),
+                painter.fontMetrics().elidedText(
+                    track.display_name,
+                    Qt.ElideRight,
+                    max(0, int(title_width - 6.0)),
+                ),
             )
-            painter.setPen(QColor("#a8a29e" if active else "#69645f"))
+            painter.setPen(QColor("#b8a487" if active else "#69645f"))
             inst_name = _ui_bdo_instrument_name(track.bdo_instrument_id)
-            cached_low, cached_high = self._track_pitch_bounds(track)
-            cached_range = f"{note_name(cached_low)} - {note_name(cached_high)}" if track.notes else "-"
             metadata = trf(
-                "{instrument} · {count} 音符 · {range}",
+                "{instrument} · {count} 音符",
                 instrument=inst_name,
                 count=track.note_count,
-                range=cached_range,
             )
             metadata_font = painter.font()
             metadata_font.setPointSize(max(7, metadata_font.pointSize() - 1))
             painter.save()
             painter.setFont(metadata_font)
             metadata_left = left + 12.0
-            metadata_right = left + header_w - 135.0
+            metadata_right = volume_label_rect.left() - 6.0
             metadata_width = max(0.0, metadata_right - metadata_left)
             painter.drawText(
-                QRectF(metadata_left, y + 31, metadata_width, 20),
+                QRectF(metadata_left, y + 39, metadata_width, 20),
                 Qt.AlignLeft | Qt.AlignVCenter,
                 painter.fontMetrics().elidedText(
                     metadata,
@@ -2858,6 +3641,17 @@ class TimelineCanvas(QWidget):
             )
 
     @staticmethod
+    def _volume_label_width(font_metrics, label: str) -> float:
+        """Reserve the rendered locale width instead of the Chinese width."""
+
+        return float(
+            max(
+                25,
+                font_metrics.horizontalAdvance(str(label)) + 8,
+            )
+        )
+
+    @staticmethod
     def _track_volume_from_position(rect: QRectF, x: float) -> int:
         if rect.width() <= 0:
             return 0
@@ -2874,6 +3668,8 @@ class TimelineCanvas(QWidget):
         if int(track.bdo_track_volume) == value:
             return False
         track.bdo_track_volume = value
+        if track is self.selected_track:
+            self._update_accessible_track_state()
         self.update(rect.adjusted(-4.0, -3.0, 32.0, 3.0).toAlignedRect())
         return True
 
@@ -2894,17 +3690,21 @@ class TimelineCanvas(QWidget):
         controller = self.reference_audio
         if controller is None:
             return
-        y = grid_top + grid_h - lane_h
+        reference_h = self._reference_audio_lane_height()
+        compact = reference_h < lane_h
+        y = grid_top + grid_h - reference_h
         accent = QColor("#d39a42")
-        lane_rect = QRectF(left, y, header_w + grid_w, lane_h)
-        header_rect = QRectF(left, y, header_w, lane_h)
-        waveform_rect = QRectF(grid_left, y + 7, grid_w, lane_h - 14)
+        lane_rect = QRectF(left, y, header_w + grid_w, reference_h)
+        header_rect = QRectF(left, y, header_w, reference_h)
+        waveform_rect = QRectF(
+            grid_left, y + 5, grid_w, max(12, reference_h - 10)
+        )
 
-        painter.fillRect(QRectF(grid_left, y, grid_w, lane_h), QColor(29, 28, 27, 186))
+        painter.fillRect(QRectF(grid_left, y, grid_w, reference_h), QColor(29, 28, 27, 186))
         painter.fillRect(header_rect, QColor(37, 35, 32, 218))
-        painter.fillRect(QRectF(left, y, 5, lane_h), accent)
+        painter.fillRect(QRectF(left, y, 5, reference_h), accent)
         painter.setPen(QPen(QColor("#2e2e2e"), 1))
-        painter.drawLine(left, y + lane_h - 1, grid_left + grid_w, y + lane_h - 1)
+        painter.drawLine(left, y + reference_h - 1, grid_left + grid_w, y + reference_h - 1)
         self.hit_regions.append((lane_rect, "audio_lane", controller))
 
         button_specs = (
@@ -2916,7 +3716,7 @@ class TimelineCanvas(QWidget):
         buttons_width = sum(width for _label, _action, width in button_specs)
         buttons_width += gap * max(0, len(button_specs) - 1)
         button_x = left + header_w - 13.0 - buttons_width
-        button_y = y + 5.0
+        button_y = y + (6.0 if compact else 5.0)
         for label, action, width in button_specs:
             rect = QRectF(button_x, button_y, width, 22)
             painter.fillRect(rect, QColor("#2b2b2b"))
@@ -2934,9 +3734,13 @@ class TimelineCanvas(QWidget):
         )
         volume_width = sum(width for _label, _action, width in volume_specs)
         volume_width += gap * max(0, len(volume_specs) - 1)
-        volume_x = left + header_w - 13.0 - volume_width
+        volume_x = (
+            left + header_w - 13.0 - buttons_width - 8.0 - volume_width
+            if compact
+            else left + header_w - 13.0 - volume_width
+        )
         for label, action, width in volume_specs:
-            rect = QRectF(volume_x, y + 32.0, width, 18)
+            rect = QRectF(volume_x, y + (8.0 if compact else 32.0), width, 18)
             painter.fillRect(rect, QColor("#292826"))
             painter.setPen(QPen(QColor("#55504a"), 1))
             painter.drawRect(rect)
@@ -2945,21 +3749,27 @@ class TimelineCanvas(QWidget):
             self.hit_regions.append((rect, action, controller))
             volume_x += width + gap
 
-        text_width = max(40.0, header_w - buttons_width - 38.0)
+        text_width = max(
+            40.0,
+            header_w
+            - buttons_width
+            - (volume_width + 46.0 if compact else 38.0),
+        )
         painter.setPen(QColor("#f3f1ea"))
         painter.drawText(
             QRectF(left + 12, y + 5, text_width, 22),
             Qt.AlignLeft | Qt.AlignVCenter,
             tr("参考音频"),
         )
-        metadata = tr("正在分析波形…") if controller.waveform_loading else controller.display_name
-        painter.setPen(QColor("#aaa39b"))
-        metadata_width = max(40.0, header_w - volume_width - 38.0)
-        painter.drawText(
-            QRectF(left + 12, y + 31, metadata_width, 20),
-            Qt.AlignLeft | Qt.AlignVCenter,
-            painter.fontMetrics().elidedText(metadata, Qt.ElideMiddle, int(metadata_width)),
-        )
+        if not compact:
+            metadata = tr("正在分析波形…") if controller.waveform_loading else controller.display_name
+            painter.setPen(QColor("#aaa39b"))
+            metadata_width = max(40.0, header_w - volume_width - 38.0)
+            painter.drawText(
+                QRectF(left + 12, y + 31, metadata_width, 20),
+                Qt.AlignLeft | Qt.AlignVCenter,
+                painter.fontMetrics().elidedText(metadata, Qt.ElideMiddle, int(metadata_width)),
+            )
 
         waveform_bg = QColor("#d39a42")
         waveform_bg.setAlpha(24 if controller.audio_path else 12)
@@ -3121,13 +3931,12 @@ class TimelineCanvas(QWidget):
 
     def mousePressEvent(self, event) -> None:
         pos = event.position()
+        self.setFocus(Qt.MouseFocusReason)
         if event.button() == Qt.RightButton:
             for rect, _action, track in reversed(self.hit_regions):
                 if rect.contains(pos) and isinstance(track, TrackState):
-                    self.selected_track = track
-                    self.selected.emit(track)
+                    self._select_track(track, emit=True)
                     self._show_instrument_menu(track, event.globalPosition().toPoint())
-                    self.update()
                     return
             super().mousePressEvent(event)
             return
@@ -3161,19 +3970,24 @@ class TimelineCanvas(QWidget):
                     continue
                 if action == "lane":
                     continue
-                self.selected_track = track
-                self.selected.emit(track)
-                if action == "track_volume":
+                self._select_track(track, emit=True)
+                if action in {"validation_error", "validation_attention"}:
+                    self.validation_requested.emit(
+                        (track, action.removeprefix("validation_"))
+                    )
+                elif action == "track_volume":
                     self._volume_drag_track = track
                     self._volume_drag_rect = QRectF(rect)
                     self._volume_drag_initial = int(track.bdo_track_volume)
                     self._set_track_volume_from_position(track, rect, pos.x())
                 elif action == "mute":
                     track.muted = not track.muted
+                    self._update_accessible_track_state()
                     self.changed.emit()
                     self.track_state_changed.emit()
                 elif action == "solo":
                     track.solo = not track.solo
+                    self._update_accessible_track_state()
                     self.changed.emit()
                     self.track_state_changed.emit()
                 elif action == "fx":
@@ -3268,10 +4082,9 @@ class TimelineCanvas(QWidget):
                     and action in ("lane", "select")
                     and rect.contains(event.position())
                 ):
-                    self.selected_track = track
-                    self.selected.emit(track)
+                    self.setFocus(Qt.MouseFocusReason)
+                    self._select_track(track, emit=True)
                     self.note_editor_requested.emit(track)
-                    self.update()
                     return
         super().mouseDoubleClickEvent(event)
 
@@ -3308,7 +4121,48 @@ class TimelineCanvas(QWidget):
                 self.update()
                 self.changed.emit()
             return
+        hover_track: TrackState | None = None
+        hover_on_badge = False
+        for rect, action, item in reversed(self.hit_regions):
+            if (
+                action in {"validation_error", "validation_attention"}
+                and isinstance(item, TrackState)
+                and rect.contains(pos)
+            ):
+                hover_track = item
+                hover_on_badge = True
+                break
+        if hover_track is None:
+            for rect, action, item in reversed(self.hit_regions):
+                if (
+                    action == "lane"
+                    and isinstance(item, TrackState)
+                    and rect.contains(pos)
+                    and self._track_validation_tooltip(item)
+                ):
+                    hover_track = item
+                    break
+        hover_track_id = (
+            int(hover_track.track_id) if hover_track is not None else None
+        )
+        if hover_track_id != self._validation_hover_track_id:
+            self._validation_hover_track_id = hover_track_id
+            self.setToolTip(
+                self._track_validation_tooltip(hover_track)
+                if hover_track is not None
+                else tr(self.KEYBOARD_SHORTCUT_HINT)
+            )
+        if hover_on_badge:
+            self.setCursor(Qt.PointingHandCursor)
+        else:
+            self.unsetCursor()
         super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._validation_hover_track_id = None
+        self.setToolTip(tr(self.KEYBOARD_SHORTCUT_HINT))
+        self.unsetCursor()
+        super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         if self._volume_drag_track is not None:
@@ -3359,153 +4213,109 @@ class TimelineCanvas(QWidget):
         self.update()
         self.changed.emit()
 
+    def keyPressEvent(self, event) -> None:
+        key = event.key()
+        modifiers = event.modifiers()
+        navigation_keys = {
+            Qt.Key_Up,
+            Qt.Key_Down,
+            Qt.Key_Home,
+            Qt.Key_End,
+        }
+        if key in navigation_keys and not (
+            modifiers & (Qt.ControlModifier | Qt.AltModifier)
+        ):
+            if not self.tracks:
+                event.accept()
+                return
+            current = self._selected_track_index()
+            if key == Qt.Key_Home:
+                target_index = 0
+            elif key == Qt.Key_End:
+                target_index = len(self.tracks) - 1
+            elif current is None:
+                target_index = 0
+            else:
+                step = -1 if key == Qt.Key_Up else 1
+                target_index = max(
+                    0,
+                    min(len(self.tracks) - 1, current + step),
+                )
+            self._select_track(self.tracks[target_index], emit=True)
+            event.accept()
+            return
 
-class TrackCard(QWidget):
-    changed = Signal()
-    instrument_changed = Signal(object)
-    selected = Signal(object)
-    effects_requested = Signal(object)
-    midi_tools_requested = Signal(object)
-
-    def __init__(self, track: TrackState, instrument_names: dict[int, str]) -> None:
-        super().__init__()
-        self.track = track
-        self.instrument_names = instrument_names
-        self.name_to_id = {name: inst_id for inst_id, name in instrument_names.items()}
-        self.setObjectName("TrackCard")
-        self.setFixedHeight(78)
-
-        outer = QHBoxLayout(self)
-        outer.setContentsMargins(8, 6, 8, 6)
-        outer.setSpacing(8)
-
-        color = QLabel()
-        color.setFixedSize(6, 54)
-        color.setStyleSheet(f"background:{track.color};")
-        outer.addWidget(color)
-
-        stack = QVBoxLayout()
-        stack.setContentsMargins(0, 0, 0, 0)
-        stack.setSpacing(5)
-        outer.addLayout(stack, stretch=1)
-
-        top = QHBoxLayout()
-        top.setSpacing(6)
-        stack.addLayout(top)
-
-        title = QLabel(
-            trf(
-                "{track}\n{count} 音符 · {range}",
-                track=track.display_name,
-                count=track.note_count,
-                range=track.pitch_range,
+        track_index = self._selected_track_index()
+        track = self.tracks[track_index] if track_index is not None else None
+        if track is None:
+            super().keyPressEvent(event)
+            return
+        plain_shortcut = not (
+            modifiers & (Qt.ControlModifier | Qt.AltModifier)
+        )
+        if plain_shortcut and key == Qt.Key_M:
+            track.muted = not track.muted
+            self._update_accessible_track_state()
+            self.changed.emit()
+            self.track_state_changed.emit()
+            self.update()
+            event.accept()
+            return
+        if plain_shortcut and key == Qt.Key_S:
+            track.solo = not track.solo
+            self._update_accessible_track_state()
+            self.changed.emit()
+            self.track_state_changed.emit()
+            self.update()
+            event.accept()
+            return
+        if plain_shortcut and key == Qt.Key_F:
+            self.effects_requested.emit(track)
+            event.accept()
+            return
+        if plain_shortcut and key in (Qt.Key_Return, Qt.Key_Enter):
+            self.note_editor_requested.emit(track)
+            event.accept()
+            return
+        volume_direction = (
+            1
+            if key in (Qt.Key_Right, Qt.Key_Plus, Qt.Key_Equal)
+            else -1
+            if key in (Qt.Key_Left, Qt.Key_Minus)
+            else 0
+        )
+        if plain_shortcut and volume_direction:
+            step = 5 if modifiers & Qt.ShiftModifier else 1
+            value = max(
+                0,
+                min(
+                    100,
+                    int(track.bdo_track_volume)
+                    + volume_direction * step,
+                ),
             )
-        )
-        title.setObjectName("TrackTitle")
-        top.addWidget(title, stretch=1)
-
-        self.mute_btn = PillButton("M")
-        self.mute_btn.setToolTip(tr("静音"))
-        self.mute_btn.setAccessibleName(tr("静音"))
-        self.mute_btn.setCheckable(True)
-        self.mute_btn.setFixedWidth(30)
-        self.mute_btn.clicked.connect(self._update_mute)
-        top.addWidget(self.mute_btn, alignment=Qt.AlignVCenter)
-
-        self.solo_btn = PillButton("S")
-        self.solo_btn.setToolTip(tr("独奏"))
-        self.solo_btn.setAccessibleName(tr("独奏"))
-        self.solo_btn.setCheckable(True)
-        self.solo_btn.setFixedWidth(30)
-        self.solo_btn.clicked.connect(self._update_solo)
-        top.addWidget(self.solo_btn, alignment=Qt.AlignVCenter)
-
-        if track.bdo_instrument_id in MARNIAN_SYNTH_INSTRUMENT_IDS:
-            fx = PillButton("FX")
-            fx.setToolTip(tr("轨道 FX"))
-            fx.setAccessibleName(tr("轨道 FX"))
-            fx.setFixedWidth(34)
-            fx.clicked.connect(lambda: self.effects_requested.emit(self.track))
-            top.addWidget(fx, alignment=Qt.AlignVCenter)
-
-        bottom = QHBoxLayout()
-        bottom.setSpacing(6)
-        stack.addLayout(bottom)
-
-        self.instrument_label = QLabel(self._instrument_label_text())
-        self.instrument_label.setObjectName("Muted")
-        bottom.addWidget(self.instrument_label, stretch=1)
-
-        self.volume = QSlider(Qt.Horizontal)
-        self.volume.setRange(10, 200)
-        self.volume.setValue(100)
-        self.volume.setFixedWidth(72)
-        self.volume.setToolTip(tr("轨道音量"))
-        self.volume.setAccessibleName(tr("轨道音量"))
-        self.volume.valueChanged.connect(self._update_volume)
-        bottom.addWidget(self.volume)
-
-        self.volume_label = QLabel("100%")
-        self.volume_label.setObjectName("Muted")
-        self.volume_label.setFixedWidth(36)
-        bottom.addWidget(self.volume_label)
-
-    def mousePressEvent(self, event) -> None:
-        self.selected.emit(self.track)
-        super().mousePressEvent(event)
-
-    def contextMenuEvent(self, event) -> None:
-        self.selected.emit(self.track)
-        menu = QMenu(self)
-        optimize_action = menu.addAction(tr("优化此轨道"))
-        menu.addSeparator()
-        current_id = self.track.bdo_instrument_id
-        title = menu.addAction(tr("更换乐器"))
-        title.setEnabled(False)
-        menu.addSeparator()
-        add_instrument_submenus(menu, current_id, _ui_bdo_instrument_names())
-        selected = menu.exec(event.globalPos())
-        if selected is None:
+            if value != int(track.bdo_track_volume):
+                track.bdo_track_volume = value
+                self._update_accessible_track_state()
+                self.changed.emit()
+                self.track_state_changed.emit()
+                self.update()
+            event.accept()
             return
-        if selected is optimize_action:
-            self.midi_tools_requested.emit(self.track)
-            return
-        inst_id = selected.data()
-        if inst_id is None or inst_id == self.track.bdo_instrument_id:
-            return
-        self.track.bdo_instrument_id = int(inst_id)
-        self.instrument_label.setText(self._instrument_label_text())
-        self.instrument_changed.emit(self.track)
-        self.changed.emit()
+        super().keyPressEvent(event)
 
-    def _instrument_label_text(self) -> str:
-        return trf(
-            "{instrument} · {range}",
-            instrument=trv(_ui_bdo_instrument_source(
-                self.track.bdo_instrument_id,
-            )),
-            range=game_pitch_range_value(
-                self.track.bdo_instrument_id,
-                self.track.marnian_synth_mode,
-            ),
-        )
+    def focusInEvent(self, event) -> None:
+        self._update_accessible_track_state()
+        self.update()
+        super().focusInEvent(event)
 
-    def _update_mute(self) -> None:
-        self.track.muted = self.mute_btn.isChecked()
-        self.changed.emit()
-
-    def _update_solo(self) -> None:
-        self.track.solo = self.solo_btn.isChecked()
-        self.changed.emit()
-
-    def _update_volume(self, value: int) -> None:
-        self.track.volume_scale = value / 100.0
-        self.volume_label.setText(f"{value}%")
-        self.changed.emit()
+    def focusOutEvent(self, event) -> None:
+        self.update()
+        super().focusOutEvent(event)
 
 
 class ConvertWorker(QThread):
-    conversion_finished = Signal(str, int, object, str)
+    conversion_finished = Signal(str, int, object, str, str)
     failed = Signal(str)
 
     def __init__(self, params: dict):
@@ -3513,126 +4323,25 @@ class ConvertWorker(QThread):
         self.params = params
 
     def run(self) -> None:
-        temp_path: Path | None = None
         try:
-            params = self.params
-            source_path = params["midi_path"]
-            if params.get("direct_tracks") is not None:
-                direct_tracks = params["direct_tracks"]
-                channel_groups = [
-                    (
-                        [
-                            note._replace(dur=max(1.0, note.dur * track.duration_scale))
-                            for note in track.notes
-                        ],
-                        track.gm_program,
-                        track.is_percussion,
-                    )
-                    for track in direct_tracks
-                ]
-                direct_instrument_map = {
-                    idx: serialized_bdo_instrument_id(track)
-                    for idx, track in enumerate(direct_tracks)
-                }
-                source_document = params.get("bdo_source_document")
-                exact_source = bool(
-                    source_document is not None
-                    and params.get("bpm_override") is None
-                    and not params.get("transpose")
-                    and not params.get("vel_range")
-                    and not params.get("vel_floor")
-                    and not params.get("vel_step")
-                    and not params.get("vel_layered")
-                    and not params.get("articulation_map")
-                    and document_matches_logical_tracks(
-                        source_document,
-                        direct_tracks,
-                        instrument_ids=[direct_instrument_map[index] for index in range(len(direct_tracks))],
-                        track_settings=[params["track_settings_map"][index] for index in range(len(direct_tracks))],
-                        owner_id=params["owner_id"],
-                        character_name=params["char_name"],
-                        bpm=params["bpm_for_temp"],
-                        time_signature=params["time_sig_for_temp"],
-                    )
-                )
-                if exact_source:
-                    bdo_data = encode_score(source_document, mode="lossless")
-                    summary = score_summary(source_document)
-                else:
-                    bdo_data, summary = channel_groups_to_bdo(
-                        params["bpm_for_temp"],
-                        params["time_sig_for_temp"],
-                        channel_groups,
-                        bpm_override=params["bpm_override"],
-                        char_name=params["char_name"],
-                        vel_range=params["vel_range"],
-                        vel_floor=params["vel_floor"],
-                        vel_step=params["vel_step"],
-                        vel_layered=params["vel_layered"],
-                        transpose=params["transpose"],
-                        owner_id=params["owner_id"],
-                        instrument_map=direct_instrument_map,
-                        reverb=params["reverb"],
-                        delay=params["delay"],
-                        chorus=params["chorus"],
-                        vel_scales=params["vel_scales"],
-                        articulation_map=params["articulation_map"],
-                        preserve_note_types=True,
-                        track_volumes=params.get("track_volumes"),
-                        track_settings_map=params.get("track_settings_map"),
-                        velocity_b_maps=params.get("velocity_b_maps"),
-                    )
-            else:
-                if params["filtered_tracks"] is not None:
-                    fd, raw_temp_path = tempfile.mkstemp(suffix=".mid")
-                    os.close(fd)
-                    temp_path = Path(raw_temp_path)
-                    build_filtered_midi(
-                        params["filtered_tracks"],
-                        params["bpm_for_temp"],
-                        params["time_sig_for_temp"],
-                        temp_path,
-                        params.get("lyric_events"),
-                    )
-                    source_path = str(temp_path)
-
-                bdo_data, summary = midi_to_bdo(
-                    source_path,
-                    bpm_override=params["bpm_override"],
-                    char_name=params["char_name"],
-                    vel_range=params["vel_range"],
-                    vel_floor=params["vel_floor"],
-                    vel_step=params["vel_step"],
-                    vel_layered=params["vel_layered"],
-                    transpose=params["transpose"],
-                    apply_sustain=params["apply_sustain"],
-                    flatten_tempo=params["flatten_tempo"],
-                    owner_id=params["owner_id"],
-                    instrument_map=params["instrument_map"],
-                    reverb=params["reverb"],
-                    delay=params["delay"],
-                    chorus=params["chorus"],
-                    vel_scales=params["vel_scales"],
-                    articulation_map=params["articulation_map"],
-                )
-
-            out_path = Path(params["out_path"])
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_bytes(bdo_data)
-
-            installed_path = str(
-                copy_export_to_game(out_path, Path(params["game_dir"]))
-            )
-
-            self.conversion_finished.emit(str(out_path), len(bdo_data), summary, installed_path)
+            self.conversion_finished.emit(*execute_export(self.params))
         except BaseException as exc:
             self.failed.emit(f"{exc}\n\n{traceback.format_exc()}")
-        finally:
-            if temp_path:
-                try:
-                    temp_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+
+
+class AutosaveWriteWorker(QThread):
+    succeeded = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, request: AutosaveRequest):
+        super().__init__()
+        self.request = request
+
+    def run(self) -> None:
+        try:
+            self.succeeded.emit(str(write_autosave(self.request)))
+        except BaseException as exc:
+            self.failed.emit(f"{exc}\n\n{traceback.format_exc()}")
 
 
 class PianoRollCanvas(QWidget):
@@ -3656,20 +4365,28 @@ class PianoRollCanvas(QWidget):
     TIME_RULER_H = 31
     CHORD_H = 26
     RULER_H = TIME_RULER_H + CHORD_H
-    ROW_H = 20
+    ROW_H = 24
     MIN_PITCH = 0
     MAX_PITCH = 127
     # Start-sorted interval blocks keep viewport queries bounded even when one
     # sustained candidate spans most of the song.  A single global maximum
     # duration would otherwise pull every later candidate into the scan.
     CANDIDATE_QUERY_BLOCK_SIZE = 128
+    # Melody lines are advisory geometry, not the review source of truth.
+    # Building fallback paths from an entire dense evidence result can create
+    # several line segments per candidate and block the GUI before the first
+    # viewport is painted.  Candidate blocks, hit testing, selection and
+    # routing still retain every candidate; only this global guide projection
+    # is bounded.
+    MAX_MELODY_LINE_SOURCE_CANDIDATES = 2048
+    _MELODY_LINE_FEATURES_PER_BLOCK = 5
 
     def __init__(self, editor) -> None:
         super().__init__(editor)
         self.editor = editor
         self.notes: list = []
         self.ghost_notes: list = []
-        self._ghost_opacity = 0.70
+        self._ghost_opacity = 0.24
         self.transcription_candidates: list[TranscriptionCandidate] = []
         self.transcription_candidates_visible = False
         self._transcription_candidate_ids: list[str] = []
@@ -3699,7 +4416,7 @@ class PianoRollCanvas(QWidget):
         self._evidence = EvidenceTileController(self)
         self._evidence.tile_ready.connect(self._evidence_tile_ready)
         self._show_spectrogram = False
-        self._reference_background_opacity = 0.60
+        self._reference_background_opacity = 0.45
         self._spectrogram_audio_path = ""
         self._spectrogram = SpectrogramTileController(self)
         self._spectrogram.tile_ready.connect(self._evidence_tile_ready)
@@ -3846,13 +4563,78 @@ class PianoRollCanvas(QWidget):
         try:
             normalized = max(0.0, min(1.0, float(opacity)))
         except (TypeError, ValueError, OverflowError):
-            normalized = 0.70
+            normalized = 0.24
         if not math.isfinite(normalized):
-            normalized = 0.70
+            normalized = 0.24
         if math.isclose(normalized, self._ghost_opacity, abs_tol=0.001):
             return
         self._ghost_opacity = normalized
         self.update()
+
+    def _editable_note_base_color(self) -> QColor:
+        color = QColor(str(getattr(self.editor.track, "color", "")))
+        return color if color.isValid() else QColor("#718c3d")
+
+    @staticmethod
+    def _bounded_note_color(color: QColor, *, maximum_value: int) -> QColor:
+        bounded = QColor(color)
+        hue, saturation, value, alpha = bounded.getHsv()
+        bounded.setHsv(
+            max(0, hue),
+            min(168, max(0, saturation)),
+            min(maximum_value, max(72, value)),
+            alpha,
+        )
+        return bounded
+
+    @staticmethod
+    def _blend_note_colors(base: QColor, accent: QColor, weight: float) -> QColor:
+        amount = max(0.0, min(1.0, float(weight)))
+        return QColor(
+            round(base.red() * (1.0 - amount) + accent.red() * amount),
+            round(base.green() * (1.0 - amount) + accent.green() * amount),
+            round(base.blue() * (1.0 - amount) + accent.blue() * amount),
+            base.alpha(),
+        )
+
+    def _technique_accent_color(self, ntype: int) -> QColor:
+        return self._bounded_note_color(
+            QColor(articulation_color(ntype)),
+            maximum_value=174,
+        )
+
+    def _note_fill_color(self, note) -> QColor:
+        velocity = max(1, min(127, int(note.vel)))
+        base = self._editable_note_base_color()
+        hue, saturation, value, _alpha = base.getHsv()
+        # Velocity remains visible, but no track color can turn into a glowing
+        # block that fights with note labels or the dark editor grid.
+        value_scale = 0.58 + (velocity / 127.0) * 0.16
+        base.setHsv(
+            max(0, hue),
+            min(158, max(0, saturation)),
+            max(78, min(158, round(value * value_scale))),
+            234,
+        )
+        ntype = int(getattr(note, "ntype", 0))
+        if ntype != int(self.editor.default_articulation_ntype):
+            base = self._blend_note_colors(
+                base,
+                self._technique_accent_color(ntype),
+                0.18,
+            )
+            base = self._bounded_note_color(base, maximum_value=158)
+            base.setAlpha(234)
+        return base
+
+    @staticmethod
+    def _note_text_color(fill: QColor) -> QColor:
+        luminance = (
+            fill.red() * 299
+            + fill.green() * 587
+            + fill.blue() * 114
+        ) / 1000.0
+        return QColor("#241f19" if luminance >= 139 else "#e8dfd2")
 
     @staticmethod
     def _group_palette_color(group_id: str) -> str:
@@ -4085,8 +4867,9 @@ class PianoRollCanvas(QWidget):
     def _rebuild_melody_line_projection(self) -> None:
         """Rebuild advisory paths outside ``paintEvent`` and audio callbacks."""
 
-        candidate_values = tuple(self.transcription_candidates)
-        candidate_ids = tuple(self._transcription_candidate_ids)
+        candidate_values, candidate_ids = (
+            self._bounded_melody_line_source()
+        )
         try:
             group_revision: object = hash(self._voice_groups)
         except TypeError:
@@ -4129,6 +4912,81 @@ class PianoRollCanvas(QWidget):
             max(self._melody_line_ends[start : start + block_size])
             for start in range(0, len(self._melody_line_ends), block_size)
         ]
+
+    def _bounded_melody_line_source(
+        self,
+    ) -> tuple[
+        tuple[TranscriptionCandidate, ...],
+        tuple[str, ...],
+    ]:
+        """Return a deterministic, time-spanning guide-only projection.
+
+        Each time block retains both temporal edges, its lowest and highest
+        pitch, and its strongest-confidence candidate.  The full sorted
+        candidate arrays remain untouched and continue to back visible-range
+        painting, review state, hit testing and routing.
+        """
+
+        candidates = self.transcription_candidates
+        candidate_ids = self._transcription_candidate_ids
+        count = len(candidates)
+        limit = self.MAX_MELODY_LINE_SOURCE_CANDIDATES
+        if count <= limit:
+            return tuple(candidates), tuple(candidate_ids)
+
+        block_count = max(
+            1,
+            limit // self._MELODY_LINE_FEATURES_PER_BLOCK,
+        )
+        block_size = max(1, math.ceil(count / block_count))
+        selected_indices: list[int] = []
+        for start in range(0, count, block_size):
+            stop = min(count, start + block_size)
+            low_index = start
+            high_index = start
+            confidence_index = start
+            low_pitch = int(candidates[start].pitch)
+            high_pitch = low_pitch
+            confidence_key = (
+                float(candidates[start].confidence),
+                float(candidates[start].duration_ms),
+                -float(candidates[start].start_ms),
+                candidate_ids[start],
+            )
+            for index in range(start + 1, stop):
+                candidate = candidates[index]
+                pitch = int(candidate.pitch)
+                if pitch < low_pitch:
+                    low_pitch = pitch
+                    low_index = index
+                if pitch > high_pitch:
+                    high_pitch = pitch
+                    high_index = index
+                current_confidence_key = (
+                    float(candidate.confidence),
+                    float(candidate.duration_ms),
+                    -float(candidate.start_ms),
+                    candidate_ids[index],
+                )
+                if current_confidence_key > confidence_key:
+                    confidence_key = current_confidence_key
+                    confidence_index = index
+            selected_indices.extend(
+                sorted(
+                    {
+                        start,
+                        stop - 1,
+                        low_index,
+                        high_index,
+                        confidence_index,
+                    }
+                )
+            )
+
+        return (
+            tuple(candidates[index] for index in selected_indices),
+            tuple(candidate_ids[index] for index in selected_indices),
+        )
 
     def set_transcription_candidates(
         self,
@@ -5163,16 +6021,16 @@ class PianoRollCanvas(QWidget):
         painter = QPainter(background)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         backdrop = QLinearGradient(0, 0, 0, self.height())
-        backdrop.setColorAt(0.0, QColor("#1d1e21"))
-        backdrop.setColorAt(1.0, QColor("#151619"))
+        backdrop.setColorAt(0.0, QColor("#242427"))
+        backdrop.setColorAt(1.0, QColor("#1c1c1e"))
         painter.fillRect(self.rect(), backdrop)
         grid = self.grid_rect()
         grid_backdrop = QLinearGradient(
             grid.topLeft(),
             grid.bottomLeft(),
         )
-        grid_backdrop.setColorAt(0.0, QColor("#202125"))
-        grid_backdrop.setColorAt(1.0, QColor("#1a1b1e"))
+        grid_backdrop.setColorAt(0.0, QColor("#202023"))
+        grid_backdrop.setColorAt(1.0, QColor("#1c1c1e"))
         painter.fillRect(grid, grid_backdrop)
         visible_rows = math.ceil(grid.height() / self.ROW_H)
         for row in range(visible_rows + 1):
@@ -5200,7 +6058,7 @@ class PianoRollCanvas(QWidget):
                     grid.width(),
                     self.ROW_H,
                 ),
-                QColor(0, 0, 0, 11 if black else 2),
+                QColor(0, 0, 0, 9 if black else 0),
             )
             if pitch % 12 == 0:
                 painter.fillRect(
@@ -5210,7 +6068,7 @@ class PianoRollCanvas(QWidget):
                         grid.width(),
                         self.ROW_H,
                     ),
-                    QColor(255, 255, 255, 5),
+                    QColor(100, 80, 42, 7),
                 )
             painter.save()
             key_rect = QRectF(0, y, self.KEY_W, self.ROW_H)
@@ -5219,28 +6077,28 @@ class PianoRollCanvas(QWidget):
                 key_rect.topRight(),
             )
             if pressed and not black:
-                natural_gradient.setColorAt(0.0, QColor("#4a381e"))
-                natural_gradient.setColorAt(0.72, QColor("#705326"))
-                natural_gradient.setColorAt(1.0, QColor("#9a7332"))
+                natural_gradient.setColorAt(0.0, QColor("#43512f"))
+                natural_gradient.setColorAt(0.72, QColor("#61763c"))
+                natural_gradient.setColorAt(1.0, QColor("#83a543"))
             elif hovered and not black:
-                natural_gradient.setColorAt(0.0, QColor("#292b29"))
-                natural_gradient.setColorAt(0.72, QColor("#353735"))
-                natural_gradient.setColorAt(1.0, QColor("#444642"))
+                natural_gradient.setColorAt(0.0, QColor("#303033"))
+                natural_gradient.setColorAt(0.72, QColor("#39393d"))
+                natural_gradient.setColorAt(1.0, QColor("#47474b"))
             else:
-                natural_gradient.setColorAt(0.0, QColor("#222422"))
-                natural_gradient.setColorAt(0.72, QColor("#292b29"))
-                natural_gradient.setColorAt(1.0, QColor("#333532"))
+                natural_gradient.setColorAt(0.0, QColor("#29292c"))
+                natural_gradient.setColorAt(0.72, QColor("#303033"))
+                natural_gradient.setColorAt(1.0, QColor("#3a3a3e"))
             if pitch % 12 == 0 and not pressed:
-                natural_gradient.setColorAt(1.0, QColor("#3a3934"))
+                natural_gradient.setColorAt(1.0, QColor("#474238"))
             painter.fillRect(key_rect, natural_gradient)
-            painter.setPen(QColor("#3b3d39"))
+            painter.setPen(QColor("#4b4b4f"))
             painter.drawLine(
                 1,
                 y + 1,
                 self.KEY_W - 2,
                 y + 1,
             )
-            painter.setPen(QColor("#111311"))
+            painter.setPen(QColor("#171719"))
             painter.drawLine(
                 0,
                 y + self.ROW_H - 1,
@@ -5268,15 +6126,15 @@ class PianoRollCanvas(QWidget):
                 if pressed:
                     black_gradient.setColorAt(
                         0.0,
-                        QColor("#3b2810"),
+                        QColor("#314024"),
                     )
                     black_gradient.setColorAt(
                         0.76,
-                        QColor("#65471d"),
+                        QColor("#526635"),
                     )
                     black_gradient.setColorAt(
                         1.0,
-                        QColor("#9b7030"),
+                        QColor("#789742"),
                     )
                 elif hovered:
                     black_gradient.setColorAt(
@@ -6237,6 +7095,17 @@ class PianoRollCanvas(QWidget):
                     ),
                 )
 
+    @staticmethod
+    def _paint_marquee_overlay(painter: QPainter, rect: QRectF) -> None:
+        """Paint a light marquee without inheriting a note-fill brush."""
+
+        painter.save()
+        painter.fillRect(rect, QColor(245, 165, 36, 18))
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor("#f5a524"), 1, Qt.DashLine))
+        painter.drawRect(rect)
+        painter.restore()
+
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         # The roll is dominated by axis-aligned rectangles and one-pixel grid
@@ -6271,20 +7140,31 @@ class PianoRollCanvas(QWidget):
         for row in range(visible_rows + 1):
             pitch = self.pitch_top - row
             y = self.RULER_H + row * self.ROW_H
-            painter.setPen(QColor("#17181a" if pitch % 12 in (1, 3, 6, 8, 10) else "#303135"))
+            painter.setPen(
+                QColor(24, 24, 26, 165)
+                if pitch % 12 in (1, 3, 6, 8, 10)
+                else QColor(52, 52, 56, 130)
+            )
             painter.drawLine(self.KEY_W, y, self.width(), y)
             if pitch % 12 == 0:
-                painter.setPen(QColor(108, 109, 113, 70))
+                painter.setPen(QColor(100, 80, 42, 42))
                 painter.drawLine(
                     self.KEY_W,
                     y + self.ROW_H - 1,
                     self.width(),
                     y + self.ROW_H - 1,
                 )
-        painter.fillRect(QRectF(0, 0, self.width(), self.RULER_H), QColor("#242427"))
-        painter.fillRect(QRectF(0, 0, self.KEY_W, self.RULER_H), QColor("#1c1c1e"))
-        painter.fillRect(QRectF(self.KEY_W - 1, self.RULER_H, 1, grid.height()), QColor("#6f5227"))
-        painter.fillRect(QRectF(self.KEY_W, self.RULER_H - 1, grid.width(), 1), QColor("#715522"))
+        painter.fillRect(QRectF(0, 0, self.width(), self.RULER_H), QColor("#2c2c30"))
+        painter.fillRect(QRectF(0, 0, self.KEY_W, self.RULER_H), QColor("#242427"))
+        grid_edge = QColor(91, 72, 37, 145)
+        painter.fillRect(
+            QRectF(self.KEY_W - 1, self.RULER_H, 1, grid.height()),
+            grid_edge,
+        )
+        painter.fillRect(
+            QRectF(self.KEY_W, self.RULER_H - 1, grid.width(), 1),
+            grid_edge,
+        )
         # Time-axis content must never paint over the fixed piano keyboard.
         # This matters after horizontal scrolling, when a long note's logical
         # rectangle can begin well to the left of the visible grid.
@@ -6306,7 +7186,7 @@ class PianoRollCanvas(QWidget):
                 right = self.x_at_time(measure + measure_ms)
                 painter.fillRect(
                     QRectF(left, self.RULER_H, right - left, grid.height()),
-                    QColor(255, 255, 255, 4),
+                    QColor(100, 80, 42, 10),
                 )
             measure += measure_ms
             measure_index += 1
@@ -6318,26 +7198,61 @@ class PianoRollCanvas(QWidget):
             x = self.x_at_time(t)
             beat_position = (t - beat_origin) / self.beat_ms
             beat_index = round(beat_position)
-            major = (
+            is_beat = abs(beat_position - beat_index) < .02
+            is_measure = (
                 beat_index % max(1, self.editor.time_sig) == 0
-                and abs(beat_position - beat_index) < .02
+                and is_beat
             )
-            painter.setPen(QPen(QColor("#45464a" if major else "#2d2e32"), 1))
-            painter.drawLine(x, 0 if major else self.RULER_H, x, self.height())
+            if is_measure:
+                grid_color = QColor(112, 88, 45, 135)
+                grid_width = 1.5
+            elif is_beat:
+                grid_color = QColor(84, 73, 52, 105)
+                grid_width = 1
+            else:
+                grid_color = QColor(52, 52, 56, 105)
+                grid_width = 1
+            painter.setPen(QPen(grid_color, grid_width))
             painter.drawLine(
                 x,
-                self.TIME_RULER_H - (8 if major else 5),
+                0 if is_measure else self.RULER_H,
+                x,
+                self.height(),
+            )
+            painter.drawLine(
+                x,
+                self.TIME_RULER_H - (9 if is_measure else (7 if is_beat else 4)),
                 x,
                 self.TIME_RULER_H - 3,
             )
-            if major:
-                painter.setPen(QColor("#c1b9ab"))
+            if is_measure:
+                painter.setPen(QColor("#d8c7ab"))
                 painter.drawText(
                     int(x + 4),
                     19,
                     str(beat_index // max(1, self.editor.time_sig) + 1),
                 )
             t += step_ms
+        grid_denominator = max(
+            1,
+            round(4.0 * self.beat_ms / max(0.001, step_ms)),
+        )
+        grid_label = f"{tr('网格')} 1/{grid_denominator}"
+        label_width = max(
+            72,
+            painter.fontMetrics().horizontalAdvance(grid_label) + 18,
+        )
+        grid_label_rect = QRectF(
+            self.KEY_W + 8,
+            5,
+            label_width,
+            self.TIME_RULER_H - 10,
+        )
+        painter.fillRect(grid_label_rect, QColor("#1c1c1e"))
+        painter.setPen(QPen(QColor(91, 72, 37, 145), 1))
+        painter.drawRect(grid_label_rect)
+        painter.setPen(QColor("#ffedd4"))
+        painter.drawText(grid_label_rect, Qt.AlignCenter, grid_label)
         self._paint_harmony_lane(
             painter,
             paint_left_ms,
@@ -6360,7 +7275,7 @@ class PianoRollCanvas(QWidget):
                 grid.height(),
             ).intersected(grid)
             painter.fillRect(selection_rect, QColor(245, 165, 36, 18))
-            painter.setPen(QPen(QColor("#d69a3b"), 1))
+            painter.setPen(QPen(QColor(172, 127, 57, 170), 1))
             painter.drawLine(
                 range_left,
                 self.RULER_H,
@@ -6405,30 +7320,86 @@ class PianoRollCanvas(QWidget):
             rect = self.note_rect(note)
             if not rect.intersects(grid):
                 continue
-            color = articulation_color(int(getattr(note, "ntype", 0)))
             velocity = max(1, min(127, int(note.vel)))
-            fill = QColor("#56575a").lighter(88 + round(velocity / 127.0 * 24))
-            fill.setAlpha(235)
+            track_color = self._editable_note_base_color()
+            note_type = int(getattr(note, "ntype", 0))
+            articulated = note_type != int(
+                self.editor.default_articulation_ntype
+            )
+            technique_color = (
+                self._technique_accent_color(note_type)
+                if articulated
+                else None
+            )
+            fill = self._note_fill_color(note)
             if invalid := self.editor.note_invalid(note.pitch):
-                fill = QColor("#714847")
-            note_gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-            top_color = fill.lighter(112)
-            bottom_color = fill.darker(108)
+                fill = QColor("#624442")
+            body_rect = rect.adjusted(0.75, 0.75, -0.75, -0.75)
+            corner_radius = min(
+                3.5,
+                max(1.0, body_rect.height() * 0.20),
+                max(1.0, body_rect.width() * 0.25),
+            )
+            note_gradient = QLinearGradient(
+                body_rect.topLeft(), body_rect.bottomLeft()
+            )
+            top_color = self._bounded_note_color(
+                fill.lighter(105),
+                maximum_value=164,
+            )
+            bottom_color = fill.darker(112)
             note_gradient.setColorAt(0.0, top_color)
             note_gradient.setColorAt(1.0, bottom_color)
             painter.setBrush(note_gradient)
-            painter.setPen(QPen(QColor("#ff625b" if invalid else ("#e5bd72" if index in self.selected else "#747579")), 2 if index in self.selected or invalid else 1))
-            painter.drawRect(rect)
+            # A dark outer keyline gives compact notes physical weight without
+            # making them larger or reducing the visible row spacing.
+            painter.setPen(QPen(QColor(8, 9, 9, 185), 3.0))
+            painter.drawRoundedRect(
+                body_rect,
+                corner_radius,
+                corner_radius,
+            )
+            normal_outline = self._bounded_note_color(
+                track_color.lighter(112),
+                maximum_value=168,
+            )
+            painter.setPen(
+                QPen(
+                    QColor("#b85d58")
+                    if invalid
+                    else (
+                        QColor("#ae8c52")
+                        if index in self.selected
+                        else (technique_color or normal_outline)
+                    ),
+                    2.0 if index in self.selected or invalid else 1.25,
+                )
+            )
+            painter.drawRoundedRect(
+                body_rect,
+                corner_radius,
+                corner_radius,
+            )
+            if body_rect.width() >= 10:
+                highlight = top_color.lighter(104)
+                highlight.setAlpha(72)
+                painter.setPen(QPen(highlight, 1.0))
+                painter.drawLine(
+                    QPointF(
+                        body_rect.left() + corner_radius,
+                        body_rect.top() + 1.25,
+                    ),
+                    QPointF(
+                        body_rect.right() - corner_radius,
+                        body_rect.top() + 1.25,
+                    ),
+                )
             if rect.width() >= 5:
                 velocity_width = max(2.0, (rect.width() - 4.0) * velocity / 127.0)
                 painter.fillRect(
                     QRectF(rect.left() + 2, rect.bottom() - 3, velocity_width, 2),
-                    QColor("#d9cbb1" if index not in self.selected else "#f0cf8d"),
+                    QColor("#8f825f" if index not in self.selected else "#b9a16d"),
                 )
-                if int(getattr(note, "ntype", 0)) != 0:
-                    technique_color = QColor(color)
-                    technique_color.setAlpha(220)
-                    painter.fillRect(QRectF(rect.left() + 1, rect.top() + 1, 3, rect.height() - 2), technique_color)
             if rect.width() >= 28:
                 painter.save()
                 painter.setClipRect(rect.adjusted(2, 1, -2, -1))
@@ -6442,17 +7413,50 @@ class PianoRollCanvas(QWidget):
                 )
                 label_font.setBold(index in self.selected)
                 painter.setFont(label_font)
-                painter.setPen(QColor("#f3efe7"))
+                painter.setPen(self._note_text_color(fill))
                 painter.drawText(
-                    rect.adjusted(5, 0, -2, 0),
+                    rect.adjusted(5, 0, -24 if articulated and rect.width() >= 52 else -2, 0),
                     Qt.AlignLeft | Qt.AlignVCenter,
                     note_name(note.pitch),
                 )
                 painter.restore()
             if index in self.selected and rect.width() >= 12:
-                handle = QColor("#fff4cf")
+                handle = QColor("#b7a177")
                 painter.fillRect(QRectF(rect.left() + 1, rect.top() + 3, 3, max(4, rect.height() - 6)), handle)
                 painter.fillRect(QRectF(rect.right() - 3, rect.top() + 3, 3, max(4, rect.height() - 6)), handle)
+            if articulated and technique_color is not None:
+                technique_color.setAlpha(218)
+                # Technique identity stays visible even when selection handles
+                # are shown; the old left stripe was painted underneath them.
+                painter.fillRect(
+                    QRectF(
+                        rect.left() + 1,
+                        rect.top() + 1,
+                        max(1.0, min(22.0, rect.width() - 2.0)),
+                        2.5,
+                    ),
+                    technique_color,
+                )
+                if rect.width() >= 52:
+                    painter.save()
+                    badge_rect = QRectF(
+                        rect.right() - 23,
+                        rect.top() + 4,
+                        19,
+                        max(8.0, rect.height() - 8),
+                    )
+                    painter.fillRect(badge_rect, QColor(15, 16, 17, 148))
+                    badge_font = painter.font()
+                    badge_font.setPointSize(max(6, badge_font.pointSize() - 2))
+                    badge_font.setBold(True)
+                    painter.setFont(badge_font)
+                    painter.setPen(technique_color)
+                    painter.drawText(
+                        badge_rect,
+                        Qt.AlignCenter,
+                        f"T{note_type}",
+                    )
+                    painter.restore()
         edit_x = self.x_at_time(self.edit_cursor_ms)
         if self.KEY_W <= edit_x <= self.width():
             painter.setPen(QPen(QColor("#63c7bd"), 1, Qt.DashLine))
@@ -6468,20 +7472,27 @@ class PianoRollCanvas(QWidget):
             # Keep the zero-position cursor inside the grid instead of hiding it
             # under the piano-key/grid divider.
             play_x = max(self.KEY_W + 2.0, min(self.width() - 3.0, play_x))
-            painter.fillRect(QRectF(play_x - 4, 0, 8, self.height()), QColor(245, 165, 36, 42))
-            painter.fillRect(QRectF(play_x - 1.5, 0, 3, self.height()), QColor("#ffc247"))
+            playhead_color = QColor("#c59643")
+            painter.fillRect(
+                QRectF(play_x - 3, 0, 6, self.height()),
+                QColor(197, 150, 67, 24),
+            )
+            painter.fillRect(
+                QRectF(play_x - 1, 0, 2, self.height()),
+                playhead_color,
+            )
             marker = QPainterPath()
             marker.moveTo(play_x - 8, 0)
             marker.lineTo(play_x + 8, 0)
             marker.lineTo(play_x, 12)
             marker.closeSubpath()
-            painter.fillPath(marker, QColor("#ffc247"))
+            painter.fillPath(marker, playhead_color)
             time_text = self.editor.format_playback_time(self.playhead_ms)
             label_w = max(58, painter.fontMetrics().horizontalAdvance(time_text) + 10)
             label_x = min(self.width() - label_w - 3, max(self.KEY_W + 4, play_x + 7))
             label_rect = QRectF(label_x, 3, label_w, 20)
             painter.fillRect(label_rect, QColor(20, 20, 19, 225))
-            painter.setPen(QPen(QColor("#ffc247"), 1))
+            painter.setPen(QPen(playhead_color, 1))
             painter.drawRect(label_rect)
             painter.setPen(QColor("#fff4d6"))
             painter.drawText(label_rect, Qt.AlignCenter, time_text)
@@ -6496,9 +7507,7 @@ class PianoRollCanvas(QWidget):
             else:
                 painter.fillRect(QRectF(grid.left(), cache_y + 1, grid.width(), 1), QColor("#477a74"))
         if not self.marquee.isNull():
-            painter.fillRect(self.marquee, QColor(245, 165, 36, 35))
-            painter.setPen(QPen(QColor("#f5a524"), 1, Qt.DashLine))
-            painter.drawRect(self.marquee)
+            self._paint_marquee_overlay(painter, self.marquee)
         if self.creation_preview is not None:
             preview_rect = self.note_rect(self.creation_preview)
             painter.setBrush(QColor(245, 165, 36, 95))
@@ -7449,6 +8458,23 @@ class MidiNoteEditorDialog(QDialog):
             int(track.bdo_instrument_id)
         )
         self.canonical_drum_lanes = track_uses_canonical_drum_lanes(track)
+        self.default_articulation_ntype = (
+            99 if self.canonical_drum_lanes else 0
+        )
+        legacy_track_articulation = getattr(track, "articulation_type", None)
+        self.legacy_track_articulation = (
+            int(legacy_track_articulation)
+            if legacy_track_articulation is not None
+            and not track.is_percussion
+            and int(track.bdo_instrument_id) != 0x0D
+            else None
+        )
+        initial_notes = [
+            note._replace(ntype=self.legacy_track_articulation)
+            if self.legacy_track_articulation is not None
+            else note
+            for note in track.notes
+        ]
         self._initial_pitch_focus_pending = True
         self.beat_origin_ms = float(getattr(parent, "beat_origin_ms", 0.0))
         self.undo_stack: list[
@@ -7474,7 +8500,7 @@ class MidiNoteEditorDialog(QDialog):
             ]
         ] = []
         self.clipboard: list = []
-        self.last_applied = list(track.notes)
+        self.last_applied = list(initial_notes)
         self.staged_primary_routes: set[CandidateRoute] = set()
         self.staged_copy_routes: set[CandidateRoute] = set()
         self.staged_new_track_specs: dict[int, int] = {}
@@ -7526,8 +8552,8 @@ class MidiNoteEditorDialog(QDialog):
                 max(self.minimumHeight(), min(960, available.height() - 72)),
             )
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 4, 0, 6)
-        root.setSpacing(4)
+        root.setContentsMargins(0, 4, 0, 4)
+        root.setSpacing(3)
 
         def add_inset(widget: QWidget, object_name: str) -> None:
             shell = QWidget()
@@ -7540,6 +8566,7 @@ class MidiNoteEditorDialog(QDialog):
 
         toolbar_frame = QFrame()
         toolbar_frame.setObjectName("EditorToolbar")
+        toolbar_frame.setFixedHeight(42)
         toolbar = QHBoxLayout(toolbar_frame)
         toolbar.setContentsMargins(10, 3, 8, 3)
         toolbar.setSpacing(6)
@@ -7593,7 +8620,7 @@ class MidiNoteEditorDialog(QDialog):
         self.editor_optimize_button.clicked.connect(self.optimize_draft)
         toolbar.addWidget(self.editor_optimize_button)
         toolbar.addSpacing(5)
-        self.apply_button = PillButton(tr("应用"), "ghost")
+        self.apply_button = PillButton(tr("应用"), "secondary")
         self.apply_button.clicked.connect(self.apply_notes)
         toolbar.addWidget(self.apply_button)
         self.cancel_button = PillButton(tr("取消"), "ghost")
@@ -7637,6 +8664,35 @@ class MidiNoteEditorDialog(QDialog):
         self.grid_mode_button.setCheckable(True)
         self.grid_mode_button.clicked.connect(lambda: self._set_top_inspector_mode("grid"))
         inspector_layout.addWidget(self.grid_mode_button)
+
+        self.quantize_quick = QFrame()
+        self.quantize_quick.setObjectName("EditorQuantizeQuick")
+        quantize_quick_layout = QHBoxLayout(self.quantize_quick)
+        quantize_quick_layout.setContentsMargins(5, 0, 3, 0)
+        quantize_quick_layout.setSpacing(5)
+        self.quantize_quick_label = QLabel(tr("量化"))
+        self.quantize_quick_label.setObjectName("QuantizeQuickLabel")
+        quantize_quick_layout.addWidget(self.quantize_quick_label)
+        self.quantize_combo = QComboBox()
+        self.quantize_combo.setObjectName("QuantizeGridCombo")
+        for label, divisor in (
+            ("1/4", 1),
+            ("1/8", 2),
+            ("1/16", 4),
+            ("1/32", 8),
+            ("1/64", 16),
+        ):
+            self.quantize_combo.addItem(label, divisor)
+        self.quantize_combo.setCurrentIndex(0)
+        self.quantize_combo.setFixedWidth(76)
+        self.quantize_combo.setAccessibleName(tr("量化"))
+        self.quantize_combo.setToolTip(tr("量化"))
+        self.quantize_combo.currentIndexChanged.connect(
+            self._quantize_grid_changed
+        )
+        quantize_quick_layout.addWidget(self.quantize_combo)
+        inspector_layout.addWidget(self.quantize_quick)
+
         self.velocity_toggle = PillButton(tr("力度"), "ghost", FluentSymbol.CURVE)
         self.velocity_toggle.setObjectName("VelocityToggle")
         self.velocity_toggle.setCheckable(True)
@@ -7679,23 +8735,62 @@ class MidiNoteEditorDialog(QDialog):
             note_layout.addWidget(group)
 
         self.articulation_combo = QComboBox()
-        supported = BDO_ARTICULATIONS.get(track.bdo_instrument_id, [])
-        known = {n for n, _ in supported}
-        for ntype, label in supported:
-            self.articulation_combo.addItem(tr(label), ntype)
-        for ntype in sorted({int(getattr(n, "ntype", 0)) for n in track.notes} - known):
-            self.articulation_combo.addItem(
-                trf("未知奏法 type {ntype}", ntype=ntype),
+        supported = list(BDO_ARTICULATIONS.get(track.bdo_instrument_id, []))
+        supported_by_type = {
+            int(ntype): str(label) for ntype, label in supported
+        }
+
+        def articulation_ui_label(ntype: int, source_label: str) -> str:
+            translated = str(tr(source_label))
+            if ntype == 0 and source_label != "普通":
+                return f"{tr('普通')}（{translated}）"
+            return translated
+
+        available_articulations: list[tuple[int, str]] = []
+        default_source = supported_by_type.get(
+            self.default_articulation_ntype,
+            "打击乐" if self.default_articulation_ntype == 99 else "普通",
+        )
+        available_articulations.append(
+            (
+                self.default_articulation_ntype,
+                articulation_ui_label(
+                    self.default_articulation_ntype,
+                    default_source,
+                ),
+            )
+        )
+        available_articulations.extend(
+            (int(ntype), articulation_ui_label(int(ntype), str(label)))
+            for ntype, label in supported
+            if int(ntype) != self.default_articulation_ntype
+        )
+        known = {ntype for ntype, _label in available_articulations}
+        available_articulations.extend(
+            (
                 ntype,
+                str(trf("未知奏法 type {ntype}", ntype=ntype)),
             )
-        if self.articulation_combo.count() == 0:
-            self.articulation_combo.addItem(tr("普通"), 0)
-        if not track.notes and self.instrument_adaptation is not None:
-            default_index = self.articulation_combo.findData(
-                int(self.instrument_adaptation.default_ntype)
-            )
-            if default_index >= 0:
-                self.articulation_combo.setCurrentIndex(default_index)
+            for ntype in sorted({
+                int(getattr(note, "ntype", 0)) for note in initial_notes
+            } - known)
+        )
+        self.available_articulations = tuple(available_articulations)
+        self.articulation_labels_by_type = dict(self.available_articulations)
+        for ntype, label in self.available_articulations:
+            self.articulation_combo.addItem(label, ntype)
+            hint_source = BDO_ARTICULATION_USAGE_HINTS.get(ntype)
+            if hint_source:
+                self.articulation_combo.setItemData(
+                    self.articulation_combo.count() - 1,
+                    tr(hint_source),
+                    Qt.ToolTipRole,
+                )
+        default_index = self.articulation_combo.findData(
+            self.default_articulation_ntype
+        )
+        if default_index >= 0:
+            self.articulation_combo.setCurrentIndex(default_index)
         self.articulation_combo.currentIndexChanged.connect(self.apply_articulation)
         note_layout.addStretch(1)
         inspector_layout.addWidget(self.note_controls, 1)
@@ -7705,18 +8800,76 @@ class MidiNoteEditorDialog(QDialog):
         articulation_layout.setContentsMargins(3, 0, 0, 0)
         articulation_layout.setSpacing(6)
         self.articulation_combo.setObjectName("ArticulationCombo")
-        self.articulation_combo.setMinimumWidth(145)
-        articulation_layout.addWidget(self.articulation_combo)
+        self.articulation_combo.setMinimumWidth(172)
+        self.articulation_combo.setFixedHeight(28)
+        articulation_layout.addWidget(
+            self.articulation_combo,
+            0,
+            Qt.AlignVCenter,
+        )
+        self.articulation_preview_button = QPushButton("")
+        self.articulation_preview_button.setObjectName(
+            "ArticulationPreview"
+        )
+        self.articulation_preview_button.setCursor(Qt.PointingHandCursor)
+        set_fluent_symbol(
+            self.articulation_preview_button,
+            FluentSymbol.PLAY,
+        )
+        self.articulation_preview_button.setIconSize(fluent_icon_size())
+        self.articulation_preview_button.setFixedSize(32, 28)
+        articulation_preview_label = f"{tr('点击试听')} · {tr('奏法')}"
+        self.articulation_preview_button.setToolTip(
+            articulation_preview_label
+        )
+        self.articulation_preview_button.setAccessibleName(
+            articulation_preview_label
+        )
+        self.articulation_preview_button.setEnabled(False)
+        self.articulation_preview_button.clicked.connect(
+            lambda: self.preview_selected_articulation(force=True)
+        )
+        articulation_layout.addWidget(
+            self.articulation_preview_button,
+            0,
+            Qt.AlignVCenter,
+        )
         self.articulation_buttons: dict[int, QPushButton] = {}
-        for ntype, label in supported:
-            button = QPushButton(tr(label))
+        for ntype, label in self.available_articulations[:4]:
+            button = QPushButton(label)
             button.setObjectName("ArticulationChip")
             button.setCheckable(True)
-            button.setAutoExclusive(True)
+            # State is synchronized explicitly with the full dropdown.  Qt's
+            # auto-exclusive mode cannot clear the last visible button when a
+            # technique outside this compact shortcut set is selected.
+            button.setAutoExclusive(False)
+            button.setFixedHeight(28)
             button.setProperty("ntype", ntype)
             button.clicked.connect(lambda _checked=False, value=ntype: self._choose_articulation(value))
-            articulation_layout.addWidget(button)
+            hint_source = BDO_ARTICULATION_USAGE_HINTS.get(ntype)
+            if hint_source:
+                button.setToolTip(tr(hint_source))
+            articulation_layout.addWidget(button, 0, Qt.AlignVCenter)
             self.articulation_buttons[ntype] = button
+        self.articulation_overflow_button = QPushButton("")
+        self.articulation_overflow_button.setObjectName("ArticulationChip")
+        self.articulation_overflow_button.setCheckable(True)
+        self.articulation_overflow_button.setAutoExclusive(False)
+        self.articulation_overflow_button.setFixedHeight(28)
+        self.articulation_overflow_button.clicked.connect(
+            lambda: self._choose_articulation(
+                int(
+                    self.articulation_overflow_button.property("ntype")
+                    or self.default_articulation_ntype
+                )
+            )
+        )
+        self.articulation_overflow_button.hide()
+        articulation_layout.addWidget(
+            self.articulation_overflow_button,
+            0,
+            Qt.AlignVCenter,
+        )
         articulation_layout.addStretch(1)
         inspector_layout.addWidget(self.articulation_controls, 1)
 
@@ -7738,7 +8891,7 @@ class MidiNoteEditorDialog(QDialog):
         self.ghost_opacity_slider = QSlider(Qt.Horizontal)
         self.ghost_opacity_slider.setObjectName("GhostNoteOpacitySlider")
         self.ghost_opacity_slider.setRange(0, 100)
-        self.ghost_opacity_slider.setValue(70)
+        self.ghost_opacity_slider.setValue(24)
         self.ghost_opacity_slider.setFixedWidth(72)
         self.ghost_opacity_slider.setToolTip(tr("幽灵音块透明度"))
         self.ghost_opacity_slider.setAccessibleName(
@@ -7748,22 +8901,9 @@ class MidiNoteEditorDialog(QDialog):
             self._ghost_opacity_changed
         )
         grid_layout.addWidget(self.ghost_opacity_slider)
-        self.ghost_opacity_label = QLabel("70%")
+        self.ghost_opacity_label = QLabel("24%")
         self.ghost_opacity_label.setFixedWidth(38)
         grid_layout.addWidget(self.ghost_opacity_label)
-        grid_layout.addWidget(QLabel(tr("量化")))
-        self.quantize_combo = QComboBox()
-        for label, divisor in (
-            ("1/4", 1),
-            ("1/8", 2),
-            ("1/16", 4),
-            ("1/32", 8),
-            ("1/64", 16),
-        ):
-            self.quantize_combo.addItem(label, divisor)
-        self.quantize_combo.setCurrentIndex(2)
-        self.quantize_combo.setFixedWidth(76)
-        grid_layout.addWidget(self.quantize_combo)
         editor_zoom_label = QLabel(tr("水平缩放"))
         grid_layout.addWidget(editor_zoom_label)
         self.editor_zoom = QSlider(Qt.Horizontal)
@@ -7873,6 +9013,9 @@ class MidiNoteEditorDialog(QDialog):
         self.transcription_panel.diagnostic_evidence_expanded_changed.connect(
             self._transcription_diagnostic_visibility_changed
         )
+        self.transcription_panel.advanced_controls_expanded_changed.connect(
+            self._transcription_advanced_visibility_changed
+        )
         self.transcription_panel.key_edit_requested.connect(
             self._edit_transcription_key
         )
@@ -7965,6 +9108,14 @@ class MidiNoteEditorDialog(QDialog):
             self.transcription_panel.set_melody_line_roles(
                 str(role) for role in configured_guide_roles
             )
+        self.transcription_panel.set_advanced_controls_expanded(
+            bool(
+                transcription_ui_config.get(
+                    "advanced_controls_expanded",
+                    False,
+                )
+            )
+        )
         self.transcription_panel.set_diagnostic_evidence_expanded(
             bool(
                 transcription_ui_config.get(
@@ -7991,7 +9142,7 @@ class MidiNoteEditorDialog(QDialog):
         self.canvas.set_melody_line_roles_visible(
             self.transcription_panel.melody_line_roles
         )
-        self.canvas.set_notes(list(track.notes))
+        self.canvas.set_notes(list(initial_notes))
         self.canvas.selection_changed.connect(self.refresh_fields)
         self.canvas.notes_changed.connect(self._notes_changed)
         self.canvas.hover_changed.connect(self._hover_changed)
@@ -8224,6 +9375,8 @@ class MidiNoteEditorDialog(QDialog):
             )
         for label in self.note_field_labels:
             label.setVisible(not compact)
+        self.quantize_quick_label.setVisible(not compact)
+        self.quantize_combo.setFixedWidth(64 if compact else 76)
         self.selection_summary.setMinimumWidth(70 if compact else 145)
         self.selection_summary.setMaximumWidth(120 if compact else 190)
         self.editor_title_block.updateGeometry()
@@ -8231,6 +9384,14 @@ class MidiNoteEditorDialog(QDialog):
 
     def quantize_ms(self) -> float:
         return self.canvas.beat_ms / int(self.quantize_combo.currentData() or 4)
+
+    def _quantize_grid_changed(self, _index: int) -> None:
+        """Refresh the existing snap grid after the shared preset changes."""
+
+        if hasattr(self, "canvas"):
+            self.canvas.update()
+        if hasattr(self, "time_scroll"):
+            self.time_scroll.setSingleStep(max(1, round(self.quantize_ms())))
 
     def select_all_notes(self) -> None:
         """Select every editable draft note regardless of the focused control."""
@@ -9717,6 +10878,18 @@ class MidiNoteEditorDialog(QDialog):
             ui_config["diagnostic_evidence_expanded"] = bool(expanded)
             save_config(parent_config)
 
+    def _transcription_advanced_visibility_changed(
+        self, expanded: bool
+    ) -> None:
+        parent = self.parent()
+        parent_config = getattr(parent, "config", None)
+        if not isinstance(parent_config, dict):
+            return
+        ui_config = parent_config.setdefault("transcription_ui", {})
+        if isinstance(ui_config, dict):
+            ui_config["advanced_controls_expanded"] = bool(expanded)
+            save_config(parent_config)
+
     @staticmethod
     def _pitch_class_label(root_pc: int | None) -> str:
         if root_pc is None:
@@ -10981,6 +12154,7 @@ class MidiNoteEditorDialog(QDialog):
             )
             return
         blockers = parent._realtime_preview_blockers([draft_track])
+        use_generic_preview = bool(blockers)
         if blockers:
             if (
                 self.transcription_mode_enabled
@@ -11003,32 +12177,50 @@ class MidiNoteEditorDialog(QDialog):
                     status_text="仅播放参考音频",
                 )
                 return
-            QMessageBox.warning(
-                self,
-                tr("无法试听"),
-                tr("当前轨道缺少可用的实时游戏音源：")
-                + "\n- "
-                + "\n- ".join(blockers[:6]),
-            )
-            return
         try:
             parent._stop_preview(reset_playhead=False)
             self.draft_reference_only = False
-            parent.realtime_audio.load_project_async(
-                [draft_track], BDO_SAMPLE_MAP_PATH, self.playhead_ms, parent.reverb, parent.delay, parent.chorus
-            )
+            if use_generic_preview and hasattr(
+                parent.realtime_audio,
+                "load_procedural_project_async",
+            ):
+                parent.realtime_audio.load_procedural_project_async(
+                    [draft_track],
+                    self.playhead_ms,
+                    parent.reverb,
+                    parent.delay,
+                    parent.chorus,
+                )
+            elif use_generic_preview:
+                self.status.setText(tr("通用 MIDI 预览不可用"))
+                return
+            else:
+                parent.realtime_audio.load_project_async(
+                    [draft_track], BDO_SAMPLE_MAP_PATH, self.playhead_ms,
+                    parent.reverb, parent.delay, parent.chorus,
+                )
             self.canvas.set_preload_progress(0.0, "loading")
             self._set_draft_playback_state("loading")
-            self.status.setText(tr("正在准备游戏音源…"))
+            self.status.setText(
+                tr(
+                    "正在准备通用 MIDI 预览…"
+                    if use_generic_preview
+                    else "正在准备游戏音源…"
+                )
+            )
             self.playback_timer.start()
         except AudioEngineError as exc:
             self.canvas.set_preload_progress(0.0, "idle")
             self._set_draft_playback_state("stopped")
             QMessageBox.warning(self, tr("试听失败"), str(exc))
 
-    def audition_note(self, note) -> None:
+    def audition_note(self, note, *, force: bool = False) -> None:
         """Asynchronously audition one editor note with the current game instrument."""
-        if hasattr(self, "note_preview_box") and not self.note_preview_box.isChecked():
+        if (
+            not force
+            and hasattr(self, "note_preview_box")
+            and not self.note_preview_box.isChecked()
+        ):
             return
         parent = self.parent()
         if not parent or not hasattr(parent, "realtime_audio"):
@@ -11039,9 +12231,9 @@ class MidiNoteEditorDialog(QDialog):
             muted=False,
             solo=False,
         )
-        if parent._realtime_preview_blockers([audition_track]):
-            self.status.setText(tr("当前音符没有可用的游戏音源"))
-            return
+        use_generic_preview = bool(
+            parent._realtime_preview_blockers([audition_track])
+        )
         try:
             if self.draft_playback_state != "stopped":
                 self.stop_draft()
@@ -11049,11 +12241,33 @@ class MidiNoteEditorDialog(QDialog):
                 parent._stop_preview(reset_playhead=False)
             self.audition_stop_timer.stop()
             self.audition_pending = True
-            self.audition_note_name = note_name(note.pitch)
-            parent.realtime_audio.load_project_async(
-                [audition_track], BDO_SAMPLE_MAP_PATH, 0.0,
-                parent.reverb, parent.delay, parent.chorus,
+            articulation_label = self.articulation_labels_by_type.get(
+                int(getattr(note, "ntype", self.default_articulation_ntype)),
+                f"type {int(getattr(note, 'ntype', self.default_articulation_ntype))}",
             )
+            self.audition_note_name = (
+                f"{note_name(note.pitch)} · {articulation_label}"
+            )
+            if use_generic_preview and hasattr(
+                parent.realtime_audio,
+                "load_procedural_project_async",
+            ):
+                parent.realtime_audio.load_procedural_project_async(
+                    [audition_track],
+                    0.0,
+                    parent.reverb,
+                    parent.delay,
+                    parent.chorus,
+                )
+            elif use_generic_preview:
+                self.audition_pending = False
+                self.status.setText(tr("通用 MIDI 预览不可用"))
+                return
+            else:
+                parent.realtime_audio.load_project_async(
+                    [audition_track], BDO_SAMPLE_MAP_PATH, 0.0,
+                    parent.reverb, parent.delay, parent.chorus,
+                )
             self.status.setText(trf("正在准备音符试听… {note}", note=self.audition_note_name))
             self.audition_timer.start()
         except AudioEngineError as exc:
@@ -11066,6 +12280,18 @@ class MidiNoteEditorDialog(QDialog):
             max(0, min(127, int(pitch))), self.default_note_velocity, 0.0,
             self.default_note_duration(), self.current_articulation(),
         ))
+
+    def preview_selected_articulation(self, *, force: bool = False) -> None:
+        """Audition one stable representative of the current selection."""
+
+        if not self.canvas.selected:
+            return
+        index = self.canvas.anchor_index
+        if index not in self.canvas.selected:
+            index = min(self.canvas.selected)
+        if index is None or not 0 <= index < len(self.canvas.notes):
+            return
+        self.audition_note(self.canvas.notes[index], force=force)
 
     def _poll_note_audition(self) -> None:
         if not self.audition_pending:
@@ -11204,7 +12430,10 @@ class MidiNoteEditorDialog(QDialog):
         )
 
     def current_articulation(self) -> int:
-        return int(self.articulation_combo.currentData() or 0)
+        value = self.articulation_combo.currentData()
+        return int(
+            self.default_articulation_ntype if value is None else value
+        )
 
     def note_invalid(self, pitch: int) -> bool:
         pitch = int(pitch)
@@ -11383,6 +12612,14 @@ class MidiNoteEditorDialog(QDialog):
         self._notes_changed(); self.refresh_fields()
 
     def _choose_articulation(self, ntype: int) -> None:
+        ntype = int(ntype)
+        if (
+            ntype != self.default_articulation_ntype
+            and ntype == self.current_articulation()
+        ):
+            # Clicking the active technique again behaves like releasing an
+            # effect pedal and returns the selection to the ordinary sound.
+            ntype = self.default_articulation_ntype
         index = self.articulation_combo.findData(ntype)
         if index < 0:
             return
@@ -11394,11 +12631,16 @@ class MidiNoteEditorDialog(QDialog):
     def apply_articulation(self) -> None:
         if self.updating_fields or not self.canvas.selected: return
         value = self.current_articulation()
-        if all(int(getattr(self.canvas.notes[i], "ntype", 0)) == value for i in self.canvas.selected): return
+        target_indices = same_onset_articulation_indices(
+            self.canvas.notes,
+            self.canvas.selected,
+        )
+        if all(int(getattr(self.canvas.notes[i], "ntype", 0)) == value for i in target_indices): return
         self.push_snapshot()
-        for i in self.canvas.selected: self.canvas.notes[i] = self.canvas.notes[i]._replace(ntype=value)
+        for i in target_indices: self.canvas.notes[i] = self.canvas.notes[i]._replace(ntype=value)
         self._notes_changed()
         self.refresh_fields()
+        self.preview_selected_articulation()
 
     def refresh_fields(self) -> None:
         self.updating_fields = True
@@ -11423,11 +12665,40 @@ class MidiNoteEditorDialog(QDialog):
             if len(types) == 1:
                 index = self.articulation_combo.findData(next(iter(types)))
                 if index >= 0: self.articulation_combo.setCurrentIndex(index)
+            else:
+                self.articulation_combo.setCurrentIndex(-1)
+                self.articulation_combo.setPlaceholderText("—")
         self.articulation_combo.setEnabled(bool(chosen))
         selected_type = next(iter(types)) if chosen and len(types) == 1 else None
         for ntype, button in self.articulation_buttons.items():
             button.setEnabled(bool(chosen))
             button.setChecked(ntype == selected_type)
+        overflow_selected = (
+            selected_type is not None
+            and selected_type not in self.articulation_buttons
+        )
+        if overflow_selected:
+            self.articulation_overflow_button.setText(
+                self.articulation_labels_by_type.get(
+                    selected_type,
+                    f"type {selected_type}",
+                )
+            )
+            self.articulation_overflow_button.setProperty(
+                "ntype",
+                selected_type,
+            )
+            self.articulation_overflow_button.setToolTip(
+                self.articulation_combo.itemData(
+                    self.articulation_combo.findData(selected_type),
+                    Qt.ToolTipRole,
+                )
+                or ""
+            )
+        self.articulation_overflow_button.setEnabled(bool(chosen))
+        self.articulation_overflow_button.setChecked(overflow_selected)
+        self.articulation_overflow_button.setVisible(overflow_selected)
+        self.articulation_preview_button.setEnabled(bool(chosen))
         self.updating_fields = False
         self._update_status()
 
@@ -11668,23 +12939,38 @@ class TrackFxDialog(QDialog):
         form.setLabelAlignment(Qt.AlignRight)
         layout.addLayout(form)
 
-        for label, index, object_name in (
-            ("混响发送", TRACK_REVERB_SEND_INDEX, "TrackReverbSend"),
-            ("延迟发送", TRACK_DELAY_SEND_INDEX, "TrackDelaySend"),
-            ("合唱发送", TRACK_CHORUS_SEND_INDEX, "TrackChorusSend"),
+        for label, index, object_name, help_text in (
+            (
+                "混响发送",
+                TRACK_REVERB_SEND_INDEX,
+                "TrackReverbSend",
+                "混响发送：控制此轨道进入共享混响的比例；0 为干声。",
+            ),
+            (
+                "延迟发送",
+                TRACK_DELAY_SEND_INDEX,
+                "TrackDelaySend",
+                "延迟发送：控制此轨道进入回声总线的比例；主“延迟反馈”决定重复次数与衰减。",
+            ),
+            (
+                "合唱发送",
+                TRACK_CHORUS_SEND_INDEX,
+                "TrackChorusSend",
+                "合唱发送：控制此轨道进入合唱/Flanger 总线的比例；用于加宽并产生流动感。",
+            ),
         ):
             field = QSpinBox()
             field.setObjectName(object_name)
             field.setRange(0, GAME_PERCENT_MAX)
             raw_value = int(self._original_track_settings[index])
             field.setValue(max(0, min(GAME_PERCENT_MAX, raw_value)))
+            tooltip = tr(help_text)
             if raw_value > GAME_PERCENT_MAX:
-                field.setToolTip(
-                    trf(
-                        "导入原值 {value}；修改后按 0–100 写入。",
-                        value=raw_value,
-                    )
+                tooltip += "\n" + trf(
+                    "导入原值 {value}；修改后按 0–100 写入。",
+                    value=raw_value,
                 )
+            field.setToolTip(tooltip)
             field.valueChanged.connect(
                 lambda _value, effect_index=index: self._effect_dirty.add(
                     effect_index
@@ -11708,7 +12994,7 @@ class TrackFxDialog(QDialog):
             mode_hint.setWordWrap(True)
             mode_hint.setObjectName("Muted")
             layout.addWidget(mode_hint)
-        preview_hint = QLabel(tr("游戏参数 · 本地试听不模拟 FX"))
+        preview_hint = QLabel(tr("游戏参数 · 本地 FX 试听为未校准近似"))
         preview_hint.setObjectName("Muted")
         layout.addWidget(preview_hint)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -13404,11 +14690,17 @@ class ConversionCheckDialog(QDialog):
             "info": "变化说明",
         }
         for issue in analysis["issues"]:
-            location = (
-                trfv("轨道 {track_id}", track_id=issue.track_id)
-                if issue.track_id is not None
-                else trv("全局")
-            )
+            if issue.track_id is not None:
+                location = trfv("轨道 {track_id}", track_id=issue.track_id)
+            elif issue.related_track_ids:
+                location = trfv(
+                    "轨道 {track_id}",
+                    track_id=", ".join(
+                        str(track_id) for track_id in issue.related_track_ids
+                    ),
+                )
+            else:
+                location = trv("全局")
             item = QListWidgetItem(trf(
                 "[{severity}] {location} · {message}",
                 severity=trv(severity_labels[issue.severity]),
@@ -13464,6 +14756,7 @@ class SettingsDialog(QDialog):
             parent.audio_sources.get("paz_root", "") or ""
         )
         self.setObjectName("SettingsDialog")
+        self.setProperty("uiSurface", "utility")
         self.setWindowTitle(tr("设置"))
         self.setModal(True)
         self.resize(920, 680)
@@ -13475,15 +14768,20 @@ class SettingsDialog(QDialog):
 
         header = QFrame()
         header.setObjectName("SettingsHeader")
+        header.setProperty("uiRole", "dialogHeader")
         header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(22, 16, 22, 14)
-        header_layout.setSpacing(3)
+        header_layout.setContentsMargins(24, 14, 24, 13)
+        header_layout.setSpacing(2)
         title = QLabel(tr("设置"))
         title.setObjectName("SettingsTitle")
-        subtitle = QLabel(tr("导出规则、MIDI 解析、力度策略与游戏效果。设置只在下次导出时生效。"))
+        title.setProperty("uiRole", "dialogTitle")
+        subtitle = QLabel(
+            tr("导出、解析、试听与界面设置；保存后立即应用相关更改。")
+        )
         self.settings_subtitle = subtitle
         subtitle.setWordWrap(True)
         subtitle.setObjectName("Muted")
+        subtitle.setProperty("uiRole", "dialogSubtitle")
         header_layout.addWidget(title)
         header_layout.addWidget(subtitle)
         layout.addWidget(header)
@@ -13496,7 +14794,7 @@ class SettingsDialog(QDialog):
         self.settings_nav = QListWidget()
         self.settings_nav.setObjectName("SettingsNav")
         self.settings_nav.setProperty("i18nTranslateItems", True)
-        self.settings_nav.setFixedWidth(150)
+        self.settings_nav.setFixedWidth(164)
         self.settings_nav.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.settings_nav.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.settings_pages = QStackedWidget()
@@ -13513,7 +14811,7 @@ class SettingsDialog(QDialog):
         for label, page in (
             (tr("通用与导出"), general_scroll),
             (tr("MIDI 与力度"), midi_scroll),
-            (tr("音源与效果"), audio_scroll),
+            (tr("音源与外观"), audio_scroll),
         ):
             self.settings_nav.addItem(label)
             self.settings_pages.addWidget(page)
@@ -13556,7 +14854,7 @@ class SettingsDialog(QDialog):
 
         output, output_layout = self._section(
             "输出目录",
-            "转换文件保存位置。",
+            "分别设置导出保存位置和游戏曲谱安装位置。",
         )
         general_page_layout.addWidget(output)
         output_row = QHBoxLayout()
@@ -13575,6 +14873,25 @@ class SettingsDialog(QDialog):
         open_output.clicked.connect(self._open_output_folder)
         output_row.addWidget(open_output)
         output_layout.addLayout(output_row)
+
+        game_music_row = QHBoxLayout()
+        game_music_row.setContentsMargins(0, 0, 0, 0)
+        game_music_row.setSpacing(6)
+        self.game_music_dir = QLineEdit(parent.game_music_dir_path)
+        self.game_music_dir.setObjectName("GameMusicDirectoryEdit")
+        self.game_music_dir.setPlaceholderText(tr("游戏曲谱目录"))
+        game_music_row.addWidget(self.game_music_dir, stretch=1)
+        browse_game_music = PillButton(tr("选择"), "secondary")
+        browse_game_music.setObjectName("BrowseGameMusicDirectoryButton")
+        browse_game_music.clicked.connect(self._browse_game_music_folder)
+        game_music_row.addWidget(browse_game_music)
+        open_game_music = PillButton(tr("打开"), "ghost")
+        open_game_music.setObjectName("OpenGameMusicDirectoryButton")
+        open_game_music.clicked.connect(self._open_game_music_folder)
+        game_music_row.addWidget(open_game_music)
+        output_layout.addLayout(
+            self._labeled_row("游戏曲谱目录", game_music_row)
+        )
 
         owner, owner_layout = self._section(
             "游戏编辑权限",
@@ -13679,9 +14996,24 @@ class SettingsDialog(QDialog):
 
         audio, audio_layout = self._section(
             "本地音源包",
-            "仅用于本机近似试听，不会写入曲谱，也不会上传。",
+            "切换或锁定试听音源；仅用于本机试听，不会写入曲谱，也不会上传。",
         )
         audio_page_layout.addWidget(audio)
+        self.preview_mode = QComboBox()
+        self.preview_mode.setProperty("i18nSkipItems", True)
+        for label, mode in (
+            ("自动选择音源", "auto"),
+            ("锁定本地 BDO 音源", "bdo"),
+            ("锁定内置通用 MIDI", "generic"),
+        ):
+            self.preview_mode.addItem(tr(label), mode)
+        preview_mode_index = self.preview_mode.findData(
+            preview_source_mode(parent.audio_sources)
+        )
+        self.preview_mode.setCurrentIndex(max(0, preview_mode_index))
+        preview_mode_form = self._form_layout()
+        preview_mode_form.addRow(tr("试听音源"), self.preview_mode)
+        audio_layout.addLayout(preview_mode_form)
         self.audio_source = QLineEdit(displayed_audio_source(parent.audio_sources))
         self.audio_source.setReadOnly(True)
         self.audio_source.setPlaceholderText(tr("未选择"))
@@ -13728,99 +15060,6 @@ class SettingsDialog(QDialog):
         art_source_layout.addWidget(clear_art_button)
         audio_layout.addWidget(art_source_row)
 
-        effects, effects_layout = self._section(
-            "游戏主效果",
-            "每轨发送在轨道 FX；本地试听不模拟。",
-        )
-        effect_grid = QGridLayout()
-        effect_grid.setContentsMargins(0, 0, 0, 0)
-        effect_grid.setHorizontalSpacing(10)
-        effect_grid.setVerticalSpacing(10)
-        for column in (1, 3, 5):
-            effect_grid.setColumnStretch(column, 1)
-        effects_layout.addLayout(effect_grid)
-        audio_page_layout.addWidget(effects)
-        try:
-            self._master_effect_original = MasterEffects.from_legacy(
-                parent.reverb,
-                parent.delay,
-                parent.chorus,
-            )
-        except (TypeError, ValueError):
-            self._master_effect_original = MasterEffects()
-        self._master_effect_dirty: set[str] = set()
-        self._master_effect_fields: dict[str, QSpinBox] = {}
-
-        def configure_master_field(
-            field: QSpinBox,
-            name: str,
-            raw_value: int,
-        ) -> None:
-            field.setRange(0, GAME_PERCENT_MAX)
-            field.setValue(max(0, min(GAME_PERCENT_MAX, int(raw_value))))
-            if int(raw_value) > GAME_PERCENT_MAX:
-                field.setToolTip(
-                    trf(
-                        "导入原值 {value}；修改后按 0–100 写入。",
-                        value=int(raw_value),
-                    )
-                )
-            field.valueChanged.connect(
-                lambda _value, effect_name=name: self._master_effect_dirty.add(
-                    effect_name
-                )
-            )
-            self._master_effect_fields[name] = field
-
-        self.reverb = QSpinBox()
-        self.reverb.setObjectName("MasterReverbTime")
-        configure_master_field(
-            self.reverb,
-            "reverb_time",
-            self._master_effect_original.reverb_time,
-        )
-        self.delay = QSpinBox()
-        self.delay.setObjectName("MasterDelayFeedback")
-        configure_master_field(
-            self.delay,
-            "delay_feedback",
-            self._master_effect_original.delay_feedback,
-        )
-        effect_grid.addWidget(QLabel(tr("混响时间")), 0, 0, alignment=Qt.AlignRight | Qt.AlignVCenter)
-        effect_grid.addWidget(self.reverb, 0, 1)
-        effect_grid.addWidget(QLabel(tr("延迟反馈")), 0, 2, alignment=Qt.AlignRight | Qt.AlignVCenter)
-        effect_grid.addWidget(self.delay, 0, 3)
-
-        self.chorus_feedback = QSpinBox()
-        self.chorus_feedback.setObjectName("MasterChorusFeedback")
-        configure_master_field(
-            self.chorus_feedback,
-            "chorus_feedback",
-            self._master_effect_original.chorus_feedback,
-        )
-        self.chorus_depth = QSpinBox()
-        self.chorus_depth.setObjectName("MasterChorusLfoDepth")
-        configure_master_field(
-            self.chorus_depth,
-            "chorus_lfo_depth",
-            self._master_effect_original.chorus_lfo_depth,
-        )
-        self.chorus_freq = QSpinBox()
-        self.chorus_freq.setObjectName("MasterChorusLfoFrequency")
-        configure_master_field(
-            self.chorus_freq,
-            "chorus_lfo_frequency",
-            self._master_effect_original.chorus_lfo_frequency,
-        )
-        for column, label, field in (
-            (0, "合唱反馈", self.chorus_feedback),
-            (2, "LFO 深度", self.chorus_depth),
-            (4, "LFO 频率", self.chorus_freq),
-        ):
-            effect_grid.addWidget(QLabel(tr(label)), 1, column, alignment=Qt.AlignRight | Qt.AlignVCenter)
-            effect_grid.addWidget(field, 1, column + 1)
-        for field in (self.reverb, self.delay, self.chorus_feedback, self.chorus_depth, self.chorus_freq):
-            field.setFixedWidth(92)
         general_page_layout.addStretch(1)
         midi_page_layout.addStretch(1)
         audio_page_layout.addStretch(1)
@@ -13829,30 +15068,21 @@ class SettingsDialog(QDialog):
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
         self.settings_buttons.setObjectName("SettingsButtons")
+        self.settings_buttons.setProperty("uiRole", "dialogButtonRow")
         self.settings_buttons.button(QDialogButtonBox.Ok).setText(tr("保存设置"))
         self.settings_buttons.button(QDialogButtonBox.Ok).setProperty("kind", "convert")
         self.settings_buttons.button(QDialogButtonBox.Cancel).setText(tr("取消"))
         self.settings_buttons.accepted.connect(self.accept)
         self.settings_buttons.rejected.connect(self.reject)
-        layout.addWidget(self.settings_buttons)
-        self.settings_nav.currentRowChanged.connect(self._show_page_tip)
+        self.settings_footer = QFrame()
+        self.settings_footer.setObjectName("SettingsFooter")
+        self.settings_footer.setProperty("uiRole", "dialogFooter")
+        settings_footer_layout = QHBoxLayout(self.settings_footer)
+        settings_footer_layout.setContentsMargins(24, 10, 24, 10)
+        settings_footer_layout.setSpacing(0)
+        settings_footer_layout.addWidget(self.settings_buttons)
+        layout.addWidget(self.settings_footer)
         self._sync_velocity_controls()
-
-    def selected_master_effects(self) -> MasterEffects:
-        """Keep imported raw bytes until a specific authoring field changes."""
-
-        values = {
-            "reverb_time": self._master_effect_original.reverb_time,
-            "delay_feedback": self._master_effect_original.delay_feedback,
-            "chorus_feedback": self._master_effect_original.chorus_feedback,
-            "chorus_lfo_depth": self._master_effect_original.chorus_lfo_depth,
-            "chorus_lfo_frequency": (
-                self._master_effect_original.chorus_lfo_frequency
-            ),
-        }
-        for name in self._master_effect_dirty:
-            values[name] = self._master_effect_fields[name].value()
-        return MasterEffects(**values)
 
     @staticmethod
     def _settings_page(
@@ -13866,8 +15096,8 @@ class SettingsDialog(QDialog):
         page = QWidget()
         page.setObjectName(page_name)
         page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(18, 16, 18, 20)
-        page_layout.setSpacing(12)
+        page_layout.setContentsMargins(22, 6, 24, 24)
+        page_layout.setSpacing(0)
         page_layout.setAlignment(Qt.AlignTop)
         scroll.setWidget(page)
         return scroll, page_layout
@@ -13876,14 +15106,16 @@ class SettingsDialog(QDialog):
     def _section(title_text: str, description: str) -> tuple[QFrame, QVBoxLayout]:
         section = QFrame()
         section.setObjectName("SettingsSection")
+        section.setProperty("uiRole", "settingsSection")
         layout = QVBoxLayout(section)
-        layout.setContentsMargins(16, 14, 16, 15)
+        layout.setContentsMargins(0, 16, 0, 20)
         layout.setSpacing(8)
         # Grid rows take the height of their taller neighbour; keep each
         # section's own controls anchored directly below its description.
         layout.setAlignment(Qt.AlignTop)
         title = QLabel(tr(title_text))
         title.setObjectName("SettingsSectionTitle")
+        title.setProperty("uiRole", "sectionTitle")
         detail = QLabel(tr(description))
         detail.setObjectName("Muted")
         detail.setWordWrap(True)
@@ -13926,13 +15158,6 @@ class SettingsDialog(QDialog):
                 return mode
         return "layered"
 
-    def _show_page_tip(self, index: int) -> None:
-        if index == 2 and self.isVisible():
-            show_global_toast(
-                self,
-                tr("轨道 FX 中的奏法会写入支持的 BDO 乐器。"),
-            )
-
     def _browse_output_folder(self) -> None:
         current = self.output_dir.text().strip()
         start = current if current and Path(current).is_dir() else ""
@@ -13952,6 +15177,32 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(
                 self,
                 tr("输出目录不可用"),
+                str(exc),
+            )
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
+
+    def _browse_game_music_folder(self) -> None:
+        current = self.game_music_dir.text().strip()
+        start = current if current and Path(current).is_dir() else ""
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            tr("选择游戏曲谱目录"),
+            start,
+        )
+        if selected:
+            self.game_music_dir.setText(selected)
+
+    def _open_game_music_folder(self) -> None:
+        directory = Path(
+            self.game_music_dir.text().strip() or default_game_music_dir()
+        ).expanduser()
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.warning(
+                self,
+                tr("游戏曲谱目录不可用"),
                 str(exc),
             )
             return
@@ -14054,6 +15305,59 @@ class SettingsDialog(QDialog):
             return
         super().reject()
 
+    def accept(self) -> None:
+        """Keep the dialog open until all local path fields are usable."""
+
+        if self.game_art_worker is not None:
+            show_global_toast(self, tr("正在解密游戏图"))
+            return
+        output_dir = Path(
+            self.output_dir.text().strip() or DEFAULT_OUTDIR
+        ).expanduser()
+        if output_dir.exists() and not output_dir.is_dir():
+            self.settings_nav.setCurrentRow(0)
+            self.output_dir.setFocus()
+            QMessageBox.warning(
+                self,
+                tr("输出目录不可用"),
+                tr("请选择有效的输出目录。"),
+            )
+            return
+        game_music_dir = Path(
+            self.game_music_dir.text().strip() or default_game_music_dir()
+        ).expanduser()
+        if game_music_dir.exists() and not game_music_dir.is_dir():
+            self.settings_nav.setCurrentRow(0)
+            self.game_music_dir.setFocus()
+            QMessageBox.warning(
+                self,
+                tr("游戏曲谱目录不可用"),
+                tr("请选择有效的游戏曲谱目录。"),
+            )
+            return
+        art_value = self.instrument_art_dir.text().strip()
+        if art_value and not Path(art_value).is_dir():
+            self.settings_nav.setCurrentRow(2)
+            self.instrument_art_dir.setFocus()
+            QMessageBox.warning(
+                self,
+                tr("背景目录不可用"),
+                tr("请选择有效的本地乐器图片目录。"),
+            )
+            return
+        try:
+            classify_audio_source(self.audio_source.text().strip())
+        except ValueError:
+            self.settings_nav.setCurrentRow(2)
+            self.audio_source.setFocus()
+            QMessageBox.warning(
+                self,
+                tr("音源不可用"),
+                tr("请选择 .bdosamples 音源包或本地音源文件夹。"),
+            )
+            return
+        super().accept()
+
     def closeEvent(self, event) -> None:
         if self.game_art_worker is not None:
             event.ignore()
@@ -14080,7 +15384,7 @@ class SettingsDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(
             self,
             tr("选择游戏内保存的曲谱文件"),
-            str(default_game_music_dir()),
+            self.game_music_dir.text().strip() or str(default_game_music_dir()),
             tr("黑色沙漠曲谱文件 (*);;所有文件 (*.*)"),
         )
         if not path:
@@ -14122,12 +15426,236 @@ class SettingsDialog(QDialog):
         self.vel_floor_row.setVisible(floor_enabled)
 
 
+class MasterEffectsDialog(QDialog):
+    """Edit score-wide effect parameters without touching track Aux sends."""
+
+    def __init__(
+        self,
+        parent: "MidiToBdoWindow",
+        current: MasterEffects | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("MasterEffectsDialog")
+        self.setWindowTitle(tr("全局主效果"))
+        self.setModal(True)
+        self.resize(720, 500)
+        self.setMinimumSize(620, 440)
+
+        self._original = current or MasterEffects()
+        self._dirty_fields: set[str] = set()
+        self._fields: dict[str, QSpinBox] = {}
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        header = QFrame()
+        header.setObjectName("SettingsHeader")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(22, 18, 22, 16)
+        header_layout.setSpacing(4)
+        title = QLabel(tr("全局主效果"))
+        title.setObjectName("SettingsTitle")
+        subtitle = QLabel(
+            tr(
+                "整首曲子共用这些参数；轨道使用多少效果仍由每条轨道的 FX 发送量决定。"
+            )
+        )
+        subtitle.setObjectName("Muted")
+        subtitle.setWordWrap(True)
+        header_layout.addWidget(title)
+        header_layout.addWidget(subtitle)
+        layout.addWidget(header)
+
+        body = QWidget()
+        body.setObjectName("MasterEffectsContent")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(22, 20, 22, 22)
+        body_layout.setSpacing(14)
+
+        scope = QFrame()
+        scope.setObjectName("EffectScopeNotice")
+        scope_layout = QVBoxLayout(scope)
+        scope_layout.setContentsMargins(14, 11, 14, 11)
+        scope_layout.setSpacing(4)
+        scope_title = QLabel(tr("作用范围"))
+        scope_title.setObjectName("EffectScopeTitle")
+        scope_detail = QLabel(
+            tr("这里仅修改全局参数，不会改动任何轨道的混响、延迟或合唱发送量。")
+        )
+        scope_detail.setObjectName("Muted")
+        scope_detail.setWordWrap(True)
+        preview_note = QLabel(
+            tr("游戏参数 · 本地 FX 试听为未校准近似")
+        )
+        preview_note.setObjectName("EffectPreviewNote")
+        preview_note.setWordWrap(True)
+        scope_layout.addWidget(scope_title)
+        scope_layout.addWidget(scope_detail)
+        scope_layout.addWidget(preview_note)
+        body_layout.addWidget(scope)
+
+        ambience, ambience_layout = self._section(
+            "混响与延迟",
+            "混响时间控制空间尾音；延迟反馈控制回声重复次数。",
+        )
+        ambience_grid = self._effect_grid()
+        ambience_layout.addLayout(ambience_grid)
+        self.reverb = self._new_field(
+            "MasterReverbTime",
+            "混响时间",
+            "reverb_time",
+            self._original.reverb_time,
+            "混响时间：控制混响尾音长度；本地试听按 0.2–8.0 秒近似。",
+        )
+        self.delay = self._new_field(
+            "MasterDelayFeedback",
+            "延迟反馈",
+            "delay_feedback",
+            self._original.delay_feedback,
+            "延迟反馈：控制回声返回延迟线的比例；越高，重复越多。本地试听固定约 250 ms。",
+        )
+        self._add_field(ambience_grid, 0, 0, "混响时间", self.reverb)
+        self._add_field(ambience_grid, 0, 2, "延迟反馈", self.delay)
+        body_layout.addWidget(ambience)
+
+        chorus, chorus_layout = self._section(
+            "合唱（游戏中为 Flanger）",
+            "反馈决定旋动感，LFO 深度决定摆动幅度，LFO 频率决定摆动速度。",
+        )
+        chorus_grid = self._effect_grid()
+        chorus_layout.addLayout(chorus_grid)
+        self.chorus_feedback = self._new_field(
+            "MasterChorusFeedback",
+            "合唱反馈",
+            "chorus_feedback",
+            self._original.chorus_feedback,
+            "合唱反馈：控制调制延迟的反馈强度；越高，梳状与旋动感越明显。",
+        )
+        self.chorus_depth = self._new_field(
+            "MasterChorusLfoDepth",
+            "LFO 深度",
+            "chorus_lfo_depth",
+            self._original.chorus_lfo_depth,
+            "LFO 深度：控制合唱延迟时间的摆动幅度；越高，空间宽度与音高摆动越明显。",
+        )
+        self.chorus_freq = self._new_field(
+            "MasterChorusLfoFrequency",
+            "LFO 频率",
+            "chorus_lfo_frequency",
+            self._original.chorus_lfo_frequency,
+            "LFO 频率：控制合唱起伏速度；越高，流动越快。",
+        )
+        self._add_field(chorus_grid, 0, 0, "合唱反馈", self.chorus_feedback)
+        self._add_field(chorus_grid, 0, 2, "LFO 深度", self.chorus_depth)
+        self._add_field(chorus_grid, 1, 0, "LFO 频率", self.chorus_freq)
+        body_layout.addWidget(chorus)
+        body_layout.addStretch(1)
+        layout.addWidget(body, stretch=1)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Apply | QDialogButtonBox.Cancel
+        )
+        buttons.setObjectName("MasterEffectsButtons")
+        buttons.button(QDialogButtonBox.Apply).setText(tr("应用"))
+        buttons.button(QDialogButtonBox.Apply).setProperty("kind", "convert")
+        buttons.button(QDialogButtonBox.Cancel).setText(tr("取消"))
+        buttons.button(QDialogButtonBox.Apply).clicked.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def _section(title_text: str, description: str) -> tuple[QFrame, QVBoxLayout]:
+        section = QFrame()
+        section.setObjectName("SettingsSection")
+        section_layout = QVBoxLayout(section)
+        section_layout.setContentsMargins(16, 14, 16, 15)
+        section_layout.setSpacing(9)
+        section_layout.setAlignment(Qt.AlignTop)
+        title = QLabel(tr(title_text))
+        title.setObjectName("SettingsSectionTitle")
+        detail = QLabel(tr(description))
+        detail.setObjectName("Muted")
+        detail.setWordWrap(True)
+        section_layout.addWidget(title)
+        section_layout.addWidget(detail)
+        return section, section_layout
+
+    @staticmethod
+    def _effect_grid() -> QGridLayout:
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 2, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+        for column in (1, 3, 5):
+            grid.setColumnStretch(column, 1)
+        return grid
+
+    @staticmethod
+    def _add_field(
+        grid: QGridLayout,
+        row: int,
+        column: int,
+        label: str,
+        field: QSpinBox,
+    ) -> None:
+        grid.addWidget(
+            QLabel(tr(label)),
+            row,
+            column,
+            alignment=Qt.AlignRight | Qt.AlignVCenter,
+        )
+        grid.addWidget(field, row, column + 1)
+
+    def _new_field(
+        self,
+        object_name: str,
+        accessible_name: str,
+        field_name: str,
+        raw_value: int,
+        help_text: str,
+    ) -> QSpinBox:
+        field = QSpinBox()
+        field.setObjectName(object_name)
+        field.setRange(0, GAME_PERCENT_MAX)
+        field.setValue(max(0, min(GAME_PERCENT_MAX, int(raw_value))))
+        field.setFixedWidth(92)
+        tooltip = tr(help_text)
+        if int(raw_value) > GAME_PERCENT_MAX:
+            tooltip += "\n" + trf(
+                "导入原值 {value}；修改后按 0–100 写入。",
+                value=int(raw_value),
+            )
+        field.setToolTip(tooltip)
+        field.setAccessibleName(tr(accessible_name))
+        field.valueChanged.connect(
+            lambda _value, name=field_name: self._dirty_fields.add(name)
+        )
+        self._fields[field_name] = field
+        return field
+
+    def selected_master_effects(self) -> MasterEffects:
+        """Preserve unedited imported bytes above the current UI range."""
+
+        values = {
+            "reverb_time": self._original.reverb_time,
+            "delay_feedback": self._original.delay_feedback,
+            "chorus_feedback": self._original.chorus_feedback,
+            "chorus_lfo_depth": self._original.chorus_lfo_depth,
+            "chorus_lfo_frequency": self._original.chorus_lfo_frequency,
+        }
+        for name in self._dirty_fields:
+            values[name] = self._fields[name].value()
+        return MasterEffects(**values)
+
+
 class MidiToBdoWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         app = QApplication.instance()
         if app is not None:
             self.widget_style_name = configure_widget_style(app)
+            app.aboutToQuit.connect(self._wait_for_background_writers_on_quit)
         else:
             self.widget_style_name = ""
         self.setWindowTitle(f"BDO Music Composer v{__version__}")
@@ -14190,6 +15718,7 @@ class MidiToBdoWindow(QMainWindow):
             )
         )
         self.workspace_close_pending = False
+        self._final_autosave_queued = False
         self.active_transcription_editor: MidiNoteEditorDialog | None = None
         self.transcription_analysis_busy = False
         self.transcription_analysis_progress: int | None = None
@@ -14209,10 +15738,10 @@ class MidiToBdoWindow(QMainWindow):
             self.config.get("instrument_art_dir", "") or ""
         )
         self.config.setdefault("audio_sources", self.audio_sources)
-        save_config(self.config)
         self.realtime_audio = BdoRealtimeAudioEngine(self, self.audio_sources)
         self.realtime_preview_active = False
         self.realtime_preview_loading = False
+        self.realtime_preview_source = "bdo"
         self.realtime_preview_start_ms = 0.0
         self.realtime_preview_tracks = []
         self.realtime_validation_state = "approximate"
@@ -14235,8 +15764,14 @@ class MidiToBdoWindow(QMainWindow):
             self.config.get("output_dir", "") or DEFAULT_OUTDIR
         )
         self.last_output_dir = Path(self.output_dir_path)
+        self.game_music_dir_path = str(
+            self.config.get("game_music_dir", "") or default_game_music_dir()
+        )
+        self.project_id = new_project_id()
         self.autosave_project_dir: Path | None = None
         self.autosave_source_copy: Path | None = None
+        self.home_scan_session: IncrementalHomeScan | None = None
+        self.home_scan_generation = 0
         self.loading_project = False
         self.research_metadata = {
             "profile_id": BDO_PROFILE.profile_id,
@@ -14247,10 +15782,19 @@ class MidiToBdoWindow(QMainWindow):
         self.check_blink_timer = QTimer(self)
         self.check_blink_timer.timeout.connect(self._blink_conversion_check_button)
         self.check_blink_ticks = 0
+        self.timeline_validation_timer = QTimer(self)
+        self.timeline_validation_timer.setSingleShot(True)
+        self.timeline_validation_timer.setInterval(80)
+        self.timeline_validation_timer.timeout.connect(
+            self._refresh_timeline_validation
+        )
+        self._timeline_validation_toast_signature: tuple[object, ...] = ()
         self.autosave_timer = QTimer(self)
         self.autosave_timer.setSingleShot(True)
         self.autosave_timer.timeout.connect(self._flush_autosave)
         self.pending_autosave_reason = ""
+        self.autosave_worker: AutosaveWriteWorker | None = None
+        self.pending_autosave_request: AutosaveRequest | None = None
         saved_settings = self.config.get("conversion_settings", {})
         self.char_name = saved_settings.get("char_name", "MIDI")
         self.bpm_override = saved_settings.get("bpm_override") or None
@@ -14262,19 +15806,11 @@ class MidiToBdoWindow(QMainWindow):
         self.vel_floor = saved_settings.get("vel_floor")
         saved_vel_step = saved_settings.get("vel_step")
         self.vel_step = tuple(saved_vel_step) if isinstance(saved_vel_step, list) else saved_vel_step
-        self.reverb = int(saved_settings.get("reverb", 0))
-        self.delay = int(saved_settings.get("delay", 0))
-        saved_chorus = saved_settings.get("chorus")
-        if isinstance(saved_chorus, dict):
-            self.chorus = (
-                int(saved_chorus.get("feedback", 0)),
-                int(saved_chorus.get("depth", 0)),
-                int(saved_chorus.get("freq", 0)),
-            )
-        elif saved_chorus:
-            self.chorus = tuple(saved_chorus)
-        else:
-            self.chorus = None
+        # Master effects belong to the open score, never to application-wide
+        # preferences. Projects and BDO imports restore their own values.
+        self.reverb = 0
+        self.delay = 0
+        self.chorus = None
 
         self._build_ui()
         self._apply_responsive_density()
@@ -14282,6 +15818,10 @@ class MidiToBdoWindow(QMainWindow):
         self.project_undo_shortcut.activated.connect(self._undo_project)
         self.project_redo_shortcut = QShortcut(QKeySequence.Redo, self)
         self.project_redo_shortcut.activated.connect(self._redo_project)
+        self.project_save_shortcut = QShortcut(QKeySequence.Save, self)
+        self.project_save_shortcut.activated.connect(self._save_current_project)
+        self.project_save_as_shortcut = QShortcut(QKeySequence.SaveAs, self)
+        self.project_save_as_shortcut.activated.connect(self._save_project_as)
         self._apply_style()
         self._sync_preview_state()
         self._update_process_metrics()
@@ -14318,35 +15858,79 @@ class MidiToBdoWindow(QMainWindow):
     def _build_toolbar(self) -> QWidget:
         bar = QFrame()
         bar.setObjectName("Toolbar")
+        bar.setFixedHeight(50)
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(5)
+        layout.setContentsMargins(8, 4, 12, 4)
+        layout.setSpacing(8)
+
+        self.ensemble_capacity_badge = EnsembleCapacityBadge(parent=bar)
+        layout.addWidget(self.ensemble_capacity_badge)
+
+        self.toolbar_identity_separator = QFrame()
+        self.toolbar_identity_separator.setObjectName("ToolbarSeparator")
+        self.toolbar_identity_separator.setFrameShape(QFrame.VLine)
+        layout.addWidget(self.toolbar_identity_separator)
 
         command_group = QFrame()
         command_group.setObjectName("CommandGroup")
         command_layout = QHBoxLayout(command_group)
-        command_layout.setContentsMargins(1, 1, 1, 1)
-        command_layout.setSpacing(1)
+        command_layout.setContentsMargins(0, 0, 0, 0)
+        command_layout.setSpacing(8)
+
+        navigation_group = QFrame()
+        navigation_group.setObjectName("ToolbarCommandCluster")
+        navigation_layout = QHBoxLayout(navigation_group)
+        navigation_layout.setContentsMargins(0, 0, 0, 0)
+        navigation_layout.setSpacing(4)
 
         self.toolbar_home_btn = PillButton(tr("主页"), "secondary", FluentSymbol.HOME)
         self.toolbar_home_btn.clicked.connect(self._show_home)
-        command_layout.addWidget(self.toolbar_home_btn)
+        navigation_layout.addWidget(self.toolbar_home_btn)
+        command_layout.addWidget(navigation_group)
+
+        self.project_toolbar_group = QFrame()
+        self.project_toolbar_group.setObjectName("ToolbarCommandCluster")
+        project_command_layout = QHBoxLayout(self.project_toolbar_group)
+        project_command_layout.setContentsMargins(0, 0, 0, 0)
+        project_command_layout.setSpacing(4)
 
         self.toolbar_new_project_btn = PillButton(tr("新建项目"), "secondary", FluentSymbol.PROJECT)
         self.toolbar_new_project_btn.clicked.connect(self._new_project)
-        command_layout.addWidget(self.toolbar_new_project_btn)
+        project_command_layout.addWidget(self.toolbar_new_project_btn)
 
         self.toolbar_import_btn = PillButton(tr("导入 MIDI"), "primary", FluentSymbol.OPEN)
         self.toolbar_import_btn.clicked.connect(self._browse_midi)
-        command_layout.addWidget(self.toolbar_import_btn)
+        project_command_layout.addWidget(self.toolbar_import_btn)
 
-        self.toolbar_open_project_btn = PillButton(tr("打开工程"), "secondary", FluentSymbol.PROJECT)
-        self.toolbar_open_project_btn.clicked.connect(self._open_project)
-        command_layout.addWidget(self.toolbar_open_project_btn)
+        self.toolbar_open_project_btn = PillButton(tr("项目"), "secondary", FluentSymbol.PROJECT)
+        self.project_file_menu = QMenu(self.toolbar_open_project_btn)
+        save_action = self.project_file_menu.addAction(tr("保存项目"))
+        save_action.triggered.connect(self._save_current_project)
+        save_as_action = self.project_file_menu.addAction(tr("另存为"))
+        save_as_action.triggered.connect(self._save_project_as)
+        self.project_file_menu.addSeparator()
+        open_action = self.project_file_menu.addAction(tr("打开工程"))
+        open_action.triggered.connect(self._open_project)
+        self.toolbar_open_project_btn.setMenu(self.project_file_menu)
+        project_command_layout.addWidget(self.toolbar_open_project_btn)
+        command_layout.addWidget(self.project_toolbar_group)
+
+        self.score_toolbar_group = QFrame()
+        self.score_toolbar_group.setObjectName("ToolbarCommandCluster")
+        score_command_layout = QHBoxLayout(self.score_toolbar_group)
+        score_command_layout.setContentsMargins(0, 0, 0, 0)
+        score_command_layout.setSpacing(4)
 
         self.toolbar_optimize_btn = PillButton(tr("全局优化"), "secondary", FluentSymbol.OPTIMIZE)
         self.toolbar_optimize_btn.clicked.connect(lambda: self._open_midi_optimizer(None))
-        command_layout.addWidget(self.toolbar_optimize_btn)
+        score_command_layout.addWidget(self.toolbar_optimize_btn)
+
+        self.toolbar_master_effects_btn = PillButton(
+            tr("全局效果"), "secondary", FluentSymbol.CURVE
+        )
+        self.toolbar_master_effects_btn.clicked.connect(self._open_master_effects)
+        score_command_layout.addWidget(self.toolbar_master_effects_btn)
+        command_layout.addWidget(self.score_toolbar_group)
         layout.addWidget(command_group)
 
         self.workspace_toolbar_separator = QFrame()
@@ -14359,7 +15943,6 @@ class MidiToBdoWindow(QMainWindow):
         )
         self.file_label.setObjectName("ToolbarText")
         layout.addWidget(self.file_label)
-        layout.addStretch(1)
 
         self.output_name = QLineEdit()
         self.output_name.setPlaceholderText(tr("曲谱名"))
@@ -14367,11 +15950,41 @@ class MidiToBdoWindow(QMainWindow):
         self.output_name.editingFinished.connect(lambda: self._autosave_project("output name"))
         layout.addWidget(self.output_name)
 
-        self.preview_source_badge = ElidedLabel(
-            tr("游戏映射：检测中"), maximum_hint_width=210
+        self.preview_source_badge = PillButton(
+            tr("自动音源 · 检测中"), "ghost"
         )
         self.preview_source_badge.setObjectName("ToolbarBadge")
+        self.preview_source_badge.setMaximumWidth(230)
+        self.preview_source_badge.setToolTip(
+            tr("点击切换试听音源；不会改变导出结果")
+        )
+        self.preview_source_menu = QMenu(self.preview_source_badge)
+        self.preview_source_action_group = QActionGroup(
+            self.preview_source_menu
+        )
+        self.preview_source_action_group.setExclusive(True)
+        self.preview_source_actions = {}
+        for mode, label in (
+            ("auto", "自动选择音源"),
+            ("bdo", "锁定本地 BDO 音源"),
+            ("generic", "锁定内置通用 MIDI"),
+        ):
+            action = self.preview_source_menu.addAction(tr(label))
+            action.setCheckable(True)
+            action.triggered.connect(
+                lambda _checked=False, selected_mode=mode:
+                self._set_preview_source_mode(selected_mode)
+            )
+            self.preview_source_action_group.addAction(action)
+            self.preview_source_actions[mode] = action
+        self.preview_source_menu.addSeparator()
+        self.preview_source_menu.addAction(
+            tr("管理本地音源包…"), lambda: self._open_settings(2)
+        )
+        self.preview_source_badge.setMenu(self.preview_source_menu)
+        self._sync_preview_source_menu()
         layout.addWidget(self.preview_source_badge)
+        layout.addStretch(1)
 
         separator = QFrame()
         separator.setObjectName("ToolbarSeparator")
@@ -14381,8 +15994,8 @@ class MidiToBdoWindow(QMainWindow):
         utility_group = QFrame()
         utility_group.setObjectName("CommandGroup")
         utility_layout = QHBoxLayout(utility_group)
-        utility_layout.setContentsMargins(1, 1, 1, 1)
-        utility_layout.setSpacing(1)
+        utility_layout.setContentsMargins(0, 0, 0, 0)
+        utility_layout.setSpacing(4)
 
         self.toolbar_thanks_btn = PillButton(tr("致谢"), "secondary", FluentSymbol.INFO)
         self.toolbar_thanks_btn.clicked.connect(self._show_acknowledgements)
@@ -14401,71 +16014,221 @@ class MidiToBdoWindow(QMainWindow):
     def _build_home_page(self) -> QWidget:
         page = QWidget()
         page.setObjectName("HomePage")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(28, 22, 28, 24)
-        layout.setSpacing(14)
-
-        hero = QFrame()
-        hero.setObjectName("HomeHero")
-        header = QHBoxLayout(hero)
-        header.setContentsMargins(22, 17, 18, 17)
-        header.setSpacing(18)
-        heading = QVBoxLayout()
-        heading.setSpacing(3)
-        eyebrow = QLabel("BDO MUSIC COMPOSER")
-        eyebrow.setObjectName("HomeEyebrow")
-        title = QLabel(tr("曲谱主页"))
-        title.setObjectName("HomeTitle")
-        heading.addWidget(eyebrow)
-        heading.addWidget(title)
-        header.addLayout(heading)
-        header.addStretch(1)
-        new_btn = PillButton(tr("新建项目"), "primary", FluentSymbol.PROJECT)
-        new_btn.setProperty("homeAction", True)
-        new_btn.clicked.connect(self._new_project)
-        header.addWidget(new_btn)
-        import_btn = PillButton(tr("导入 MIDI"), "primary", FluentSymbol.OPEN)
-        import_btn.setProperty("homeAction", True)
-        import_btn.clicked.connect(self._browse_midi)
-        header.addWidget(import_btn)
-        open_btn = PillButton(tr("打开工程"), "secondary", FluentSymbol.PROJECT)
-        open_btn.setProperty("homeAction", True)
-        open_btn.clicked.connect(self._open_project)
-        header.addWidget(open_btn)
-        refresh_btn = PillButton(tr("刷新"), "ghost")
-        refresh_btn.setProperty("homeAction", True)
-        refresh_btn.clicked.connect(self._refresh_home)
-        header.addWidget(refresh_btn)
-        layout.addWidget(hero)
-
-        content = QHBoxLayout()
-        content.setSpacing(0)
-        game_card, self.game_score_list, game_footer, self.game_score_count = self._build_home_card(
-            "游戏曲谱",
-            "打开目录",
-            "primary",
+        self.home_instrument_art = InstrumentLaneArtwork()
+        self._home_instrument_visual_keys = {
+            instrument_id: adaptation.visual_key
+            for instrument_id, adaptation
+            in instrument_editor_display_adaptations().items()
+        }
+        self.home_instrument_art.reload(
+            self.instrument_art_dir,
+            self._home_instrument_visual_keys,
         )
-        game_footer.clicked.connect(self._open_game_music_directory)
-        content.addWidget(game_card, stretch=5)
+        outer = QHBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.home_outer_layout = outer
 
-        side = QWidget()
-        side.setObjectName("HomeSideColumn")
-        side_layout = QVBoxLayout(side)
-        side_layout.setContentsMargins(18, 0, 0, 0)
-        side_layout.setSpacing(0)
+        shell = HomeBackdrop(HOME_BACKGROUND_IMAGE)
+        self.home_backdrop = shell
+        shell_layout = QHBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+        self.home_shell_layout = shell_layout
+        outer.addWidget(shell, stretch=1)
+
+        overlay = QFrame()
+        overlay.setObjectName("HomeOverlay")
+        overlay.setFixedWidth(584)
+        self.home_sidebar = overlay
+        overlay_layout = QVBoxLayout(overlay)
+        overlay_layout.setContentsMargins(32, 20, 22, 16)
+        overlay_layout.setSpacing(0)
+
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(12)
+        brand = QLabel("BDO MUSIC COMPOSER")
+        brand.setObjectName("HomeBrand")
+        brand_row.addWidget(brand)
+        brand_row.addStretch(1)
+        self.home_user_button = HomeIdentityBadge()
+        self.home_user_button.setToolTip(tr("设置角色名与 Owner ID"))
+        self.home_user_button.clicked.connect(lambda: self._open_settings(0))
+        brand_row.addWidget(self.home_user_button)
+        overlay_layout.addLayout(brand_row)
+        overlay_layout.addSpacing(10)
+
+        hero = QWidget()
+        hero.setObjectName("HomeHero")
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(0, 2, 0, 2)
+        hero_layout.setSpacing(2)
+        title = QLabel(tr("继续创作"))
+        title.setObjectName("HomeTitle")
+        subtitle = QLabel(tr("从最近工程继续，或开始一个新的编曲项目"))
+        subtitle.setObjectName("HomeSubtitle")
+        subtitle.setWordWrap(True)
+        hero_layout.addWidget(title)
+        hero_layout.addWidget(subtitle)
+        overlay_layout.addWidget(hero)
+        overlay_layout.addSpacing(16)
+
+        command_deck = QFrame()
+        command_deck.setObjectName("HomeCommandDeck")
+        quick_actions = QHBoxLayout(command_deck)
+        quick_actions.setContentsMargins(0, 0, 0, 0)
+        quick_actions.setSpacing(8)
+        self.home_new_btn = PillButton(
+            tr("新建项目"),
+            "primary",
+            FluentSymbol.PROJECT,
+        )
+        self.home_import_btn = PillButton(
+            tr("导入 MIDI"),
+            "secondary",
+            FluentSymbol.OPEN,
+        )
+        self.home_open_btn = PillButton(
+            tr("打开工程"),
+            "secondary",
+            FluentSymbol.PROJECT,
+        )
+        action_descriptions = (
+            (self.home_new_btn, "新建空白项目\n从一条空白轨道开始"),
+            (self.home_import_btn, "导入 MIDI\n继续编排已有音乐"),
+            (self.home_open_btn, "打开工程\n浏览本地项目文件"),
+        )
+        for action_button, description in action_descriptions:
+            action_button.setObjectName("HomeQuickAction")
+            action_button.setProperty("homeAction", True)
+            action_button.setFixedHeight(42)
+            action_button.setToolTip(tr(description).replace("\n", " · "))
+            action_button.setAccessibleDescription(tr(description))
+        self.home_new_btn.setProperty("actionTone", "accent")
+        quick_actions.addWidget(self.home_new_btn, stretch=1)
+        quick_actions.addWidget(self.home_import_btn, stretch=1)
+        quick_actions.addWidget(self.home_open_btn, stretch=1)
+        self.home_new_btn.clicked.connect(self._new_project)
+        self.home_import_btn.clicked.connect(self._browse_midi)
+        self.home_open_btn.clicked.connect(self._open_project)
+        overlay_layout.addWidget(command_deck)
+        overlay_layout.addSpacing(14)
+
+        library_bar = QFrame()
+        library_bar.setObjectName("HomeLibraryBar")
+        library_layout = QHBoxLayout(library_bar)
+        library_layout.setContentsMargins(0, 0, 0, 0)
+        library_layout.setSpacing(6)
+
+        self.home_nav_group = QButtonGroup(self)
+        self.home_nav_group.setExclusive(True)
+        self.home_project_nav = QPushButton(tr("最近项目"))
+        self.home_project_nav.setObjectName("HomeNavButton")
+        self.home_project_nav.setCheckable(True)
+        self.home_project_nav.setAccessibleDescription(
+            tr("最近项目、自动保存与示例")
+        )
+        self.home_game_nav = QPushButton(tr("游戏曲谱"))
+        self.home_game_nav.setObjectName("HomeNavButton")
+        self.home_game_nav.setCheckable(True)
+        self.home_game_nav.setAccessibleDescription(
+            tr("Black Desert Music 目录中的曲谱")
+        )
+        for nav_button in (self.home_project_nav, self.home_game_nav):
+            nav_button.setCursor(Qt.PointingHandCursor)
+            self.home_nav_group.addButton(nav_button)
+            library_layout.addWidget(nav_button)
+        self.home_project_nav.setChecked(True)
+
+        self.home_search = QLineEdit()
+        self.home_search.setObjectName("HomeSearch")
+        self.home_search.setPlaceholderText(tr("搜索项目或曲谱"))
+        self.home_search.setClearButtonEnabled(True)
+        self.home_search.textChanged.connect(self._apply_home_filter)
+        library_layout.addWidget(self.home_search, stretch=1)
+        self.home_refresh_btn = PillButton(tr("刷新"), "ghost")
+        self.home_refresh_btn.setProperty("homeAction", True)
+        self.home_refresh_btn.clicked.connect(self._refresh_home)
+        library_layout.addWidget(self.home_refresh_btn)
+        overlay_layout.addWidget(library_bar)
+        overlay_layout.addSpacing(10)
+
+        self.home_library_stack = QStackedWidget()
+        self.home_library_stack.setObjectName("HomeLibraryStack")
         project_card, self.project_list, project_footer, self.project_count = self._build_home_card(
             "项目",
-            "打开工程",
+            "打开所选项目",
             "primary",
         )
-        project_footer.clicked.connect(self._open_project)
-        side_layout.addWidget(project_card, stretch=1)
-        content.addWidget(side, stretch=4)
-        layout.addLayout(content, stretch=1)
+        project_card.setProperty("homeKind", "project")
+        self.project_open_button = project_footer
+        project_footer.clicked.connect(
+            lambda: self._open_selected_home_item(self.project_list)
+        )
+        game_card, self.game_score_list, game_footer, self.game_score_count = self._build_home_card(
+            "游戏曲谱",
+            "打开游戏目录",
+            "primary",
+        )
+        game_card.setProperty("homeKind", "game")
+        game_footer.clicked.connect(self._open_game_music_directory)
+        self.home_library_stack.addWidget(project_card)
+        self.home_library_stack.addWidget(game_card)
+        overlay_layout.addWidget(self.home_library_stack, stretch=1)
 
-        self.game_score_list.itemDoubleClicked.connect(self._open_home_item)
-        self.project_list.itemDoubleClicked.connect(self._open_home_item)
+        local_badge = QLabel(tr("本地处理 · 不上传工程"))
+        local_badge.setObjectName("HomeLocalBadge")
+        local_badge.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        overlay_layout.addWidget(local_badge)
+        shell_layout.addWidget(overlay)
+        shell_layout.addStretch(1)
+
+        self.home_project_nav.clicked.connect(
+            lambda: self._show_home_library("project")
+        )
+        self.home_game_nav.clicked.connect(
+            lambda: self._show_home_library("game")
+        )
+        self.project_list.currentItemChanged.connect(
+            lambda *_args: self._home_selection_changed()
+        )
+        self.game_score_list.currentItemChanged.connect(
+            lambda *_args: self._home_selection_changed()
+        )
+        self._show_home_library("project")
+
+        self.game_score_list.itemActivated.connect(self._open_home_item)
+        self.project_list.itemActivated.connect(self._open_home_item)
+        self.project_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.project_list.customContextMenuRequested.connect(
+            self._show_project_context_menu
+        )
         return page
+
+    def _show_home_library(self, library: str) -> None:
+        if not hasattr(self, "home_library_stack"):
+            return
+        show_game = library == "game"
+        self.home_library_stack.setCurrentIndex(1 if show_game else 0)
+        self.home_project_nav.setChecked(not show_game)
+        self.home_game_nav.setChecked(show_game)
+        active_list = self.game_score_list if show_game else self.project_list
+        active_list.setFocus(Qt.OtherFocusReason)
+        self._update_toolbar_ensemble_badge()
+
+    def _home_selection_changed(self) -> None:
+        self._update_home_action_states()
+        self._update_toolbar_ensemble_badge()
+
+    def _update_home_action_states(self) -> None:
+        if not hasattr(self, "project_open_button"):
+            return
+        item = self.project_list.currentItem()
+        self.project_open_button.setEnabled(
+            item is not None
+            and not item.isHidden()
+            and isinstance(item.data(Qt.UserRole), dict)
+        )
 
     def _build_home_card(
         self,
@@ -14477,8 +16240,8 @@ class MidiToBdoWindow(QMainWindow):
         card.setObjectName("HomeCard")
         card.setProperty("density", density)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 15, 16, 14)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
         card_header = QHBoxLayout()
         card_header.setSpacing(8)
         title_label = QLabel(tr(title))
@@ -14486,41 +16249,79 @@ class MidiToBdoWindow(QMainWindow):
         count_label = QLabel("0")
         count_label.setObjectName("HomeCount")
         count_label.setAlignment(Qt.AlignCenter)
+        action_button = PillButton(tr(action), "ghost")
+        action_button.setProperty("homeAction", True)
         card_header.addWidget(title_label)
         card_header.addWidget(count_label)
         card_header.addStretch(1)
+        card_header.addWidget(action_button)
         item_list = QListWidget()
         item_list.setObjectName("HomeList")
         item_list.setProperty("i18nSkipItems", True)
-        item_list.setSpacing(2)
-        action_button = PillButton(tr(action), "ghost")
-        action_button.setProperty("homeAction", True)
+        item_list.setSpacing(0)
+        item_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        item_list.setTextElideMode(Qt.ElideRight)
+        item_list.setAccessibleName(tr(title))
+        item_list.setItemDelegate(
+            HomeEntryDelegate(self.home_instrument_art, item_list)
+        )
         layout.addLayout(card_header)
         layout.addWidget(item_list, stretch=1)
-        layout.addWidget(action_button, alignment=Qt.AlignLeft)
         return card, item_list, action_button, count_label
 
     @staticmethod
     def _add_home_entry(target: QListWidget, entry: HomeEntry) -> None:
         item = QListWidgetItem(f"{entry.label}\n{entry.detail}")
-        item.setData(Qt.UserRole, {"kind": entry.kind, "path": str(entry.path), "label": entry.label})
-        tooltip = str(entry.path)
+        item.setData(Qt.UserRole, {
+            "kind": entry.kind,
+            "path": str(entry.path),
+            "label": entry.label,
+            "project_id": entry.project_id,
+            "version_index": entry.version_index,
+            "version_count": entry.version_count,
+            "instrument_ids": list(entry.instrument_ids),
+            "performance_instrument_ids": list(entry.performance_instrument_ids),
+            "instrument_count": entry.instrument_count,
+            "required_players": entry.required_players,
+            "ensemble_limit_exceeded": entry.exceeds_ensemble_limit,
+        })
+        item.setData(HOME_INSTRUMENT_IDS_ROLE, entry.performance_instrument_ids)
+        tooltip_details = [entry.detail] if entry.detail else []
+        if entry.instrument_ids:
+            player_text = HomeEntryDelegate._ensemble_text(entry.instrument_count)
+            tooltip_details.extend((
+                trf("{count} 种乐器", count=entry.instrument_count),
+                player_text,
+            ))
+            item.setData(
+                Qt.ItemDataRole.AccessibleDescriptionRole,
+                " · ".join(tooltip_details),
+            )
         if entry.version_count > 1:
-            tooltip += trf("\n已合并 {count} 个版本，双击打开最新工程", count=entry.version_count)
+            tooltip_details.append(f"v{entry.version_index}/{entry.version_count}")
+        tooltip = entry.label
+        if tooltip_details:
+            tooltip += "\n" + " · ".join(tooltip_details)
         item.setToolTip(tooltip)
-        item.setSizeHint(QSize(0, 58))
         target.addItem(item)
+        if target.currentRow() < 0:
+            target.setCurrentRow(0)
 
     def _refresh_home(self) -> None:
         if not hasattr(self, "game_score_list"):
             return
+        self._refresh_home_identity()
+        previous = self.home_scan_session
+        if previous is not None:
+            previous.cancel()
+        self.home_scan_generation += 1
+        generation = self.home_scan_generation
         self.game_score_list.clear()
         self.project_list.clear()
-        for entry in scan_game_scores(default_game_music_dir()):
-            self._add_home_entry(self.game_score_list, entry)
+        self._update_home_action_states()
         for entry in scan_example_projects(EXAMPLE_PROJECTS_DIR):
             self._add_home_entry(self.project_list, entry)
-        project_entries = scan_local_projects(AUTO_SAVE_DIR, limit=400)
+        recent_entries: list[HomeEntry] = []
         for raw in self.config.get("recent_items", []):
             if not isinstance(raw, dict):
                 continue
@@ -14533,32 +16334,127 @@ class MidiToBdoWindow(QMainWindow):
             except (OSError, TypeError, ValueError):
                 continue
             label = str(raw.get("label") or path.stem)
-            recent_entry = HomeEntry(kind, label, path, _home_timestamp(opened_at), opened_at)
-            project_entries.append(recent_entry)
-        for entry in merge_home_project_entries(project_entries):
-            self._add_home_entry(
-                self.project_list,
-                entry,
-            )
-        self.game_score_count.setText(str(self.game_score_list.count()))
+            recent_entries.append(HomeEntry(
+                kind,
+                label,
+                path,
+                _home_timestamp(opened_at),
+                opened_at,
+                project_id=normalize_project_id(raw.get("project_id")),
+            ))
+        self._home_recent_entries = recent_entries
+        self.home_scan_session = IncrementalHomeScan(
+            Path(self.game_music_dir_path),
+            AUTO_SAVE_DIR,
+            game_limit=80,
+            project_limit=400,
+        )
+        self.game_score_count.setText("0")
         self.project_count.setText(str(self.project_list.count()))
+        self._scan_home_batch(generation)
+
+    def _configured_character_name(self) -> str:
+        """Return a meaningful configured identity, excluding the legacy fallback."""
+
+        name = str(self.char_name or "").strip()
+        return "" if name.casefold() == "midi" else name
+
+    def _refresh_home_identity(self) -> None:
+        if not hasattr(self, "home_user_button"):
+            return
+        name = self._configured_character_name()
+        self.home_user_button.set_identity(name, self.owner_id)
+
+    def _show_startup_notice(self) -> None:
+        name = self._configured_character_name()
+        if not name and not self.owner_id:
+            self.show_toast(
+                tr("尚未设置用户名称和 Owner ID；请在设置中补充后再导出。"),
+                kind="warning",
+                duration_ms=5200,
+            )
+        elif not name:
+            self.show_toast(
+                tr("尚未设置用户名称；请在设置中补充。"),
+                kind="warning",
+                duration_ms=4400,
+            )
+        elif not self.owner_id:
+            self.show_toast(
+                tr("Owner ID 未设置；导出前需要从游戏曲谱读取。"),
+                kind="warning",
+                duration_ms=5000,
+            )
+        else:
+            self.show_toast(
+                tr("双击曲谱或项目即可打开；主页扫描不会读取曲谱中的身份信息。")
+            )
+
+    def _scan_home_batch(self, generation: int) -> None:
+        session = self.home_scan_session
+        if generation != self.home_scan_generation or session is None:
+            return
+        if not session.step(64):
+            QTimer.singleShot(0, lambda: self._scan_home_batch(generation))
+            return
+        game_entries, project_entries = session.results()
+        self.home_scan_session = None
+        for entry in game_entries:
+            self._add_home_entry(self.game_score_list, entry)
+        project_entries.extend(self._home_recent_entries)
+        for entry in merge_home_project_entries(project_entries):
+            self._add_home_entry(self.project_list, entry)
         if self.game_score_list.count() == 0:
             self.game_score_list.addItem(tr("未找到游戏曲谱"))
         if self.project_list.count() == 0:
             self.project_list.addItem(tr("暂无项目"))
+        self._apply_home_filter()
+        self._update_home_action_states()
+
+    def _apply_home_filter(self, *_args) -> None:
+        if not hasattr(self, "home_search"):
+            return
+        query = " ".join(self.home_search.text().casefold().split())
+        for target, count_label in (
+            (self.game_score_list, self.game_score_count),
+            (self.project_list, self.project_count),
+        ):
+            visible_count = 0
+            for index in range(target.count()):
+                item = target.item(index)
+                data = item.data(Qt.UserRole)
+                if not isinstance(data, dict):
+                    item.setHidden(bool(query))
+                    continue
+                searchable = f"{data.get('label', '')} {item.text()}".casefold()
+                visible = not query or query in searchable
+                item.setHidden(not visible)
+                visible_count += int(visible)
+            count_label.setText(str(visible_count))
+        self._update_home_action_states()
 
     def _show_home(self) -> None:
         self._stop_preview(reset_playhead=False)
         self._refresh_home()
-        self.page_stack.setCurrentWidget(self.home_page)
-        self._set_home_toolbar_mode(True)
+        self._switch_main_page(self.home_page, home=True)
         self.show_toast(
             tr("双击曲谱或项目即可打开；主页扫描不会读取曲谱中的身份信息。")
         )
 
     def _show_workspace(self) -> None:
-        self.page_stack.setCurrentWidget(self.workspace_page)
-        self._set_home_toolbar_mode(False)
+        self._switch_main_page(self.workspace_page, home=False)
+
+    def _switch_main_page(self, page: QWidget, *, home: bool) -> None:
+        """Commit page and toolbar visibility in one paint frame."""
+
+        self.setUpdatesEnabled(False)
+        try:
+            self._set_home_toolbar_mode(home)
+            self.page_stack.setCurrentWidget(page)
+        finally:
+            self.setUpdatesEnabled(True)
+        self._update_ensemble_metric()
+        self.update()
 
     def _reference_audio_changed(self, path: str) -> None:
         previous_path = self.reference_audio_path
@@ -14743,23 +16639,35 @@ class MidiToBdoWindow(QMainWindow):
 
     def _set_home_toolbar_mode(self, home: bool) -> None:
         for widget in (
-            self.toolbar_new_project_btn,
-            self.toolbar_import_btn,
-            self.toolbar_open_project_btn,
+            self.score_toolbar_group,
             self.toolbar_optimize_btn,
+            self.toolbar_master_effects_btn,
             self.workspace_toolbar_separator,
             self.file_label,
             self.output_name,
             self.preview_source_badge,
-            self.convert_button,
         ):
             widget.setVisible(not home)
+        self._sync_convert_button_enabled(home=home)
         self._apply_responsive_density()
+
+    def _sync_convert_button_enabled(self, *, home: bool | None = None) -> None:
+        if home is None:
+            home = self.page_stack.currentWidget() is self.home_page
+        self.convert_button.setEnabled(not home and self.worker is None)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if hasattr(self, "toolbar_home_btn"):
             self._apply_responsive_density()
+
+    def _apply_home_responsive_density(self) -> None:
+        if not hasattr(self, "home_sidebar"):
+            return
+        compact = self.width() < 1360
+        self.home_outer_layout.setContentsMargins(0, 0, 0, 0)
+        self.home_shell_layout.setSpacing(0)
+        self.home_sidebar.setFixedWidth(584 if compact else 620)
 
     @staticmethod
     def _set_responsive_icon_button(
@@ -14772,7 +16680,7 @@ class MidiToBdoWindow(QMainWindow):
         button.setToolTip(label)
         if compact:
             button.setText("")
-            button.setFixedWidth(34)
+            button.setFixedWidth(40)
         else:
             button.setMinimumWidth(0)
             button.setMaximumWidth(16777215)
@@ -14781,17 +16689,21 @@ class MidiToBdoWindow(QMainWindow):
     def _apply_responsive_density(self) -> None:
         """Keep both command rails usable at the supported narrow width."""
 
+        self._apply_home_responsive_density()
         compact = self.width() < MAIN_VERBOSE_CONTROLS_MIN_WIDTH
         for button, source in (
             (self.toolbar_home_btn, "主页"),
             (self.toolbar_new_project_btn, "新建项目"),
             (self.toolbar_import_btn, "导入 MIDI"),
-            (self.toolbar_open_project_btn, "打开工程"),
+            (self.toolbar_open_project_btn, "项目"),
             (self.toolbar_optimize_btn, "全局优化"),
+            (self.toolbar_master_effects_btn, "全局效果"),
             (self.toolbar_thanks_btn, "致谢"),
             (self.toolbar_settings_btn, "设置"),
         ):
             self._set_responsive_icon_button(button, source, compact)
+
+        self.output_name.setFixedWidth(148 if compact else 170)
 
         if not hasattr(self, "play_button"):
             return
@@ -14865,6 +16777,7 @@ class MidiToBdoWindow(QMainWindow):
             self.bdo_source_snapshot = None
             self.bdo_source_document = None
             self.midi_path = ""
+            self.project_id = new_project_id()
             self.autosave_project_dir = project_dir
             self.autosave_source_copy = None
             self.owner_id = 0
@@ -14878,6 +16791,7 @@ class MidiToBdoWindow(QMainWindow):
             self.vel_range = None
             self.vel_floor = None
             self.vel_step = None
+            self._reset_master_effects()
             instrument_id = gm_to_bdo_instrument(0, False)
             instrument_name = _ui_bdo_instrument_name(instrument_id)
             self.tracks = [
@@ -14932,9 +16846,147 @@ class MidiToBdoWindow(QMainWindow):
         return show_global_toast(self, text, kind=kind, duration_ms=duration_ms)
 
     def _open_game_music_directory(self) -> None:
-        directory = default_game_music_dir()
+        directory = Path(self.game_music_dir_path)
         directory.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
+
+    def _open_selected_home_item(self, target: QListWidget) -> None:
+        item = target.currentItem()
+        if item is None or not isinstance(item.data(Qt.UserRole), dict):
+            self.show_toast(tr("请先选择一个项目或曲谱"))
+            return
+        self._open_home_item(item)
+
+    def _show_project_context_menu(self, position) -> None:
+        item = self.project_list.itemAt(position)
+        if item is None:
+            return
+        data = item.data(Qt.UserRole)
+        if not isinstance(data, dict):
+            return
+        menu = QMenu(self.project_list)
+        menu.addAction(tr("打开工程"), lambda: self._open_home_item(item))
+        if str(data.get("kind") or "") == "project":
+            menu.addSeparator()
+            menu.addAction(tr("重命名项目"), lambda: self._rename_home_project(item))
+            menu.addAction(tr("移到回收站"), lambda: self._trash_home_project(item))
+        menu.exec(self.project_list.mapToGlobal(position))
+
+    def _rename_home_project(self, item: QListWidgetItem) -> None:
+        data = item.data(Qt.UserRole)
+        if not isinstance(data, dict):
+            return
+        project_path = Path(str(data.get("path") or ""))
+        if not project_path.is_file():
+            return
+        old_name = str(data.get("label") or project_path.parent.name)
+        new_name, accepted = QInputDialog.getText(
+            self,
+            tr("重命名项目"),
+            tr("项目名称"),
+            QLineEdit.Normal,
+            old_name,
+        )
+        new_name = new_name.strip()
+        if not accepted or not new_name or new_name == old_name:
+            return
+        try:
+            current_project = (
+                self.autosave_project_dir is not None
+                and self.autosave_project_dir.resolve() == project_path.parent.resolve()
+            )
+        except OSError:
+            current_project = False
+        if current_project and not self._wait_for_autosave_idle():
+            QMessageBox.warning(
+                self,
+                tr("重命名项目失败"),
+                tr("仍有项目写入正在进行，请稍后重试。"),
+            )
+            return
+        try:
+            project_id = rename_project(project_path, new_name)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                tr("重命名项目失败"),
+                trf("无法重命名项目：{error}", error=exc),
+            )
+            return
+        if current_project:
+            self.project_id = project_id
+            self.output_name.setText(new_name)
+        for recent in self.config.get("recent_items", []):
+            if not isinstance(recent, dict):
+                continue
+            try:
+                same_path = Path(str(recent.get("path") or "")).resolve() == project_path.resolve()
+            except OSError:
+                same_path = False
+            if same_path:
+                recent["label"] = new_name
+                recent["project_id"] = project_id
+        save_config(self.config)
+        self._refresh_home()
+        self.show_toast(tr("项目已重命名"), kind="success")
+
+    def _trash_home_project(self, item: QListWidgetItem) -> None:
+        data = item.data(Qt.UserRole)
+        if not isinstance(data, dict):
+            return
+        project_path = Path(str(data.get("path") or ""))
+        project_dir = project_path.parent
+        try:
+            project_dir.resolve().relative_to(AUTO_SAVE_DIR.resolve())
+        except (OSError, ValueError):
+            QMessageBox.warning(
+                self,
+                tr("无法删除项目"),
+                tr("只能把自动保存目录中的项目移到回收站。"),
+            )
+            return
+        try:
+            is_current = (
+                self.autosave_project_dir is not None
+                and self.autosave_project_dir.resolve() == project_dir.resolve()
+            )
+        except OSError:
+            is_current = False
+        if is_current:
+            QMessageBox.warning(
+                self,
+                tr("无法删除项目"),
+                tr("当前打开的项目不能删除；请先打开其他项目。"),
+            )
+            return
+        label = str(data.get("label") or project_dir.name)
+        answer = QMessageBox.question(
+            self,
+            tr("移到回收站"),
+            trf("要把项目“{project}”移到回收站吗？", project=label),
+        )
+        if answer != QMessageBox.Yes:
+            return
+        if not QFile.moveToTrash(str(project_dir)):
+            QMessageBox.warning(
+                self,
+                tr("无法删除项目"),
+                tr("系统未能把项目移到回收站。"),
+            )
+            return
+        kept_recents = []
+        for recent in self.config.get("recent_items", []):
+            if not isinstance(recent, dict):
+                continue
+            try:
+                recent_path = Path(str(recent.get("path") or "")).resolve()
+                recent_path.relative_to(project_dir.resolve())
+            except (OSError, ValueError):
+                kept_recents.append(recent)
+        self.config["recent_items"] = kept_recents
+        save_config(self.config)
+        self._refresh_home()
+        self.show_toast(tr("项目已移到回收站"), kind="success")
 
     def _open_home_item(self, item: QListWidgetItem) -> None:
         data = item.data(Qt.UserRole)
@@ -14958,46 +17010,15 @@ class MidiToBdoWindow(QMainWindow):
             item for item in self.config.get("recent_items", [])
             if isinstance(item, dict) and str(item.get("path") or "").casefold() != normalized.casefold()
         ]
-        recent.insert(0, {"kind": kind, "path": normalized, "label": label, "opened_at": time.time()})
+        recent.insert(0, {
+            "kind": kind,
+            "path": normalized,
+            "label": label,
+            "opened_at": time.time(),
+            "project_id": self.project_id if kind == "project" else "",
+        })
         self.config["recent_items"] = recent[:12]
         save_config(self.config)
-
-    def _build_tracks_panel(self) -> QWidget:
-        panel = QFrame()
-        panel.setObjectName("Panel")
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(7)
-
-        header = QHBoxLayout()
-        title = QLabel(tr("轨道"))
-        title.setObjectName("PanelTitle")
-        self.track_summary = QLabel(tr("导入 MIDI 后显示轨道"))
-        self.track_summary.setObjectName("Muted")
-        clear_solo = PillButton(tr("清除 Solo"), "ghost")
-        clear_solo.clicked.connect(self._clear_solo)
-        unmute = PillButton(tr("取消静音"), "ghost")
-        unmute.clicked.connect(self._unmute_all)
-        header.addWidget(title)
-        header.addWidget(self.track_summary, stretch=1)
-        header.addWidget(clear_solo)
-        header.addWidget(unmute)
-        layout.addLayout(header)
-
-        self.track_container = QWidget()
-        self.track_container.setObjectName("TrackContainer")
-        self.track_layout = QVBoxLayout(self.track_container)
-        self.track_layout.setContentsMargins(0, 0, 0, 0)
-        self.track_layout.setSpacing(6)
-        self.track_layout.addStretch(1)
-
-        scroll = QScrollArea()
-        scroll.setObjectName("TrackScroll")
-        scroll.viewport().setObjectName("TrackViewport")
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self.track_container)
-        layout.addWidget(scroll, stretch=1)
-        return panel
 
     def _build_timeline_panel(self) -> QWidget:
         workspace = QWidget()
@@ -15009,8 +17030,8 @@ class MidiToBdoWindow(QMainWindow):
         controls = QFrame()
         controls.setObjectName("TimelineControlBar")
         header = QHBoxLayout(controls)
-        header.setContentsMargins(10, 4, 10, 4)
-        header.setSpacing(5)
+        header.setContentsMargins(12, 6, 12, 6)
+        header.setSpacing(8)
         self.timeline_meta = ElidedLabel(
             tr("等待 MIDI"), maximum_hint_width=170
         )
@@ -15040,8 +17061,8 @@ class MidiToBdoWindow(QMainWindow):
         transport_group = QFrame()
         transport_group.setObjectName("TransportGroup")
         transport_layout = QHBoxLayout(transport_group)
-        transport_layout.setContentsMargins(1, 1, 1, 1)
-        transport_layout.setSpacing(1)
+        transport_layout.setContentsMargins(2, 2, 2, 2)
+        transport_layout.setSpacing(4)
         self.play_button = PillButton(tr("播放"), "secondary", FluentSymbol.PLAY)
         self.play_button.clicked.connect(self._play_preview)
         self.pause_button = PillButton(tr("暂停"), "secondary", FluentSymbol.PAUSE)
@@ -15109,6 +17130,9 @@ class MidiToBdoWindow(QMainWindow):
         self.timeline.track_state_changed.connect(self._on_track_filter_changed)
         self.timeline.instrument_changed.connect(self._on_track_instrument_changed)
         self.timeline.selected.connect(self._select_track)
+        self.timeline.validation_requested.connect(
+            self._open_track_conversion_check
+        )
         self.timeline.effects_requested.connect(self._show_effects_placeholder)
         self.timeline.midi_tools_requested.connect(self._open_midi_tool)
         self.timeline.note_editor_requested.connect(self._open_note_editor)
@@ -15136,16 +17160,23 @@ class MidiToBdoWindow(QMainWindow):
 
         strip = QFrame()
         strip.setObjectName("PerformanceStrip")
-        strip.setFixedHeight(25)
+        strip.setFixedHeight(30)
         layout = QHBoxLayout(strip)
-        layout.setContentsMargins(10, 0, 10, 0)
-        layout.setSpacing(14)
+        layout.setContentsMargins(12, 2, 12, 2)
+        layout.setSpacing(18)
         caption = QLabel(tr("本程序"))
         caption.setObjectName("PerformanceCaption")
         self.process_cpu_label = QLabel("CPU --")
         self.process_cpu_label.setObjectName("PerformanceMetric")
         self.process_ram_label = QLabel("RAM --")
         self.process_ram_label.setObjectName("PerformanceMetric")
+        self.ensemble_metric_label = QLabel(trf(
+            "乐器 {count} · {players}/{limit} 人",
+            count=0,
+            players=0,
+            limit=BDO_ENSEMBLE_PLAYER_LIMIT,
+        ))
+        self.ensemble_metric_label.setObjectName("EnsembleMetric")
         self.audio_load_label = QLabel(tr("音频 --"))
         self.audio_load_label.setObjectName("PerformanceMetric")
         self.active_voice_label = QLabel(tr("声部 --"))
@@ -15162,6 +17193,7 @@ class MidiToBdoWindow(QMainWindow):
         layout.addWidget(caption)
         layout.addWidget(self.process_cpu_label)
         layout.addWidget(self.process_ram_label)
+        layout.addWidget(self.ensemble_metric_label)
         layout.addStretch(1)
         layout.addWidget(self.audio_load_label)
         layout.addWidget(self.active_voice_label)
@@ -15189,6 +17221,85 @@ class MidiToBdoWindow(QMainWindow):
             trf("音频 {load:.0f}% · XRUN {count}", load=audio_load * 100.0, count=underruns)
         )
         self.active_voice_label.setText(trf("声部 {count}", count=active_voices))
+        self._update_ensemble_metric()
+
+    def _active_ensemble_instrument_ids(self) -> tuple[int, ...]:
+        return unique_performance_instrument_ids(
+            serialized_bdo_instrument_id(track)
+            for track in selected_tracks(self.tracks)
+            if track.notes
+        )
+
+    def _update_ensemble_metric(self) -> None:
+        instrument_count = len(self._active_ensemble_instrument_ids())
+        self._update_toolbar_ensemble_badge(instrument_count)
+        if not hasattr(self, "ensemble_metric_label"):
+            return
+        over_limit = instrument_count > BDO_ENSEMBLE_PLAYER_LIMIT
+        if over_limit:
+            text = trf(
+                "乐器 {count} · 超过 {limit} 人",
+                count=instrument_count,
+                limit=BDO_ENSEMBLE_PLAYER_LIMIT,
+            )
+        else:
+            text = trf(
+                "乐器 {count} · {players}/{limit} 人",
+                count=instrument_count,
+                players=instrument_count,
+                limit=BDO_ENSEMBLE_PLAYER_LIMIT,
+            )
+        self.ensemble_metric_label.setText(text)
+        state = "over" if over_limit else "ok"
+        if self.ensemble_metric_label.property("ensembleState") != state:
+            self.ensemble_metric_label.setProperty("ensembleState", state)
+            style = self.ensemble_metric_label.style()
+            style.unpolish(self.ensemble_metric_label)
+            style.polish(self.ensemble_metric_label)
+        self.ensemble_metric_label.setToolTip(tr(
+            "按当前参与演奏且含音符的轨道统计；同一实体乐器只计一次"
+        ))
+
+    def _update_toolbar_ensemble_badge(
+        self,
+        workspace_player_count: int | None = None,
+    ) -> None:
+        if not hasattr(self, "ensemble_capacity_badge"):
+            return
+        on_home = (
+            hasattr(self, "page_stack")
+            and hasattr(self, "home_page")
+            and self.page_stack.currentWidget() is self.home_page
+        )
+        if on_home and hasattr(self, "home_library_stack"):
+            target = (
+                self.game_score_list
+                if self.home_library_stack.currentIndex() == 1
+                else self.project_list
+            )
+            item = target.currentItem()
+            data = item.data(Qt.UserRole) if item is not None else None
+            if isinstance(data, dict):
+                try:
+                    player_count = max(
+                        0,
+                        int(data.get("required_players", 0)),
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    player_count = 0
+                self.ensemble_capacity_badge.set_player_count(
+                    player_count,
+                    item.toolTip() if item is not None else "",
+                )
+                return
+            self.ensemble_capacity_badge.set_player_count(0)
+            return
+        player_count = (
+            len(self._active_ensemble_instrument_ids())
+            if workspace_player_count is None
+            else max(0, int(workspace_player_count))
+        )
+        self.ensemble_capacity_badge.set_player_count(player_count)
 
     def _open_transcription_mode(self) -> None:
         melodic_tracks = [
@@ -18178,11 +20289,17 @@ class MidiToBdoWindow(QMainWindow):
             tuple(tracks_by_id[track_id].notes) != notes
             for track_id, notes in final_notes_by_id.items()
         )
+        legacy_articulation_changed = (
+            current_track.articulation_type is not None
+        )
         sidecar_changed = (
             final_pending != old_pending or final_applied != old_applied
         )
         project_changed = (
-            notes_changed or sidecar_changed or bool(created_track_ids)
+            notes_changed
+            or legacy_articulation_changed
+            or sidecar_changed
+            or bool(created_track_ids)
         )
 
         if project_changed:
@@ -18190,6 +20307,11 @@ class MidiToBdoWindow(QMainWindow):
             self._stop_preview(reset_playhead=False)
             for track_id in sorted(created_track_ids):
                 self.tracks.append(new_tracks_by_id[track_id])
+            # Old projects could store one whole-track technique which would
+            # otherwise override every per-note edit during export.  The note
+            # editor materializes that value into its draft; committing the
+            # draft therefore completes the migration to per-note ntypes.
+            current_track.articulation_type = None
             for track_id, notes in final_notes_by_id.items():
                 track = tracks_by_id[track_id]
                 if tuple(track.notes) == notes:
@@ -18266,16 +20388,22 @@ class MidiToBdoWindow(QMainWindow):
         style_sheet = """
             QWidget#Root { background: #151515; color: #f3f1ea; }
             QDialog QLabel { color: #ddd7cf; }
-            QDialog#SettingsDialog {
+            QDialog#SettingsDialog, QDialog#MasterEffectsDialog,
+            QDialog#ThanksDialog, QDialog#MidiNoteEditorDialog {
                 background: #151515;
                 color: #f3f1ea;
             }
-            QFrame#SettingsHeader {
+            QFrame[uiRole="dialogHeader"] {
                 background: #191919;
                 border: 0;
                 border-bottom: 1px solid #4a3b27;
+                border-radius: 0;
             }
             QWidget#SettingsContent {
+                background: #151515;
+                border: 0;
+            }
+            QWidget#MasterEffectsContent {
                 background: #151515;
                 border: 0;
             }
@@ -18294,7 +20422,6 @@ class MidiToBdoWindow(QMainWindow):
                 background: #181818;
                 color: #aaa39a;
                 border: 0;
-                border-right: 1px solid #302f2d;
                 min-height: 52px;
                 padding: 0 18px;
                 font-weight: 700;
@@ -18307,7 +20434,6 @@ class MidiToBdoWindow(QMainWindow):
                 background: #25211b;
                 color: #f0c66f;
                 border-left: 3px solid #f5a524;
-                border-right: 1px solid #4a3b27;
             }
             QWidget#SettingsGeneralPage, QWidget#SettingsMidiPage,
             QWidget#SettingsAudioPage {
@@ -18324,17 +20450,34 @@ class MidiToBdoWindow(QMainWindow):
                 background: #151515;
             }
             QDialog#SettingsDialog QLabel { color: #ddd7cf; }
-            QLabel#SettingsTitle {
+            QLabel[uiRole="dialogTitle"] {
                 color: #f3f1ea;
-                font-size: 24px;
+                font-size: 22px;
                 font-weight: 900;
             }
-            QFrame#SettingsSection {
-                background: #1e1e1e;
-                border: 1px solid #353332;
-                border-radius: 7px;
+            QLabel[uiRole="dialogSubtitle"] {
+                color: #aaa39a;
+                font-size: 11px;
             }
-            QLabel#SettingsSectionTitle {
+            QFrame#SettingsSection {
+                background: transparent;
+                border: 0;
+                border-bottom: 1px solid #302f2d;
+                border-radius: 0;
+            }
+            QFrame#EffectScopeNotice {
+                background: #211e19;
+                border: 1px solid #5a4528;
+                border-radius: 0;
+            }
+            QLabel#EffectScopeTitle {
+                color: #f0c66f;
+                font-weight: 800;
+            }
+            QLabel#EffectPreviewNote {
+                color: #b9a078;
+            }
+            QLabel[uiRole="sectionTitle"] {
                 color: #f0c66f;
                 font-size: 14px;
                 font-weight: 900;
@@ -18344,11 +20487,13 @@ class MidiToBdoWindow(QMainWindow):
             QLabel#OwnerStatus[ownerError="true"] { color: #e06c62; }
             QFrame#SettingsModeRow {
                 background: #1a1a1a;
-                border: 1px solid #34322f;
-                border-radius: 6px;
+                border: 0;
+                border-left: 2px solid #5a4528;
+                border-radius: 0;
                 padding: 7px 9px;
             }
-            QDialog#SettingsDialog QSpinBox {
+            QDialog#SettingsDialog QSpinBox,
+            QDialog#MasterEffectsDialog QSpinBox {
                 min-height: 27px;
                 padding: 2px 7px;
             }
@@ -18364,38 +20509,142 @@ class MidiToBdoWindow(QMainWindow):
                 background: #f5a524;
                 border: 3px solid #f5a524;
             }
-            QDialog#SettingsDialog QDialogButtonBox {
+            QFrame[uiRole="dialogFooter"],
+            QDialog#MasterEffectsDialog QDialogButtonBox {
                 background: #1b1b1b;
                 border: 0;
                 border-top: 1px solid #34322f;
-                padding: 12px 18px;
             }
-            QDialog#ThanksDialog { background: #151515; color: #f3f1ea; }
+            QDialogButtonBox[uiRole="dialogButtonRow"] {
+                background: transparent;
+                border: 0;
+                padding: 0;
+            }
             QFrame#Panel {
                 background: #222222;
                 border: 1px solid #343434;
                 border-radius: 4px;
             }
             QStackedWidget#MainPages, QWidget#WorkspacePage, QWidget#HomePage {
-                background: #151515;
+                background: #1c1c1e;
                 border: 0;
             }
-            QFrame#HomeHero {
-                background: #191919;
+            QFrame#HomeShell, QStackedWidget#HomeLibraryStack {
+                background: transparent;
                 border: 0;
-                border-bottom: 1px solid #4a3b27;
+            }
+            QFrame#HomeOverlay {
+                background: transparent;
+                border: 0;
                 border-radius: 0;
             }
+            QLabel#HomeBrand {
+                color: #ece5d8;
+                font-size: 11px;
+                font-weight: 700;
+                letter-spacing: 2px;
+            }
+            QPushButton#HomeUserButton {
+                background: transparent;
+                border: 0;
+                border-radius: 6px;
+                padding: 0;
+            }
+            QPushButton#HomeNavButton {
+                min-height: 34px;
+                background: transparent;
+                border: 0;
+                border-bottom: 1px solid transparent;
+                border-radius: 0;
+                color: #9b978f;
+                padding: 0 8px;
+                font-weight: 700;
+            }
+            QPushButton#HomeNavButton:hover {
+                color: #e8e1d6;
+                background: rgba(28, 30, 29, 52);
+            }
+            QPushButton#HomeNavButton:checked {
+                color: #e8dfcf;
+                background: transparent;
+                border-bottom-color: #9f7939;
+            }
+            QPushButton#HomeNavButton:focus {
+                color: #eee6d9;
+            }
+            QLabel#HomeLocalBadge {
+                color: #77746e;
+                background: transparent;
+                border: 0;
+                border-radius: 0;
+                padding: 2px 0 0 0;
+                font-size: 10px;
+            }
+            QWidget#HomeHero {
+                background: transparent;
+                border: 0;
+            }
             QLabel#HomeEyebrow {
-                color: #c28b38;
-                font-size: 9px;
-                font-weight: 900;
+                color: #e3b653;
+                font-size: 10px;
+                font-weight: 800;
                 letter-spacing: 2px;
             }
             QLabel#HomeTitle {
-                color: #f3f1ea;
+                color: #eee7db;
                 font-size: 24px;
                 font-weight: 900;
+            }
+            QLabel#HomeSubtitle {
+                color: #9b958b;
+                font-size: 12px;
+            }
+            QFrame#HomeCommandDeck {
+                background: transparent;
+                border: 0;
+            }
+            QPushButton#HomeQuickAction {
+                min-height: 42px;
+                background: rgba(15, 17, 18, 42);
+                border: 0;
+                border-radius: 0;
+                color: #b9b4ac;
+                padding: 4px 9px;
+                font-weight: 700;
+            }
+            QPushButton#HomeQuickAction:hover {
+                background: rgba(58, 53, 43, 112);
+                color: #eee7da;
+            }
+            QPushButton#HomeQuickAction[actionTone="accent"] {
+                background: rgba(102, 76, 36, 148);
+                border: 0;
+                color: #f0e7d5;
+            }
+            QPushButton#HomeQuickAction[actionTone="accent"]:hover {
+                background: rgba(118, 88, 40, 184);
+            }
+            QFrame#HomeLibraryBar {
+                background: transparent;
+                border: 0;
+            }
+            QLineEdit#HomeSearch {
+                min-height: 34px;
+                background: rgba(9, 11, 12, 58);
+                border: 0;
+                border-radius: 0;
+                color: #dfd7ca;
+                padding: 0 8px;
+                selection-background-color: #665129;
+            }
+            QLineEdit#HomeSearch:focus {
+                background: rgba(22, 22, 20, 118);
+            }
+            QFrame#HomeLibraryBar QPushButton[homeAction="true"] {
+                min-height: 34px;
+                background: transparent;
+                border: 0;
+                padding: 0 7px;
             }
             QFrame#HomeCard {
                 background: transparent;
@@ -18406,53 +20655,87 @@ class MidiToBdoWindow(QMainWindow):
                 background: transparent;
                 border: 0;
             }
-            QWidget#HomeSideColumn {
-                border: 0;
-                border-left: 1px solid #383532;
-            }
             QLabel#HomeCardTitle {
-                color: #eee9e1;
-                font-size: 16px;
+                color: #ded5c6;
+                font-size: 13px;
                 font-weight: 900;
             }
             QFrame#HomeCard[density="primary"] QLabel#HomeCardTitle {
-                color: #f0c66f;
+                color: #c8b686;
+            }
+            QLabel#HomeCardSubtitle {
+                color: #a89f8e;
+                font-size: 10px;
             }
             QLabel#HomeCount {
                 min-width: 16px;
-                color: #9f978d;
+                color: #a89872;
                 background: transparent;
                 border: 0;
                 border-radius: 0;
+                padding: 0 2px;
                 font-size: 10px;
                 font-weight: 700;
+            }
+            QFrame#HomeCard QPushButton[homeAction="true"] {
+                min-height: 28px;
+                background: transparent;
+                border: 0;
+                color: #9f9685;
+                padding: 0 5px;
+            }
+            QFrame#HomeCard QPushButton[homeAction="true"]:hover {
+                color: #ddd3c1;
+                background: rgba(35, 36, 32, 54);
             }
             QListWidget#HomeList {
                 background: transparent;
                 border: 0;
-                border-radius: 7px;
-                padding: 2px 0;
+                border-radius: 0;
+                padding: 0;
                 outline: 0;
             }
-            QListWidget#HomeList::item {
-                color: #ddd7cf;
-                background: transparent;
+            QListWidget#HomeList:focus {
                 border: 0;
-                border-bottom: 1px solid #2b2a28;
+                padding: 0;
+            }
+            QListWidget#HomeList::item {
+                color: #ddd8cf;
+                background: rgba(16, 18, 19, 38);
+                border: 0;
+                border-bottom: 1px solid rgba(152, 139, 111, 26);
                 border-radius: 0;
-                padding: 8px 10px;
+                padding: 0;
             }
             QListWidget#HomeList::item:hover {
-                background: #242321;
+                background: rgba(49, 48, 42, 72);
             }
             QListWidget#HomeList::item:selected {
-                background: #382a18;
+                background: rgba(108, 87, 45, 34);
                 border: 0;
-                border-bottom: 1px solid #51402b;
-                color: #fff1d1;
+                border-left: 2px solid #9f7939;
+                color: #f1e9dc;
+            }
+            QComboBox#QuantizeGridCombo {
+                background: #1c1c1e;
+                border: 1px solid #735b2d;
+                color: #ffedd4;
+                padding: 3px 8px;
+            }
+            QComboBox#QuantizeGridCombo:hover,
+            QComboBox#QuantizeGridCombo:focus {
+                border-color: #83a543;
+            }
+            QFrame#EditorQuantizeQuick {
+                background: transparent;
+                border: 0;
+            }
+            QLabel#QuantizeQuickLabel {
+                color: #e4c17c;
+                font-weight: 800;
             }
             QWidget#HomePage QPushButton[homeAction="true"] {
-                border-radius: 2px;
+                border-radius: 0;
             }
             QListWidget#HomeList QScrollBar:vertical {
                 width: 8px;
@@ -18461,17 +20744,17 @@ class MidiToBdoWindow(QMainWindow):
             }
             QListWidget#HomeList QScrollBar::handle:vertical {
                 min-height: 28px;
-                background: #504a43;
-                border-radius: 4px;
+                background: #6b665b;
+                border-radius: 0;
             }
             QListWidget#HomeList QScrollBar::add-line:vertical,
             QListWidget#HomeList QScrollBar::sub-line:vertical {
                 height: 0;
             }
             QFrame#Toolbar {
-                background: #202020;
+                background: #191919;
                 border: 0;
-                border-bottom: 1px solid #393735;
+                border-bottom: 1px solid #5a4727;
                 border-radius: 0;
             }
             QFrame#Toolbar QFrame#CommandGroup {
@@ -18479,15 +20762,67 @@ class MidiToBdoWindow(QMainWindow):
                 border: 0;
                 border-radius: 0;
             }
+            QFrame#Toolbar QFrame#ToolbarCommandCluster {
+                background: transparent;
+                border: 0;
+            }
             QFrame#Toolbar QPushButton, QFrame#Toolbar QLineEdit {
-                border-radius: 2px;
-                min-height: 24px;
-                padding: 3px 8px;
+                border-radius: 0;
+                min-height: 29px;
+                padding: 3px 10px;
+            }
+            QFrame#Toolbar QPushButton[kind="secondary"],
+            QFrame#Toolbar QPushButton[kind="primary"] {
+                background: transparent;
+                border: 0;
+                border-bottom: 2px solid transparent;
+                color: #c9c1b5;
+            }
+            QFrame#Toolbar QPushButton[kind="secondary"]:hover,
+            QFrame#Toolbar QPushButton[kind="primary"]:hover {
+                background: #292722;
+                border-bottom-color: #806533;
+                color: #fff0cf;
+            }
+            QFrame#Toolbar QPushButton[kind="primary"] {
+                color: #e8c373;
+            }
+            QFrame#Toolbar QLineEdit {
+                background: transparent;
+                border: 0;
+                border-bottom: 1px solid #5d513c;
+                color: #f1e7d6;
+            }
+            QFrame#Toolbar QLineEdit:focus {
+                border-bottom-color: #d6a743;
+            }
+            QFrame#Toolbar QPushButton[kind="convert"]:disabled {
+                background: #292722;
+                border-color: #3e392f;
+                color: #716a5e;
+            }
+            QFrame#Toolbar QLabel#ToolbarText {
+                padding: 0 6px;
+                color: #bdb4a7;
+            }
+            QFrame#Toolbar QPushButton#ToolbarBadge {
+                background: transparent;
+                border: 0;
+                border-radius: 0;
+                padding: 5px 6px;
+                color: #d8c7a7;
+            }
+            QFrame#Toolbar QPushButton#ToolbarBadge:hover,
+            QFrame#Toolbar QPushButton#ToolbarBadge:focus {
+                background: #26231e;
+                color: #f0d99e;
             }
             QFrame#ToolbarSeparator {
-                color: #46423d;
+                color: #4d4539;
+                background: #4d4539;
+                min-width: 1px;
                 max-width: 1px;
-                margin: 3px 2px;
+                margin: 7px 3px;
             }
             QFrame#Inspector {
                 background: #202020;
@@ -18496,31 +20831,31 @@ class MidiToBdoWindow(QMainWindow):
                 border-radius: 0;
             }
             QWidget#TimelineWorkspace, QWidget#TimelineCanvas {
-                background: #151515;
+                background: #1c1c1e;
                 border: 0;
             }
             QFrame#TimelineControlBar {
-                background: #1d1d1d;
+                background: #2c2c30;
                 border: 0;
-                border-bottom: 1px solid #353332;
+                border-bottom: 1px solid #735b2d;
                 border-radius: 0;
             }
             QFrame#TimelineControlBar QPushButton {
-                min-height: 24px;
-                padding: 3px 8px;
+                min-height: 25px;
+                padding: 2px 9px;
             }
             QLabel#TimelineMeta {
-                color: #9f9991;
+                color: #c9b798;
                 padding: 0 5px;
             }
             QLabel#TimelineControlLabel {
-                color: #77716a;
+                color: #a78e6a;
                 font-size: 10px;
             }
             QFrame#PerformanceStrip {
-                background: #191919;
+                background: #1c1c1e;
                 border: 0;
-                border-top: 1px solid #302e2b;
+                border-top: 1px solid #40351f;
                 border-radius: 0;
             }
             QLabel#PerformanceCaption {
@@ -18529,9 +20864,17 @@ class MidiToBdoWindow(QMainWindow):
                 font-weight: 700;
             }
             QLabel#PerformanceMetric {
-                color: #b8b0a6;
+                color: #c9b798;
                 font-size: 10px;
                 font-family: Consolas, monospace;
+            }
+            QLabel#EnsembleMetric {
+                color: #a9c477;
+                font-size: 10px;
+                font-weight: 800;
+            }
+            QLabel#EnsembleMetric[ensembleState="over"] {
+                color: #ef8178;
             }
             QFrame#TimelineSeparator {
                 color: #413d38;
@@ -18565,71 +20908,72 @@ class MidiToBdoWindow(QMainWindow):
                 border-radius: 3px;
             }
             QFrame#EditorToolbar {
-                background: #1d1d1b;
-                border: 1px solid #3b3730;
-                border-bottom: 2px solid #57401e;
-                border-radius: 7px;
+                background: #191919;
+                border: 0;
+                border-bottom: 1px solid #4a3b27;
+                border-radius: 0;
             }
             QFrame#EditorToolbar QPushButton {
                 min-height: 22px;
                 padding: 3px 8px;
             }
             QLabel#EditorTrackTitle {
-                color: #f5f1e9;
+                color: #ffedd4;
                 font-size: 15px;
                 font-weight: 900;
             }
             QLabel#EditorTrackMeta {
-                color: #8faaa0;
+                color: #b8a487;
                 font-size: 10px;
                 font-family: Consolas, "Microsoft YaHei UI";
             }
             QFrame#EditorTransport {
-                background: #171817;
-                border: 1px solid #343833;
-                border-radius: 7px;
+                background: #202022;
+                border: 0;
+                border-radius: 0;
             }
             QFrame#EditorWorkspace {
-                background: #1a1b1e;
-                border: 1px solid #3d3e42;
-                border-radius: 6px;
+                background: #1c1c1e;
+                border: 0;
+                border-radius: 0;
             }
             QFrame#VelocityHeader {
-                background: #202020;
+                background: #242427;
                 border: 0;
-                border-top: 1px solid #353332;
+                border-top: 1px solid #735b2d;
                 border-radius: 0;
                 min-height: 32px;
                 max-height: 32px;
             }
             QFrame#NoteInspectorTop {
-                background: #202020;
-                border: 1px solid #3d3932;
-                border-radius: 5px;
+                background: #1c1c1e;
+                border: 0;
+                border-bottom: 1px solid #34322f;
+                border-radius: 0;
             }
             QPushButton#InspectorMode:checked {
-                background: #6f4b17;
-                border-color: #dda03a;
-                color: #fff2d2;
+                background: #5c4a28;
+                border-color: #caa24f;
+                color: #ffedd4;
                 font-weight: 800;
             }
             QPushButton#DrawMode:checked {
-                background: #245943;
-                border-color: #62b98b;
-                color: #e6fff0;
+                background: #435c31;
+                border-color: #83a543;
+                color: #f1f4df;
                 font-weight: 800;
             }
             QPushButton#VelocityToggle:checked {
-                background: #284c49;
-                border-color: #63c7bd;
-                color: #e3fffb;
+                background: #435c31;
+                border-color: #83a543;
+                color: #f1f4df;
                 font-weight: 800;
             }
             QLabel#InspectorSelection {
-                background: #191919;
-                border: 1px solid #383531;
-                border-radius: 4px;
-                color: #d9d3ca;
+                background: transparent;
+                border: 0;
+                border-radius: 0;
+                color: #e1d4c1;
                 padding: 3px 6px;
             }
             QFrame#NoteInspectorTop QLineEdit,
@@ -18638,23 +20982,41 @@ class MidiToBdoWindow(QMainWindow):
                 padding: 3px 6px;
             }
             QComboBox#ArticulationCombo {
-                border-color: #9b7533;
-                color: #f0d39b;
+                border-color: #625337;
+                color: #cbbd9f;
                 font-weight: 700;
+                min-height: 19px;
+                max-height: 19px;
+            }
+            QPushButton#ArticulationPreview {
+                background: #262628;
+                border: 1px solid #4b4437;
+                border-radius: 0;
+                min-height: 26px;
+                max-height: 26px;
+                padding: 0;
+            }
+            QPushButton#ArticulationPreview:hover {
+                background: #34312b;
+                border-color: #8d7548;
+            }
+            QPushButton#ArticulationPreview:disabled {
+                background: #202022;
+                border-color: #373532;
             }
             QPushButton#ArticulationChip {
-                background: #28251f;
-                border: 1px solid #575044;
-                border-radius: 4px;
-                color: #d8d1c5;
-                min-height: 23px;
+                background: #2c2c30;
+                border: 1px solid #4b4437;
+                border-radius: 0;
+                color: #e1d4c1;
+                min-height: 24px;
                 padding: 1px 6px;
             }
-            QPushButton#ArticulationChip:hover { border-color: #b88939; color: #f3dfb4; }
+            QPushButton#ArticulationChip:hover { border-color: #8d7548; color: #d8cab0; }
             QPushButton#ArticulationChip:checked {
-                background: #78541c;
-                border-color: #e0a339;
-                color: #fff4db;
+                background: #463c29;
+                border-color: #917744;
+                color: #ddd2bd;
                 font-weight: 800;
             }
             QLabel#EditorTime {
@@ -18662,10 +21024,17 @@ class MidiToBdoWindow(QMainWindow):
                 font-family: Consolas, "Microsoft YaHei UI";
             }
             QFrame#EditorFooter {
-                background: #202020;
-                border: 1px solid #353332;
-                border-radius: 5px;
+                background: #191919;
+                border: 0;
+                border-top: 1px solid #34322f;
+                border-radius: 0;
                 max-height: 31px;
+            }
+            QWidget#EditorToolbarInset,
+            QWidget#EditorInspectorInset,
+            QWidget#EditorFooterInset {
+                background: #151515;
+                border: 0;
             }
             QDialog#MidiNoteEditorDialog QFrame#EditorToolbar,
             QDialog#MidiNoteEditorDialog QFrame#EditorTransport,
@@ -18720,45 +21089,24 @@ class MidiToBdoWindow(QMainWindow):
             }
             QLabel#ToolbarText { color: #c7c0b8; }
             QLabel#Muted { color: #a8a29e; }
-            QLabel#ThanksTitle {
-                color: #f3f1ea;
-                font-size: 23px;
-                font-weight: 900;
-            }
-            QLabel#ThanksSubtitle {
-                color: #aaa39a;
-                font-size: 12px;
-                line-height: 140%;
-            }
             QFrame#ThanksTextPanel {
-                background: #1e1e1e;
-                border: 1px solid #353332;
-                border-radius: 7px;
-            }
-            QFrame#ThanksHeader {
-                background: #191919;
+                background: #151515;
                 border: 0;
-                border-bottom: 1px solid #4a3b27;
                 border-radius: 0;
-            }
-            QLabel#ThanksSectionLabel {
-                color: #f0c66f;
-                font-size: 14px;
-                font-weight: 900;
             }
             QLabel#ThanksMutedNote {
                 color: #aaa39a;
                 font-size: 11px;
                 line-height: 135%;
             }
-            QTextEdit#ThanksText {
-                background: #181818;
-                border: 1px solid #34322f;
-                border-radius: 5px;
+            QTextEdit#ThanksText, QTextBrowser#ThanksText {
+                background: #151515;
+                border: 0;
+                border-radius: 0;
                 color: #d8d3cc;
-                padding: 16px 18px;
+                padding: 0;
             }
-            QLabel#ToolbarBadge {
+            QLabel#ToolbarBadge, QPushButton#ToolbarBadge {
                 background: #1f1f1f;
                 border: 1px solid #313131;
                 border-radius: 3px;
@@ -18771,18 +21119,6 @@ class MidiToBdoWindow(QMainWindow):
                 border-radius: 4px;
                 color: #f3f1ea;
                 padding: 8px 10px;
-                font-weight: 800;
-            }
-            QWidget#TrackCard {
-                background: #262626;
-                border: 1px solid #363636;
-                border-radius: 3px;
-            }
-            QWidget#TrackContainer, QWidget#TrackViewport {
-                background: #1a1a1a;
-            }
-            QLabel#TrackTitle {
-                color: #f3f1ea;
                 font-weight: 800;
             }
             QLineEdit, QComboBox, QTextEdit {
@@ -18839,6 +21175,23 @@ class MidiToBdoWindow(QMainWindow):
                 background: transparent;
                 border-color: #3a3a3a;
                 color: #c9c2ba;
+            }
+            QDialog#SettingsDialog QLineEdit,
+            QDialog#SettingsDialog QComboBox,
+            QDialog#SettingsDialog QSpinBox,
+            QDialog#SettingsDialog QPushButton,
+            QDialog#ThanksDialog QPushButton,
+            QDialog#ThanksDialog QTextEdit,
+            QDialog#ThanksDialog QTextBrowser {
+                border-radius: 0;
+            }
+            QDialog#MidiNoteEditorDialog QPushButton[kind="ghost"] {
+                background: transparent;
+                border-color: transparent;
+            }
+            QDialog#MidiNoteEditorDialog QPushButton[kind="ghost"]:hover {
+                background: #282725;
+                border-color: #4a443a;
             }
             QPushButton:disabled {
                 color: #8d8780;
@@ -18996,6 +21349,10 @@ class MidiToBdoWindow(QMainWindow):
         self.output_name.setText(path.stem)
         if not self._load_midi_info(str(path)):
             return
+        # A raw MIDI has no BDO master-effect layer. Starting from neutral
+        # values prevents the previously open score from leaking into it.
+        self._reset_master_effects()
+        self.project_id = new_project_id()
         self._autosave_project("import midi", immediate=True)
         self._mark_conversion_check_dirty()
         self._record_recent("midi", path, path.stem)
@@ -19023,6 +21380,7 @@ class MidiToBdoWindow(QMainWindow):
         self.reference_audio_relink_required = False
         if not self._load_bdo_info(path):
             return
+        self.project_id = new_project_id()
         self.autosave_project_dir = None
         self.autosave_source_copy = None
         self.file_label.setProperty("i18nSkip", True)
@@ -19075,9 +21433,7 @@ class MidiToBdoWindow(QMainWindow):
         self.tracks = tracks
         self.selected_track = None
         self._refresh_tracks()
-        self.timeline.set_tracks(self.tracks)
         self._reset_timeline_position()
-        self._on_track_changed()
         self.status_label.setText(tr("游戏曲谱已打开"))
         self.inspector_text.setText(trf(
             "已打开游戏曲谱：{file} · {tracks} 轨 · {notes} 音符",
@@ -19098,6 +21454,57 @@ class MidiToBdoWindow(QMainWindow):
         )
         if path:
             self._load_project(Path(path))
+
+    def _save_current_project(self) -> None:
+        if not self.tracks:
+            self.show_toast(tr("当前没有可保存的项目"))
+            return
+        self._autosave_project("manual save", immediate=True)
+        if self.autosave_project_dir is not None:
+            self._record_recent(
+                "project",
+                self.autosave_project_dir / "project.json",
+                self.output_name.text().strip() or self.autosave_project_dir.name,
+            )
+        self.status_label.setText(tr("项目保存已排入队列"))
+
+    def _save_project_as(self) -> None:
+        if not self.tracks:
+            self.show_toast(tr("当前没有可保存的项目"))
+            return
+        parent = QFileDialog.getExistingDirectory(
+            self,
+            tr("选择另存位置"),
+            str(AUTO_SAVE_DIR),
+        )
+        if not parent:
+            return
+        if not self._wait_for_autosave_idle():
+            QMessageBox.warning(
+                self,
+                tr("另存为失败"),
+                tr("仍有项目写入正在进行，请稍后重试。"),
+            )
+            return
+        project_name = safe_filename(
+            self.output_name.text().strip(),
+            tr("未命名项目"),
+        )
+        target = Path(parent) / project_name
+        suffix = 2
+        while target.exists():
+            target = Path(parent) / f"{project_name}_{suffix}"
+            suffix += 1
+        self.project_id = new_project_id()
+        self.autosave_project_dir = target
+        self.autosave_source_copy = None
+        self._autosave_project("save as", immediate=True)
+        self._record_recent(
+            "project",
+            target / "project.json",
+            self.output_name.text().strip() or project_name,
+        )
+        self.status_label.setText(tr("项目副本保存已排入队列"))
 
     def _project_snapshot(self) -> ProjectSnapshot:
         return ProjectSnapshot.capture(
@@ -19156,7 +21563,6 @@ class MidiToBdoWindow(QMainWindow):
         self._clear_transcription_review_history()
         self.selected_track = None
         self._refresh_tracks()
-        self.timeline.set_tracks(self.tracks)
         self.timeline.set_time_range(
             *(
                 self.transcription_session.state.region
@@ -19164,12 +21570,10 @@ class MidiToBdoWindow(QMainWindow):
                 else (None, None)
             )
         )
-        self._refresh_transcription_workspace()
         if self.transcription_result is not None:
             self._start_transcription_assist_analysis(
                 allow_review_recovery=allow_assist_review_recovery,
             )
-        self._on_track_changed()
         self._mark_conversion_check_dirty()
         self._autosave_project(action, immediate=True)
         self.status_label.setText(tr("已撤销工程修改" if action == "project undo" else "已重做工程修改"))
@@ -19202,6 +21606,11 @@ class MidiToBdoWindow(QMainWindow):
                 trf("无法读取工程文件：{error}", error=exc),
             )
             return
+
+        loaded_project_id = (
+            normalize_project_id(payload.get("project_id"))
+            or new_project_id()
+        )
 
         source_format = str(payload.get("source_format") or "midi")
         if source_format not in {"midi", "bdo", "project"}:
@@ -19252,6 +21661,7 @@ class MidiToBdoWindow(QMainWindow):
             )
             self.reference_audio_path = ""
             self.reference_audio_relink_required = False
+            self.project_id = loaded_project_id
             self.autosave_project_dir = project_path.parent
             self.autosave_source_copy = (
                 source_path
@@ -19286,16 +21696,25 @@ class MidiToBdoWindow(QMainWindow):
             if source_format == "bdo":
                 if not self._load_bdo_info(midi_path):
                     return
-                self._apply_conversion_settings(conversion_settings)
+                self._apply_conversion_settings(
+                    conversion_settings,
+                    default_master=self._current_master_effects(),
+                )
             elif source_format == "midi":
-                self._apply_conversion_settings(conversion_settings)
+                self._apply_conversion_settings(
+                    conversion_settings,
+                    default_master=MasterEffects(),
+                )
                 if not self._load_midi_info(str(midi_path)):
                     return
             else:
                 self._stop_preview()
                 self.project_commands.clear()
                 self._clear_track_selection()
-                self._apply_conversion_settings(conversion_settings)
+                self._apply_conversion_settings(
+                    conversion_settings,
+                    default_master=MasterEffects(),
+                )
                 self.bdo_source_snapshot = None
                 self.bdo_source_document = None
                 self.bpm = int(payload.get("bpm") or 120)
@@ -19437,7 +21856,6 @@ class MidiToBdoWindow(QMainWindow):
                 reference_audio_was_attached and not reference_audio_restored
             )
             self._refresh_tracks()
-            self.timeline.set_tracks(self.tracks)
             self._reset_timeline_position()
             self.timeline.set_time_range(
                 *(
@@ -19446,7 +21864,6 @@ class MidiToBdoWindow(QMainWindow):
                     else (None, None)
                 )
             )
-            self._refresh_transcription_workspace()
             if reference_audio_was_attached and not reference_audio_restored:
                 self.status_label.setText(
                     tr("工程已恢复；参考音频未随工程保存，请重新载入。")
@@ -19462,7 +21879,14 @@ class MidiToBdoWindow(QMainWindow):
         self._record_recent("project", project_path, self.output_name.text() or project_path.parent.name)
         self._show_workspace()
 
-    def _apply_conversion_settings(self, settings: dict) -> None:
+    def _apply_conversion_settings(
+        self,
+        settings: dict,
+        *,
+        default_master: MasterEffects | None = None,
+    ) -> None:
+        master = default_master or MasterEffects()
+        self.reverb, self.delay, self.chorus = master.legacy_values()
         if not isinstance(settings, dict):
             return
         self.char_name = settings.get("char_name", self.char_name)
@@ -19475,10 +21899,18 @@ class MidiToBdoWindow(QMainWindow):
         self.vel_floor = settings.get("vel_floor")
         saved_vel_step = settings.get("vel_step")
         self.vel_step = tuple(saved_vel_step) if isinstance(saved_vel_step, list) else saved_vel_step
-        self.reverb = int(settings.get("reverb", self.reverb))
-        self.delay = int(settings.get("delay", self.delay))
-        saved_chorus = settings.get("chorus")
-        self.chorus = tuple(saved_chorus) if saved_chorus else None
+        self.reverb = int(settings.get("reverb", master.reverb_time))
+        self.delay = int(settings.get("delay", master.delay_feedback))
+        if "chorus" in settings:
+            saved_chorus = settings.get("chorus")
+            if isinstance(saved_chorus, dict):
+                self.chorus = (
+                    int(saved_chorus.get("feedback", 0)),
+                    int(saved_chorus.get("depth", 0)),
+                    int(saved_chorus.get("freq", 0)),
+                )
+            else:
+                self.chorus = tuple(saved_chorus) if saved_chorus else None
 
     def _conversion_settings_payload(self) -> dict:
         return {
@@ -19496,38 +21928,8 @@ class MidiToBdoWindow(QMainWindow):
             "chorus": list(self.chorus) if self.chorus else None,
         }
 
-    def _track_state_payload(self, track: TrackState) -> dict:
-        return {
-            "track_id": track.track_id,
-            "gm_program": track.gm_program,
-            "is_percussion": track.is_percussion,
-            "display_name": track.display_name,
-            "bdo_instrument_id": track.bdo_instrument_id,
-            "muted": track.muted,
-            "solo": track.solo,
-            "volume_scale": track.volume_scale,
-            "duration_scale": track.duration_scale,
-            "bdo_track_volume": int(track.bdo_track_volume),
-            "bdo_track_settings": list(track.bdo_track_settings),
-            "bdo_source_group_index": track.bdo_source_group_index,
-            "bdo_source_note_records": [list(record) for record in track.bdo_source_note_records],
-            "articulation_type": track.articulation_type,
-            "marnian_synth_mode": track.marnian_synth_mode,
-            "notes_optimized": track.notes_optimized,
-            "performance_controls": [dict(control) for control in track.performance_controls],
-            "notes": [
-                [
-                    int(note.pitch),
-                    int(note.vel),
-                    float(note.start),
-                    float(note.dur),
-                    int(getattr(note, "ntype", 0)),
-                ]
-                for note in track.notes
-            ],
-        }
-
-    def _ensure_autosave_project(self) -> None:
+    def _ensure_autosave_project(self) -> tuple[Path | None, Path | None]:
+        self.project_id = normalize_project_id(self.project_id) or new_project_id()
         midi_path = Path(getattr(self, "midi_path", "") or "")
         if self.source_format == "project":
             if self.autosave_project_dir is None:
@@ -19536,9 +21938,9 @@ class MidiToBdoWindow(QMainWindow):
                 self.autosave_project_dir = AUTO_SAVE_DIR / f"{project_name}_{stamp}"
             self.autosave_project_dir.mkdir(parents=True, exist_ok=True)
             self.autosave_source_copy = None
-            return
+            return None, None
         if not midi_path.is_file():
-            return
+            return None, None
         if self.autosave_project_dir is None:
             stamp = time.strftime("%Y%m%d_%H%M%S")
             self.autosave_project_dir = AUTO_SAVE_DIR / f"{safe_filename(midi_path.stem)}_{stamp}"
@@ -19546,9 +21948,12 @@ class MidiToBdoWindow(QMainWindow):
         fallback_suffix = ".bdo" if self.source_format == "bdo" else ".mid"
         source_name = f"source{midi_path.suffix or fallback_suffix}"
         target = self.autosave_project_dir / source_name
-        if (self.autosave_source_copy != target or not target.is_file()) and midi_path.resolve() != target.resolve():
-            shutil.copy2(midi_path, target)
         self.autosave_source_copy = target
+        try:
+            same_file = midi_path.resolve() == target.resolve()
+        except OSError:
+            same_file = False
+        return (None, None) if same_file else (midi_path, target)
 
     def _autosave_project(self, reason: str, immediate: bool = False) -> None:
         if immediate:
@@ -19569,7 +21974,7 @@ class MidiToBdoWindow(QMainWindow):
         ):
             return
         try:
-            self._ensure_autosave_project()
+            source_path, source_copy = self._ensure_autosave_project()
             if self.autosave_project_dir is None:
                 return
             saved_at = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -19577,8 +21982,9 @@ class MidiToBdoWindow(QMainWindow):
                 self.autosave_project_dir,
                 self.autosave_source_copy,
             )
-            payload = {
+            metadata = {
                 "schema_version": CURRENT_PROJECT_SCHEMA,
+                "project_id": self.project_id,
                 "path_policy": "project-relative-v1",
                 "saved_at": saved_at,
                 "reason": reason,
@@ -19611,25 +22017,81 @@ class MidiToBdoWindow(QMainWindow):
                     self.reference_layer_settings
                 ),
                 "conversion_settings": self._conversion_settings_payload(),
-                "tracks": [self._track_state_payload(track) for track in self.tracks],
                 "research": dict(self.research_metadata),
             }
-            project_path = self.autosave_project_dir / "project.json"
-            tmp_path = project_path.with_suffix(".json.tmp")
-            tmp_path.write_text(
-                json.dumps(
-                    payload,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-                encoding="utf-8",
+            request = AutosaveRequest(
+                project_dir=self.autosave_project_dir,
+                metadata=metadata,
+                tracks=freeze_project_tracks(self.tracks),
+                saved_at=saved_at,
+                reason=reason,
+                source_path=source_path,
+                source_copy=source_copy,
             )
-            tmp_path.replace(project_path)
-            with (self.autosave_project_dir / "autosave.log").open("a", encoding="utf-8") as file:
-                file.write(f"[{saved_at}] {reason}\n")
+            self._queue_autosave_request(request)
         except Exception as exc:
             append_crash_log("Autosave failed", traceback.format_exc())
             self.status_label.setText(trf("自动保存失败：{error}", error=exc))
+
+    def _queue_autosave_request(self, request: AutosaveRequest) -> None:
+        worker = self.autosave_worker
+        if worker is not None:
+            # Autosave is a latest-state checkpoint. Coalesce intermediate
+            # requests while the single disk writer drains the current one.
+            self.pending_autosave_request = request
+            return
+        self._start_autosave_worker(request)
+
+    def _start_autosave_worker(self, request: AutosaveRequest) -> None:
+        worker = AutosaveWriteWorker(request)
+        self.autosave_worker = worker
+        worker.failed.connect(self._autosave_failed)
+        worker.finished.connect(
+            lambda current=worker: self._autosave_worker_finished(current)
+        )
+        worker.start()
+
+    def _autosave_failed(self, message: str) -> None:
+        append_crash_log("Autosave failed", message)
+        self.status_label.setText(
+            trf("自动保存失败：{error}", error=message.splitlines()[0])
+        )
+
+    def _autosave_worker_finished(self, worker: AutosaveWriteWorker) -> None:
+        if self.autosave_worker is not worker:
+            return
+        self.autosave_worker = None
+        worker.deleteLater()
+        pending = self.pending_autosave_request
+        self.pending_autosave_request = None
+        if pending is not None:
+            self._start_autosave_worker(pending)
+        elif self.workspace_close_pending:
+            QTimer.singleShot(0, self.close)
+
+    def _wait_for_autosave_idle(self, timeout_ms: int = 30_000) -> bool:
+        """Drain queued disk writes; used by tests and final process shutdown."""
+
+        deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+        while self.autosave_worker is not None or self.pending_autosave_request is not None:
+            worker = self.autosave_worker
+            if worker is not None and worker.isRunning():
+                remaining_ms = max(0, round((deadline - time.monotonic()) * 1000))
+                if remaining_ms <= 0:
+                    return False
+                worker.wait(min(50, remaining_ms))
+            QApplication.processEvents()
+            if time.monotonic() >= deadline:
+                return False
+        return True
+
+    def _wait_for_background_writers_on_quit(self) -> None:
+        deadline = time.monotonic() + 30.0
+        export_worker = self.worker
+        if export_worker is not None and export_worker.isRunning():
+            export_worker.wait(max(0, round((deadline - time.monotonic()) * 1000)))
+        remaining_ms = max(0, round((deadline - time.monotonic()) * 1000))
+        self._wait_for_autosave_idle(remaining_ms)
 
     def _mark_conversion_check_dirty(self) -> None:
         self.conversion_check_dirty = True
@@ -19671,6 +22133,46 @@ class MidiToBdoWindow(QMainWindow):
             return
         self._clear_conversion_check_dirty()
         dialog = ConversionCheckDialog(self)
+        dialog.exec()
+
+    def _open_track_conversion_check(self, request: object) -> None:
+        if not self.tracks:
+            return
+        if (
+            not isinstance(request, tuple)
+            or len(request) != 2
+            or not isinstance(request[0], TrackState)
+        ):
+            return
+        track, notice_kind = request
+        target_track_id = int(track.track_id)
+        self._clear_conversion_check_dirty()
+        dialog = ConversionCheckDialog(self)
+        fallback_item: QListWidgetItem | None = None
+        selected_item: QListWidgetItem | None = None
+        for row in range(dialog.issue_list.count()):
+            item = dialog.issue_list.item(row)
+            issue = item.data(Qt.UserRole)
+            if not isinstance(issue, ValidationIssue):
+                continue
+            related_ids = set(issue.related_track_ids)
+            if issue.track_id is not None:
+                related_ids.add(int(issue.track_id))
+            if target_track_id not in related_ids:
+                continue
+            if fallback_item is None:
+                fallback_item = item
+            if notice_kind == "error" and issue.severity == "error":
+                selected_item = item
+                break
+            if notice_kind == "attention" and issue.code == "tracks.merge":
+                selected_item = item
+                break
+        selected_item = selected_item or fallback_item
+        if selected_item is not None:
+            dialog.issue_list.setCurrentItem(selected_item)
+            dialog.issue_list.scrollToItem(selected_item)
+            dialog.issue_list.setFocus(Qt.OtherFocusReason)
         dialog.exec()
 
     def _open_midi_tool(self, request) -> None:
@@ -19724,9 +22226,19 @@ class MidiToBdoWindow(QMainWindow):
                 self._schedule_transcription_assist_refresh()
 
     def _focus_validation_issue(self, issue: ValidationIssue) -> None:
-        if issue.track_id is None:
+        target_track_id = issue.track_id
+        if target_track_id is None and issue.related_track_ids:
+            target_track_id = issue.related_track_ids[0]
+        if target_track_id is None:
             return
-        track = next((item for item in self.tracks if int(item.track_id) == issue.track_id), None)
+        track = next(
+            (
+                item
+                for item in self.tracks
+                if int(item.track_id) == int(target_track_id)
+            ),
+            None,
+        )
         if track is None:
             return
         self._select_track(track)
@@ -19748,8 +22260,6 @@ class MidiToBdoWindow(QMainWindow):
             self.reverb, self.delay, self.chorus = optimized_effects
         self.selected_track = None
         self._refresh_tracks()
-        self.timeline.set_tracks(self.tracks)
-        self._on_track_changed()
         self._mark_conversion_check_dirty()
         self._autosave_project("midi optimize", immediate=True)
         self._schedule_transcription_assist_refresh()
@@ -19881,32 +22391,38 @@ class MidiToBdoWindow(QMainWindow):
         dialog.resize(860, 640)
         dialog.setMinimumSize(700, 520)
         dialog.setObjectName("ThanksDialog")
+        dialog.setProperty("uiSurface", "utility")
         layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(20, 18, 20, 16)
-        layout.setSpacing(14)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         header = QFrame()
         header.setObjectName("ThanksHeader")
+        header.setProperty("uiRole", "dialogHeader")
         header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(18, 14, 18, 14)
-        header_layout.setSpacing(4)
+        header_layout.setContentsMargins(24, 14, 24, 13)
+        header_layout.setSpacing(2)
         title = QLabel(tr("致谢"))
         title.setObjectName("ThanksTitle")
+        title.setProperty("uiRole", "dialogTitle")
         header_layout.addWidget(title)
         subtitle = QLabel(tr("感谢以下项目、作者与社区。"))
         subtitle.setObjectName("ThanksSubtitle")
+        subtitle.setProperty("uiRole", "dialogSubtitle")
         subtitle.setWordWrap(True)
         header_layout.addWidget(subtitle)
         layout.addWidget(header)
 
         text_panel = QFrame()
         text_panel.setObjectName("ThanksTextPanel")
+        text_panel.setProperty("uiRole", "dialogBody")
         text_layout = QVBoxLayout(text_panel)
-        text_layout.setContentsMargins(18, 16, 18, 16)
-        text_layout.setSpacing(9)
+        text_layout.setContentsMargins(24, 16, 24, 18)
+        text_layout.setSpacing(10)
 
         text_title = QLabel(tr("项目、作者与社区"))
         text_title.setObjectName("ThanksSectionLabel")
+        text_title.setProperty("uiRole", "sectionTitle")
         text_layout.addWidget(text_title)
 
         thanks_text = QTextBrowser()
@@ -19958,9 +22474,9 @@ class MidiToBdoWindow(QMainWindow):
         thanks_text.setHtml(
             f"""
             <style>
-                body {{ color: {thanks_body_color}; font-family: "Microsoft YaHei UI"; font-size: 11px; }}
-                h2 {{ color: {thanks_heading_color}; font-size: 17px; margin-top: 14px; margin-bottom: 6px; }}
-                p {{ margin: 7px 0; line-height: 145%; }}
+                body {{ color: {thanks_body_color}; font-family: "Microsoft YaHei UI"; font-size: 12px; margin: 0; }}
+                h2 {{ color: {thanks_heading_color}; font-size: 16px; margin-top: 18px; margin-bottom: 7px; }}
+                p {{ margin: 7px 0; line-height: 150%; }}
                 b {{ color: {thanks_heading_color}; }}
                 a {{ color: #70aee8; text-decoration: none; }}
                 .credit {{ margin-bottom: 11px; }}
@@ -19992,6 +22508,8 @@ class MidiToBdoWindow(QMainWindow):
         layout.addWidget(text_panel, stretch=1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.setObjectName("ThanksButtons")
+        buttons.setProperty("uiRole", "dialogButtonRow")
         copy_button = buttons.addButton(tr("复制致谢名单"), QDialogButtonBox.ActionRole)
         copy_button.setProperty("kind", "secondary")
         copy_button.setToolTip(tr("复制为纯文本，便于放入项目说明或发布页面"))
@@ -20001,7 +22519,14 @@ class MidiToBdoWindow(QMainWindow):
         buttons.button(QDialogButtonBox.Ok).setText(tr("关闭"))
         buttons.button(QDialogButtonBox.Ok).setProperty("kind", "convert")
         buttons.accepted.connect(dialog.accept)
-        layout.addWidget(buttons)
+        footer = QFrame()
+        footer.setObjectName("ThanksFooter")
+        footer.setProperty("uiRole", "dialogFooter")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(24, 10, 24, 10)
+        footer_layout.setSpacing(0)
+        footer_layout.addWidget(buttons)
+        layout.addWidget(footer)
         dialog.exec()
 
     def _load_midi_info(self, path: str) -> bool:
@@ -20055,9 +22580,7 @@ class MidiToBdoWindow(QMainWindow):
                 )
             )
         self._refresh_tracks()
-        self.timeline.set_tracks(self.tracks)
         self._reset_timeline_position()
-        self._on_track_changed()
         self.status_label.setText(tr("MIDI 已载入"))
         self._show_project_summary()
         self._sync_preview_state()
@@ -20071,7 +22594,6 @@ class MidiToBdoWindow(QMainWindow):
     def _refresh_tracks(self) -> None:
         self.timeline.set_tracks(self.tracks)
         self._on_track_changed()
-        self._refresh_transcription_workspace()
 
     def _on_track_changed(self) -> None:
         self.timeline.set_conversion_transpose(self.transpose)
@@ -20095,7 +22617,103 @@ class MidiToBdoWindow(QMainWindow):
             self.timeline_pan.setValue(self.timeline.pan_percent())
             self.timeline_pan.setEnabled(self.timeline.zoom_factor > 1.0)
             self.timeline_pan.blockSignals(False)
+        self._update_ensemble_metric()
         self._refresh_transcription_workspace()
+        self._schedule_timeline_validation_refresh()
+
+    def _schedule_timeline_validation_refresh(self) -> None:
+        if hasattr(self, "timeline_validation_timer"):
+            self.timeline_validation_timer.start()
+
+    def _refresh_timeline_validation(self) -> None:
+        if not hasattr(self, "timeline"):
+            return
+        if not self.tracks:
+            self.timeline.set_validation_notices({})
+            self._timeline_validation_toast_signature = ()
+            return
+        issues = self._validation_issues()
+        errors = [item for item in issues if item.severity == "error"]
+        merges = [item for item in issues if item.code == "tracks.merge"]
+        track_notices: dict[int, dict[str, list[str]]] = {}
+        for issue in issues:
+            if issue.severity != "error" and issue.code != "tracks.merge":
+                continue
+            track_ids = set(int(track_id) for track_id in issue.related_track_ids)
+            if issue.track_id is not None:
+                track_ids.add(int(issue.track_id))
+            if not track_ids:
+                continue
+            category = "errors" if issue.severity == "error" else "attentions"
+            message = localized_validation_message(
+                issue,
+                tr,
+                format_translate=trf,
+            )
+            for track_id in track_ids:
+                notice = track_notices.setdefault(
+                    track_id,
+                    {"errors": [], "attentions": []},
+                )
+                if message not in notice[category]:
+                    notice[category].append(message)
+        self.timeline.set_validation_notices({
+            track_id: {
+                "errors": tuple(notice["errors"]),
+                "attentions": tuple(notice["attentions"]),
+            }
+            for track_id, notice in track_notices.items()
+        })
+        if errors:
+            text = trf(
+                "发现 {count} 个导出错误；对应轨道已标红，可点击轨道标记查看。",
+                count=len(errors),
+            )
+            toast_kind = "error"
+            toast_signature: tuple[object, ...] = (
+                "error",
+                tuple(
+                    (
+                        issue.code,
+                        issue.track_id,
+                        issue.related_track_ids,
+                        issue.message,
+                    )
+                    for issue in errors
+                ),
+            )
+        elif merges:
+            attention_track_count = sum(
+                bool(notice["attentions"])
+                for notice in track_notices.values()
+            )
+            text = trf(
+                "{count} 条轨道使用相同乐器；已标为琥珀色，导出时会合并。",
+                count=attention_track_count,
+            )
+            toast_kind = "warning"
+            toast_signature = (
+                "warning",
+                tuple(
+                    (
+                        issue.code,
+                        issue.related_track_ids,
+                        issue.message,
+                    )
+                    for issue in merges
+                ),
+            )
+        else:
+            self._timeline_validation_toast_signature = ()
+            return
+        if toast_signature == self._timeline_validation_toast_signature:
+            return
+        self._timeline_validation_toast_signature = toast_signature
+        self.show_toast(
+            text,
+            kind=toast_kind,
+            duration_ms=4600 if toast_kind == "error" else 3600,
+        )
 
     def _restart_preview_after_timeline_change(self) -> None:
         was_playing = self.realtime_preview_active and self.realtime_audio.status.state == "playing"
@@ -20288,6 +22906,7 @@ class MidiToBdoWindow(QMainWindow):
             ),
             kind="success",
         )
+        self._mark_conversion_check_dirty()
         self._on_preview_mapping_changed()
 
     def _clear_solo(self) -> None:
@@ -20326,7 +22945,7 @@ class MidiToBdoWindow(QMainWindow):
     def _sync_preview_state(self) -> None:
         tracks = selected_tracks(self.tracks)
         preview_blockers = self._realtime_preview_blockers(tracks)
-        has_bdo_samples = not preview_blockers
+        source_mode = preview_source_mode(self.audio_sources)
         has_reference = bool(self.reference_audio.audio_path)
         bdo_running = self.realtime_preview_active
         reference_state = self.reference_audio.player.playbackState()
@@ -20336,7 +22955,7 @@ class MidiToBdoWindow(QMainWindow):
             (not bdo_running or self.realtime_audio.status.state != "playing")
             and not self.reference_audio.is_playing
         )
-        can_play = (has_bdo_samples and bool(self.tracks)) or has_reference
+        can_play = bool(tracks) or has_reference
         self.play_button.setEnabled(can_play and (not running or paused))
         play_label = tr("播放" if can_play else "无法原声试听")
         self.play_button.setAccessibleName(play_label)
@@ -20349,19 +22968,82 @@ class MidiToBdoWindow(QMainWindow):
             self.play_button.setMaximumWidth(16777215)
             self.play_button.setText(play_label)
         if hasattr(self, "preview_source_badge"):
-            if preview_blockers:
-                self.preview_source_badge.setText(tr("无法原声还原"))
+            if (
+                self.realtime_preview_source == "generic"
+                and (self.realtime_preview_active or self.realtime_preview_loading)
+            ):
+                badge_text = tr("内置通用 MIDI · 非游戏原声")
             elif not self.realtime_audio.available():
-                self.preview_source_badge.setText(tr("无可用音频设备"))
+                badge_text = tr("无可用音频设备")
+            elif source_mode == "generic":
+                badge_text = tr("内置通用 MIDI · 已锁定")
+            elif source_mode == "bdo" and preview_blockers:
+                badge_text = tr("本地 BDO 音源不可用")
+            elif source_mode == "auto" and preview_blockers:
+                badge_text = tr("自动音源 · 内置通用 MIDI")
             elif self.realtime_audio.status.cache_misses:
-                self.preview_source_badge.setText(tr("等待预取"))
+                badge_text = tr("等待预取")
             elif self.realtime_validation_state == "verified":
-                self.preview_source_badge.setText(tr("原声已验证"))
+                badge_text = tr(
+                    "本地 BDO 音源 · 已验证"
+                    if source_mode == "bdo"
+                    else "自动音源 · BDO 已验证"
+                )
             else:
                 # Wwise samples are exact; DSP remains explicitly unverified until A/B calibration.
-                self.preview_source_badge.setText(tr("原声近似" if self.realtime_audio.status.unverified else "原声近似（待 A/B 验证）"))
+                badge_text = tr(
+                    "本地 BDO 音源 · DSP 待 A/B"
+                    if source_mode == "bdo"
+                    else "自动音源 · BDO 近似"
+                )
+            self.preview_source_badge.setText(badge_text)
+            detail = tr("点击切换试听音源；不会改变导出结果")
+            if source_mode == "bdo" and preview_blockers:
+                detail += "\n" + str(preview_blockers[0])
+            self.preview_source_badge.setToolTip(detail)
+            self._sync_preview_source_menu()
         self.pause_button.setEnabled(running and not paused)
         self.stop_button.setEnabled(running)
+
+    def _sync_preview_source_menu(self) -> None:
+        actions = getattr(self, "preview_source_actions", {})
+        mode = preview_source_mode(self.audio_sources)
+        for action_mode, action in actions.items():
+            action.setChecked(action_mode == mode)
+
+    def _set_preview_source_mode(self, mode: str) -> None:
+        selected_mode = str(mode or "").casefold()
+        if selected_mode not in PREVIEW_SOURCE_MODES:
+            return
+        if selected_mode == preview_source_mode(self.audio_sources):
+            self._sync_preview_source_menu()
+            self._sync_preview_state()
+            return
+        was_playing = bool(
+            self.realtime_preview_active or self.reference_audio.is_playing
+        )
+        retained_position = self.timeline.playhead_ms
+        self._stop_preview(reset_playhead=False)
+        self.audio_sources["preview_mode"] = selected_mode
+        self.realtime_audio.source_config = dict(self.audio_sources)
+        self.config["audio_sources"] = dict(self.audio_sources)
+        save_config(self.config)
+        self._sync_preview_source_menu()
+        self._sync_preview_state()
+        label = {
+            "auto": "自动选择音源",
+            "bdo": "锁定本地 BDO 音源",
+            "generic": "锁定内置通用 MIDI",
+        }[selected_mode]
+        self.show_toast(
+            trf("试听音源已切换：{source}", source=tr(label)),
+            kind="success",
+        )
+        if was_playing and selected_tracks(self.tracks):
+            QTimer.singleShot(
+                0, lambda position=retained_position:
+                self._start_preview_from(position)
+            )
 
     def _can_preview_with_bdo_samples(self, tracks: list[TrackState]) -> bool:
         return not self._realtime_preview_blockers(tracks)
@@ -20506,7 +23188,13 @@ class MidiToBdoWindow(QMainWindow):
 
     def _play_preview(self) -> None:
         if self.realtime_preview_loading:
-            self.status_label.setText(tr("正在准备游戏音源…"))
+            self.status_label.setText(
+                tr(
+                    "正在准备通用 MIDI 预览…"
+                    if self.realtime_preview_source == "generic"
+                    else "正在准备游戏音源…"
+                )
+            )
             return
         if self.realtime_preview_active:
             try:
@@ -20549,23 +23237,43 @@ class MidiToBdoWindow(QMainWindow):
         self.preview_generation += 1
         self.last_reported_underruns = 0
         blockers = self._realtime_preview_blockers(tracks)
-        if blockers:
-            if self.reference_audio.audio_path:
-                self._start_reference_audio_from(start_ms)
-                return
-            QMessageBox.warning(
-                self,
-                tr("无法原声试听"),
-                tr("当前工程缺少可用的实时游戏音源：\n- ")
-                + "\n- ".join(blockers[:6]),
+        source_mode = preview_source_mode(self.audio_sources)
+        use_generic = source_mode == "generic" or (
+            source_mode == "auto" and bool(blockers)
+        )
+        if source_mode == "bdo" and blockers:
+            self.status_label.setText(tr("本地 BDO 音源不可用"))
+            self.show_toast(
+                trf(
+                    "已锁定本地 BDO 音源，当前无法试听：{reason}",
+                    reason=blockers[0],
+                ),
+                kind="warning",
+                duration_ms=4400,
             )
             self._sync_preview_state()
             return
         try:
             self.realtime_audio.start()
-            self.realtime_audio.load_project_async(
-                tracks, BDO_SAMPLE_MAP_PATH, start_ms, self.reverb, self.delay, self.chorus
-            )
+            if use_generic:
+                self.realtime_audio.load_procedural_project_async(
+                    tracks,
+                    start_ms,
+                    self.reverb,
+                    self.delay,
+                    self.chorus,
+                )
+                self.realtime_preview_source = "generic"
+            else:
+                self.realtime_audio.load_project_async(
+                    tracks,
+                    BDO_SAMPLE_MAP_PATH,
+                    start_ms,
+                    self.reverb,
+                    self.delay,
+                    self.chorus,
+                )
+                self.realtime_preview_source = "bdo"
         except AudioEngineError as exc:
             self._on_preview_failed(str(exc))
             self._sync_preview_state()
@@ -20576,7 +23284,23 @@ class MidiToBdoWindow(QMainWindow):
         self.realtime_preview_tracks = tracks
         self.timeline.set_buffer_progress(0.0, True)
         self.realtime_status_timer.start()
-        self.status_label.setText(tr("正在准备游戏音源…"))
+        if self.reference_audio.audio_path:
+            # Let the already-decoded reference layer respond immediately
+            # while a local/game source preloads.  Once preload completes the
+            # real-time engine seeks to this clock and becomes the transport
+            # master, avoiding a silent Play button on first use.
+            self.reference_audio.set_position(start_ms)
+            audio_position = self.reference_audio.project_to_audio(start_ms)
+            if 0.0 <= audio_position < self.reference_audio.duration_ms:
+                self.reference_audio.play()
+                self.reference_status_timer.start()
+        self.status_label.setText(
+            tr(
+                "正在准备通用 MIDI 预览…"
+                if use_generic
+                else "正在准备游戏音源…"
+            )
+        )
         self._sync_preview_state()
 
     def _start_reference_audio_from(self, start_ms: float) -> None:
@@ -20679,15 +23403,31 @@ class MidiToBdoWindow(QMainWindow):
                 self.timeline.set_buffer_progress(1.0, True)
                 details = result.get("unverified", [])
                 self.realtime_validation_state = self._validation_state(self.realtime_preview_tracks, details)
+                resume_position = self.realtime_preview_start_ms
+                if self.reference_audio.is_playing:
+                    resume_position = max(
+                        0.0, self.reference_audio.project_position_ms
+                    )
+                    if abs(resume_position - self.realtime_preview_start_ms) > 1.0:
+                        self.realtime_audio.seek(resume_position)
                 self.realtime_audio.play()
+                self.reference_status_timer.stop()
                 self._sync_reference_to_position(
-                    self.realtime_preview_start_ms,
+                    resume_position,
                     play=True,
-                    force=True,
+                    force=False,
                 )
                 self.status_label.setText(
-                    tr("BDO 实时原声试听") if not details
-                    else trf("BDO 实时试听（{count} 项待验证）", count=len(details))
+                    tr("通用 MIDI 预览（非游戏原声）")
+                    if self.realtime_preview_source == "generic"
+                    else (
+                        tr("BDO 实时原声试听")
+                        if not details
+                        else trf(
+                            "BDO 实时试听（{count} 项待验证）",
+                            count=len(details),
+                        )
+                    )
                 )
             status = self.realtime_audio.get_status()
         except AudioEngineError as exc:
@@ -20729,7 +23469,7 @@ class MidiToBdoWindow(QMainWindow):
         if status.underruns > self.last_reported_underruns:
             self.last_reported_underruns = status.underruns
             self.status_label.setText(trf(
-                "BDO 实时试听缓冲不足 {count} 次 · 混音 P95 {p95:.1f} ms",
+                "实时试听缓冲不足 {count} 次 · 混音 P95 {p95:.1f} ms",
                 count=status.underruns, p95=status.render_p95_ms,
             ))
         if status.state == "stopped" or (status.position_ms >= status.duration_ms and status.duration_ms > 0):
@@ -20856,63 +23596,87 @@ class MidiToBdoWindow(QMainWindow):
         audio_root = str(outcome["audio_root"])
         return audio_root or None
 
-    def _open_settings(self) -> None:
+    def _reset_master_effects(self) -> None:
+        self.reverb = 0
+        self.delay = 0
+        self.chorus = None
+
+    def _current_master_effects(self) -> MasterEffects:
+        try:
+            return MasterEffects.from_legacy(
+                self.reverb,
+                self.delay,
+                self.chorus,
+            )
+        except (TypeError, ValueError):
+            return MasterEffects()
+
+    def _open_master_effects(self) -> None:
+        dialog = MasterEffectsDialog(self, self._current_master_effects())
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._apply_master_effects(dialog.selected_master_effects())
+
+    def _apply_master_effects(self, selected: MasterEffects) -> bool:
+        """Commit only the score-wide layer as one undoable project action."""
+
+        current = self._current_master_effects()
+        if selected == current:
+            return False
+        self._push_project_snapshot()
+        self.reverb, self.delay, self.chorus = selected.legacy_values()
+        self._mark_conversion_check_dirty()
+        self._restart_preview_after_timeline_change()
+        self._autosave_project("master effects")
+        self.status_label.setText(tr("全局主效果已更新"))
+        self.show_toast(tr("全局主效果已更新"), kind="success")
+        return True
+
+    def _open_settings(self, initial_page: int = 0) -> None:
         old_parse_settings = (self.apply_sustain, self.flatten_tempo)
         old_effective_bpm = float(max(1, self.bpm_override or self.bpm))
         old_transpose = int(self.transpose)
-        old_master_effects = MasterEffects.from_legacy(
-            self.reverb,
-            self.delay,
-            self.chorus,
-        )
         dialog = SettingsDialog(self)
-        if dialog.exec() != QDialog.Accepted:
-            return
+        dialog.settings_nav.setCurrentRow(max(0, min(2, int(initial_page))))
+        while True:
+            if dialog.exec() != QDialog.Accepted:
+                return
 
-        selected_output_dir = Path(
-            dialog.output_dir.text().strip() or DEFAULT_OUTDIR
-        ).expanduser()
-        if selected_output_dir.exists() and not selected_output_dir.is_dir():
-            QMessageBox.warning(
-                self,
-                tr("输出目录不可用"),
-                tr("请选择有效的输出目录。"),
-            )
-            return
-        try:
-            selected_output_dir = selected_output_dir.resolve()
-        except OSError:
-            pass
+            selected_output_dir = Path(
+                dialog.output_dir.text().strip() or DEFAULT_OUTDIR
+            ).expanduser()
+            try:
+                selected_output_dir = selected_output_dir.resolve()
+            except OSError:
+                pass
+            selected_game_music_dir = Path(
+                dialog.game_music_dir.text().strip()
+                or default_game_music_dir()
+            ).expanduser()
+            try:
+                selected_game_music_dir = selected_game_music_dir.resolve()
+            except OSError:
+                pass
 
-        selected_instrument_art_dir = dialog.instrument_art_dir.text().strip()
-        if selected_instrument_art_dir:
-            art_root = Path(selected_instrument_art_dir)
-            if not art_root.is_dir():
-                QMessageBox.warning(
-                    self,
-                    tr("背景目录不可用"),
-                    tr("请选择有效的本地乐器图片目录。"),
+            selected_instrument_art_dir = dialog.instrument_art_dir.text().strip()
+            if selected_instrument_art_dir:
+                selected_instrument_art_dir = str(
+                    Path(selected_instrument_art_dir).resolve()
                 )
-                return
-            selected_instrument_art_dir = str(art_root.resolve())
 
-        selected_audio_source = dialog.audio_source.text().strip()
-        try:
             sample_pack, audio_root = classify_audio_source(
-                selected_audio_source
+                dialog.audio_source.text().strip()
             )
-        except ValueError:
-            QMessageBox.warning(
-                self,
-                tr("音源不可用"),
-                tr("请选择 .bdosamples 音源包或本地音源文件夹。"),
-            )
-            return
-        if sample_pack:
-            prepared_root = self._prepare_sample_pack(sample_pack)
-            if prepared_root is None:
-                return
-            audio_root = prepared_root
+            if sample_pack:
+                prepared_root = self._prepare_sample_pack(sample_pack)
+                if prepared_root is None:
+                    if self.workspace_close_pending:
+                        return
+                    # Re-open the same dialog instance so every edit survives
+                    # a cancelled or failed package preparation.
+                    continue
+                audio_root = prepared_root
+            break
 
         self.char_name = dialog.char_name.text().strip() or "MIDI"
         self.language = str(dialog.language.currentData() or "auto")
@@ -20942,12 +23706,7 @@ class MidiToBdoWindow(QMainWindow):
             self.vel_floor = dialog.vel_step_base.value()
             self.vel_step = (dialog.vel_step_base.value(), dialog.vel_step.value())
 
-        selected_master_effects = dialog.selected_master_effects()
-        self.reverb, self.delay, self.chorus = (
-            selected_master_effects.legacy_values()
-        )
-        master_effects_changed = selected_master_effects != old_master_effects
-
+        old_preview_mode = preview_source_mode(self.audio_sources)
         old_sample_pack = str(self.audio_sources.get("sample_pack", "") or "")
         old_audio_root = str(self.audio_sources.get("audio_root", "") or "")
         sample_source_changed = (
@@ -20956,6 +23715,12 @@ class MidiToBdoWindow(QMainWindow):
         self.audio_sources["sample_pack"] = sample_pack
         self.audio_sources["audio_root"] = audio_root
         self.audio_sources["paz_root"] = dialog.selected_paz_root.strip()
+        self.audio_sources["preview_mode"] = str(
+            dialog.preview_mode.currentData() or "auto"
+        )
+        preview_mode_changed = (
+            old_preview_mode != preview_source_mode(self.audio_sources)
+        )
         if sample_source_changed:
             # Sample timbre descriptors are scoped to one local pack.  Never
             # reuse them after a hot source change, otherwise Top-3 results
@@ -20976,14 +23741,26 @@ class MidiToBdoWindow(QMainWindow):
             self.instrument_match_analysis = None
         self.realtime_audio.source_config = dict(self.audio_sources)
         self.config["audio_sources"] = dict(self.audio_sources)
+        if sample_source_changed or preview_mode_changed:
+            self._stop_preview(reset_playhead=False)
+        self._sync_preview_source_menu()
         self.output_dir_path = str(selected_output_dir)
         self.last_output_dir = selected_output_dir
         self.config["output_dir"] = self.output_dir_path
+        self.game_music_dir_path = str(selected_game_music_dir)
+        self.config["game_music_dir"] = self.game_music_dir_path
         self.instrument_art_dir = selected_instrument_art_dir
         self.config["instrument_art_dir"] = self.instrument_art_dir
         loaded_art_count = self.timeline.set_instrument_art_dir(
             self.instrument_art_dir
         )
+        if hasattr(self, "home_instrument_art"):
+            self.home_instrument_art.reload(
+                self.instrument_art_dir,
+                self._home_instrument_visual_keys,
+            )
+            self.project_list.viewport().update()
+            self.game_score_list.viewport().update()
 
         self.config["language"] = self.language
         self.config["conversion_settings"] = {
@@ -20996,9 +23773,6 @@ class MidiToBdoWindow(QMainWindow):
             "vel_range": list(self.vel_range) if self.vel_range else None,
             "vel_floor": self.vel_floor,
             "vel_step": self.vel_step,
-            "reverb": self.reverb,
-            "delay": self.delay,
-            "chorus": list(self.chorus) if self.chorus else None,
         }
         save_config(self.config)
         active_localizer = localizer()
@@ -21006,9 +23780,8 @@ class MidiToBdoWindow(QMainWindow):
             active_localizer.set_language(self.language)
         self._apply_responsive_density()
         self._refresh_home()
-        if master_effects_changed:
-            self._restart_preview_after_timeline_change()
-        elif effective_bpm_changed or transpose_changed:
+        self._sync_preview_state()
+        if effective_bpm_changed or transpose_changed:
             self._on_track_changed()
         if (
             self.source_format == "midi"
@@ -21060,6 +23833,7 @@ class MidiToBdoWindow(QMainWindow):
         active = selected_tracks(self.tracks)
         if not active:
             raise ValueError(tr("没有可导出的轨道，请取消静音或 Solo 至少一条轨道"))
+        export_tracks = freeze_export_tracks(active)
         if not self.owner_id:
             raise ValueError(
                 tr("尚未读取有效 Owner ID。请在设置中选择一份游戏内保存的曲谱，否则导出文件无法在游戏内正常编辑。")
@@ -21085,14 +23859,8 @@ class MidiToBdoWindow(QMainWindow):
 
         # The editor model is the single source of truth.  Re-reading the
         # imported MIDI here would silently discard manual note edits and new
-        # tracks.  Marnian source modes occupy the three IDs following each
-        # base waveform ID (basic + 0, stereo + 1, super + 2, superoct + 3).
-        filtered_tracks = None
-        export_tracks = active
-        instrument_map = {
-            idx: serialized_bdo_instrument_id(track)
-            for idx, track in enumerate(export_tracks)
-        }
+        # tracks. Marnian source-mode serialization is centralized in the
+        # immutable export workflow.
         vel_scales = {
             idx: track.volume_scale
             for idx, track in enumerate(export_tracks)
@@ -21127,15 +23895,12 @@ class MidiToBdoWindow(QMainWindow):
         }
         return {
             "midi_path": midi_path,
-            "filtered_tracks": filtered_tracks,
-            "lyric_events": [dict(event) for event in self.lyric_events],
-            "direct_tracks": active,
+            "direct_tracks": export_tracks,
             "bpm_for_temp": self.bpm,
             "time_sig_for_temp": self.time_sig,
             "out_path": str(out_path),
             "char_name": self.char_name,
             "owner_id": self.owner_id,
-            "instrument_map": instrument_map,
             "bpm_override": self.bpm_override,
             "vel_range": self.vel_range if self.velocity_mode == "rescale" else None,
             "vel_floor": self.vel_floor if self.velocity_mode in {"floor", "stepped"} else None,
@@ -21153,7 +23918,7 @@ class MidiToBdoWindow(QMainWindow):
             "track_settings_map": track_settings_map,
             "velocity_b_maps": velocity_b_maps or None,
             "bdo_source_document": self.bdo_source_document if self.source_format == "bdo" else None,
-            "game_dir": str(default_game_music_dir()),
+            "game_dir": self.game_music_dir_path,
         }
 
     def _convert(self) -> None:
@@ -21197,10 +23962,20 @@ class MidiToBdoWindow(QMainWindow):
         self.worker = ConvertWorker(params)
         self.worker.conversion_finished.connect(self._on_convert_finished)
         self.worker.failed.connect(self._on_convert_failed)
+        self.worker.finished.connect(
+            lambda current=self.worker: self._convert_worker_finished(current)
+        )
         self.worker.start()
 
-    def _on_convert_finished(self, out_path: str, byte_count: int, summary: object, installed: str) -> None:
-        self.convert_button.setEnabled(True)
+    def _on_convert_finished(
+        self,
+        out_path: str,
+        byte_count: int,
+        summary: object,
+        installed: str,
+        installation_error: str,
+    ) -> None:
+        self._sync_convert_button_enabled()
         self.last_output_dir = Path(out_path).parent
         self.last_export_path = Path(out_path)
         self.status_label.setText(tr("转换完成"))
@@ -21208,6 +23983,13 @@ class MidiToBdoWindow(QMainWindow):
         extra_parts: list[object] = []
         if installed:
             extra_parts.append(trv(" · 已复制到游戏目录"))
+        elif installation_error:
+            extra_parts.append(
+                trfv(
+                    " · 未复制到游戏目录：{error}",
+                    error=installation_error,
+                )
+            )
         roundtrip_failed = False
         roundtrip_error: object | None = None
         try:
@@ -21237,23 +24019,23 @@ class MidiToBdoWindow(QMainWindow):
             extra=tr_joinv(extra_parts, separator=""),
         )
         self.inspector_text.setText(result_text)
+        if installation_error:
+            self.status_label.setText(tr("转换完成（未复制到游戏目录）"))
         self.show_toast(
             result_text,
-            kind="warning" if roundtrip_failed else "success",
+            kind="warning" if roundtrip_failed or installation_error else "success",
             duration_ms=5200,
         )
         self._autosave_project("convert finished", immediate=True)
-        self.worker = None
 
     def _on_convert_failed(self, message: str) -> None:
-        self.convert_button.setEnabled(True)
+        self._sync_convert_button_enabled()
         self.status_label.setText(tr("转换失败"))
         safe_message = _redact_log_paths(message)
         append_crash_log("Convert failed", safe_message)
         log_path = DEFAULT_OUTDIR / "last_convert_error.log"
         try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(safe_message, encoding="utf-8")
+            atomic_write_bytes(log_path, safe_message.encode("utf-8"))
         except Exception:
             log_path = None
         brief = (
@@ -21266,8 +24048,17 @@ class MidiToBdoWindow(QMainWindow):
             if log_path
             else ""
         )
-        QMessageBox.critical(self, tr("转换失败"), f"{brief}{detail}")
+        if not self.workspace_close_pending:
+            QMessageBox.critical(self, tr("转换失败"), f"{brief}{detail}")
+
+    def _convert_worker_finished(self, worker: ConvertWorker) -> None:
+        if self.worker is not worker:
+            return
         self.worker = None
+        self._sync_convert_button_enabled()
+        worker.deleteLater()
+        if self.workspace_close_pending:
+            QTimer.singleShot(0, self.close)
 
     def _open_output_dir(self) -> None:
         directory = Path(self.output_dir_path or self.last_output_dir)
@@ -21277,13 +24068,33 @@ class MidiToBdoWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self.autosave_timer.stop()
         self.transcription_assist_refresh_timer.stop()
-        self._flush_autosave()
+        if not self._final_autosave_queued:
+            # Queue exactly one final immutable snapshot.  Waiting happens via
+            # the worker's finished signal, keeping the GUI responsive and
+            # preventing each close retry from starting another autosave.
+            self._final_autosave_queued = True
+            self._flush_autosave()
+        if (
+            self.autosave_worker is not None
+            or self.pending_autosave_request is not None
+        ):
+            # Ordinary snapshots finish in milliseconds.  Drain a short,
+            # bounded window so embedding tests and temporary workspaces do not
+            # tear down beneath a live writer; genuinely slow disks remain
+            # asynchronous and trigger close again from ``finished``.
+            if self._wait_for_autosave_idle(timeout_ms=3_000):
+                return self.closeEvent(event)
+            self.workspace_close_pending = True
+            self.status_label.setText(tr("正在完成最终自动保存…"))
+            event.ignore()
+            return
         running_workers = [
             worker
             for worker in (
                 self.workspace_transcription_worker,
                 self.transcription_assist_worker,
                 self.sample_pack_worker,
+                self.worker,
             )
             if worker is not None and worker.isRunning()
         ]
@@ -21303,6 +24114,7 @@ class MidiToBdoWindow(QMainWindow):
         self.reference_audio.set_audio_path(None, notify=False)
         self._stop_preview()
         self.realtime_audio.stop()
+        self.workspace_close_pending = False
         super().closeEvent(event)
 
 
@@ -21342,9 +24154,7 @@ def main() -> int:
         startup.finish(window)
         QTimer.singleShot(
             StartupSplash.MINIMUM_VISIBLE_MS + StartupSplash.FADE_OUT_MS + 180,
-            lambda: window.show_toast(
-                tr("双击曲谱或项目即可打开；主页扫描不会读取曲谱中的身份信息。")
-            ),
+            window._show_startup_notice,
         )
         result = app.exec()
         append_crash_log("Application exited", f"exit_code={result}")

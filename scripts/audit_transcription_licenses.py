@@ -26,7 +26,10 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
 
-INVENTORY_SCHEMA = 1
+# Schema 1 accidentally treated Python source/bytecode below directories named
+# ``licenses`` as notice material, so its digest depended on whether bytecode
+# compilation had already run. Schema 2 excludes executable module artifacts.
+INVENTORY_SCHEMA = 2
 DEFAULT_ROOT_DISTRIBUTIONS = (
     "basic-pitch",
     "onnxruntime",
@@ -65,6 +68,8 @@ _LICENSE_NAME = re.compile(
     re.IGNORECASE,
 )
 
+_NON_NOTICE_SUFFIXES = frozenset({".py", ".pyc", ".pyo"})
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -84,6 +89,11 @@ def _distribution_license_files(
         is_license_dir = "licenses" in path_parts
         is_notice_name = bool(_LICENSE_NAME.match(relative_path.name))
         if not (is_license_dir or is_notice_name):
+            continue
+        # Some dependencies expose an importable ``packaging.licenses`` module.
+        # Those source files and environment-dependent bytecode are runtime
+        # code, not redistributable notice documents.
+        if relative_path.suffix.lower() in _NON_NOTICE_SUFFIXES:
             continue
         absolute = Path(distribution.locate_file(relative))
         if absolute.is_file():
@@ -323,6 +333,11 @@ def release_blockers(
     blockers: list[str] = []
     if policy.get("public_release_cleared") is not True:
         blockers.append("public_release_cleared is not true")
+    approved_schema = policy.get("approved_inventory_schema")
+    if approved_schema is None:
+        blockers.append("approved_inventory_schema is missing")
+    elif approved_schema != inventory.get("schema"):
+        blockers.append("installed dependency inventory schema is not approved")
     approved_digest = str(policy.get("approved_inventory_sha256") or "")
     if not approved_digest:
         blockers.append("approved_inventory_sha256 is empty")

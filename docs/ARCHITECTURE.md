@@ -119,7 +119,7 @@ Widgets mutate a draft list through `_replace()`. The note editor commits a sort
   editor tracks remain the source of truth, are autosaved directly to
   `project.json`, and can be reopened and exported without manufacturing a hidden
   source MIDI track.
-- Piano roll: draft note creation/deletion/movement/resizing, batch properties, articulations, undo/redo, and isolated track preview. It opens at a screen-aware large working size and uses a square-corner editing surface, taller note rows, measure bands, octave guides, velocity-responsive note shading, and an empty-score creation prompt without changing hit testing. Selection mode uses an empty click to place the edit cursor, an empty drag to marquee-select, and a double-click to create; `Ctrl`-drag clones the grabbed selection and paste targets the edit cursor. Draw mode sets duration and initial velocity in one gesture; Alt temporarily bypasses snap, arrow keys edit selections, and `Ctrl+D` duplicates them. Clicking the piano ruler, creating, selecting, or repitching a note asynchronously auditions it with the current game instrument without doing sample I/O in the audio callback. Its ruler owns seeking, playhead display, and sample-preload progress; there is no separate editor timeline slider. Note, articulation, grid, and velocity controls share the fixed-height top switcher, while apply/cancel/confirm live in the top command bar. The compact footer retains selection status, controls the shared reference-audio gain, and enables the embedded transcription mode. That mode reuses the same piano roll, adds a time-aligned waveform and review controls, and temporarily hides the velocity lane without replacing the canvas. The collapsible velocity lane is opened by a curve icon and groups every simultaneous onset into one control point. Dragging a point applies a smooth time-distance falloff to neighbouring points, while the mouse wheel changes the influence radius; each drag remains one undoable edit.
+- Piano roll: draft note creation/deletion/movement/resizing, batch properties, articulations, undo/redo, and isolated track preview. It opens at a screen-aware large working size and uses a square-corner editing surface, taller note rows, measure bands, octave guides, velocity-responsive note shading, and an empty-score creation prompt without changing hit testing. Selection mode uses an empty click to place the edit cursor, an empty drag to marquee-select, and a double-click to create; `Ctrl`-drag clones the grabbed selection and paste targets the edit cursor. Draw mode sets duration and initial velocity in one gesture; Alt temporarily bypasses snap, arrow keys edit selections, and `Ctrl+D` duplicates them. Clicking the piano ruler, creating, selecting, or repitching a note asynchronously auditions it with the current game instrument without doing sample I/O in the audio callback. Changing a selected note's articulation auditions one representative note with its updated `ntype`; the adjacent play control can force the same audition even when click-to-preview is disabled. The full articulation dropdown and compact shortcut chips share one explicit selection state, including techniques outside the visible shortcut set. Its ruler owns seeking, playhead display, and sample-preload progress; there is no separate editor timeline slider. Note, articulation, grid, and velocity controls share the fixed-height top switcher, while apply/cancel/confirm live in the top command bar. The compact footer retains selection status, controls the shared reference-audio gain, and enables the embedded transcription mode. That mode reuses the same piano roll, adds a time-aligned waveform and review controls, and temporarily hides the velocity lane without replacing the canvas. The collapsible velocity lane is opened by a curve icon and groups every simultaneous onset into one control point. Dragging a point applies a smooth time-distance falloff to neighbouring points, while the mouse wheel changes the influence radius; each drag remains one undoable edit.
 - Timeline artwork: the packaged low-contrast background and twelve
   instrument-family icons are original app resources. `InstrumentLaneArtwork`
   decodes each unique family file once during reload, reuses it across matching
@@ -147,6 +147,9 @@ produces location-aware `ValidationIssue` values and is the export gate;
 known note loss, unsupported pitches, illegal articulations, and unmapped drums
 cannot pass silently. `bdo_score.py` owns full BDO v9 snapshots and score diffs,
 with private Owner/name fields excluded from comparison unless explicitly requested.
+Track-local issues carry `track_id`; merge, conflicting-volume/effect, and
+instrument-capacity issues carry `related_track_ids`. UI consumers must use those
+structured IDs rather than parsing translated track names from messages.
 `bdo_codec/` owns lossless decoding, the reversible document model, canonical
 encoding, ICE, opaque-data safety, and the CLI. See `docs/BDO_V9_CODEC.md`.
 
@@ -426,6 +429,32 @@ and time stretching.
 
 `BdoRealtimeAudioEngine` reads the Wwise MIDI-zone map, resolves every note to a user-provided WAV, decodes/cache-loads off the callback path, and schedules events by exact sample frame. Native articulation Events suppress legacy synthetic pitch, chord-stack, and envelope effects so one mechanism is never applied twice; synth Events select the native sample layer while their unverified modulators remain approximate. Parent-chain Volume, Note-Off release, WEM loop points, playlist order, and node-level instance limits are prepared before playback. Per-object instance limits use `track_id` as the preview object boundary; one Qt-free timeline planner bakes accepted events and 4 ms releases once, then real-time playback, Seek, and offline rendering consume that result without applying the policy again. Async consumers poll `AudioStatus.preload_progress`, commit with `finish_loading()`, and invalidate abandoned work with `cancel_loading()`. `bdo_audio_lifecycle.py` is the Qt-free source of truth for formal note length, game-derived release, bounded audible tail, instance planning, and the final fade; real-time mixing, seek restoration, key audition, project duration, and `bdo_sample_renderer.py` all consume the same result. The effective signal endpoint is scanned once during decode/cache preparation, never in the callback.
 
+When no legal local game samples are configured, ordinary timeline, piano-roll,
+and key audition can preload deterministic bounded procedural voices off the
+callback thread. This internal renderer has deterministic piano, plucked-string,
+harp, bowed-string, woodwind, clarinet, brass, bass, handpan, and synth families;
+BDO drum pieces 48–64 are separate one-shots. The toolbar and Settings share one
+persistent `preview_mode` policy: `auto` prefers a usable local BDO source,
+`bdo` fails visibly instead of falling back, and `generic` explicitly locks the
+internal renderer. The UI labels the generic route as non-game audio.
+Game-candidate A/B review remains sample-backed and never silently substitutes
+the procedural preview, so evidence semantics stay intact. See
+[audio source strategy](AUDIO_SOURCE_STRATEGY.md) for the third-party SoundFont
+release gate.
+
+The timeline reserves a compact 34 px reference row while no MP3/WAV is loaded
+and expands it to the standard lane height only for a loaded or loading source.
+Its left track header omits redundant pitch-range text; conversion validation is
+projected onto each affected lane. Red rails and `!` badges are reserved for hard
+export errors; amber rails and merge badges are non-blocking attention marks for
+same-instrument export merges. Each lane renders only its highest severity: an
+error lane stays fully red, while its lower-priority merge information remains
+in the tooltip/check dialog instead of splitting the lane red/amber. Hover exposes
+the localized reasons and clicking a badge opens the matching conversion-check
+item. There is no dedicated persistent validation row above the canvas; only a
+deduplicated global toast appears when the highest validation state changes, then
+automatically clears. Validation remains owned by `bdo_validation.py`.
+
 `bdo_track_effects.py` is the Qt-free authoring boundary for the mixer bytes.
 Track volume is independent of velocity and has a verified game UI range of
 0–100/default 70. Setting bytes 0/2/4 are per-instrument Aux sends; bytes
@@ -433,11 +462,15 @@ Track volume is independent of velocity and has a verified game UI range of
 Editors update only their layer, while imported 101–255 bytes remain lossless
 until that field is explicitly edited. The byte/authoring structure is stored
 accurately; its Wwise DSP scaling and volume taper remain unverified, so preview
-uses a bounded linear volume interpretation and labels nonzero FX as unsimulated.
+uses a bounded linear volume interpretation. `bdo_preview_effects.py` routes
+each voice into the verified per-track Reverb/Delay/Chorus Aux topology, then
+applies a preallocated feedback-comb reverb, fixed-delay echo, and modulated
+delay chorus. Those local curves are explicitly labelled uncalibrated and never
+alter the lossless export bytes.
 
-The Qt audio worker only pulls prepared PCM. Output format negotiation prefers the samples' native 36 kHz stereo Int16 format, then 48 kHz, then a valid device-preferred stereo format. A low/high watermark refills at least 1024 frames per render instead of remixing a 2 ms deficit. Sparse audition retains the former 72 ms queue target; the sink owns 128 ms of physical capacity and playback with at least 64 active voices may use the extra headroom, in blocks of at most 2048 frames, to absorb scheduler and OS spikes. Basic/native voices that share a Wwise sample source use fixed eight-voice interpolation tiles backed by preallocated scratch. The logical voices, lifecycle, instance limits, Seek state, track meters, and scalar DSP paths remain independent. All event boundaries in a block are scheduled before each surviving voice is mixed once, same-frame pressure pruning is reused, and release-complete spans never run interpolation or articulation DSP. The bounded voice pool uses short release steals. `AudioStatus.render_p95_load` reports render time relative to the delivered audio budget. The output queue retains partially accepted PCM writes so the mixer timeline cannot skip samples at a block boundary. Pause has explicit transport state, suspends `QAudioSink`, and preserves both its device queue and partially accepted PCM; resume continues in place, while ordinary Stop in both timelines, clear, and seek reset stale PCM without destroying the shared output/decode workers. Repeated note/velocity zone lookups and immutable mapping parses are memoized during preload. Reference waveform decoding yields completely while its media stream is playing, preventing a second full-file decoder from starving the audible stream. `tools/benchmark_realtime_audio.py` defaults to one device-free producer using the same refill policy; real-sink mode never drives `_read_pcm` from a second thread.
+The Qt audio worker only pulls prepared PCM. Output format negotiation prefers the samples' native 36 kHz stereo Int16 format, then 48 kHz, then a valid device-preferred stereo format. A low/high watermark refills at least 1024 frames per render instead of remixing a 2 ms deficit. Sparse audition retains the former 72 ms queue target; the sink owns 128 ms of physical capacity and playback with at least 64 active voices may use the extra headroom, in blocks of at most 2048 frames, to absorb scheduler and OS spikes. Basic/native voices use fixed eight-voice interpolation tiles backed by preallocated scratch, including voices with nonzero Aux sends. Track-specific wet buses remain logically independent; exactly shared tile routes and exactly equivalent voice groups only aggregate mathematically linear gain/send sums. All logical voices, lifecycle, instance limits, Seek state, track meters, and nonlinear DSP paths remain independent. All event boundaries in a block are scheduled before each surviving voice is mixed once, same-frame pressure pruning is reused, and release-complete spans never run interpolation or articulation DSP. Effect input buses and rings are fixed before playback; the callback only clears, routes and advances them. The bounded voice pool uses short release steals. `AudioStatus.render_p95_load` reports render time relative to the delivered audio budget. The output queue retains partially accepted PCM writes so the mixer timeline cannot skip samples at a block boundary. Pause has explicit transport state, suspends `QAudioSink`, and preserves both its device queue and partially accepted PCM; resume continues in place, while ordinary Stop in both timelines, clear, and seek reset stale PCM without destroying the shared output/decode workers. Repeated note/velocity zone lookups and immutable mapping parses are memoized during preload. Reference waveform decoding yields completely while its media stream is playing, preventing a second full-file decoder from starving the audible stream. `tools/benchmark_realtime_audio.py` defaults to one device-free producer using the same refill policy, supports an explicit all-effects workload, and never lets real-sink mode drive `_read_pcm` from a second thread.
 
-The fixed-tile NumPy mixer has measured headroom for ordinary projects and the 176-note real-sample stress case. More than roughly 200 simultaneous nonlinear or unrelated-sample voices can still exceed a block budget; that boundary remains visible in load/underrun telemetry instead of being hidden by an unbounded buffer or a changed voice-admission policy.
+The fixed-tile NumPy mixer has measured device-free headroom for ordinary projects and 64/176/256-request real-sample stress cases. The highest case reaches the bounded soft-voice admission policy and therefore exercises short release steals. Target-device scheduling remains visible in load/underrun telemetry instead of being hidden by an unbounded buffer or a changed voice-admission policy.
 
 Decoded caches up to 192 MiB are repacked during cancellable preload into one
 immutable PCM arena, allowing one fixed eight-voice interpolation tile to span
@@ -476,13 +509,19 @@ experiment metadata, never local paths or audio assets.
 
 ## Export
 
-`MidiToBdoWindow._build_params()` always passes active `TrackState` objects as
-`direct_tracks`. An unchanged imported BDO document is emitted byte-for-byte;
+`MidiToBdoWindow._build_params()` freezes active `TrackState` values into
+immutable `ExportTrackSnapshot` objects before the worker starts. The worker
+therefore never races later editor mutations. An unchanged imported BDO
+document is emitted byte-for-byte;
 edited documents preserve bound dual velocities, track volume/settings, and
-then use deterministic canonical encoding through `bdo_export` and `bdo_codec`.
-After a successful conversion the score is always copied into the user's default
-Black Desert music directory; choosing that directory as the output destination
-is handled as a safe no-op instead of attempting to copy a file onto itself.
+then use deterministic canonical encoding through `export_workflow`,
+`bdo_export`, and `bdo_codec`. Output and game-directory copies are written to
+same-directory temporary files, flushed, and atomically replaced; window close
+waits for an active export rather than destroying its `QThread`.
+After a successful conversion the score is copied into the configured Black
+Desert music directory (initially resolved from the redirected Windows
+Documents known folder); choosing that directory as the output destination is
+handled as a safe no-op instead of attempting to copy a file onto itself.
 
 BDO v9 payload invariants:
 
@@ -532,6 +571,13 @@ account limit; the native composition UI receives `noteCount` dynamically.
   a boolean that lets the UI request reference-audio relinking. Projects written
   before this policy may read their legacy absolute paths once; the immediate
   autosave rewrites them to the path-free policy.
+- Autosave captures immutable track/note containers on the GUI thread, then a
+  single coalescing writer serializes JSON, copies a missing recovery source,
+  and atomically replaces `project.json` off-thread. `project.index.json`
+  contains only the stable project UUID, display name, save time, and distinct
+  BDO instrument IDs so the home page never has to parse multi-megabyte note
+  payloads. Final window close
+  drains the last writer.
 - Personal/game files are never bundled.
 - `BDOMusicComposer.spec` is the sole Windows packaging boundary. It includes
   the Basic Pitch `nmp.onnx` model, ONNX Runtime CPU native libraries, required
@@ -548,10 +594,11 @@ account limit; the native composition UI receives `noteCount` dynamically.
   aborts the build. The startup diagnostic also creates and removes its own
   disposable user-data root, so invoking it directly cannot scan or update
   normal projects, recents, settings, caches, or autosaves.
-- `build.ps1 -PublicRelease` is blocked by
-  `packaging/transcription_release_policy.json` until a human reviewer approves
-  the exact generated inventory digest, model redistribution terms, native
-  libraries, and complete notice set.
+- `build.ps1 -PublicRelease` validates the generated inventory against
+  `packaging/transcription_release_policy.json`. The checked-in v1.0.0 policy
+  clears only its recorded schema-2 digest; any dependency or artifact change fails
+  closed until a human reviewer approves the new model terms, native libraries,
+  inventory digest, and complete notice set.
 
 ## Performance strategy
 
@@ -564,6 +611,9 @@ account limit; the native composition UI receives `noteCount` dynamically.
   reuse that projection; only a merge that creates new frame boundaries needs
   a new projection.
 - Timeline and piano-roll canvases use time-sorted visible-range indexes.
+- Each formal track replacement rebuilds the multi-track time index once;
+  `_refresh_tracks()` is the single refresh boundary rather than being followed
+  by duplicate `set_tracks()` calls.
 - The multi-track timeline iterates only visible track rows, reuses its
   size-matched background pixmap, and caches conversion-range results by
   instrument, pitch, and transpose.
@@ -593,6 +643,10 @@ account limit; the native composition UI receives `noteCount` dynamically.
   at the inference boundary instead of blocking the GUI thread.
 - Timeline note rectangles are batched by articulation color.
 - Supported-pitch maps, track durations, and pitch bounds are cached.
+- `tools/benchmark_dense_ui.py` records reproducible offscreen 48k timeline,
+  12k + 8k piano-roll paint, and 12k/50k/100k visible-query distributions.
+  Correctness gates assert bounded inspections and cache identity; wall-clock
+  results remain diagnostic because host scheduling can introduce outliers.
 - Audio decode is concurrent and deduplicated by Wwise source ID.
 - Abandoned WAV preloads are cooperatively cancelled in bounded chunks, submit
   at most one decode-worker window, and release their executor threads on
@@ -603,6 +657,13 @@ account limit; the native composition UI receives `noteCount` dynamically.
   10 FPS GUI status poll
   copies the values into narrow timeline meters, so meter repainting is limited
   to the track-header strip and adds no file I/O to the audio callback.
+- Effect-enabled linear voices remain eligible for the fixed eight-voice
+  interpolation tile. Their logical Aux sends stay independent, while an
+  exactly shared route is accumulated once per tile and exact duplicate voices
+  use gain-weighted Aux sums without merging lifecycle state. The approximate reverb
+  uses four preallocated scalar delay rings; delay and chorus process bounded
+  vector chunks through fixed scratch arrays. None of these hot paths resize a
+  NumPy buffer or perform I/O after project preparation.
 
 ## UI theme
 
@@ -612,13 +673,30 @@ dark palette, and owns the shared Fluent-inspired component rules and monochrome
 line icons. `pyside_bdo_gui.py` supplies the BDO-branded base QSS and keeps the
 timeline, piano roll, and velocity lane custom-painted. The piano-roll keyboard
 uses dark natural-key beds with shorter raised black keys and right-aligned pitch
-labels; the roll uses a neutral charcoal grid and gray note bodies with a warm
-velocity line to mirror the game's composition workspace. Theme work must not
+labels; the roll uses the game's charcoal, beige, brown and green composition
+palette. Its visible snap grid uses the existing `1/4` through `1/64` quantize
+state, with separate measure, beat and subdivision weights. Formal piano-roll
+notes share one green identity, while overview notes inherit each track's
+identity stripe color; a narrow articulation marker retains technique color and
+invalid notes retain red warnings. Theme work must not
 replace those visible-range paint paths or introduce UI-library licensing into
 the MIDI, preview, or export layers.
 
 The settings dialog uses a persistent left navigation rail for three bounded
-domains: export identity, MIDI/velocity processing, and local audio/effects.
+domains: export identity, MIDI/velocity processing, and local audio/appearance.
+Score-wide master effects live in a separate workspace-toolbar dialog, while
+per-instrument Aux sends remain in each timeline row's Track FX editor. Neither
+surface owns or writes the other layer.
+The fixed top toolbar is shared by the home and workspace pages. A fixed-width
+ensemble identity block anchors its left edge: the original musician portrait,
+numeric performer count, and five square capacity lights move as one unit. They
+use the same unique physical-instrument calculation as the bottom performance
+metric and describe the open score, not connected users. All five lights turn
+red when the score exceeds the normal five-person party limit. Navigation,
+project commands, and right-side utilities stay in place across pages; only
+score commands and score context change visibility. Page and toolbar state are
+committed while top-level painting is suspended so a page switch cannot expose
+an intermediate toolbar layout.
 The acknowledgements dialog shares the same charcoal surfaces, amber accents,
 panel rhythm, and button hierarchy as the editor instead of defining a separate
 feature palette. Its curated entries come from `third_party_credits.py`; every
@@ -639,15 +717,45 @@ guidance, piano-roll shortcuts, drawing-mode help, and settings FX notes use thi
 surface instead of permanently occupying layout rows; durable state, errors,
 selection details, and export results remain in their existing status surfaces.
 
-The main window starts on a lightweight home page before entering the editor
-workspace. It has two collections: immediate files from the default Black
-Desert music folder, and a unified project list that merges autosaved
-`project.json` files with the bounded recent-file list stored in local config.
-The project list is path-deduplicated and ordered by recent activity. Startup
+The main window starts on a lightweight project-chooser home page before
+entering the editor workspace. Its packaged, application-owned mountain music
+workshop illustration is rendered once through a cached cover pixmap, with a
+left-to-right readability gradient and no disk reads in repaint events. A
+single translucent left functional layer leaves the character and environment
+visible on the right while switching one content surface between recent
+projects and files from the configured Black Desert music folder, rather than
+rendering two dense lists simultaneously. A compact three-command row covers a
+blank project, MIDI import, and opening an existing project. The library uses
+lightweight tabs and separator-based rows instead of nested cards, matching the
+scope of a small desktop utility. Brown-gold accents and olive selection follow
+the game-inspired visual direction without changing those commands or the
+library interaction model; refresh, directory maintenance, rename, delete, and
+version management remain secondary actions. The project collection
+combines autosaved `project.json` files with the bounded recent-file list stored
+in local config.
+The brand row includes a compact custom-painted, one-line identity entry with a
+neutral profile outline, performer name, and small readiness dot. Owner-ID detail
+moves to its tooltip instead of forming a second visual row. Missing identity uses
+an amber incomplete state and opens Settings; complete identity uses a muted green
+state. It is local export identity, not an account/login surface.
+Directory enumeration is incremental and yields after bounded batches. The
+project list is path-deduplicated and ordered by recent activity; a stable UUID,
+not the editable title, identifies related versions. Same-title unrelated
+projects remain separate, while every related version remains an independently
+openable row. Search filters both collections without reading score contents. Startup
 does not add a separate "autosave found" status banner; recovery stays inside
-this unified project list. Homepage scanning never parses game scores, so
-embedded Owner IDs and character names are
-not surfaced. Double-clicking a game score explicitly decrypts and parses its
+this unified project list. Homepage scanning performs a bounded,
+identity-blind structural read for the instrument summary: it decrypts only
+independent ICE blocks containing group counts and track prefixes, skips all
+note records, and never decodes Owner IDs, character names, or lyrics.
+The compact ensemble label derives physical performer selections from those wire
+IDs. Duplicate editor tracks and 730-note physical chunks do not increase the
+count; Marnian mode offsets fold back to the same selectable instrument. Because
+ensemble playback uses a normal five-member party, scores with more than five
+physical instruments show the instrument count and the five-player limit rather
+than an impossible required-player number.
+Oversized, malformed, or unsupported scores simply show no instrument badges.
+Double-clicking a game score explicitly decrypts and parses its
 BDO v9 data, collapses physical 730-note chunks into logical `TrackState`
 entries, preserves per-note articulation values, and switches to the existing
 timeline workspace. The source format is persisted with autosaves so a restored

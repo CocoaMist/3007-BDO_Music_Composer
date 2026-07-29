@@ -218,6 +218,18 @@ class OptimizerPluginApiTests(unittest.TestCase):
         with self.assertRaisesRegex(InvalidOptimizationPreview, "only one"):
             apply_preview([track], request, preview)
 
+    def test_preview_effect_writes_use_game_authoring_range(self) -> None:
+        track = Track(1, [Note(60, 80, 0, 300, 0)])
+        request = self.request([track])
+        preview = OptimizationPreview(
+            request.source_fingerprint,
+            "test",
+            "1",
+            (EffectChange(101, 0, None),),
+        )
+        with self.assertRaisesRegex(InvalidOptimizationPreview, r"\[0, 100\]"):
+            apply_preview([track], request, preview)
+
 
 if __name__ == "__main__":
     unittest.main()

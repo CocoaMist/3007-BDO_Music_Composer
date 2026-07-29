@@ -16,6 +16,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 
+from atomic_io import atomic_write_bytes  # noqa: E402
 from bdo_midi import (  # noqa: E402
     BDO_INSTRUMENT_NAMES,
     Note,
@@ -26,7 +27,7 @@ from bdo_export import channel_groups_to_bdo  # noqa: E402
 from bdo_profile import load_bdo_profile  # noqa: E402
 from bdo_score import read_bdo_score  # noqa: E402
 from bdo_validation import ValidationContext, validate_tracks  # noqa: E402
-from bdo_articulation_profiles import PROFILES  # noqa: E402
+from bdo_instrument_adaptation import articulation_pairs_by_instrument  # noqa: E402
 from optimization import OptimizationIntensity, OptimizerConfig  # noqa: E402
 from optimization.plugin_api import tracks_fingerprint  # noqa: E402
 from optimization.plugin_host import analyse_with_algorithm, discover_host_algorithms  # noqa: E402
@@ -219,7 +220,10 @@ def _issues(payload: dict[str, Any]) -> list[dict[str, Any]]:
             if not 0 <= note.pitch <= 127 or note.dur <= 0:
                 issues.append({"code": "note.invalid", "severity": "error", "message": "音符音高或时值无效", "track_id": track.track_id, "note_indices": [index]})
     tracks = _active(_tracks(payload))
-    profile = load_bdo_profile(ROOT / "data" / "profiles" / "bdo_global_v9.json")
+    profile = load_bdo_profile(
+        ROOT / "data" / "profiles" / "bdo_global_v9.json",
+        articulation_map=articulation_pairs_by_instrument(),
+    )
     settings = _settings(payload)
     context = ValidationContext(
         transpose=int(settings.get("transpose", 0)), active_track_ids=frozenset(track.track_id for track in tracks),
@@ -268,8 +272,7 @@ def _export(payload: dict[str, Any], out_path: str) -> dict[str, Any]:
         velocity_b_maps=velocity_b_maps or None,
     )
     target = Path(out_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
+    atomic_write_bytes(target, data)
     return {"exported": True, "path": str(target), "bytes": len(data), "summary": summary, "issues": issues}
 
 
@@ -286,7 +289,11 @@ def _algorithm_descriptors() -> tuple[list[dict[str, Any]], tuple[Any, ...]]:
 
 
 def _optimizer_maps() -> tuple[dict[int, frozenset[int]], dict[int, list[tuple[int, str]]], frozenset[int]]:
-    profile = load_bdo_profile(ROOT / "data" / "profiles" / "bdo_global_v9.json")
+    articulation_map = articulation_pairs_by_instrument()
+    profile = load_bdo_profile(
+        ROOT / "data" / "profiles" / "bdo_global_v9.json",
+        articulation_map=articulation_map,
+    )
     pitches: dict[int, frozenset[int]] = {}
     articulations: dict[int, list[tuple[int, str]]] = {}
     for instrument_id, rule in profile.instruments.items():
@@ -294,12 +301,10 @@ def _optimizer_maps() -> tuple[dict[int, frozenset[int]], dict[int, list[tuple[i
             pitches[instrument_id] = rule.allowed_pitches
         elif rule.pitch_min is not None and rule.pitch_max is not None:
             pitches[instrument_id] = frozenset(range(rule.pitch_min, rule.pitch_max + 1))
-    for item in PROFILES:
-        for instrument_id in item.instrument_ids:
-            pair = (int(item.ntype), str(item.technique))
-            if pair not in articulations.setdefault(int(instrument_id), []):
-                articulations[int(instrument_id)].append(pair)
-    articulations[profile.drum_instrument_id] = [(99, "打击乐")]
+    articulations = {
+        int(instrument_id): list(pairs)
+        for instrument_id, pairs in articulation_map.items()
+    }
     return pitches, articulations, frozenset(profile.instruments)
 
 

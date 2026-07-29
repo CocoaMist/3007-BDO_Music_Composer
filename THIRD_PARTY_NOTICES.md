@@ -75,10 +75,10 @@ Source checkouts install the same runtime through
 terms and notices.
 
 The Basic Pitch model finding resolves that model's upstream licensing
-evidence. For v0.3.0, the exact scientific Python/native dependency inventory
-and its available notice files were also reviewed and approved in the
-checked-in public-release policy. A different dependency inventory remains
-blocked until it receives a new review.
+evidence. For v1.0.0, the deterministic schema-2 scientific Python/native
+dependency inventory and its available notice files were reviewed and approved
+in the checked-in public-release policy. A different dependency inventory
+remains blocked until it receives a new review.
 
 The semantic-block, harmony, deterministic voice-grouping, and BDO Top-3
 features do not add another pretrained model or a separate product edition.
@@ -115,5 +115,5 @@ Every `BDO-Music-Composer.exe` build runs
 dependency graph, versions, declared licenses, available license files, and
 hashes of the ONNX model and ONNX Runtime native libraries. Available notice
 files and the generated report are embedded in the executable. The checked-in
-`packaging/transcription_release_policy.json` approves the recorded v0.3.0
-inventory digest only; a changed digest fails closed.
+`packaging/transcription_release_policy.json` approves the recorded v1.0.0
+schema-2 inventory digest only; a changed digest fails closed.

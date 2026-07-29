@@ -241,7 +241,7 @@ class ScopedAndEnsembleOptimizationTests(unittest.TestCase):
         self.assertEqual(suggestion, repeated.effect_suggestion)
         self.assertTrue(suggestion.writable)
         values = (suggestion.suggested_reverb, suggestion.suggested_delay, *(suggestion.suggested_chorus or (0, 0, 0)))
-        self.assertTrue(all(0 <= value <= 127 for value in values))
+        self.assertTrue(all(0 <= value <= 100 for value in values))
         single_result = optimize_tracks(
             [source], 120, BDO_ARTICULATIONS,
             OptimizerConfig(**kwargs, target_track_ids=frozenset({1}), allow_global_effect_write=False),
@@ -374,6 +374,24 @@ class ScopedAndEnsembleOptimizationTests(unittest.TestCase):
         )
         self.assertEqual([note.pitch for note in result.tracks[0].notes], [60])
         self.assertEqual(len(result.tracks[0].notes), 1)
+
+    def test_optimizer_does_not_mutate_reusable_config(self) -> None:
+        source = track(0x12, [Note(60, 80, 0, 1200)])
+        config = OptimizerConfig(
+            level=OptimizationLevel.EXPRESSIVE,
+            game_safe_only=True,
+            allow_track_creation=True,
+            optimize_blocks=False,
+            polish_velocity=False,
+            apply_articulations=False,
+            soft_quantize=False,
+        )
+
+        optimize_tracks([source], 120, BDO_ARTICULATIONS, config)
+
+        self.assertEqual(config.level, OptimizationLevel.EXPRESSIVE)
+        self.assertTrue(config.game_safe_only)
+        self.assertTrue(config.allow_track_creation)
 
     def test_expressive_mode_splits_non_melody_sustain_with_cap(self) -> None:
         source = track(0x12, [Note(60, 80, 0, 1200)])

@@ -93,6 +93,24 @@ class BdoProfileValidationTests(unittest.TestCase):
         self.assertEqual(pitch_issue.note_indices, (0,))
         self.assertTrue(any(item.code == "export.velocity_scale" for item in issues))
 
+    def test_approximate_instrument_range_warns_without_hard_rejection(self) -> None:
+        track = Track(
+            6,
+            [Note(44, 90, 0, 200, 0), Note(89, 90, 300, 200, 0)],
+            0x13,
+        )
+
+        issues = validate_tracks([track], self.profile, self.context([track]))
+
+        range_issue = next(
+            item for item in issues if item.code == "pitch.range_unverified"
+        )
+        self.assertEqual("warning", range_issue.severity)
+        self.assertEqual("approximate", range_issue.evidence_status)
+        self.assertFalse(any(
+            item.code == "pitch.instrument_unsupported" for item in issues
+        ))
+
     def test_validator_blocks_unmapped_drums_and_capacity_loss(self) -> None:
         drums = Track(1, [Note(99, 90, 0, 100, 0)], 13, is_percussion=True)
         issues = validate_tracks([drums], self.profile, self.context([drums]))
@@ -107,6 +125,7 @@ class BdoProfileValidationTests(unittest.TestCase):
         capacity = next(item for item in issues if item.code == "capacity.instrument")
         self.assertEqual("warning", capacity.severity)
         self.assertEqual("inferred", capacity.evidence_status)
+        self.assertEqual((9,), capacity.related_track_ids)
         self.assertIn("工具保守审阅阈值 10000", capacity.message)
         self.assertIn("导出器不会因此截断", capacity.message)
         self.assertIn("游戏内确认", capacity.message)
@@ -137,6 +156,15 @@ class BdoProfileValidationTests(unittest.TestCase):
         by_code = {issue.code: issue for issue in issues}
         self.assertEqual("error", by_code["tracks.volume_conflict"].severity)
         self.assertEqual("error", by_code["tracks.effects_conflict"].severity)
+        self.assertEqual((1, 2), by_code["tracks.merge"].related_track_ids)
+        self.assertEqual(
+            (1, 2),
+            by_code["tracks.volume_conflict"].related_track_ids,
+        )
+        self.assertEqual(
+            (1, 2),
+            by_code["tracks.effects_conflict"].related_track_ids,
+        )
 
     def test_legacy_wire_values_are_preserved_but_warned(self) -> None:
         track = Track(

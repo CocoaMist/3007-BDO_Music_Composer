@@ -1,6 +1,8 @@
 -r requirements-pyside.txt
 # Source/development runtime matching the sole Windows one-file release.
 # It is not an in-place extension mechanism for an already-built EXE.
+# scripts/install_transcription.ps1 applies constraints-windows-py312.txt so
+# the complete pinned transitive closure is reproducible.
 # Install basic-pitch itself with scripts/install_transcription.ps1 because its
 # published dependency metadata still requests an unavailable TensorFlow build
 # on Python 3.12. The runtime uses its ONNX backend only.

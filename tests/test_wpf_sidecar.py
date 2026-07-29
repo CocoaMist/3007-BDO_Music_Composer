@@ -3,7 +3,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import atomic_io
 import wpf_sidecar
 
 
@@ -12,7 +14,7 @@ class WpfSidecarTests(unittest.TestCase):
         return {
             "schema_version": 2, "owner_id": 123, "char_name": "Owner", "bpm": 120, "time_sig": 4,
             "conversion_settings": {"transpose": 0, "velocity_mode": "preserve", "reverb": 0, "delay": 0},
-            "tracks": [{"track_id": 1, "gm_program": 0, "is_percussion": False, "display_name": "lead", "bdo_instrument_id": 0x0B, "notes": [[60, 90, 0, 400, 7]]}],
+            "tracks": [{"track_id": 1, "gm_program": 0, "is_percussion": False, "display_name": "lead", "bdo_instrument_id": 0x0B, "notes": [[60, 90, 0, 400, 3]]}],
         }
 
     def test_handshake_advertises_capabilities(self) -> None:
@@ -42,10 +44,26 @@ class WpfSidecarTests(unittest.TestCase):
             self.assertTrue(exported["exported"])
             imported = wpf_sidecar.dispatch("import_bdo", {"score_path": str(out_path)})["project"]
             self.assertEqual(imported["owner_id"], 123)
-            self.assertEqual(imported["tracks"][0]["notes"][0], [60, 90, 0.0, 400.0, 7])
+            self.assertEqual(imported["tracks"][0]["notes"][0], [60, 90, 0.0, 400.0, 3])
             self.assertEqual(imported["path_policy"], "project-relative-v1")
             self.assertEqual(imported["source_bdo_path"], "")
             self.assertNotIn(str(Path(directory).resolve()), str(imported))
+
+    def test_export_failure_preserves_existing_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            out_path = Path(directory) / "score"
+            out_path.write_bytes(b"known-good")
+            with patch.object(atomic_io.os, "replace", side_effect=OSError("busy")):
+                with self.assertRaises(OSError):
+                    wpf_sidecar.dispatch(
+                        "export_bdo",
+                        {"project": self.project(), "out_path": str(out_path)},
+                    )
+            self.assertEqual(out_path.read_bytes(), b"known-good")
+            self.assertEqual(
+                list(out_path.parent.glob(f".{out_path.name}.*.tmp")),
+                [],
+            )
 
     def test_optimizer_preview_and_apply_use_snapshot_fingerprint(self) -> None:
         project = self.project()

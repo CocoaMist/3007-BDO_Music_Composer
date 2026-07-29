@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
+import atomic_io
 from bdo_experiments import AbExperimentRecord, read_experiment_records, write_experiment_records
 from project_schema import (
     CURRENT_PROJECT_SCHEMA,
@@ -176,6 +178,14 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
 
     def test_new_reference_layers_are_bounded_and_quiet(self) -> None:
         self.assertEqual(
+            DEFAULT_REFERENCE_LAYER_SETTINGS["ghost_opacity_percent"],
+            24,
+        )
+        self.assertEqual(
+            DEFAULT_REFERENCE_LAYER_SETTINGS["background_opacity_percent"],
+            45,
+        )
+        self.assertEqual(
             normalize_reference_layer_settings(None),
             DEFAULT_REFERENCE_LAYER_SETTINGS,
         )
@@ -191,6 +201,40 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
         self.assertEqual(normalized["ghost_opacity_percent"], 100)
         self.assertEqual(normalized["background_opacity_percent"], 0)
         self.assertTrue(normalized["frame_visible"])
+
+    def test_old_default_ghost_opacity_migrates_without_overwriting_custom_value(self) -> None:
+        migrated_default = normalize_reference_layer_settings(
+            {"version": 1, "ghost_opacity_percent": 70}
+        )
+        preserved_custom = normalize_reference_layer_settings(
+            {"version": 1, "ghost_opacity_percent": 58}
+        )
+
+        self.assertEqual(migrated_default["version"], 3)
+        self.assertEqual(migrated_default["ghost_opacity_percent"], 24)
+        self.assertEqual(preserved_custom["ghost_opacity_percent"], 58)
+
+    def test_v2_quiet_defaults_migrate_to_lower_density_without_overwriting_custom_values(self) -> None:
+        migrated_defaults = normalize_reference_layer_settings(
+            {
+                "version": 2,
+                "ghost_opacity_percent": 40,
+                "background_opacity_percent": 60,
+            }
+        )
+        preserved_custom = normalize_reference_layer_settings(
+            {
+                "version": 2,
+                "ghost_opacity_percent": 31,
+                "background_opacity_percent": 52,
+            }
+        )
+
+        self.assertEqual(migrated_defaults["version"], 3)
+        self.assertEqual(migrated_defaults["ghost_opacity_percent"], 24)
+        self.assertEqual(migrated_defaults["background_opacity_percent"], 45)
+        self.assertEqual(preserved_custom["ghost_opacity_percent"], 31)
+        self.assertEqual(preserved_custom["background_opacity_percent"], 52)
 
     def test_project_file_reference_round_trips_only_inside_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -252,6 +296,20 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
                 "bad", "profile", "2026.07", 11, 0, "", "", "inferred",
                 r"C:\Users\private\score",
             )
+
+    def test_experiment_write_failure_preserves_existing_destination(self) -> None:
+        record = AbExperimentRecord(
+            "exp-1", "profile", "2026.07", 11, 0, "same note", "aligned",
+            "verified", "abc123", "def456", "2026-07-15",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "experiments.json"
+            path.write_text("known-good", encoding="utf-8")
+            with patch.object(atomic_io.os, "replace", side_effect=OSError("busy")):
+                with self.assertRaises(OSError):
+                    write_experiment_records(path, [record])
+            self.assertEqual(path.read_text(encoding="utf-8"), "known-good")
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
 
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ exact build environment it:
 
 Basic Pitch model evidence is therefore available and consistent with
 Apache-2.0 redistribution. This finding did **not** by itself clear the whole
-Windows executable. The separate v0.3.0 review of ONNX Runtime, Qt/PySide6,
+Windows executable. The separate v1.0.0 review of ONNX Runtime, Qt/PySide6,
 libsndfile, libsoxr, LLVM-derived components, and other native/transitive
 artifacts is recorded in `packaging/transcription_release_policy.json`; any
 changed inventory requires a new review.

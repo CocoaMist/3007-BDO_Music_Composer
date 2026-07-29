@@ -15,12 +15,13 @@ class LocaleResponsiveUiTests(unittest.TestCase):
     def test_supported_locales_fit_and_preserve_dynamic_music_text(self) -> None:
         script = textwrap.dedent(
             """
-            from PySide6.QtWidgets import QApplication, QFrame, QLabel, QListWidget
+            from PySide6.QtWidgets import QApplication, QFrame, QLabel, QListWidget, QPushButton
 
             from i18n import install_localizer, tr, trf
             from pyside_bdo_gui import (
                 MidiNoteEditorDialog,
                 MidiToBdoWindow,
+                MasterEffectsDialog,
                 Note,
                 SettingsDialog,
                 TrackState,
@@ -61,6 +62,11 @@ class LocaleResponsiveUiTests(unittest.TestCase):
             settings = SettingsDialog(window)
             settings.resize(760, 680)
             settings.show()
+            master_effects = MasterEffectsDialog(
+                window, window._current_master_effects()
+            )
+            master_effects.resize(master_effects.minimumSize())
+            master_effects.show()
             app.processEvents()
 
             translations.set_language("en_US")
@@ -69,6 +75,7 @@ class LocaleResponsiveUiTests(unittest.TestCase):
             )
             cached_statuses = {
                 "zh_CN": "载入参考音频后可开始整首分析",
+                "zh_TW": "載入參考音訊後可開始整首分析",
                 "en_US": "Load reference audio to analyze the full song",
                 "ja_JP": "参照オーディオを読み込むと全曲解析を開始できます",
                 "ko_KR": "참조 오디오를 불러오면 전체 곡 분석을 시작할 수 있습니다",
@@ -98,7 +105,7 @@ class LocaleResponsiveUiTests(unittest.TestCase):
                 is True
             )
 
-            for language in ("zh_CN", "en_US", "ja_JP", "ko_KR"):
+            for language in ("zh_CN", "zh_TW", "en_US", "ja_JP", "ko_KR"):
                 translations.set_language(language)
                 window.resize(1160, 720)
                 window._apply_responsive_density()
@@ -110,6 +117,21 @@ class LocaleResponsiveUiTests(unittest.TestCase):
                 app.processEvents()
                 window._refresh_transcription_workspace()
                 editor.transcription_panel.set_copy_targets([(2, "Play")])
+                window.page_stack.setCurrentWidget(window.home_page)
+                window._set_home_toolbar_mode(True)
+                app.processEvents()
+                home_actions = window.findChildren(QPushButton, "HomeQuickAction")
+                assert len(home_actions) == 3
+                assert all(action.width() >= 100 for action in home_actions)
+                assert all(action.height() >= 42 for action in home_actions)
+                assert not any(
+                    home_actions[left].geometry().intersects(home_actions[right].geometry())
+                    for left in range(len(home_actions))
+                    for right in range(left + 1, len(home_actions))
+                )
+                window.page_stack.setCurrentWidget(window.workspace_page)
+                window._set_home_toolbar_mode(False)
+                app.processEvents()
                 assert (
                     editor.transcription_panel.status_label.text()
                     == cached_statuses[language]
@@ -120,6 +142,10 @@ class LocaleResponsiveUiTests(unittest.TestCase):
                 assert editor.minimumSizeHint().width() <= editor.width()
                 assert editor_toolbar.minimumSizeHint().width() <= editor.width()
                 assert inspector.minimumSizeHint().width() <= editor.width()
+                assert (
+                    master_effects.minimumSizeHint().width()
+                    <= master_effects.width()
+                )
                 assert window.file_label.text() == "Open"
                 assert window.file_label.toolTip() == "Open"
                 assert window.timeline_meta.text() == trf(
@@ -138,6 +164,7 @@ class LocaleResponsiveUiTests(unittest.TestCase):
 
                 for button in (
                     window.toolbar_home_btn,
+                    window.toolbar_master_effects_btn,
                     window.pause_button,
                     editor.draft_play_button,
                     editor.cancel_button,
@@ -145,6 +172,8 @@ class LocaleResponsiveUiTests(unittest.TestCase):
                 ):
                     assert button.toolTip()
                     assert button.accessibleName()
+                assert window.ensemble_capacity_badge.toolTip()
+                assert window.ensemble_capacity_badge.accessibleName()
                 assert editor.music_volume_slider.accessibleName()
                 assert editor.ghost_opacity_slider.accessibleName()
 
@@ -164,6 +193,7 @@ class LocaleResponsiveUiTests(unittest.TestCase):
             assert editor.draft_play_button.toolTip()
             assert all(not label.isVisible() for label in editor.note_field_labels)
 
+            master_effects.close()
             settings.close()
             editor.close()
             window.close()

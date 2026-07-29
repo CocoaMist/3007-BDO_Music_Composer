@@ -4,9 +4,10 @@
   "artifact": "BDO-Music-Composer.exe",
   "distribution_model": "single Windows one-file package with bundled Basic Pitch ONNX CPU inference",
   "public_release_cleared": true,
-  "approved_inventory_sha256": "918f3f8b802730d21b922970dd05232484a84075bdffcd8ab639e61c2cae77fe",
-  "reviewed_by": "CocoaMist maintainer (explicit public-release instruction)",
-  "reviewed_at_utc": "2026-07-27T01:09:59Z",
+  "approved_inventory_schema": 2,
+  "approved_inventory_sha256": "68fa9a2c6dd12608ff7ebe80a3a57be65efdf989a6cf55eca19cc70e732bf23b",
+  "reviewed_by": "CocoaMist maintainer (explicit v1.0.0 public-release instruction)",
+  "reviewed_at_utc": "2026-07-29T15:24:17Z",
   "notice_files_verified": true,
   "model_redistribution_reviewed": true,
   "native_library_notices_reviewed": true,
@@ -17,5 +18,5 @@
     "Confirm that all required license and notice texts are shipped with the release artifact.",
     "Record the approved inventory digest, reviewer, and UTC review time before setting public_release_cleared to true."
   ],
-  "note": "Public release is cleared only for the exact approved inventory digest. Any dependency or artifact change fails closed and requires a new review."
+  "note": "The v1.0.0 public build is cleared only for this deterministic schema-2 inventory. The published v0.3.0 schema-1 digest remains historical release evidence; any future inventory change fails closed and requires a new maintainer review."
 }

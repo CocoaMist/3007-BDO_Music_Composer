@@ -39,6 +39,25 @@ class DenseProjectUiTests(unittest.TestCase):
             timeline.set_tracks(tracks)
             timeline.show()
             app.processEvents()
+            visible_duration = timeline._visible_duration_ms()
+            overview_grid_width = timeline.width() - 320
+            assert not timeline._show_measure_banding(
+                visible_duration, overview_grid_width
+            )
+            overview_ticks = timeline._visible_musical_ticks(
+                0.0, visible_duration, overview_grid_width
+            )
+            tick_positions = [
+                value / visible_duration * overview_grid_width
+                for value, _major, _label in overview_ticks
+            ]
+            assert all(
+                right - left >= timeline.GRID_MIN_TICK_SPACING_PX - 0.01
+                for left, right in zip(tick_positions, tick_positions[1:])
+            )
+            assert timeline._show_measure_banding(
+                visible_duration / 8.0, overview_grid_width
+            )
             actions = {action for _rect, action, _track in timeline.hit_regions}
             assert "shorten" not in actions
             assert "lengthen" not in actions
@@ -81,6 +100,8 @@ class DenseProjectUiTests(unittest.TestCase):
                 rect for rect, action, target in timeline.hit_regions
                 if action == "audio_lane" and target is reference
             )
+            assert initial_audio_lane.height() == 34
+            assert initial_audio_lane.height() < timeline._lane_height()
             first, last = timeline._visible_track_row_range(450.0)
             assert last - first <= 10
             timeline.track_scroll.setValue(timeline.track_scroll.maximum())
@@ -105,6 +126,11 @@ class DenseProjectUiTests(unittest.TestCase):
             reference._audio_path = __import__("pathlib").Path("loaded.wav")
             timeline.update()
             app.processEvents()
+            loaded_audio_lane = next(
+                rect for rect, action, target in timeline.hit_regions
+                if action == "audio_lane" and target is reference
+            )
+            assert loaded_audio_lane.height() == timeline._lane_height()
             loaded_audio_actions = {
                 action for _rect, action, target in timeline.hit_regions
                 if target is reference

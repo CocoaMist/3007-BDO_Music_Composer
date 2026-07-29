@@ -50,6 +50,29 @@ class RealtimeAudioBenchmarkTests(unittest.TestCase):
         self.assertIn("2048", result["block_distribution"])
         self.assertEqual(result["buffer_frames"], 4_608)
 
+    def test_synthetic_all_effects_workload_is_active_and_bounded(self) -> None:
+        engine = build_synthetic_engine(
+            64,
+            0.2,
+            36_000,
+            effect_preview=True,
+        )
+        try:
+            self.assertTrue(engine._preview_effects.active)
+            self.assertTrue(engine._preview_effects.reverb_enabled)
+            self.assertTrue(engine._preview_effects.delay_enabled)
+            self.assertTrue(engine._preview_effects.chorus_enabled)
+            self.assertTrue(all(event.reverb_send > 0.0 for event in engine._events))
+            self.assertTrue(all(event.delay_send > 0.0 for event in engine._events))
+            self.assertTrue(all(event.chorus_send > 0.0 for event in engine._events))
+
+            result = run_offline_benchmark(engine, 0.2)
+        finally:
+            engine.stop()
+
+        self.assertEqual(result["active_voices_peak"], 64)
+        self.assertEqual(result["underruns"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -55,9 +55,13 @@ class BdoEffectsUiTests(unittest.TestCase):
             assert reverb is not None
             assert delay is not None
             assert chorus is not None
+            assert "共享混响" in reverb.toolTip()
+            assert "回声总线" in delay.toolTip()
+            assert "合唱/Flanger" in chorus.toolTip()
             for field in (reverb, delay, chorus):
                 assert (field.minimum(), field.maximum()) == (0, 100)
                 assert field.value() == 100
+                assert "导入原值" in field.toolTip()
 
             # Merely opening the editor must not normalize imported wire bytes.
             assert dialog.selected_track_settings() == raw
@@ -120,20 +124,73 @@ class BdoEffectsUiTests(unittest.TestCase):
             """
         )
 
-    def test_settings_master_effects_preserve_unedited_raw_values(self) -> None:
+    def test_track_fx_commit_marks_conversion_check_dirty(self) -> None:
         self._run_offscreen(
             """
-            from PySide6.QtWidgets import QApplication
+            from unittest.mock import patch
 
-            from bdo_track_effects import MasterEffects
-            from pyside_bdo_gui import MidiToBdoWindow, SettingsDialog
+            from PySide6.QtWidgets import QApplication, QDialog
+
+            from pyside_bdo_gui import MidiToBdoWindow, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()
-            window.reverb = 201
-            window.delay = 202
-            window.chorus = (203, 204, 205)
-            dialog = SettingsDialog(window)
+            track = TrackState(
+                1,
+                [],
+                0,
+                False,
+                "fx-commit",
+                0x0B,
+                bdo_track_settings=(0, 21, 0, 23, 0, 24, 25, 26),
+            )
+            window.tracks = [track]
+            dirty_calls = []
+            preview_calls = []
+            window._mark_conversion_check_dirty = lambda: dirty_calls.append(True)
+            window._on_preview_mapping_changed = lambda: preview_calls.append(True)
+
+            with patch("pyside_bdo_gui.TrackFxDialog") as dialog_type:
+                dialog = dialog_type.return_value
+                dialog.exec.return_value = QDialog.Accepted
+                dialog.selected_marnian_synth_mode.return_value = "basic"
+                dialog.selected_track_settings.return_value = (
+                    41, 21, 42, 23, 43, 24, 25, 26
+                )
+                window._show_effects_placeholder(track)
+
+            assert track.bdo_track_settings == (
+                41, 21, 42, 23, 43, 24, 25, 26
+            )
+            assert dirty_calls == [True]
+            assert preview_calls == [True]
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+
+    def test_master_effects_dialog_preserves_unedited_raw_values(self) -> None:
+        self._run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication, QSpinBox
+
+            from bdo_track_effects import MasterEffects
+            from pyside_bdo_gui import (
+                MasterEffectsDialog,
+                MidiToBdoWindow,
+                SettingsDialog,
+            )
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            settings = SettingsDialog(window)
+            assert settings.findChild(QSpinBox, "MasterReverbTime") is None
+            assert settings.findChild(QSpinBox, "MasterDelayFeedback") is None
+            settings.close()
+
+            original = MasterEffects(201, 202, 203, 204, 205)
+            dialog = MasterEffectsDialog(window, original)
             fields = (
                 dialog.reverb,
                 dialog.delay,
@@ -144,6 +201,12 @@ class BdoEffectsUiTests(unittest.TestCase):
             for field in fields:
                 assert (field.minimum(), field.maximum()) == (0, 100)
                 assert field.value() == 100
+                assert "导入原值" in field.toolTip()
+            assert "0.2–8.0 秒" in dialog.reverb.toolTip()
+            assert "250 ms" in dialog.delay.toolTip()
+            assert "梳状与旋动感" in dialog.chorus_feedback.toolTip()
+            assert "摆动幅度" in dialog.chorus_depth.toolTip()
+            assert "起伏速度" in dialog.chorus_freq.toolTip()
 
             # The visible authoring cap must not mutate legacy/imported bytes
             # just because the settings window was opened.
@@ -166,6 +229,107 @@ class BdoEffectsUiTests(unittest.TestCase):
                 1, 2, 3, 4, 5
             )
             dialog.close()
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+
+    def test_master_effect_commit_is_undoable_and_does_not_touch_track_sends(self) -> None:
+        self._run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication
+
+            from bdo_track_effects import MasterEffects
+            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            raw = (11, 21, 22, 23, 33, 24, 25, 26)
+            window.tracks = [
+                TrackState(
+                    1,
+                    [],
+                    0,
+                    False,
+                    "isolated-fx",
+                    0x0B,
+                    bdo_track_settings=raw,
+                )
+            ]
+            window.source_format = "project"
+            window.reverb = 21
+            window.delay = 23
+            window.chorus = (24, 25, 26)
+            preview_restarts = []
+            autosaves = []
+            window._restart_preview_after_timeline_change = (
+                lambda: preview_restarts.append(True)
+            )
+            window._autosave_project = (
+                lambda reason, immediate=False: autosaves.append(
+                    (reason, immediate)
+                )
+            )
+
+            selected = MasterEffects(1, 2, 3, 4, 5)
+            assert window._apply_master_effects(selected)
+            assert (window.reverb, window.delay, window.chorus) == (
+                1, 2, (3, 4, 5)
+            )
+            assert window.tracks[0].bdo_track_settings == raw
+            assert preview_restarts == [True]
+            assert autosaves == [("master effects", False)]
+
+            # Re-applying the same values is a no-op and creates no command.
+            assert not window._apply_master_effects(selected)
+            assert preview_restarts == [True]
+            assert autosaves == [("master effects", False)]
+
+            window._undo_project()
+            assert (window.reverb, window.delay, window.chorus) == (
+                21, 23, (24, 25, 26)
+            )
+            assert window.tracks[0].bdo_track_settings == raw
+            assert autosaves[-1] == ("project undo", True)
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+
+    def test_project_effect_defaults_do_not_leak_between_source_types(self) -> None:
+        self._run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication
+
+            from bdo_track_effects import MasterEffects
+            from pyside_bdo_gui import MidiToBdoWindow
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            window.reverb = 91
+            window.delay = 92
+            window.chorus = (93, 94, 95)
+
+            # Old MIDI/blank projects with no FX keys start neutral instead
+            # of inheriting the previously open score.
+            window._apply_conversion_settings(
+                {"char_name": "legacy-midi"},
+                default_master=MasterEffects(),
+            )
+            assert (window.reverb, window.delay, window.chorus) == (0, 0, None)
+
+            # A legacy BDO-backed project keeps values read from its score
+            # when its project metadata predates explicit master fields.
+            imported = MasterEffects(11, 12, 13, 14, 15)
+            window._apply_conversion_settings(
+                {},
+                default_master=imported,
+            )
+            assert (window.reverb, window.delay, window.chorus) == (
+                11, 12, (13, 14, 15)
+            )
             window.close()
             app.processEvents()
             app.quit()
@@ -227,7 +391,7 @@ class BdoEffectsUiTests(unittest.TestCase):
             """
         )
 
-    def test_realtime_marks_track_aux_sends_as_unsimulated(self) -> None:
+    def test_realtime_routes_track_aux_sends_to_approximate_preview(self) -> None:
         self._run_offscreen(
             """
             import json
@@ -286,15 +450,24 @@ class BdoEffectsUiTests(unittest.TestCase):
                         ntype=0,
                     )],
                 )
-                _events, _cache, _bytes, unverified, _duration = (
+                events, _cache, _bytes, unverified, duration = (
                     engine._prepare_project(
                         [track], map_path, 0, 0, 0, None, 1024 * 1024
                     )
                 )
+                assert len(events) == 1
+                assert events[0].reverb_send == 0.25
+                assert events[0].delay_send == 0.0
+                assert events[0].chorus_send == 0.0
                 assert (
-                    "per-track reverb/delay/chorus sends: exported; "
-                    "local DSP not simulated"
+                    "reverb/delay/chorus preview: bounded local approximation; "
+                    "not calibrated against game Wwise DSP"
                 ) in unverified
+                committed = engine._commit_project(
+                    events, _cache, _bytes, unverified, duration, start_ms=0
+                )
+                assert engine._preview_effects.reverb_enabled
+                assert committed["duration_ms"] > duration * 1000 / 48_000
                 engine.stop()
             app.quit()
             """

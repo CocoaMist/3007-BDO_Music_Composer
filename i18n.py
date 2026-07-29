@@ -35,6 +35,7 @@ _LOGGER = logging.getLogger(__name__)
 
 LANGUAGES = (
     ("zh_CN", "简体中文"),
+    ("zh_TW", "繁體中文"),
     ("en_US", "English"),
     ("ja_JP", "日本語"),
     ("ko_KR", "한국어"),
@@ -112,6 +113,11 @@ def detect_language_from_timezone(
         # Singapore, Malaysia, the Philippines, and other UTC+8 regions.
         system_locale = str(QLocale.system().name() or "").casefold()
         if system_locale.startswith("zh"):
+            if any(
+                token in system_locale
+                for token in ("zh_tw", "zh_hk", "zh_mo", "zh_hant")
+            ):
+                return "zh_TW"
             return "zh_CN"
         if system_locale.startswith("ja"):
             return "ja_JP"
@@ -125,7 +131,9 @@ def detect_language_from_timezone(
         if utc_offset_minutes is None:
             utc_offset_minutes = round(offset.total_seconds() / 60) if offset else 0
     normalized = timezone_name.casefold().replace("_", "/")
-    if any(token in normalized for token in ("asia/shanghai", "asia/chongqing", "asia/hong/kong", "asia/taipei", "china standard", "cst-china")):
+    if any(token in normalized for token in ("asia/taipei", "taipei standard", "asia/hong/kong", "hong kong standard")):
+        return "zh_TW"
+    if any(token in normalized for token in ("asia/shanghai", "asia/chongqing", "china standard", "cst-china")):
         return "zh_CN"
     if any(token in normalized for token in ("asia/tokyo", "tokyo standard", "japan standard", "jst")):
         return "ja_JP"
@@ -136,6 +144,104 @@ def detect_language_from_timezone(
 
 def resolve_language(language: str) -> str:
     return detect_language_from_timezone() if language == "auto" else language
+
+
+# Compact character coverage for every Han character currently used by the
+# Chinese source catalog. Phrase replacements run first to resolve contextual
+# forms and common Taiwan desktop terminology; no runtime conversion package
+# is required in source or frozen builds.
+_SIMPLIFIED_CATALOG_CHARACTERS = '\u4e0e\u4e13\u4e22\u4e24\u4e25\u4e2a\u4e34\u4e3a\u4e50\u4e89\u4e8e\u4e91\u4ec5\u4ece\u4ef7\u4f18\u4f1a\u4f20\u4f2a\u4f53\u4fa7\u5170\u5173\u5185\u5199\u51b2\u51b5\u51c0\u51c6\u51cf\u51ef\u51fb\u5219\u521b\u5220\u522b\u52a1\u52a8\u52bf\u533a\u534f\u5355\u5360\u538b\u53c2\u53cc\u53d1\u53d8\u53e0\u53f0\u53f7\u540e\u5417\u542c\u542f\u5450\u54cd\u5522\u56f4\u56fd\u56fe\u5706\u5757\u5760\u58f0\u5904\u5907\u590d\u5934\u5939\u5b66\u5b9e\u5ba1\u5bbd\u5bf9\u5bfc\u5c06\u5c14\u5c42\u5c5e\u5cf0\u5e26\u5e2e\u5e72\u5e76\u5e93\u5e94\u5f00\u5f02\u5f03\u5f20\u5f2f\u5f39\u5f3a\u5f53\u5f55\u5f84\u6001\u603b\u613f\u620f\u6237\u6269\u626b\u626c\u62a4\u62a5\u62c5\u62e8\u62e9\u6362\u636e\u6447\u6491\u6570\u65ad\u65e0\u65e7\u65f6\u663e\u6682\u673a\u6743\u6761\u6765\u6781\u6784\u67aa\u6807\u6811\u6837\u6863\u68c0\u69db\u6a2a\u6c14\u6ca1\u6d4a\u6d4b\u6d4f\u6da6\u6e10\u6e29\u6e38\u6eda\u6ee1\u6ee4\u7075\u70b9\u72b6\u72ec\u732e\u739b\u73af\u73b0\u7535\u76d6\u76d8\u7801\u7840\u786e\u79bb\u79cd\u79d8\u79f0\u7a33\u7ad6\u7ade\u7b14\u7b5d\u7b7e\u7b80\u7bab\u7c7b\u7d27\u7ea6\u7ea7\u7eaf\u7eb9\u7ebf\u7ec4\u7ec6\u7ec7\u7ec8\u7ecf\u7ed1\u7ed3\u7ed8\u7edd\u7edf\u7ee7\u7eea\u7eed\u7ef4\u7f00\u7f13\u7f16\u7f29\u7f51\u7f57\u8054\u8111\u8282\u8303\u83b1\u8428\u8854\u88c5\u89c1\u89c4\u89c8\u89e6\u8ba1\u8ba4\u8ba8\u8ba9\u8bae\u8bb0\u8bb8\u8bba\u8bbe\u8bc1\u8bc6\u8bca\u8bcd\u8bd5\u8bdd\u8be5\u8be6\u8bed\u8bef\u8bf4\u8bf7\u8bfb\u8c03\u8c22\u8c23\u8c31\u8d1d\u8d1f\u8d21\u8d25\u8d26\u8d2f\u8d44\u8d56\u8d5b\u8dc3\u8f68\u8f6c\u8f6e\u8f6f\u8f74\u8f7b\u8f7d\u8f83\u8f85\u8f91\u8f93\u8fb9\u8fbe\u8fc7\u8fd0\u8fd8\u8fd9\u8fdb\u8fde\u8fdf\u9002\u9009\u9012\u90bb\u91c7\u91cc\u949f\u94a2\u94b9\u94c3\u94db\u94dc\u94f2\u94f6\u94fa\u94fe\u9500\u9501\u9510\u9519\u951a\u952e\u952f\u9572\u957f\u95e8\u95ed\u95ee\u95f4\u95f7\u9605\u9608\u961f\u9636\u9645\u9669\u968f\u9690\u9759\u9875\u9879\u987a\u987b\u9884\u9891\u9897\u9898\u989c\u989d\u98a4\u98ce\u9970\u9988\u9a6c\u9a8c\u9c7c\u9e1f\u9e23\u9f50\u9f7f\u9f99'
+_TRADITIONAL_CATALOG_CHARACTERS = '\u8207\u5c08\u4e1f\u5169\u56b4\u500b\u81e8\u7232\u6a02\u722d\u65bc\u96f2\u50c5\u5f9e\u50f9\u512a\u6703\u50b3\u50de\u9ad4\u5074\u862d\u95dc\u5167\u5beb\u885d\u6cc1\u6de8\u6e96\u6e1b\u51f1\u64ca\u5247\u5275\u522a\u5225\u52d9\u52d5\u52e2\u5340\u5354\u55ae\u4f54\u58d3\u53c3\u96d9\u767c\u8b8a\u758a\u81fa\u865f\u5f8c\u55ce\u807d\u5553\u5436\u97ff\u55e9\u570d\u570b\u5716\u5713\u584a\u589c\u8072\u8655\u5099\u5fa9\u982d\u593e\u5b78\u5be6\u5be9\u5bec\u5c0d\u5c0e\u5c07\u723e\u5c64\u5c6c\u5cef\u5e36\u5e6b\u5e79\u4e26\u5eab\u61c9\u958b\u7570\u68c4\u5f35\u5f4e\u5f48\u5f37\u7576\u9304\u5f91\u614b\u7e3d\u9858\u6232\u6236\u64f4\u6383\u63da\u8b77\u5831\u64d4\u64a5\u64c7\u63db\u64da\u6416\u6490\u6578\u65b7\u7121\u820a\u6642\u986f\u66ab\u6a5f\u6b0a\u689d\u4f86\u6975\u69cb\u69cd\u6a19\u6a39\u6a23\u6a94\u6aa2\u6abb\u6a6b\u6c23\u6c92\u6fc1\u6e2c\u700f\u6f64\u6f38\u6eab\u904a\u6efe\u6eff\u6ffe\u9748\u9ede\u72c0\u7368\u737b\u746a\u74b0\u73fe\u96fb\u84cb\u76e4\u78bc\u790e\u78ba\u96e2\u7a2e\u7955\u7a31\u7a69\u8c4e\u7af6\u7b46\u7b8f\u7c64\u7c21\u7c2b\u985e\u7dca\u7d04\u7d1a\u7d14\u7d0b\u7dda\u7d44\u7d30\u7e54\u7d42\u7d93\u7d81\u7d50\u7e6a\u7d55\u7d71\u7e7c\u7dd2\u7e8c\u7dad\u7db4\u7de9\u7de8\u7e2e\u7db2\u7f85\u806f\u8166\u7bc0\u7bc4\u840a\u85a9\u929c\u88dd\u898b\u898f\u89bd\u89f8\u8a08\u8a8d\u8a0e\u8b93\u8b70\u8a18\u8a31\u8ad6\u8a2d\u8b49\u8b58\u8a3a\u8a5e\u8a66\u8a71\u8a72\u8a73\u8a9e\u8aa4\u8aaa\u8acb\u8b80\u8abf\u8b1d\u8b20\u8b5c\u8c9d\u8ca0\u8ca2\u6557\u8cec\u8cab\u8cc7\u8cf4\u8cfd\u8e8d\u8ecc\u8f49\u8f2a\u8edf\u8ef8\u8f15\u8f09\u8f03\u8f14\u8f2f\u8f38\u908a\u9054\u904e\u904b\u9084\u9019\u9032\u9023\u9072\u9069\u9078\u905e\u9130\u63a1\u88cf\u937e\u92fc\u9238\u9234\u943a\u9285\u93df\u9280\u92ea\u93c8\u92b7\u9396\u92b3\u932f\u9328\u9375\u92f8\u9454\u9577\u9580\u9589\u554f\u9593\u60b6\u95b1\u95be\u968a\u968e\u969b\u96aa\u96a8\u96b1\u975c\u9801\u9805\u9806\u9808\u9810\u983b\u9846\u984c\u984f\u984d\u986b\u98a8\u98fe\u994b\u99ac\u9a57\u9b5a\u9ce5\u9cf4\u9f4a\u9f52\u9f8d'
+
+_TRADITIONAL_CHARACTER_TRANSLATION = str.maketrans(
+    _SIMPLIFIED_CATALOG_CHARACTERS,
+    _TRADITIONAL_CATALOG_CHARACTERS,
+)
+_TAIWAN_UI_PHRASES = {
+    "为": "為",
+    "文件路径": "檔案路徑",
+    "文件格式": "檔案格式",
+    "源文件": "來源檔案",
+    "文件夹": "資料夾",
+    "文件名": "檔名",
+    "文件": "檔案",
+    "转换检查": "匯出檢查",
+    "导入": "匯入",
+    "导出": "匯出",
+    "加载": "載入",
+    "读取": "讀取",
+    "保存": "儲存",
+    "设置": "設定",
+    "默认": "預設",
+    "项目": "專案",
+    "工程": "專案",
+    "打开": "開啟",
+    "新建": "新增",
+    "创建": "建立",
+    "应用": "套用",
+    "优化": "最佳化",
+    "列表": "清單",
+    "菜单": "選單",
+    "按钮": "按鈕",
+    "搜索": "搜尋",
+    "刷新": "重新整理",
+    "点击": "按一下",
+    "双击": "按兩下",
+    "右键": "按右鍵",
+    "鼠标": "滑鼠",
+    "界面": "介面",
+    "窗口": "視窗",
+    "用户": "使用者",
+    "软件": "軟體",
+    "硬件": "硬體",
+    "音频": "音訊",
+    "视频": "影片",
+    "数据": "資料",
+    "缓存": "快取",
+    "内存": "記憶體",
+    "后台": "背景",
+    "程序": "程式",
+    "进程": "處理程序",
+    "线程": "執行緒",
+    "网络": "網路",
+    "链接": "連結",
+    "兼容": "相容",
+    "支持": "支援",
+    "反馈": "回授",
+    "曲谱": "樂譜",
+    "轨道": "音軌",
+    "复制": "複製",
+    "剪切": "剪下",
+    "粘贴": "貼上",
+    "撤销": "復原",
+    "本地": "本機",
+    "分辨率": "解析度",
+    "质量": "品質",
+    "复选框": "核取方塊",
+    "标签": "標籤",
+    "签名": "簽名",
+    "干声": "乾聲",
+    "干净": "乾淨",
+    "干扰": "干擾",
+    "回收站": "資源回收筒",
+    "产生": "產生",
+    "摆动": "擺動",
+    "重复": "重複",
+    "调制": "調變",
+}
+
+
+def simplified_to_traditional_ui(text: str) -> str:
+    """Return deterministic Taiwan-oriented UI copy without touching data."""
+
+    converted = str(text)
+    for source, translated in sorted(
+        _TAIWAN_UI_PHRASES.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
+        converted = converted.replace(source, translated)
+    return converted.translate(_TRADITIONAL_CHARACTER_TRANSLATION)
 
 
 EN = {
@@ -197,8 +303,8 @@ EN = {
     "合唱反馈": "Chorus Feedback", "LFO 深度": "LFO Depth",
     "LFO 频率": "LFO Frequency", "音源模式": "Source Mode",
     "Basic 默认；其他模式待验证": "Basic by default; other modes need verification",
-    "游戏参数 · 本地试听不模拟 FX": "Game parameters · FX is not simulated locally",
-    "每轨发送在轨道 FX；本地试听不模拟。": "Per-track sends are under AuxSend; local preview does not simulate them.",
+    "游戏参数 · 本地 FX 试听为未校准近似": "Game parameters · local FX preview is an uncalibrated approximation",
+    "每轨发送在轨道 FX；本地试听为未校准近似，导出值不变。": "Per-track sends are under AuxSend; local preview is uncalibrated and export values remain unchanged.",
     "导入原值 {value}；修改后按 0–100 写入。": "Imported value {value}; edits use 0–100.",
     "深度": "Depth", "频率": "Frequency",
     "保存设置": "Save Settings", "界面语言": "Interface Language",
@@ -289,8 +395,8 @@ JA = {
     "合唱反馈": "コーラス・フィードバック", "LFO 深度": "LFO深度",
     "LFO 频率": "LFO周波数", "音源模式": "音源モード",
     "Basic 默认；其他模式待验证": "Basicが既定。その他のモードは要検証",
-    "游戏参数 · 本地试听不模拟 FX": "ゲーム設定 · ローカル試聴ではFXを再現しません",
-    "每轨发送在轨道 FX；本地试听不模拟。": "トラックごとの送信量はAuxSendで設定します。ローカル試聴では再現しません。",
+    "游戏参数 · 本地 FX 试听为未校准近似": "ゲーム設定 · ローカルFX試聴は未校正の近似です",
+    "每轨发送在轨道 FX；本地试听为未校准近似，导出值不变。": "トラックごとの送信量はAuxSendで設定します。ローカル試聴は未校正の近似で、書き出し値は変わりません。",
     "导入原值 {value}；修改后按 0–100 写入。": "読み込み値 {value}。編集後は0～100で保存します。",
     "深度": "深さ", "频率": "周波数",
     "保存设置": "設定を保存", "界面语言": "表示言語",
@@ -378,8 +484,8 @@ KO = {
     "合唱反馈": "코러스 피드백", "LFO 深度": "LFO 깊이",
     "LFO 频率": "LFO 주파수", "音源模式": "음원 모드",
     "Basic 默认；其他模式待验证": "기본값은 Basic, 다른 모드는 검증 필요",
-    "游戏参数 · 本地试听不模拟 FX": "게임 설정 · 로컬 미리듣기는 FX를 재현하지 않음",
-    "每轨发送在轨道 FX；本地试听不模拟。": "트랙별 전송량은 AuxSend에서 설정하며 로컬 미리듣기에서는 재현하지 않습니다.",
+    "游戏参数 · 本地 FX 试听为未校准近似": "게임 설정 · 로컬 FX 미리듣기는 보정되지 않은 근사치",
+    "每轨发送在轨道 FX；本地试听为未校准近似，导出值不变。": "트랙별 전송량은 AuxSend에서 설정합니다. 로컬 미리듣기는 보정되지 않은 근사치이며 내보내기 값은 바뀌지 않습니다.",
     "导入原值 {value}；修改后按 0–100 写入。": "가져온 값 {value}; 수정 후에는 0~100으로 저장합니다.",
     "深度": "깊이", "频率": "주파수",
     "保存设置": "설정 저장", "界面语言": "인터페이스 언어",
@@ -424,8 +530,8 @@ EN.update({
     "选择一份游戏内保存的曲谱，读取角色名和 Owner ID。": "Choose a score saved in game to read its character name and Score Owner ID.",
     "这两项会影响 MIDI 读入方式；修改后会重新载入当前文件。": "These options affect MIDI parsing; changing them reloads the current file.",
     "选择一种输出力度策略；下方仅显示当前策略需要的参数。": "Choose an output velocity strategy; only its relevant parameters are shown.",
-    "数值范围为 0–127；设为 0 即不写入对应效果。": "Values range from 0–127; zero disables the corresponding effect.",
-    "轨道 FX 中的奏法会写入支持的 BDO 乐器。": "Musical Techniques selected under AuxSend are written to supported BDO instruments.",
+    "数值范围为 0–100；设为 0 即不写入对应效果。": "Values range from 0–100; zero disables the corresponding effect.",
+    "轨道 FX 设置每轨发送；此页设置共享主效果。": "Track FX sets per-track sends; this page configures the shared master effects.",
     "选择轨道查看详情。右键可修复和优化轨道或更换乐器；FX 可设置支持乐器的 BDO 奏法。": "Select a track for details. Right-click to optimize or change its instrument; AuxSend configures supported BDO Musical Techniques.",
     "导入 MIDI 后显示轨道与音符时间轴": "Import a MIDI file to display tracks and notes",
     "打开输出目录": "Open Output Folder", "无法原声试听": "Preview Unavailable",
@@ -497,8 +603,8 @@ JA.update({
     "选择一份游戏内保存的曲谱，读取角色名和 Owner ID。": "ゲーム内で保存した楽譜からキャラクター名と楽譜所有者IDを読み込みます。",
     "这两项会影响 MIDI 读入方式；修改后会重新载入当前文件。": "MIDIの読み込み方法に影響します。変更すると現在のファイルを再読み込みします。",
     "选择一种输出力度策略；下方仅显示当前策略需要的参数。": "ベロシティの出力方式を選択します。必要な設定だけが表示されます。",
-    "数值范围为 0–127；设为 0 即不写入对应效果。": "値は0～127です。0にすると対応するエフェクトを書き込みません。",
-    "轨道 FX 中的奏法会写入支持的 BDO 乐器。": "トラックFXの奏法は対応するBDO楽器へ書き込まれます。",
+    "数值范围为 0–100；设为 0 即不写入对应效果。": "値は0～100です。0にすると対応するエフェクトを書き込みません。",
+    "轨道 FX 设置每轨发送；此页设置共享主效果。": "トラックFXはトラックごとの送信量を設定し、このページでは共有マスターエフェクトを設定します。",
     "选择轨道查看详情。右键可修复和优化轨道或更换乐器；FX 可设置支持乐器的 BDO 奏法。": "トラックを選択すると詳細を表示します。右クリックで最適化や楽器変更、FXで奏法を設定できます。",
     "导入 MIDI 后显示轨道与音符时间轴": "MIDIを読み込むとトラックとノートを表示します",
     "打开输出目录": "出力フォルダーを開く", "无法原声试听": "プレビューできません",
@@ -570,8 +676,8 @@ KO.update({
     "选择一份游戏内保存的曲谱，读取角色名和 Owner ID。": "게임에서 저장한 악보를 선택해 캐릭터 이름과 악보 소유자 ID를 읽습니다.",
     "这两项会影响 MIDI 读入方式；修改后会重新载入当前文件。": "MIDI 읽기 방식에 영향을 주며 변경하면 현재 파일을 다시 불러옵니다.",
     "选择一种输出力度策略；下方仅显示当前策略需要的参数。": "벨로시티 출력 전략을 선택합니다. 필요한 설정만 아래에 표시됩니다.",
-    "数值范围为 0–127；设为 0 即不写入对应效果。": "값 범위는 0–127이며 0이면 해당 효과를 기록하지 않습니다.",
-    "轨道 FX 中的奏法会写入支持的 BDO 乐器。": "트랙 FX의 주법은 지원되는 BDO 악기에 기록됩니다.",
+    "数值范围为 0–100；设为 0 即不写入对应效果。": "값 범위는 0–100이며 0이면 해당 효과를 기록하지 않습니다.",
+    "轨道 FX 设置每轨发送；此页设置共享主效果。": "트랙 FX에서 트랙별 전송량을 설정하고 이 페이지에서 공유 마스터 이펙트를 설정합니다.",
     "选择轨道查看详情。右键可修复和优化轨道或更换乐器；FX 可设置支持乐器的 BDO 奏法。": "트랙을 선택하면 세부 정보를 봅니다. 우클릭으로 최적화하거나 악기를 바꾸고 FX에서 주법을 설정합니다.",
     "导入 MIDI 后显示轨道与音符时间轴": "MIDI를 가져오면 트랙과 노트를 표시합니다",
     "打开输出目录": "출력 폴더 열기", "无法原声试听": "미리듣기 불가",
@@ -2352,6 +2458,23 @@ EN.update({
     ),
     "音频 {load:.0f}% · XRUN {count}": "Audio {load:.0f}% · XRUN {count}",
     "声部 {count}": "Voices {count}",
+    "乐器 {count} · {players}/{limit} 人": (
+        "Instruments {count} · Players {players}/{limit}"
+    ),
+    "乐器 {count} · 超过 {limit} 人": "Instruments {count} · Over {limit} players",
+    "按当前参与演奏且含音符的轨道统计；同一实体乐器只计一次": (
+        "Counts active tracks with notes; each physical instrument counts once"
+    ),
+    "工程演奏人数": "Score performers",
+    "当前工程没有需要演奏的实体乐器": (
+        "The current score has no physical instruments to perform"
+    ),
+    "当前工程预计 {count}/{limit} 人演奏；同一实体乐器只计一人": (
+        "Current score: {count}/{limit} performers; each physical instrument counts once"
+    ),
+    "当前工程预计 {count} 人演奏，超过 {limit} 人队伍上限": (
+        "Current score needs {count} performers, over the {limit}-player party limit"
+    ),
 })
 JA.update({
     "本程序": "このアプリ",
@@ -2362,6 +2485,23 @@ JA.update({
     ),
     "音频 {load:.0f}% · XRUN {count}": "オーディオ {load:.0f}% · XRUN {count}",
     "声部 {count}": "ボイス {count}",
+    "乐器 {count} · {players}/{limit} 人": (
+        "楽器 {count} · 人数 {players}/{limit}"
+    ),
+    "乐器 {count} · 超过 {limit} 人": "楽器 {count} · {limit}人超過",
+    "按当前参与演奏且含音符的轨道统计；同一实体乐器只计一次": (
+        "演奏対象の音符があるトラックを集計し、同じ実楽器は1回だけ数えます"
+    ),
+    "工程演奏人数": "楽譜の演奏人数",
+    "当前工程没有需要演奏的实体乐器": (
+        "現在の楽譜には演奏が必要な実楽器がありません"
+    ),
+    "当前工程预计 {count}/{limit} 人演奏；同一实体乐器只计一人": (
+        "現在の楽譜は{count}/{limit}人想定。同じ実楽器は1人として数えます"
+    ),
+    "当前工程预计 {count} 人演奏，超过 {limit} 人队伍上限": (
+        "現在の楽譜は{count}人必要で、{limit}人のパーティー上限を超えています"
+    ),
 })
 KO.update({
     "本程序": "이 앱",
@@ -2372,6 +2512,23 @@ KO.update({
     ),
     "音频 {load:.0f}% · XRUN {count}": "오디오 {load:.0f}% · XRUN {count}",
     "声部 {count}": "보이스 {count}",
+    "乐器 {count} · {players}/{limit} 人": (
+        "악기 {count} · 인원 {players}/{limit}"
+    ),
+    "乐器 {count} · 超过 {limit} 人": "악기 {count} · {limit}명 초과",
+    "按当前参与演奏且含音符的轨道统计；同一实体乐器只计一次": (
+        "연주 대상이며 음표가 있는 트랙을 집계하고 같은 실제 악기는 한 번만 셉니다"
+    ),
+    "工程演奏人数": "악보 연주 인원",
+    "当前工程没有需要演奏的实体乐器": (
+        "현재 악보에는 연주가 필요한 실제 악기가 없습니다"
+    ),
+    "当前工程预计 {count}/{limit} 人演奏；同一实体乐器只计一人": (
+        "현재 악보 예상 인원 {count}/{limit}명; 같은 실제 악기는 한 명으로 계산합니다"
+    ),
+    "当前工程预计 {count} 人演奏，超过 {limit} 人队伍上限": (
+        "현재 악보는 {count}명이 필요해 {limit}명 파티 상한을 초과합니다"
+    ),
 })
 
 
@@ -4251,6 +4408,59 @@ KO.update({
 })
 
 
+EN.update({
+    "实时试听缓冲不足 {count} 次 · 混音 P95 {p95:.1f} ms": "Real-time preview underruns: {count} · mix P95 {p95:.1f} ms",
+    "导出、解析、试听与界面设置；保存后立即应用相关更改。": "Export, parsing, preview, and interface settings; related changes apply immediately after saving.",
+    "无法读取 MIDI 拍号，已阻止导出：{error}": "Could not read the MIDI meter; export was blocked: {error}",
+    "正在完成最终自动保存…": "Finishing the final autosave…",
+    "游戏曲谱目录": "Game score folder",
+    "游戏曲谱目录不可用": "Game Score Folder Unavailable",
+    "请选择有效的游戏曲谱目录。": "Choose a valid game score folder.",
+    "转换完成（未复制到游戏目录）": "Export complete (not copied to the game folder)",
+    "选择游戏曲谱目录": "Choose Game Score Folder",
+    "通用 MIDI 预览不可用": "Generic MIDI preview unavailable",
+    "通用 MIDI 预览可用": "Generic MIDI preview available",
+    "通用 MIDI 预览（非游戏原声）": "Generic MIDI preview (not game audio)",
+    "正在准备通用 MIDI 预览…": "Preparing generic MIDI preview…",
+    "分别设置导出保存位置和游戏曲谱安装位置。": "Set separate folders for exported scores and installed game scores.",
+    " · 未复制到游戏目录：{error}": " · Game-folder copy failed: {error}",
+})
+JA.update({
+    "实时试听缓冲不足 {count} 次 · 混音 P95 {p95:.1f} ms": "リアルタイム試聴のバッファ不足 {count} 回・ミックス P95 {p95:.1f} ms",
+    "导出、解析、试听与界面设置；保存后立即应用相关更改。": "書き出し、解析、試聴、画面の設定です。関連する変更は保存後すぐに反映されます。",
+    "无法读取 MIDI 拍号，已阻止导出：{error}": "MIDIの拍子を読み取れないため書き出しを停止しました：{error}",
+    "正在完成最终自动保存…": "最後の自動保存を完了しています…",
+    "游戏曲谱目录": "ゲーム楽譜フォルダー",
+    "游戏曲谱目录不可用": "ゲーム楽譜フォルダーを使用できません",
+    "请选择有效的游戏曲谱目录。": "有効なゲーム楽譜フォルダーを選択してください。",
+    "转换完成（未复制到游戏目录）": "書き出し完了（ゲームフォルダーにはコピーされていません）",
+    "选择游戏曲谱目录": "ゲーム楽譜フォルダーを選択",
+    "通用 MIDI 预览不可用": "汎用MIDIプレビューを使用できません",
+    "通用 MIDI 预览可用": "汎用MIDIプレビューを使用できます",
+    "通用 MIDI 预览（非游戏原声）": "汎用MIDIプレビュー（ゲーム音源ではありません）",
+    "正在准备通用 MIDI 预览…": "汎用MIDIプレビューを準備中…",
+    "分别设置导出保存位置和游戏曲谱安装位置。": "書き出し先とゲーム楽譜のインストール先を個別に設定します。",
+    " · 未复制到游戏目录：{error}": "・ゲームフォルダーへのコピー失敗：{error}",
+})
+KO.update({
+    "实时试听缓冲不足 {count} 次 · 混音 P95 {p95:.1f} ms": "실시간 미리듣기 버퍼 부족 {count}회 · 믹싱 P95 {p95:.1f} ms",
+    "导出、解析、试听与界面设置；保存后立即应用相关更改。": "내보내기, 분석, 미리듣기와 화면 설정입니다. 관련 변경은 저장 후 즉시 적용됩니다.",
+    "无法读取 MIDI 拍号，已阻止导出：{error}": "MIDI 박자를 읽을 수 없어 내보내기를 차단했습니다: {error}",
+    "正在完成最终自动保存…": "마지막 자동 저장을 완료하는 중…",
+    "游戏曲谱目录": "게임 악보 폴더",
+    "游戏曲谱目录不可用": "게임 악보 폴더를 사용할 수 없음",
+    "请选择有效的游戏曲谱目录。": "유효한 게임 악보 폴더를 선택하세요.",
+    "转换完成（未复制到游戏目录）": "내보내기 완료(게임 폴더에 복사되지 않음)",
+    "选择游戏曲谱目录": "게임 악보 폴더 선택",
+    "通用 MIDI 预览不可用": "일반 MIDI 미리듣기를 사용할 수 없음",
+    "通用 MIDI 预览可用": "일반 MIDI 미리듣기 사용 가능",
+    "通用 MIDI 预览（非游戏原声）": "일반 MIDI 미리듣기(게임 원음 아님)",
+    "正在准备通用 MIDI 预览…": "일반 MIDI 미리듣기 준비 중…",
+    "分别设置导出保存位置和游戏曲谱安装位置。": "내보내기 저장 폴더와 게임 악보 설치 폴더를 각각 설정합니다.",
+    " · 未复制到游戏目录：{error}": " · 게임 폴더 복사 실패: {error}",
+})
+
+
 # Built-in optimizer runtime vocabulary. These values may be nested inside a
 # report, so each fixed source fragment must be translated independently while
 # track names and captured numeric values remain untouched.
@@ -4704,6 +4914,86 @@ for _source, (_english, _japanese, _korean) in _OPTIMIZER_RUNTIME_TRANSLATIONS.i
 del _source, _english, _japanese, _korean
 
 
+EN.update({
+    "搜索项目或曲谱": "Search projects or scores",
+    "打开所选项目": "Open Selected Project",
+    "保存项目": "Save Project",
+    "另存为": "Save As",
+    "选择另存位置": "Choose Save Location",
+    "另存为失败": "Save As Failed",
+    "仍有项目写入正在进行，请稍后重试。": "A project write is still in progress. Please try again shortly.",
+    "当前没有可保存的项目": "There is no project to save",
+    "项目保存已排入队列": "Project save queued",
+    "项目副本保存已排入队列": "Project-copy save queued",
+    "重命名项目": "Rename Project",
+    "重命名项目失败": "Rename Project Failed",
+    "无法重命名项目：{error}": "Could not rename project: {error}",
+    "项目已重命名": "Project renamed",
+    "移到回收站": "Move to Recycle Bin",
+    "无法删除项目": "Could Not Remove Project",
+    "只能把自动保存目录中的项目移到回收站。": "Only projects inside the autosave directory can be moved to the Recycle Bin.",
+    "当前打开的项目不能删除；请先打开其他项目。": "The open project cannot be removed. Open another project first.",
+    "要把项目“{project}”移到回收站吗？": "Move project \"{project}\" to the Recycle Bin?",
+    "系统未能把项目移到回收站。": "The system could not move the project to the Recycle Bin.",
+    "项目已移到回收站": "Project moved to the Recycle Bin",
+    "请先选择一个项目或曲谱": "Select a project or score first",
+    "{time} · 版本 {index}/{count}": "{time} · Version {index}/{count}",
+    "\n工程版本 {index}/{count}；此版本可独立打开": "\nProject version {index}/{count}; this version can be opened independently",
+})
+JA.update({
+    "搜索项目或曲谱": "プロジェクトまたは楽譜を検索",
+    "打开所选项目": "選択したプロジェクトを開く",
+    "保存项目": "プロジェクトを保存",
+    "另存为": "名前を付けて保存",
+    "选择另存位置": "保存先を選択",
+    "另存为失败": "名前を付けて保存できませんでした",
+    "仍有项目写入正在进行，请稍后重试。": "プロジェクトの書き込み中です。しばらくしてから再試行してください。",
+    "当前没有可保存的项目": "保存できるプロジェクトがありません",
+    "项目保存已排入队列": "プロジェクトの保存を開始しました",
+    "项目副本保存已排入队列": "プロジェクトのコピー保存を開始しました",
+    "重命名项目": "プロジェクト名を変更",
+    "重命名项目失败": "プロジェクト名を変更できませんでした",
+    "无法重命名项目：{error}": "プロジェクト名を変更できません：{error}",
+    "项目已重命名": "プロジェクト名を変更しました",
+    "移到回收站": "ごみ箱に移動",
+    "无法删除项目": "プロジェクトを削除できません",
+    "只能把自动保存目录中的项目移到回收站。": "自動保存フォルダー内のプロジェクトだけをごみ箱に移動できます。",
+    "当前打开的项目不能删除；请先打开其他项目。": "開いているプロジェクトは削除できません。先に別のプロジェクトを開いてください。",
+    "要把项目“{project}”移到回收站吗？": "プロジェクト「{project}」をごみ箱に移動しますか？",
+    "系统未能把项目移到回收站。": "プロジェクトをごみ箱に移動できませんでした。",
+    "项目已移到回收站": "プロジェクトをごみ箱に移動しました",
+    "请先选择一个项目或曲谱": "先にプロジェクトまたは楽譜を選択してください",
+    "{time} · 版本 {index}/{count}": "{time} · バージョン {index}/{count}",
+    "\n工程版本 {index}/{count}；此版本可独立打开": "\nプロジェクトのバージョン {index}/{count}・このバージョンを個別に開けます",
+})
+KO.update({
+    "搜索项目或曲谱": "프로젝트 또는 악보 검색",
+    "打开所选项目": "선택한 프로젝트 열기",
+    "保存项目": "프로젝트 저장",
+    "另存为": "다른 이름으로 저장",
+    "选择另存位置": "저장 위치 선택",
+    "另存为失败": "다른 이름으로 저장 실패",
+    "仍有项目写入正在进行，请稍后重试。": "프로젝트를 기록하는 중입니다. 잠시 후 다시 시도하세요.",
+    "当前没有可保存的项目": "저장할 프로젝트가 없습니다",
+    "项目保存已排入队列": "프로젝트 저장을 시작했습니다",
+    "项目副本保存已排入队列": "프로젝트 복사본 저장을 시작했습니다",
+    "重命名项目": "프로젝트 이름 변경",
+    "重命名项目失败": "프로젝트 이름 변경 실패",
+    "无法重命名项目：{error}": "프로젝트 이름을 변경할 수 없습니다: {error}",
+    "项目已重命名": "프로젝트 이름을 변경했습니다",
+    "移到回收站": "휴지통으로 이동",
+    "无法删除项目": "프로젝트를 삭제할 수 없음",
+    "只能把自动保存目录中的项目移到回收站。": "자동 저장 폴더 안의 프로젝트만 휴지통으로 이동할 수 있습니다.",
+    "当前打开的项目不能删除；请先打开其他项目。": "현재 열린 프로젝트는 삭제할 수 없습니다. 먼저 다른 프로젝트를 여세요.",
+    "要把项目“{project}”移到回收站吗？": "프로젝트 ‘{project}’을(를) 휴지통으로 이동할까요?",
+    "系统未能把项目移到回收站。": "시스템이 프로젝트를 휴지통으로 이동하지 못했습니다.",
+    "项目已移到回收站": "프로젝트를 휴지통으로 이동했습니다",
+    "请先选择一个项目或曲谱": "먼저 프로젝트 또는 악보를 선택하세요",
+    "{time} · 版本 {index}/{count}": "{time} · 버전 {index}/{count}",
+    "\n工程版本 {index}/{count}；此版本可独立打开": "\n프로젝트 버전 {index}/{count} · 이 버전을 개별적으로 열 수 있습니다",
+})
+
+
 # Final regional terminology pass.  Keeping these corrections in one table
 # makes the NA/EU, Japan, and Korea wording directly comparable and prevents
 # later feature catalogs from silently restoring older generic terms.
@@ -4908,10 +5198,10 @@ _REGIONAL_QUALITY_TRANSLATIONS = {
         "単一トラックの最適化ではグローバルエフェクトを書き込めません",
         "단일 트랙 최적화는 전역 효과를 기록할 수 없습니다",
     ),
-    "效果值必须在 [0, 127] 范围内": (
-        "Effect values must be in the [0, 127] range",
-        "エフェクト値は[0, 127]の範囲内である必要があります",
-        "효과 값은 [0, 127] 범위여야 합니다",
+    "效果值必须在 [0, 100] 范围内": (
+        "Effect values must be in the [0, 100] range",
+        "エフェクト値は[0, 100]の範囲内である必要があります",
+        "효과 값은 [0, 100] 범위여야 합니다",
     ),
     "单轨优化不得创建轨道": (
         "Single-track optimization may not create tracks",
@@ -5201,6 +5491,230 @@ for _source, (_english, _japanese, _korean) in _REGIONAL_QUALITY_TRANSLATIONS.it
 del _source, _english, _japanese, _korean
 
 
+_HOME_LIBRARY_TRANSLATIONS = {
+    "本地曲谱工作台": (
+        "Local score workspace",
+        "ローカル楽譜ワークスペース",
+        "로컬 악보 작업 공간",
+    ),
+    "资料库": ("Library", "ライブラリ", "라이브러리"),
+    "最近项目": ("Recent Projects", "最近のプロジェクト", "최근 프로젝트"),
+    "最近项目、自动保存与示例": (
+        "Recent projects, autosaves, and examples",
+        "最近のプロジェクト、自動保存、サンプル",
+        "최근 프로젝트, 자동 저장 및 예제",
+    ),
+    "Black Desert Music 目录中的曲谱": (
+        "Scores in the Black Desert Music folder",
+        "Black Desert Music フォルダーの楽譜",
+        "Black Desert Music 폴더의 악보",
+    ),
+    "本地处理 · 不上传工程": (
+        "Local processing · projects stay on this device",
+        "ローカル処理 · プロジェクトはアップロードされません",
+        "로컬 처리 · 프로젝트를 업로드하지 않음",
+    ),
+    "打开游戏目录": (
+        "Open Game Folder",
+        "ゲームフォルダーを開く",
+        "게임 폴더 열기",
+    ),
+    "继续创作": ("Continue Creating", "制作を続ける", "계속 만들기"),
+    "从最近工程继续，或开始一个新的编曲项目": (
+        "Continue a recent project or start a new arrangement",
+        "最近のプロジェクトを続けるか、新しい編曲を始めます",
+        "최근 프로젝트를 계속하거나 새 편곡을 시작하세요",
+    ),
+    "新建空白项目\n从一条空白轨道开始": (
+        "New Blank Project\nStart with an empty track",
+        "空のプロジェクトを作成\n空のトラックから開始",
+        "빈 프로젝트 만들기\n빈 트랙에서 시작",
+    ),
+    "导入 MIDI\n继续编排已有音乐": (
+        "Import MIDI\nContinue arranging existing music",
+        "MIDI を読み込む\n既存の曲を編曲",
+        "MIDI 가져오기\n기존 음악 계속 편곡",
+    ),
+    "打开工程\n浏览本地项目文件": (
+        "Open Project\nBrowse local project files",
+        "プロジェクトを開く\nローカルファイルを参照",
+        "프로젝트 열기\n로컬 프로젝트 파일 찾기",
+    ),
+    "{count} 人": (
+        "{count} players",
+        "{count}人",
+        "{count}명",
+    ),
+    "上限 {limit} 人": (
+        "{limit}-player limit",
+        "上限{limit}人",
+        "최대 {limit}명",
+    ),
+    "{count} 种乐器": (
+        "{count} instruments",
+        "{count}楽器",
+        "{count}개 악기",
+    ),
+}
+
+for _source, (_english, _japanese, _korean) in _HOME_LIBRARY_TRANSLATIONS.items():
+    if _source in EN or _source in JA or _source in KO:
+        raise RuntimeError(f"duplicate home localization source: {_source}")
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+
+_ACCESSIBILITY_TRANSLATIONS = {
+    "高级": ("Advanced", "詳細", "고급"),
+    "高级扒谱选项": (
+        "Advanced transcription options",
+        "詳細な採譜オプション",
+        "고급 채보 옵션",
+    ),
+    "轨道时间轴": (
+        "Track timeline",
+        "トラックタイムライン",
+        "트랙 타임라인",
+    ),
+    (
+        "上下键选择轨道；M 静音；S 独奏；F 打开效果；"
+        "Enter 编辑音符；左右键调整轨道音量（Shift 5）"
+    ): (
+        "Use Up/Down to select a track; M mute; S solo; F open effects; "
+        "Enter edit notes; Left/Right adjust track volume (Shift: 5)",
+        "上下キーでトラックを選択；M ミュート；S ソロ；F エフェクトを開く；"
+        "Enter ノート編集；左右キーでトラック音量調整（Shift: 5）",
+        "위/아래 키로 트랙 선택; M 음소거; S 솔로; F 이펙트 열기; "
+        "Enter 음표 편집; 왼쪽/오른쪽 키로 트랙 볼륨 조절(Shift: 5)",
+    ),
+    "当前轨道：{track}；音量 {volume}。{shortcuts}": (
+        "Current track: {track}; volume {volume}. {shortcuts}",
+        "現在のトラック：{track}；音量 {volume}。{shortcuts}",
+        "현재 트랙: {track}; 볼륨 {volume}. {shortcuts}",
+    ),
+}
+
+for _source, (_english, _japanese, _korean) in _ACCESSIBILITY_TRANSLATIONS.items():
+    if _source in EN or _source in JA or _source in KO:
+        raise RuntimeError(f"duplicate accessibility localization source: {_source}")
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+
+_EFFECT_GUIDANCE_TRANSLATIONS = {
+    "音源与外观": (
+        "Audio & Appearance",
+        "音源と外観",
+        "음원 및 외관",
+    ),
+    "全局效果": (
+        "Global FX",
+        "グローバルFX",
+        "전역 FX",
+    ),
+    "全局主效果": (
+        "Global Master FX",
+        "グローバルマスターFX",
+        "전역 마스터 FX",
+    ),
+    "整首曲子共用这些参数；轨道使用多少效果仍由每条轨道的 FX 发送量决定。": (
+        "These parameters are shared by the whole score; each track's FX sends still determine how much effect it uses.",
+        "これらのパラメーターは曲全体で共有されます。各トラックの効果量は引き続きトラックFXの送信量で決まります。",
+        "이 매개변수는 곡 전체가 공유합니다. 각 트랙의 효과 양은 계속 트랙 FX 전송량으로 결정됩니다.",
+    ),
+    "这里仅修改全局参数，不会改动任何轨道的混响、延迟或合唱发送量。": (
+        "This changes only global parameters; no track's reverb, delay, or chorus send is modified.",
+        "ここではグローバルパラメーターだけを変更し、各トラックのリバーブ／ディレイ／コーラス送信量は変更しません。",
+        "여기서는 전역 매개변수만 변경하며 어떤 트랙의 리버브, 딜레이 또는 코러스 전송량도 바꾸지 않습니다.",
+    ),
+    "混响与延迟": (
+        "Reverb & Delay",
+        "リバーブとディレイ",
+        "리버브 및 딜레이",
+    ),
+    "混响时间控制空间尾音；延迟反馈控制回声重复次数。": (
+        "Reverb Time controls the room tail; Delay Feedback controls how many times the echo repeats.",
+        "リバーブ時間は空間の残響を、ディレイフィードバックは反響の反復回数を調整します。",
+        "리버브 시간은 공간의 잔향을, 딜레이 피드백은 에코 반복 횟수를 조절합니다.",
+    ),
+    "合唱（游戏中为 Flanger）": (
+        "Chorus (Flanger in game)",
+        "コーラス（ゲーム内ではFlanger）",
+        "코러스(게임에서는 Flanger)",
+    ),
+    "反馈决定旋动感，LFO 深度决定摆动幅度，LFO 频率决定摆动速度。": (
+        "Feedback sets the swirling character, LFO Depth sets its range, and LFO Frequency sets its speed.",
+        "フィードバックは回転感、LFO深度は揺れ幅、LFO周波数は揺れる速さを決めます。",
+        "피드백은 회전감을, LFO 깊이는 흔들림 폭을, LFO 주파수는 흔들림 속도를 결정합니다.",
+    ),
+    "全局主效果已更新": (
+        "Global master FX updated",
+        "グローバルマスターFXを更新しました",
+        "전역 마스터 FX를 업데이트했습니다",
+    ),
+    "每轨发送在轨道 FX；延迟产生回声，合唱增加宽度与流动感。本地试听为未校准近似，导出值不变。": (
+        "Per-track sends are in Track FX; delay creates echoes and chorus adds width and movement. Local preview is an uncalibrated approximation; export values are unchanged.",
+        "トラックごとの送信量はトラックFXで設定します。ディレイは反響を、コーラスは広がりと揺らぎを加えます。ローカル試聴は未校正の近似で、書き出し値は変わりません。",
+        "트랙별 전송량은 트랙 FX에서 설정합니다. 딜레이는 에코를 만들고 코러스는 폭과 움직임을 더합니다. 로컬 미리듣기는 보정되지 않은 근사치이며 내보내기 값은 바뀌지 않습니다.",
+    ),
+    "混响发送：控制此轨道进入共享混响的比例；0 为干声。": (
+        "Reverb Send: controls how much of this track enters the shared reverb; 0 is dry.",
+        "リバーブ送信：このトラックを共有リバーブへ送る量です。0はドライ音です。",
+        "리버브 전송: 이 트랙을 공유 리버브로 보내는 양입니다. 0은 드라이 신호입니다.",
+    ),
+    "延迟发送：控制此轨道进入回声总线的比例；主“延迟反馈”决定重复次数与衰减。": (
+        "Delay Send: controls how much of this track enters the echo bus; master Delay Feedback controls repeat count and decay.",
+        "ディレイ送信：このトラックをエコーバスへ送る量です。マスターの「ディレイフィードバック」が反復回数と減衰を決めます。",
+        "딜레이 전송: 이 트랙을 에코 버스로 보내는 양입니다. 마스터 딜레이 피드백이 반복 횟수와 감쇠를 정합니다.",
+    ),
+    "合唱发送：控制此轨道进入合唱/Flanger 总线的比例；用于加宽并产生流动感。": (
+        "Chorus Send: controls how much of this track enters the chorus/flanger bus; it adds width and movement.",
+        "コーラス送信：このトラックをコーラス／フランジャーバスへ送る量です。広がりと揺らぎを加えます。",
+        "코러스 전송: 이 트랙을 코러스/플랜저 버스로 보내는 양입니다. 폭과 움직임을 더합니다.",
+    ),
+    "混响时间：控制混响尾音长度；本地试听按 0.2–8.0 秒近似。": (
+        "Reverb Time: controls the reverb-tail length; local preview approximates 0.2–8.0 seconds.",
+        "リバーブ時間：残響の長さを調整します。ローカル試聴では0.2～8.0秒として近似します。",
+        "리버브 시간: 잔향 길이를 조절합니다. 로컬 미리듣기는 0.2–8.0초로 근사합니다.",
+    ),
+    "延迟反馈：控制回声返回延迟线的比例；越高，重复越多。本地试听固定约 250 ms。": (
+        "Delay Feedback: controls how much echo returns to the delay line; higher values produce more repeats. Local preview uses about 250 ms.",
+        "ディレイフィードバック：エコーをディレイラインへ戻す量です。高いほど反復が増えます。ローカル試聴は約250 ms固定です。",
+        "딜레이 피드백: 에코가 딜레이 라인으로 돌아가는 양입니다. 높을수록 반복이 많아집니다. 로컬 미리듣기는 약 250ms로 고정됩니다.",
+    ),
+    "合唱反馈：控制调制延迟的反馈强度；越高，梳状与旋动感越明显。": (
+        "Chorus Feedback: controls modulated-delay feedback; higher values make comb filtering and swirling more pronounced.",
+        "コーラスフィードバック：変調ディレイのフィードバック量です。高いほどコーム感と回転感が強くなります。",
+        "코러스 피드백: 변조 딜레이의 피드백 양입니다. 높을수록 콤 필터와 회전감이 강해집니다.",
+    ),
+    "LFO 深度：控制合唱延迟时间的摆动幅度；越高，空间宽度与音高摆动越明显。": (
+        "LFO Depth: controls the chorus delay-time modulation; higher values increase width and pitch movement.",
+        "LFO深度：コーラスのディレイ時間が揺れる幅です。高いほど広がりと音程の揺れが強くなります。",
+        "LFO 깊이: 코러스 딜레이 시간이 흔들리는 폭입니다. 높을수록 공간 폭과 음높이 움직임이 커집니다.",
+    ),
+    "LFO 频率：控制合唱起伏速度；越高，流动越快。": (
+        "LFO Frequency: controls the chorus modulation speed; higher values move faster.",
+        "LFO周波数：コーラスの揺れる速さです。高いほど速く変化します。",
+        "LFO 주파수: 코러스가 움직이는 속도입니다. 높을수록 더 빠르게 움직입니다.",
+    ),
+}
+
+for _source, (_english, _japanese, _korean) in _EFFECT_GUIDANCE_TRANSLATIONS.items():
+    if _source in EN or _source in JA or _source in KO:
+        raise RuntimeError(f"duplicate effect-guidance localization source: {_source}")
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+
 if len(GM_PROGRAM_NAMES) != 128 or len(GM_PROGRAM_TRANSLATIONS) != 128:
     raise RuntimeError("General MIDI localization table must contain 128 programs")
 
@@ -5222,6 +5736,158 @@ for _source, (_english, _japanese, _korean) in zip(
         _catalog.setdefault(_source, _translated)
 
 del _source, _english, _japanese, _korean, _catalog, _translated, _existing
+
+
+EN.update({
+    "切换或锁定试听音源；仅用于本机试听，不会写入曲谱，也不会上传。": "Switch or lock the preview source. It is used only for local preview and is never written to scores or uploaded.",
+    "自动选择音源": "Choose Source Automatically",
+    "锁定本地 BDO 音源": "Lock Local BDO Source",
+    "锁定内置通用 MIDI": "Lock Built-in General MIDI",
+    "试听音源": "Preview Source",
+    "自动音源 · 检测中": "Automatic Source · Detecting",
+    "点击切换试听音源；不会改变导出结果": "Click to switch the preview source; export is unchanged",
+    "管理本地音源包…": "Manage Local Sample Pack…",
+    "未设置用户": "User Not Set",
+    "设置角色名与 Owner ID": "Set character name and Owner ID",
+    "用户 · {name}": "User · {name}",
+    " · Owner ID 未设置": " · Owner ID not set",
+    "尚未设置用户名称和 Owner ID；请在设置中补充后再导出。": "User name and Owner ID are not set. Add them in Settings before export.",
+    "尚未设置用户名称；请在设置中补充。": "User name is not set. Add it in Settings.",
+    "Owner ID 未设置；导出前需要从游戏曲谱读取。": "Owner ID is not set. Read it from an in-game score before export.",
+    "内置通用 MIDI · 非游戏原声": "Built-in General MIDI · Not Game Audio",
+    "内置通用 MIDI · 已锁定": "Built-in General MIDI · Locked",
+    "本地 BDO 音源不可用": "Local BDO Source Unavailable",
+    "自动音源 · 内置通用 MIDI": "Automatic Source · Built-in General MIDI",
+    "本地 BDO 音源 · 已验证": "Local BDO Source · Verified",
+    "自动音源 · BDO 已验证": "Automatic Source · BDO Verified",
+    "本地 BDO 音源 · DSP 待 A/B": "Local BDO Source · DSP A/B Pending",
+    "自动音源 · BDO 近似": "Automatic Source · Approximate BDO",
+    "试听音源已切换：{source}": "Preview source changed: {source}",
+    "已锁定本地 BDO 音源，当前无法试听：{reason}": "The local BDO source is locked but cannot preview now: {reason}",
+    "{instrument} · {count} 音符": "{instrument} · {count} notes",
+    "打开转换检查": "Open Conversion Check",
+    "轨道存在 {count} 个导出错误 · 点击查看": "Tracks contain {count} export errors · Click to review",
+    " · 相同乐器将合并": " · Duplicate instruments will be merged",
+    "相同乐器轨道将在导出时合并 · 点击查看": "Tracks using the same instrument will be merged on export · Click to review",
+    "设置演奏者": "Set Performer",
+    "身份待完善": "Complete Identity",
+    "Owner ID 已绑定": "Owner ID linked",
+    "Owner ID 未设置": "Owner ID not set",
+    "导出错误": "Export Errors",
+    "需要注意": "Attention",
+    "发现 {count} 个导出错误；对应轨道已标红，可点击轨道标记查看。": "Found {count} export errors. Affected tracks are marked red; click a track marker to review.",
+    "{count} 条轨道使用相同乐器；已标为琥珀色，导出时会合并。": "{count} tracks use the same instrument. They are marked amber and will be merged on export.",
+})
+JA.update({
+    "切换或锁定试听音源；仅用于本机试听，不会写入曲谱，也不会上传。": "試聴音源を切り替えまたは固定します。ローカル試聴専用で、楽譜への書き込みやアップロードは行いません。",
+    "自动选择音源": "音源を自動選択",
+    "锁定本地 BDO 音源": "ローカルBDO音源に固定",
+    "锁定内置通用 MIDI": "内蔵General MIDIに固定",
+    "试听音源": "試聴音源",
+    "自动音源 · 检测中": "自動音源 · 検出中",
+    "点击切换试听音源；不会改变导出结果": "クリックして試聴音源を切り替えます。書き出し結果は変わりません",
+    "管理本地音源包…": "ローカル音源パックを管理…",
+    "未设置用户": "ユーザー未設定",
+    "设置角色名与 Owner ID": "キャラクター名とOwner IDを設定",
+    "用户 · {name}": "ユーザー · {name}",
+    " · Owner ID 未设置": " · Owner ID未設定",
+    "尚未设置用户名称和 Owner ID；请在设置中补充后再导出。": "ユーザー名とOwner IDが未設定です。書き出し前に設定で追加してください。",
+    "尚未设置用户名称；请在设置中补充。": "ユーザー名が未設定です。設定で追加してください。",
+    "Owner ID 未设置；导出前需要从游戏曲谱读取。": "Owner IDが未設定です。書き出し前にゲーム楽譜から読み取ってください。",
+    "内置通用 MIDI · 非游戏原声": "内蔵General MIDI · ゲーム原音ではありません",
+    "内置通用 MIDI · 已锁定": "内蔵General MIDI · 固定",
+    "本地 BDO 音源不可用": "ローカルBDO音源を使用できません",
+    "自动音源 · 内置通用 MIDI": "自動音源 · 内蔵General MIDI",
+    "本地 BDO 音源 · 已验证": "ローカルBDO音源 · 検証済み",
+    "自动音源 · BDO 已验证": "自動音源 · BDO検証済み",
+    "本地 BDO 音源 · DSP 待 A/B": "ローカルBDO音源 · DSP A/B待ち",
+    "自动音源 · BDO 近似": "自動音源 · BDO近似",
+    "试听音源已切换：{source}": "試聴音源を切り替えました：{source}",
+    "已锁定本地 BDO 音源，当前无法试听：{reason}": "ローカルBDO音源に固定されていますが、現在試聴できません：{reason}",
+    "{instrument} · {count} 音符": "{instrument} · {count}ノート",
+    "打开转换检查": "変換チェックを開く",
+    "轨道存在 {count} 个导出错误 · 点击查看": "トラックに書き出しエラーが{count}件あります · クリックして確認",
+    " · 相同乐器将合并": " · 同じ楽器は統合されます",
+    "相同乐器轨道将在导出时合并 · 点击查看": "同じ楽器のトラックは書き出し時に統合されます · クリックして確認",
+    "设置演奏者": "演奏者を設定",
+    "身份待完善": "本人情報を完了",
+    "Owner ID 已绑定": "Owner ID連携済み",
+    "Owner ID 未设置": "Owner ID未設定",
+    "导出错误": "書き出しエラー",
+    "需要注意": "要確認",
+    "发现 {count} 个导出错误；对应轨道已标红，可点击轨道标记查看。": "書き出しエラーが{count}件あります。対象トラックは赤で表示され、トラックマーカーをクリックして確認できます。",
+    "{count} 条轨道使用相同乐器；已标为琥珀色，导出时会合并。": "{count}トラックが同じ楽器を使用しています。琥珀色で表示され、書き出し時に統合されます。",
+})
+KO.update({
+    "切换或锁定试听音源；仅用于本机试听，不会写入曲谱，也不会上传。": "미리듣기 음원을 전환하거나 고정합니다. 로컬 미리듣기에만 사용되며 악보에 기록되거나 업로드되지 않습니다.",
+    "自动选择音源": "음원 자동 선택",
+    "锁定本地 BDO 音源": "로컬 BDO 음원 고정",
+    "锁定内置通用 MIDI": "내장 General MIDI 고정",
+    "试听音源": "미리듣기 음원",
+    "自动音源 · 检测中": "자동 음원 · 감지 중",
+    "点击切换试听音源；不会改变导出结果": "클릭하여 미리듣기 음원을 전환합니다. 내보내기 결과는 바뀌지 않습니다",
+    "管理本地音源包…": "로컬 음원 팩 관리…",
+    "未设置用户": "사용자 미설정",
+    "设置角色名与 Owner ID": "캐릭터 이름과 Owner ID 설정",
+    "用户 · {name}": "사용자 · {name}",
+    " · Owner ID 未设置": " · Owner ID 미설정",
+    "尚未设置用户名称和 Owner ID；请在设置中补充后再导出。": "사용자 이름과 Owner ID가 설정되지 않았습니다. 내보내기 전에 설정에서 추가하세요.",
+    "尚未设置用户名称；请在设置中补充。": "사용자 이름이 설정되지 않았습니다. 설정에서 추가하세요.",
+    "Owner ID 未设置；导出前需要从游戏曲谱读取。": "Owner ID가 설정되지 않았습니다. 내보내기 전에 게임 악보에서 읽으세요.",
+    "内置通用 MIDI · 非游戏原声": "내장 General MIDI · 게임 원음 아님",
+    "内置通用 MIDI · 已锁定": "내장 General MIDI · 고정됨",
+    "本地 BDO 音源不可用": "로컬 BDO 음원을 사용할 수 없음",
+    "自动音源 · 内置通用 MIDI": "자동 음원 · 내장 General MIDI",
+    "本地 BDO 音源 · 已验证": "로컬 BDO 음원 · 검증됨",
+    "自动音源 · BDO 已验证": "자동 음원 · BDO 검증됨",
+    "本地 BDO 音源 · DSP 待 A/B": "로컬 BDO 음원 · DSP A/B 대기",
+    "自动音源 · BDO 近似": "자동 음원 · BDO 근사",
+    "试听音源已切换：{source}": "미리듣기 음원 전환: {source}",
+    "已锁定本地 BDO 音源，当前无法试听：{reason}": "로컬 BDO 음원이 고정되어 있지만 현재 미리들을 수 없습니다: {reason}",
+    "{instrument} · {count} 音符": "{instrument} · 노트 {count}개",
+    "打开转换检查": "변환 검사 열기",
+    "轨道存在 {count} 个导出错误 · 点击查看": "트랙에 내보내기 오류 {count}개가 있습니다 · 클릭하여 확인",
+    " · 相同乐器将合并": " · 같은 악기는 병합됩니다",
+    "相同乐器轨道将在导出时合并 · 点击查看": "같은 악기의 트랙은 내보낼 때 병합됩니다 · 클릭하여 확인",
+    "设置演奏者": "연주자 설정",
+    "身份待完善": "사용자 정보 완성",
+    "Owner ID 已绑定": "Owner ID 연결됨",
+    "Owner ID 未设置": "Owner ID 미설정",
+    "导出错误": "내보내기 오류",
+    "需要注意": "주의 필요",
+    "发现 {count} 个导出错误；对应轨道已标红，可点击轨道标记查看。": "내보내기 오류 {count}개를 발견했습니다. 해당 트랙은 빨간색으로 표시되며 트랙 마커를 클릭해 확인할 수 있습니다.",
+    "{count} 条轨道使用相同乐器；已标为琥珀色，导出时会合并。": "{count}개 트랙이 같은 악기를 사용합니다. 호박색으로 표시되며 내보낼 때 병합됩니다.",
+})
+
+
+# Simplified Chinese remains the exact source language.  Build the complete
+# Traditional Chinese catalog only after every maintained source key (including
+# the General MIDI names) has been registered, so all regional catalogs keep an
+# identical coverage contract without a runtime conversion dependency.
+def _build_traditional_catalog() -> dict[str, str]:
+    catalog = {
+        source: simplified_to_traditional_ui(source)
+        for source in EN
+    }
+    equivalent_sources: dict[tuple[str, str, str], list[str]] = {}
+    for source in EN:
+        vector = (EN[source], JA[source], KO[source])
+        equivalent_sources.setdefault(vector, []).append(source)
+    for sources in equivalent_sources.values():
+        if len(sources) < 2:
+            continue
+        preferred = min(
+            sources,
+            key=lambda source: (len(catalog[source]), catalog[source], source),
+        )
+        translated = catalog[preferred]
+        for source in sources:
+            catalog[source] = translated
+    return catalog
+
+
+ZH_TW = _build_traditional_catalog()
+TRANSLATIONS["zh_TW"] = ZH_TW
 
 
 def _translation_reverse_maps() -> dict[str, dict[str, str]]:

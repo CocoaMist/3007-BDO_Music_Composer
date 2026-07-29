@@ -9,13 +9,14 @@ from typing import Any, Mapping
 
 
 CURRENT_PROJECT_SCHEMA = 9
+REFERENCE_LAYER_SETTINGS_VERSION = 3
 
 
 DEFAULT_REFERENCE_LAYER_SETTINGS: dict[str, Any] = {
-    "version": 1,
+    "version": REFERENCE_LAYER_SETTINGS_VERSION,
     "ghost_visible": True,
-    "ghost_opacity_percent": 70,
-    "background_opacity_percent": 60,
+    "ghost_opacity_percent": 24,
+    "background_opacity_percent": 45,
     "melody_lines_visible": True,
     "frame_visible": False,
     "onset_visible": False,
@@ -46,6 +47,10 @@ def normalize_reference_layer_settings(
         else DEFAULT_REFERENCE_LAYER_SETTINGS
     )
     source = dict(value) if isinstance(value, Mapping) else {}
+    try:
+        source_version = int(source.get("version", 1))
+    except (TypeError, ValueError, OverflowError):
+        source_version = 1
     result = dict(defaults)
     for key in (
         "ghost_visible",
@@ -68,7 +73,22 @@ def normalize_reference_layer_settings(
             continue
         if math.isfinite(candidate):
             result[key] = max(0, min(100, round(candidate)))
-    result["version"] = 1
+    # Earlier versions shipped 70% and then 40% as their ghost defaults, plus
+    # a 60% evidence-background default.  Migrate only those exact defaults;
+    # deliberate custom values remain untouched.
+    if not legacy_defaults and source_version < REFERENCE_LAYER_SETTINGS_VERSION:
+        old_ghost_defaults = {40}
+        if source_version < 2:
+            old_ghost_defaults.add(70)
+        if result["ghost_opacity_percent"] in old_ghost_defaults:
+            result["ghost_opacity_percent"] = int(
+                DEFAULT_REFERENCE_LAYER_SETTINGS["ghost_opacity_percent"]
+            )
+        if result["background_opacity_percent"] == 60:
+            result["background_opacity_percent"] = int(
+                DEFAULT_REFERENCE_LAYER_SETTINGS["background_opacity_percent"]
+            )
+    result["version"] = REFERENCE_LAYER_SETTINGS_VERSION
     return result
 
 

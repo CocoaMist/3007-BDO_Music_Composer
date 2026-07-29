@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import main as application_entry
 from scripts.audit_transcription_licenses import (
+    _distribution_license_files,
     build_inventory,
     release_blockers,
     write_inventory,
@@ -45,6 +46,7 @@ class TranscriptionPackagingTests(unittest.TestCase):
             PROJECT_ROOT / "packaging" / "windows" / "BDOMusicComposer.spec"
         ).read_text(encoding="utf-8")
         self.assertIn('"timeline_background_v2.png"', spec)
+        self.assertIn('"home_mountain_workshop_v1.jpg"', spec)
         self.assertIn('"assets" / "instruments" / "ai_v1"', spec)
         self.assertTrue(
             (
@@ -52,6 +54,15 @@ class TranscriptionPackagingTests(unittest.TestCase):
                 / "assets"
                 / "ui"
                 / "timeline_background_v2.png"
+            ).is_file()
+        )
+        self.assertTrue(
+            (
+                PROJECT_ROOT
+                / "assets"
+                / "ui"
+                / "home"
+                / "home_mountain_workshop_v1.jpg"
             ).is_file()
         )
         icon_root = PROJECT_ROOT / "assets" / "instruments" / "ai_v1"
@@ -116,6 +127,40 @@ class TranscriptionPackagingTests(unittest.TestCase):
             ).exists()
         )
 
+    def test_source_install_uses_pinned_windows_constraints(self) -> None:
+        constraints = (
+            PROJECT_ROOT / "constraints-windows-py312.txt"
+        ).read_text(encoding="utf-8")
+        for package in (
+            "PySide6",
+            "mido",
+            "numpy",
+            "basic-pitch",
+            "onnxruntime",
+            "soundfile",
+            "soxr",
+            "pyinstaller",
+        ):
+            self.assertRegex(
+                constraints,
+                rf"(?mi)^{package}==[^\s=]+$",
+            )
+
+        install_script = (
+            PROJECT_ROOT / "scripts" / "install_transcription.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("constraints-windows-py312.txt", install_script)
+        self.assertGreaterEqual(install_script.count('"--constraint"'), 3)
+
+        workflow = (
+            PROJECT_ROOT / ".github" / "workflows" / "windows-ci.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('python-version: "3.12.10"', workflow)
+        self.assertIn(
+            "-m unittest discover -s tests -t . -q",
+            workflow,
+        )
+
     def test_checked_in_policy_approves_only_the_reviewed_inventory(self) -> None:
         policy = json.loads(
             (
@@ -133,11 +178,13 @@ class TranscriptionPackagingTests(unittest.TestCase):
             r"^[0-9a-f]{64}$",
         )
         inventory = {
+            "schema": policy["approved_inventory_schema"],
             "inventory_sha256": policy["approved_inventory_sha256"],
             "unresolved_packages": [],
         }
         self.assertEqual((), release_blockers(policy, inventory))
         mismatched = {
+            "schema": policy["approved_inventory_schema"],
             "inventory_sha256": "0" * 64,
             "unresolved_packages": [],
         }
@@ -145,6 +192,44 @@ class TranscriptionPackagingTests(unittest.TestCase):
             "installed dependency inventory is not the approved digest",
             release_blockers(policy, mismatched),
         )
+        mismatched_schema = {
+            **inventory,
+            "schema": policy["approved_inventory_schema"] + 1,
+        }
+        self.assertIn(
+            "installed dependency inventory schema is not approved",
+            release_blockers(policy, mismatched_schema),
+        )
+
+    def test_license_inventory_excludes_python_modules_and_bytecode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            relative_paths = (
+                "demo-1.0.dist-info/licenses/LICENSE",
+                "demo/licenses/THIRD_PARTY_NOTICES.md",
+                "demo/licenses/__init__.py",
+                "demo/licenses/__pycache__/__init__.cpython-312.pyc",
+            )
+            for relative in relative_paths:
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"fixture")
+
+            class FakeDistribution:
+                files = relative_paths
+
+                @staticmethod
+                def locate_file(relative: str) -> Path:
+                    return root / relative
+
+            selected = _distribution_license_files(FakeDistribution())
+            self.assertEqual(
+                selected,
+                (
+                    root / "demo-1.0.dist-info/licenses/LICENSE",
+                    root / "demo/licenses/THIRD_PARTY_NOTICES.md",
+                ),
+            )
 
     def test_missing_distribution_remains_visible_and_unresolved(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

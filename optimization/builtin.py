@@ -1770,9 +1770,12 @@ def _nearest(value: float, choices: tuple[int, ...]) -> int:
 
 
 def _suggest_effects(tracks: list, context: SongContext, config: OptimizerConfig) -> EffectSuggestion:
-    current_reverb = _clamp(int(config.current_reverb), 0, 127)
-    current_delay = _clamp(int(config.current_delay), 0, 127)
-    current_chorus = tuple(_clamp(int(value), 0, 127) for value in config.current_chorus) if config.current_chorus else None
+    # Imported wire bytes may be 101..255 and remain lossless until an explicit
+    # effect edit. Optimizer targets, however, must stay inside the verified
+    # game authoring range 0..100.
+    current_reverb = _clamp(int(config.current_reverb), 0, 255)
+    current_delay = _clamp(int(config.current_delay), 0, 255)
+    current_chorus = tuple(_clamp(int(value), 0, 255) for value in config.current_chorus) if config.current_chorus else None
     notes = [note for track in tracks for note in track.notes]
     if not notes or not config.optimize_effects:
         return EffectSuggestion(
@@ -2040,7 +2043,10 @@ def _lyric_masking_issue(track, all_tracks: list, role: TrackRole, lyric: LyricC
 
 def optimize_tracks(tracks: list, bpm: int, supported_articulations: dict[int, list[tuple[int, str]]],
                     config: OptimizerConfig | None = None, time_sig: int = 4) -> OptimizationResult:
-    config = config or OptimizerConfig()
+    # Normalizing compatibility flags is execution-local. Mutating a caller's
+    # reusable config makes later previews depend on whether it was used
+    # before, which violates deterministic optimizer semantics.
+    config = replace(config) if config is not None else OptimizerConfig()
     config.level = OptimizationLevel(config.level)
     # An explicitly requested legacy expressive/arrange level remains an
     # internal compatibility opt-out.  The normal GUI only submits SAFE.

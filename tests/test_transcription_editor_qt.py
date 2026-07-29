@@ -679,17 +679,19 @@ class TranscriptionEditorQtTests(unittest.TestCase):
 
             melody_labels = {
                 "zh_CN": "旋律线",
+                "zh_TW": "旋律線",
                 "en_US": "Melody lines",
                 "ja_JP": "メロディライン",
                 "ko_KR": "멜로디 라인",
             }
             alternative_prefixes = {
                 "zh_CN": "备选：",
+                "zh_TW": "備選：",
                 "en_US": "Alternatives:",
                 "ja_JP": "候補：",
                 "ko_KR": "대안:",
             }
-            for language in ("zh_CN", "en_US", "ja_JP", "ko_KR"):
+            for language in ("zh_CN", "zh_TW", "en_US", "ja_JP", "ko_KR"):
                 localizer.set_language(language)
                 app.processEvents()
                 for index in range(panel.cleanup_profile_combo.count()):
@@ -714,7 +716,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
                 )
 
             panel.set_diagnostic_evidence_expanded(True)
-            for language in ("zh_CN", "en_US", "ja_JP", "ko_KR"):
+            for language in ("zh_CN", "zh_TW", "en_US", "ja_JP", "ko_KR"):
                 localizer.set_language(language)
                 app.processEvents()
                 assert panel.minimumSizeHint().width() <= 920, (

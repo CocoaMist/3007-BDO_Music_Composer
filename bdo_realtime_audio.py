@@ -68,6 +68,11 @@ from bdo_track_effects import (
     decode_track_effects,
     track_volume_preview_gain,
 )
+from bdo_preview_effects import (
+    PreviewEffectProcessor,
+    PreviewEffectSettings,
+    preview_send_gain,
+)
 
 
 PLAYBACK_ATTACK_MS = 3.0
@@ -101,6 +106,10 @@ TRACK_METER_RENDER_INTERVAL = 4
 # interpolation dispatch without changing the logical voice pool.  Below this
 # size the small grouping table costs more than it saves.
 EQUIVALENT_VOICE_GROUP_THRESHOLD = 112
+# Effect routing makes repeated interpolation more expensive, while weighted
+# Aux aggregation remains exactly linear. Probe earlier for effect-enabled
+# projects once they reach the same density that activates larger refills.
+EQUIVALENT_EFFECT_VOICE_GROUP_THRESHOLD = 64
 # Different pitches routed to the same Wwise source are much more common than
 # exactly duplicated voices in real multitrack projects.  Interpolate a small,
 # fixed-size tile together when every member is on the simple linear path.  The
@@ -216,6 +225,14 @@ class _Event:
     max_instances: int = 0
     kill_newest: bool = False
     instance_limit_global: bool = False
+    reverb_send: float = 0.0
+    delay_send: float = 0.0
+    chorus_send: float = 0.0
+    reverb_time: int = 0
+    delay_feedback: int = 0
+    chorus_feedback: int = 0
+    chorus_lfo_depth: int = 0
+    chorus_lfo_frequency: int = 0
 
 
 @dataclass
@@ -242,6 +259,9 @@ class _Voice:
     instance_group_id: int = -1
     instance_scope_id: int = -1
     start_frame: int = 0
+    reverb_send: float = 0.0
+    delay_send: float = 0.0
+    chorus_send: float = 0.0
     equivalent_probe_key: tuple[int, int, float, int, bool] = field(
         default_factory=tuple,
         repr=False,
@@ -609,6 +629,11 @@ class BdoRealtimeAudioEngine(QObject):
         self._frame_bytes = 4
         self._mix_buffer = np.empty((0, 2), dtype=np.float32)
         self._group_mix_buffer = np.empty((0, 2), dtype=np.float32)
+        self._effect_reverb_input = np.empty((0, 2), dtype=np.float32)
+        self._effect_delay_input = np.empty((0, 2), dtype=np.float32)
+        self._effect_chorus_input = np.empty((0, 2), dtype=np.float32)
+        self._effect_route_scratch = np.empty((0, 2), dtype=np.float32)
+        self._preview_effects = PreviewEffectProcessor(self._sample_rate)
         self._timeline_buffer = np.empty(0, dtype=np.float32)
         self._voice_a = np.empty((0, 2), dtype=np.float32)
         self._voice_b = np.empty((0, 2), dtype=np.float32)
@@ -717,6 +742,14 @@ class BdoRealtimeAudioEngine(QObject):
             self._format = audio_format
             self._sample_rate = audio_format.sampleRate()
             self._frame_bytes = 8 if audio_format.sampleFormat() == QAudioFormat.SampleFormat.Float else 4
+            previous_effects = self._preview_effects
+            self._preview_effects = PreviewEffectProcessor(self._sample_rate)
+            self._preview_effects.configure(
+                previous_effects.settings,
+                reverb_send=previous_effects.reverb_enabled,
+                delay_send=previous_effects.delay_enabled,
+                chorus_send=previous_effects.chorus_enabled,
+            )
             # The worker never requests more than this quantum. Allocate the
             # fixed mixer tiles while opening the device, not on the first
             # audible callback where allocator jitter can clip the attack.
@@ -836,6 +869,7 @@ class BdoRealtimeAudioEngine(QObject):
             self._track_meter_ids = []
             self._track_peaks = np.empty(0, dtype=np.float32)
             self._track_block_peaks = np.empty(0, dtype=np.float32)
+            self._preview_effects.reset()
             self._mark_output_reset_pending_locked()
         if self._output_thread and self._output_thread.isRunning():
             self.output_reset_requested.emit()
@@ -887,6 +921,53 @@ class BdoRealtimeAudioEngine(QObject):
             self._prepare_project,
             list(tracks), map_path, start_ms, reverb, delay, chorus, cache_limit_bytes,
             generation, cancel_event,
+        )
+        with self._lock:
+            if generation == self._load_generation:
+                self._load_future = future
+            else:
+                cancel_event.set()
+                future.cancel()
+
+    def load_procedural_project_async(
+        self,
+        tracks: list[Any],
+        start_ms: float,
+        reverb: int = 0,
+        delay: int = 0,
+        chorus: tuple[int, int, int] | None = None,
+    ) -> None:
+        """Preload a clearly labelled generic MIDI fallback off the GUI thread.
+
+        This path is intentionally not a BDO timbre emulation.  It keeps pitch,
+        timing, velocity, track volume, and basic articulation useful on a
+        first run where private game samples are unavailable.
+        """
+
+        self.start()
+        with self._lock:
+            previous_cancel = self._load_cancel_event
+            previous_future = self._load_future
+            if previous_cancel is not None:
+                previous_cancel.set()
+            self._load_generation += 1
+            generation = self._load_generation
+            cancel_event = threading.Event()
+            self._load_cancel_event = cancel_event
+            self._preload_loaded = 0
+            self._preload_total = 0
+        if previous_future is not None and not previous_future.done():
+            previous_future.cancel()
+        loader, _decode_pool = self._ensure_preload_executors()
+        future = loader.submit(
+            self._prepare_procedural_project,
+            list(tracks),
+            start_ms,
+            reverb,
+            delay,
+            chorus,
+            generation,
+            cancel_event,
         )
         with self._lock:
             if generation == self._load_generation:
@@ -958,7 +1039,11 @@ class BdoRealtimeAudioEngine(QObject):
             )
             self._event_index = 0
             self._frame = 0
-            self._duration_frames = max(duration, fade_frames)
+            self._configure_preview_effects(events)
+            self._duration_frames = max(
+                duration + self._preview_effects.tail_frames(),
+                fade_frames,
+            )
             self._cache = cache
             self._cache_bytes = cache_bytes
             self._sample_arena = self._shared_sample_arena(cache)
@@ -1005,6 +1090,306 @@ class BdoRealtimeAudioEngine(QObject):
         if future is not None and not future.done():
             future.cancel()
 
+    def _procedural_sample(
+        self,
+        instrument_id: int,
+        *,
+        percussion: bool,
+        percussion_pitch: int = 60,
+    ) -> _Sample:
+        """Build one bounded immutable, license-clean fallback timbre.
+
+        The renderer is deliberately deterministic and generated entirely in
+        memory.  Instrument families use different harmonic/envelope profiles,
+        while BDO drum pieces 48..64 receive distinct one-shot voices.  This is
+        substantially more useful than the former four-wave oscillator, but it
+        remains a generic preview rather than evidence of BDO game timbre.
+        """
+
+        rate = max(8_000, int(self._sample_rate))
+        family = self._procedural_instrument_family(instrument_id)
+        one_shot = percussion or family in {"piano", "pluck", "harp", "handpan"}
+        duration_seconds = 1.4 if percussion else (2.0 if one_shot else 1.0)
+        frames = max(2, round(rate * duration_seconds))
+        time_axis = np.arange(frames, dtype=np.float32) / np.float32(rate)
+        if percussion:
+            pitch = max(0, min(127, int(percussion_pitch)))
+            rng = np.random.default_rng(
+                0xBD0000 + int(instrument_id) * 257 + pitch
+            )
+            noise = rng.standard_normal(frames).astype(np.float32)
+            if instrument_id == 0x05 or pitch >= 61:
+                # Deterministic high-passed noise gives cymbals and the upper
+                # drum-set pieces a bright, short metallic wash.
+                bright = noise - np.concatenate((noise[:1], noise[:-1]))
+                envelope = np.exp(-time_axis * np.float32(5.2))
+                mono = bright * envelope * np.float32(0.085)
+            elif pitch <= 48:
+                frequency = np.float32(58.0 + max(0, pitch - 35) * 1.5)
+                phase = time_axis * frequency * np.float32(2.0 * math.pi)
+                envelope = np.exp(-time_axis * np.float32(10.0))
+                mono = (
+                    np.sin(phase) * np.float32(0.22)
+                    + noise * np.float32(0.025)
+                ) * envelope
+            elif pitch <= 51:
+                phase = time_axis * np.float32(185.0 * 2.0 * math.pi)
+                envelope = np.exp(-time_axis * np.float32(13.0))
+                mono = (
+                    noise * np.float32(0.13)
+                    + np.sin(phase) * np.float32(0.055)
+                ) * envelope
+            else:
+                frequency = np.float32(105.0 + (pitch - 52) * 15.0)
+                phase = time_axis * frequency * np.float32(2.0 * math.pi)
+                envelope = np.exp(-time_axis * np.float32(8.0))
+                mono = (
+                    np.sin(phase) * np.float32(0.17)
+                    + np.sin(phase * np.float32(1.51)) * np.float32(0.045)
+                    + noise * np.float32(0.018)
+                ) * envelope
+        else:
+            radians = time_axis * np.float32(440.0 * 2.0 * math.pi)
+            profiles: dict[str, tuple[tuple[float, ...], float, float]] = {
+                "piano": ((1.0, 0.62, 0.34, 0.19, 0.10, 0.055), 0.006, 2.4),
+                "pluck": ((1.0, 0.48, 0.31, 0.20, 0.12, 0.07), 0.003, 3.2),
+                "harp": ((1.0, 0.38, 0.22, 0.12, 0.07), 0.004, 2.6),
+                "handpan": ((1.0, 0.18, 0.36, 0.08, 0.16), 0.004, 1.8),
+                "strings": ((1.0, 0.52, 0.30, 0.19, 0.11, 0.07), 0.055, 0.0),
+                "woodwind": ((1.0, 0.13, 0.08, 0.035), 0.035, 0.0),
+                "clarinet": ((1.0, 0.03, 0.31, 0.02, 0.12), 0.040, 0.0),
+                "brass": ((1.0, 0.45, 0.25, 0.13, 0.07), 0.045, 0.0),
+                "bass": ((1.0, 0.40, 0.18, 0.08), 0.018, 0.0),
+                "synth": ((1.0, 0.50, 0.28, 0.16, 0.09), 0.018, 0.0),
+            }
+            partials, attack_seconds, decay_rate = profiles[family]
+            mono = np.zeros(frames, dtype=np.float32)
+            for harmonic, amplitude in enumerate(partials, start=1):
+                phase_offset = np.float32(
+                    (instrument_id % 7) * harmonic * 0.037
+                )
+                mono += np.sin(
+                    radians * np.float32(harmonic) + phase_offset
+                ) * np.float32(amplitude)
+            if family == "synth":
+                mono = np.tanh(mono * np.float32(1.35))
+            if attack_seconds > 0.0:
+                attack = np.minimum(
+                    np.float32(1.0),
+                    time_axis / np.float32(attack_seconds),
+                )
+                # A short cosine-shaped attack avoids clicks without allocating
+                # or processing anything in the real-time callback.
+                attack = np.sin(attack * np.float32(math.pi / 2.0))
+                mono *= attack
+            if decay_rate > 0.0:
+                mono *= np.exp(-time_axis * np.float32(decay_rate))
+            peak = max(1e-6, float(np.max(np.abs(mono))))
+            mono *= np.float32(0.19 / peak)
+        pcm = np.empty((frames, 2), dtype=np.float32)
+        # Small fixed family-dependent stereo shading keeps the mix readable
+        # without chorus state or callback allocations.
+        stereo_bias = np.float32(((int(instrument_id) % 5) - 2) * 0.012)
+        pcm[:, 0] = mono * (np.float32(1.0) - stereo_bias)
+        pcm[:, 1] = mono * (np.float32(1.0) + stereo_bias)
+        pcm.setflags(write=False)
+        return _Sample(pcm=pcm, rate=rate, frames=frames, active_frames=frames)
+
+    @staticmethod
+    def _procedural_instrument_family(instrument_id: int) -> str:
+        instrument = int(instrument_id)
+        if instrument in {0x07, 0x11}:
+            return "piano"
+        if instrument in {0x00, 0x0A, 0x24, 0x25, 0x26}:
+            return "pluck"
+        if instrument in {0x06, 0x10}:
+            return "harp"
+        if instrument == 0x13:
+            return "handpan"
+        if instrument in {0x08, 0x12}:
+            return "strings"
+        if instrument in {0x01, 0x02, 0x0B}:
+            return "woodwind"
+        if instrument == 0x27:
+            return "clarinet"
+        if instrument == 0x28:
+            return "brass"
+        if instrument in {0x0E, 0x0F}:
+            return "bass"
+        return "synth"
+
+    def _prepare_procedural_project(
+        self,
+        tracks: list[Any],
+        start_ms: float,
+        reverb: int,
+        delay: int,
+        chorus: tuple[int, int, int] | None,
+        load_generation: int | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> tuple[list[_Event], dict[tuple[str, int], _Sample], int, list[str], int]:
+        """Create generic waveforms and events without filesystem access."""
+
+        del start_ms
+        self._raise_if_preload_cancelled(cancel_event)
+        cache: dict[tuple[str, int], _Sample] = {}
+        events: list[_Event] = []
+        duration = 0
+        rate = max(8_000, int(self._sample_rate))
+        release_frames = max(1, round(rate * 0.08))
+        master_settings = PreviewEffectSettings.from_legacy(
+            reverb,
+            delay,
+            chorus,
+        )
+        has_track_effect_sends = False
+        for track_slot, track in enumerate(tracks):
+            self._raise_if_preload_cancelled(cancel_event)
+            instrument_id = int(getattr(track, "bdo_instrument_id", 0))
+            percussion = bool(getattr(track, "is_percussion", False)) or (
+                instrument_id in {0x04, 0x05, 0x0D}
+            )
+            family = self._procedural_instrument_family(instrument_id)
+            melodic_key = ("procedural", instrument_id)
+            sample = cache.get(melodic_key) if not percussion else None
+            if not percussion and sample is None:
+                sample = self._procedural_sample(
+                    instrument_id, percussion=False
+                )
+                cache[melodic_key] = sample
+            track_id = int(getattr(track, "track_id", track_slot))
+            track_gain = track_volume_preview_gain(
+                getattr(track, "bdo_track_volume", DEFAULT_TRACK_VOLUME)
+            )
+            try:
+                track_sends, _track_master = decode_track_effects(
+                    getattr(track, "bdo_track_settings", (0,) * 8)
+                )
+                reverb_send = preview_send_gain(track_sends.reverb)
+                delay_send = preview_send_gain(track_sends.delay)
+                chorus_send = preview_send_gain(track_sends.chorus)
+            except ValueError:
+                reverb_send = delay_send = chorus_send = 0.0
+            has_track_effect_sends = has_track_effect_sends or any((
+                reverb_send,
+                delay_send,
+                chorus_send,
+            ))
+            duration_scale = float(getattr(track, "duration_scale", 1.0))
+            volume_scale = float(getattr(track, "volume_scale", 1.0))
+            for note_index, note in enumerate(getattr(track, "notes", ())):
+                if note_index % 256 == 0:
+                    self._raise_if_preload_cancelled(cancel_event)
+                frame = round(
+                    max(0.0, float(getattr(note, "start", 0.0)))
+                    * rate
+                    / 1000.0
+                )
+                note_duration = max(
+                    1,
+                    round(
+                        max(1.0, float(getattr(note, "dur", 0.0)))
+                        * max(0.01, duration_scale)
+                        * rate
+                        / 1000.0
+                    ),
+                )
+                ntype = int(
+                    getattr(note, "ntype", 0)
+                    or getattr(track, "articulation_type", 0)
+                    or 0
+                )
+                if percussion:
+                    percussion_pitch = max(
+                        0, min(127, int(getattr(note, "pitch", 60)))
+                    )
+                    percussion_key = (
+                        "procedural",
+                        0x10000 | (instrument_id << 8) | percussion_pitch,
+                    )
+                    sample = cache.get(percussion_key)
+                    if sample is None:
+                        sample = self._procedural_sample(
+                            instrument_id,
+                            percussion=True,
+                            percussion_pitch=percussion_pitch,
+                        )
+                        cache[percussion_key] = sample
+                    ratio = 1.0
+                    audible_frames = max(
+                        note_duration,
+                        min(sample.frames, round(rate * 0.18)),
+                    )
+                    audible_frames = min(audible_frames, sample.frames)
+                    fade_out_frames = min(release_frames, audible_frames)
+                    loop_start = loop_end = 0
+                else:
+                    assert sample is not None
+                    pitch = max(0, min(127, int(getattr(note, "pitch", 69))))
+                    ratio = max(0.125, min(8.0, 2.0 ** ((pitch - 69) / 12.0)))
+                    if family in {"piano", "pluck", "harp", "handpan"}:
+                        audible_frames = min(
+                            note_duration + release_frames,
+                            max(1, round(sample.frames / ratio)),
+                        )
+                        loop_start = loop_end = 0
+                    else:
+                        audible_frames = note_duration + release_frames
+                        loop_start = round(rate * 0.20)
+                        loop_end = round(rate * 0.80)
+                    fade_out_frames = release_frames
+                velocity = max(
+                    1,
+                    min(
+                        127,
+                        round(float(getattr(note, "vel", 96)) * volume_scale),
+                    ),
+                )
+                events.append(_Event(
+                    frame=frame,
+                    sample=sample,
+                    ratio=ratio,
+                    gain=velocity / 127.0 * track_gain,
+                    duration_frames=note_duration,
+                    instrument_id=instrument_id,
+                    ntype=ntype,
+                    track_slot=track_slot,
+                    track_id=track_id,
+                    audible_frames=audible_frames,
+                    fade_out_frames=fade_out_frames,
+                    native_articulation=False,
+                    native_sample_route=False,
+                    loop_start_frame=loop_start,
+                    loop_end_frame=loop_end,
+                    reverb_send=reverb_send,
+                    delay_send=delay_send,
+                    chorus_send=chorus_send,
+                    reverb_time=master_settings.reverb_time,
+                    delay_feedback=master_settings.delay_feedback,
+                    chorus_feedback=master_settings.chorus_feedback,
+                    chorus_lfo_depth=master_settings.chorus_lfo_depth,
+                    chorus_lfo_frequency=(
+                        master_settings.chorus_lfo_frequency
+                    ),
+                ))
+                duration = max(duration, frame + audible_frames)
+        events.sort(key=lambda event: event.frame)
+        cache_bytes = sum(sample.pcm.nbytes for sample in cache.values())
+        if load_generation is not None:
+            with self._lock:
+                if load_generation == self._load_generation:
+                    self._preload_total = len(cache)
+                    self._preload_loaded = len(cache)
+        unverified = [
+            "generic MIDI fallback: not BDO game audio or verified game DSP"
+        ]
+        if has_track_effect_sends:
+            unverified.append(
+                "reverb/delay/chorus preview: bounded local approximation; "
+                "not calibrated against game Wwise DSP"
+            )
+        return events, cache, cache_bytes, unverified, duration
+
     def _prepare_project(
         self,
         tracks: list[Any],
@@ -1033,19 +1418,24 @@ class BdoRealtimeAudioEngine(QObject):
         events: list[_Event] = []
         unverified: set[str] = set()
         has_track_effect_sends = False
+        master_settings = PreviewEffectSettings.from_legacy(
+            reverb,
+            delay,
+            chorus,
+        )
         duration = 0
         # Resolve all note→zone relationships first.  Decoding is deduplicated
         # by Wwise source ID and happens concurrently below.
         resolved: list[
             tuple[
                 Any, int, int, int, int, str, dict, tuple[str, int],
-                float, int, int, float,
+                float, int, int, float, float, float, float,
             ]
         ] = []
         selection_requests: list[
             tuple[
                 float, int, int, Any, int, int, int, int, str,
-                tuple[dict, ...], float, int, float,
+                tuple[dict, ...], float, int, float, float, float, float,
             ]
         ] = []
         source_candidates: dict[
@@ -1066,12 +1456,16 @@ class BdoRealtimeAudioEngine(QObject):
                 track_sends, _track_master = decode_track_effects(
                     getattr(track, "bdo_track_settings", (0,) * 8)
                 )
+                reverb_send = preview_send_gain(track_sends.reverb)
+                delay_send = preview_send_gain(track_sends.delay)
+                chorus_send = preview_send_gain(track_sends.chorus)
                 has_track_effect_sends = has_track_effect_sends or any((
-                    track_sends.reverb,
-                    track_sends.delay,
-                    track_sends.chorus,
+                    reverb_send,
+                    delay_send,
+                    chorus_send,
                 ))
             except ValueError:
+                reverb_send = delay_send = chorus_send = 0.0
                 unverified.add(
                     f"track {track_id}: invalid effect settings; preview ignored them"
                 )
@@ -1120,6 +1514,9 @@ class BdoRealtimeAudioEngine(QObject):
                     float(getattr(track, "duration_scale", 1.0)),
                     track_id,
                     track_preview_gain,
+                    reverb_send,
+                    delay_send,
+                    chorus_send,
                 ))
 
         # Wwise random/sequence state is global to the container.  Resolve
@@ -1140,6 +1537,9 @@ class BdoRealtimeAudioEngine(QObject):
             duration_scale,
             track_id,
             track_preview_gain,
+            reverb_send,
+            delay_send,
+            chorus_send,
         ) in sorted(
             selection_requests,
             key=lambda item: (item[0], item[1], item[2]),
@@ -1182,6 +1582,7 @@ class BdoRealtimeAudioEngine(QObject):
             resolved.append((
                 note, velocity, pitch, instrument_id, ntype, bank, row, key,
                 duration_scale, track_slot, track_id, track_preview_gain,
+                reverb_send, delay_send, chorus_send,
             ))
 
         sources = {
@@ -1263,6 +1664,7 @@ class BdoRealtimeAudioEngine(QObject):
         for resolved_index, (
             note, velocity, pitch, _instrument_id, ntype, _bank, row, key,
             duration_scale, track_slot, track_id, track_preview_gain,
+            reverb_send, delay_send, chorus_send,
         ) in enumerate(resolved):
             if resolved_index % 512 == 0:
                 self._raise_if_preload_cancelled(cancel_event)
@@ -1349,15 +1751,20 @@ class BdoRealtimeAudioEngine(QObject):
                 ),
                 kill_newest=instance_limit.kill_newest,
                 instance_limit_global=instance_limit.global_scope,
+                reverb_send=reverb_send,
+                delay_send=delay_send,
+                chorus_send=chorus_send,
+                reverb_time=master_settings.reverb_time,
+                delay_feedback=master_settings.delay_feedback,
+                chorus_feedback=master_settings.chorus_feedback,
+                chorus_lfo_depth=master_settings.chorus_lfo_depth,
+                chorus_lfo_frequency=master_settings.chorus_lfo_frequency,
             ))
             duration = max(duration, frame + lifecycle.audible_frames)
-        if reverb or delay or (chorus is not None and any(chorus)):
-            unverified.add(
-                "master reverb/delay/chorus: exported; local DSP not simulated"
-            )
         if has_track_effect_sends:
             unverified.add(
-                "per-track reverb/delay/chorus sends: exported; local DSP not simulated"
+                "reverb/delay/chorus preview: bounded local approximation; "
+                "not calibrated against game Wwise DSP"
             )
         events.sort(key=lambda item: item.frame)
         instance_release_frames = max(
@@ -1492,6 +1899,29 @@ class BdoRealtimeAudioEngine(QObject):
         if cancel_event is not None and cancel_event.is_set():
             raise _LoadCancelled()
 
+    def _configure_preview_effects(self, events: list[_Event]) -> None:
+        """Prepare the verified Aux topology and unverified local DSP curve."""
+
+        if events:
+            reference = events[0]
+            settings = PreviewEffectSettings(
+                reverb_time=int(getattr(reference, "reverb_time", 0)),
+                delay_feedback=int(getattr(reference, "delay_feedback", 0)),
+                chorus_feedback=int(getattr(reference, "chorus_feedback", 0)),
+                chorus_lfo_depth=int(getattr(reference, "chorus_lfo_depth", 0)),
+                chorus_lfo_frequency=int(
+                    getattr(reference, "chorus_lfo_frequency", 0)
+                ),
+            )
+        else:
+            settings = PreviewEffectSettings()
+        self._preview_effects.configure(
+            settings,
+            reverb_send=any(event.reverb_send > 0.0 for event in events),
+            delay_send=any(event.delay_send > 0.0 for event in events),
+            chorus_send=any(event.chorus_send > 0.0 for event in events),
+        )
+
     def _commit_project(
         self,
         events: list[_Event],
@@ -1503,6 +1933,8 @@ class BdoRealtimeAudioEngine(QObject):
         start_ms: float,
     ) -> dict[str, Any]:
         with self._lock:
+            self._configure_preview_effects(events)
+            duration += self._preview_effects.tail_frames()
             self._events = events
             self._event_frames = np.fromiter((event.frame for event in events), dtype=np.int64, count=len(events))
             self._max_event_tail_frames = max(
@@ -1605,6 +2037,7 @@ class BdoRealtimeAudioEngine(QObject):
     def seek(self, position_ms: float) -> None:
         with self._lock:
             self._master_gain = 1.0
+            self._preview_effects.reset()
             self._seek_locked(round(max(0.0, position_ms) * self._sample_rate / 1000.0))
             self._mark_output_reset_pending_locked()
         if self._output_thread and self._output_thread.isRunning():
@@ -1672,6 +2105,9 @@ class BdoRealtimeAudioEngine(QObject):
         start_frame: int | None = None,
         scheduler_frame: int | None = None,
         instance_scope_id: int = -1,
+        reverb_send: float = 0.0,
+        delay_send: float = 0.0,
+        chorus_send: float = 0.0,
     ) -> tuple[_Voice, tuple[_Voice, ...]]:
         del steal_delay_frames  # Kept for source compatibility with old callers.
         scheduled_at = (
@@ -1776,6 +2212,9 @@ class BdoRealtimeAudioEngine(QObject):
             instance_group_id=instance_group_id,
             instance_scope_id=instance_scope_id,
             start_frame=voice_start,
+            reverb_send=max(0.0, min(1.0, float(reverb_send))),
+            delay_send=max(0.0, min(1.0, float(delay_send))),
+            chorus_send=max(0.0, min(1.0, float(chorus_send))),
             equivalent_probe_key=(
                 id(sample),
                 voice_start,
@@ -1927,6 +2366,9 @@ class BdoRealtimeAudioEngine(QObject):
             event.frame,
             scheduler_frame,
             instance_scope_id,
+            event.reverb_send,
+            event.delay_send,
+            event.chorus_send,
         )
         # Harp chord note types are Wwise-generated note stacks. Recreate the
         # audible chord while retaining the single serialized BDO note.
@@ -1955,6 +2397,9 @@ class BdoRealtimeAudioEngine(QObject):
                 event.frame,
                 scheduler_frame,
                 -1,
+                event.reverb_send,
+                event.delay_send,
+                event.chorus_send,
             )
             if displaced:
                 if retired is None:
@@ -2023,6 +2468,10 @@ class BdoRealtimeAudioEngine(QObject):
         if len(self._mix_buffer) < frames:
             self._mix_buffer = np.empty((frames, 2), dtype=np.float32)
             self._group_mix_buffer = np.empty((frames, 2), dtype=np.float32)
+            self._effect_reverb_input = np.empty((frames, 2), dtype=np.float32)
+            self._effect_delay_input = np.empty((frames, 2), dtype=np.float32)
+            self._effect_chorus_input = np.empty((frames, 2), dtype=np.float32)
+            self._effect_route_scratch = np.empty((frames, 2), dtype=np.float32)
             self._voice_a = np.empty((frames, 2), dtype=np.float32)
             self._voice_b = np.empty((frames, 2), dtype=np.float32)
             self._master_envelope = np.empty(frames, dtype=np.float32)
@@ -2042,7 +2491,74 @@ class BdoRealtimeAudioEngine(QObject):
             )
             self._pcm_i16 = np.empty((frames, 2), dtype="<i2")
 
-    def _mix_single_voice(self, output: np.ndarray, length: int, voice: _Voice) -> None:
+    def _accumulate_voice_pcm(
+        self,
+        output: np.ndarray,
+        pcm: np.ndarray,
+        active: int,
+        voice: _Voice,
+        effect_offset: int,
+    ) -> None:
+        """Route one prepared voice to dry output and fixed Aux input buses."""
+
+        output[:active] += pcm[:active]
+        self._accumulate_effect_pcm(
+            pcm,
+            active,
+            float(getattr(voice, "reverb_send", 0.0)),
+            float(getattr(voice, "delay_send", 0.0)),
+            float(getattr(voice, "chorus_send", 0.0)),
+            effect_offset,
+        )
+
+    def _accumulate_effect_pcm(
+        self,
+        pcm: np.ndarray,
+        active: int,
+        reverb_send: float,
+        delay_send: float,
+        chorus_send: float,
+        effect_offset: int,
+    ) -> None:
+        """Accumulate one dry-independent signal into prepared Aux buses."""
+
+        if not self._preview_effects.active:
+            return
+        start = max(0, int(effect_offset))
+        end = min(len(self._effect_reverb_input), start + active)
+        routed = end - start
+        if routed <= 0:
+            return
+        scratch = self._effect_route_scratch[:routed]
+        if self._preview_effects.reverb_enabled and reverb_send > 0.0:
+            np.multiply(
+                pcm[:routed],
+                reverb_send,
+                out=scratch,
+            )
+            self._effect_reverb_input[start:end] += scratch
+        if self._preview_effects.delay_enabled and delay_send > 0.0:
+            np.multiply(
+                pcm[:routed],
+                delay_send,
+                out=scratch,
+            )
+            self._effect_delay_input[start:end] += scratch
+        if self._preview_effects.chorus_enabled and chorus_send > 0.0:
+            np.multiply(
+                pcm[:routed],
+                chorus_send,
+                out=scratch,
+            )
+            self._effect_chorus_input[start:end] += scratch
+
+    def _mix_single_voice(
+        self,
+        output: np.ndarray,
+        length: int,
+        voice: _Voice,
+        effect_offset: int = 0,
+    ) -> None:
         sample = voice.sample
         start = voice.position
         loop_start = int(getattr(voice, "loop_start_frame", 0))
@@ -2109,7 +2625,13 @@ class BdoRealtimeAudioEngine(QObject):
                     first,
                     int(getattr(voice, "track_slot", -1)),
                 )
-            output[:active] += first
+            self._accumulate_voice_pcm(
+                output,
+                first,
+                active,
+                voice,
+                effect_offset,
+            )
             return
         positions = self._voice_positions[:active]
         indices = self._voice_indices[:active]
@@ -2160,7 +2682,13 @@ class BdoRealtimeAudioEngine(QObject):
                 first,
                 int(getattr(voice, "track_slot", -1)),
             )
-        output[:active] += first
+        self._accumulate_voice_pcm(
+            output,
+            first,
+            active,
+            voice,
+            effect_offset,
+        )
 
     def _apply_voice_transition(self, pcm: np.ndarray, active: int, voice: _Voice) -> None:
         """Apply bounded, allocation-free attack/release ramps for key hand-off."""
@@ -2256,7 +2784,12 @@ class BdoRealtimeAudioEngine(QObject):
         length = end - start
         if length <= 0:
             return
-        self._mix_single_voice(output[start:end], length, voice)
+        self._mix_single_voice(
+            output[start:end],
+            length,
+            voice,
+            effect_offset=start,
+        )
         self._advance_voice_span(voice, length)
 
     def _advance_voice_span(self, voice: _Voice, length: int) -> None:
@@ -2442,8 +2975,42 @@ class BdoRealtimeAudioEngine(QObject):
         first += second
         first *= self._batch_gains[:count, None, None]
 
-        # Preserve scalar accumulation order and per-track peak semantics.  The
-        # expensive interpolation dispatch above is the only shared operation.
+        # A tile often contains voices from one track and therefore one Aux
+        # route. Sum that route once when it is exactly shared; mixed routes
+        # retain per-voice accumulation below. Logical lifecycle, meters and
+        # instance-limit state remain independent in either case.
+        shared_effect_route = self._preview_effects.active
+        reverb_send = representative.reverb_send
+        delay_send = representative.delay_send
+        chorus_send = representative.chorus_send
+        any_effect_send = (
+            reverb_send > 0.0
+            or delay_send > 0.0
+            or chorus_send > 0.0
+        )
+        if shared_effect_route:
+            for index in range(1, count):
+                voice = voices[index]
+                if voice is None:
+                    shared_effect_route = False
+                    continue
+                any_effect_send = any_effect_send or (
+                    voice.reverb_send > 0.0
+                    or voice.delay_send > 0.0
+                    or voice.chorus_send > 0.0
+                )
+                if (
+                    voice.reverb_send != reverb_send
+                    or voice.delay_send != delay_send
+                    or voice.chorus_send != chorus_send
+                ):
+                    shared_effect_route = False
+        shared_effect_route = shared_effect_route and any_effect_send
+        grouped_pcm = self._group_mix_buffer[:frames]
+        if shared_effect_route:
+            grouped_pcm.fill(0.0)
+
+        # Preserve scalar dry accumulation order and per-track peak semantics.
         for index in range(count):
             voice = voices[index]
             if voice is None:
@@ -2452,7 +3019,27 @@ class BdoRealtimeAudioEngine(QObject):
             if self._capture_track_peaks:
                 self._record_track_peak(pcm, voice.track_slot)
             output += pcm
+            if shared_effect_route:
+                grouped_pcm += pcm
+            elif any_effect_send:
+                self._accumulate_effect_pcm(
+                    pcm,
+                    frames,
+                    voice.reverb_send,
+                    voice.delay_send,
+                    voice.chorus_send,
+                    0,
+                )
             self._advance_voice_span(voice, frames)
+        if shared_effect_route:
+            self._accumulate_effect_pcm(
+                grouped_pcm,
+                frames,
+                reverb_send,
+                delay_send,
+                chorus_send,
+                0,
+            )
 
     def _flush_linear_voice_batch(
         self,
@@ -2637,13 +3224,22 @@ class BdoRealtimeAudioEngine(QObject):
         group_pcm.fill(0.0)
         original_gain = representative.gain
         original_track_slot = representative.track_slot
+        original_reverb_send = representative.reverb_send
+        original_delay_send = representative.delay_send
+        original_chorus_send = representative.chorus_send
         representative.gain = 1.0
         representative.track_slot = -1
+        representative.reverb_send = 0.0
+        representative.delay_send = 0.0
+        representative.chorus_send = 0.0
         try:
             self._mix_single_voice(group_pcm, length, representative)
         finally:
             representative.gain = original_gain
             representative.track_slot = original_track_slot
+            representative.reverb_send = original_reverb_send
+            representative.delay_send = original_delay_send
+            representative.chorus_send = original_chorus_send
 
         if self._capture_track_peaks and group_pcm.size:
             unit_peak = max(
@@ -2657,6 +3253,23 @@ class BdoRealtimeAudioEngine(QObject):
                         int(getattr(voice, "track_slot", -1)),
                     )
         total_gain = math.fsum(float(voice.gain) for voice in voices)
+        self._accumulate_effect_pcm(
+            group_pcm,
+            length,
+            math.fsum(
+                float(voice.gain) * float(voice.reverb_send)
+                for voice in voices
+            ),
+            math.fsum(
+                float(voice.gain) * float(voice.delay_send)
+                for voice in voices
+            ),
+            math.fsum(
+                float(voice.gain) * float(voice.chorus_send)
+                for voice in voices
+            ),
+            start,
+        )
         group_pcm *= total_gain
         output[start:end] += group_pcm
         for voice in voices:
@@ -2665,7 +3278,12 @@ class BdoRealtimeAudioEngine(QObject):
     def _render_active_voice_pool(self, output: np.ndarray, frames: int) -> None:
         """Mix the bounded pool, grouping only exact linear equivalents."""
 
-        if len(self._voices) < EQUIVALENT_VOICE_GROUP_THRESHOLD:
+        equivalent_threshold = (
+            EQUIVALENT_EFFECT_VOICE_GROUP_THRESHOLD
+            if self._preview_effects.active
+            else EQUIVALENT_VOICE_GROUP_THRESHOLD
+        )
+        if len(self._voices) < equivalent_threshold:
             self._render_voice_sequence(output, self._voices, frames)
             return
 
@@ -2700,15 +3318,13 @@ class BdoRealtimeAudioEngine(QObject):
             groups.setdefault(key, []).append(voice)
         for voices in groups.values():
             if len(voices) == 1:
-                voice = voices[0]
-                self._render_voice_span(
-                    output,
-                    voice,
-                    voice.render_start_offset,
-                    frames,
-                )
+                scalar_voices.append(voices[0])
             else:
                 self._render_equivalent_voice_group(output, voices, frames)
+        # A duplicate candidate should not force every unrelated singleton
+        # back through per-voice NumPy interpolation.  Feed the remaining
+        # voices through the normal bounded tile path after exact groups have
+        # been collapsed.
         self._render_voice_sequence(output, scalar_voices, frames)
 
     def _voice_is_alive(self, voice: _Voice) -> bool:
@@ -2793,6 +3409,10 @@ class BdoRealtimeAudioEngine(QObject):
         self._ensure_render_buffers(frames)
         output = self._mix_buffer[:frames]
         output.fill(0.0)
+        if self._preview_effects.active:
+            self._effect_reverb_input[:frames].fill(0.0)
+            self._effect_delay_input[:frames].fill(0.0)
+            self._effect_chorus_input[:frames].fill(0.0)
         if self._track_peaks.size:
             np.multiply(self._track_peaks, 0.82, out=self._track_peaks)
         self._capture_track_peaks = self._meter_render_phase == 0
@@ -2848,6 +3468,14 @@ class BdoRealtimeAudioEngine(QObject):
             self._paused = False
         if self._capture_track_peaks and self._track_peaks.size:
             np.maximum(self._track_peaks, self._track_block_peaks, out=self._track_peaks)
+        if self._preview_effects.active:
+            self._preview_effects.process(
+                output,
+                self._effect_reverb_input,
+                self._effect_delay_input,
+                self._effect_chorus_input,
+                frames,
+            )
         self._apply_master_headroom(output, frames)
         soft_limit_in_place(
             output,

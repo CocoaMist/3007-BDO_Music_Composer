@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from bdo_articulation_profiles import PROFILES, profile_for
 from bdo_instrument_adaptation import (
     ArrangementRole,
     GameInstrumentFamily,
@@ -96,6 +97,23 @@ class InstrumentEditorAdaptationTests(unittest.TestCase):
         self.assertFalse(drum_set.should_render_pitch_row(47))
         self.assertFalse(drum_set.should_render_pitch_row(65))
         self.assertEqual((99,), tuple(item.ntype for item in drum_set.articulations))
+
+    def test_every_game_instrument_has_the_correct_basic_articulation_first(self) -> None:
+        registry = articulation_pairs_by_instrument()
+        for instrument_id, adaptation in self.adaptations.items():
+            expected = 99 if instrument_id == 0x0D else 0
+            with self.subTest(instrument_id=instrument_id):
+                self.assertEqual(expected, adaptation.default_ntype)
+                self.assertEqual(expected, registry[instrument_id][0][0])
+                self.assertEqual(
+                    "打击乐" if expected == 99 else "延音",
+                    registry[instrument_id][0][1],
+                )
+        self.assertEqual(((0, "延音"),), registry[0x07])
+        self.assertEqual(
+            ((0, "延音"), (11, "延音踏板")),
+            registry[0x11],
+        )
 
     def test_non_drum_set_percussion_is_not_silently_rewritten_to_99(self) -> None:
         for instrument_id in (0x04, 0x05, 0x13):
@@ -200,6 +218,41 @@ class InstrumentEditorAdaptationTests(unittest.TestCase):
                     self.assertEqual((99,), ntypes)
                 else:
                     self.assertEqual(0, ntypes[0])
+
+    def test_articulation_profiles_match_game_ui_registry(self) -> None:
+        registry = {
+            instrument_id: {ntype for ntype, _label in pairs}
+            for instrument_id, pairs in articulation_pairs_by_instrument().items()
+        }
+        for profile in PROFILES:
+            for instrument_id in profile.instrument_ids:
+                with self.subTest(
+                    instrument_id=instrument_id,
+                    ntype=profile.ntype,
+                ):
+                    self.assertIn(profile.ntype, registry[instrument_id])
+
+        # These two declarations previously leaked in from a shared profile,
+        # despite having neither a game UI entry nor a Wwise route.
+        self.assertIsNone(profile_for(0x27, 2))
+        self.assertIsNone(profile_for(0x28, 2))
+
+    def test_articulation_context_ranges_do_not_cross_instrument_limits(self) -> None:
+        for profile in PROFILES:
+            if profile.preferred_range is None:
+                continue
+            for instrument_id in profile.instrument_ids:
+                adaptation = self.adaptations[instrument_id]
+                legal = adaptation.legal_pitches
+                if legal is None:
+                    continue
+                low, high = profile.preferred_range
+                with self.subTest(
+                    instrument_id=instrument_id,
+                    ntype=profile.ntype,
+                ):
+                    self.assertGreaterEqual(low, min(legal))
+                    self.assertLessEqual(high, max(legal))
 
 
 if __name__ == "__main__":

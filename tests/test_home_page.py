@@ -12,9 +12,38 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pyside_bdo_gui as gui
+from home_catalog import GAME_SCORE_METADATA_MAX_BYTES, game_score_instrument_ids
 
 
 class HomePageTests(unittest.TestCase):
+    def test_oversized_game_score_is_bounded_before_structural_decode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "oversized-score"
+            path.write_bytes(b"x" * (GAME_SCORE_METADATA_MAX_BYTES + 1))
+            with patch(
+                "home_catalog.score_instrument_ids",
+                side_effect=AssertionError("oversized score must not decode"),
+            ):
+                self.assertEqual(game_score_instrument_ids(path), ())
+
+    def test_home_ensemble_count_folds_modes_and_caps_party_size(self) -> None:
+        modes = gui.HomeEntry(
+            "game", "Modes", Path("C:/virtual/modes"), "", 1.0,
+            instrument_ids=(0x14, 0x15, 0x16, 0x17, 0x11),
+        )
+        self.assertEqual(modes.performance_instrument_ids, (0x14, 0x11))
+        self.assertEqual(modes.instrument_count, 2)
+        self.assertEqual(modes.required_players, 2)
+        self.assertFalse(modes.exceeds_ensemble_limit)
+
+        oversized = gui.HomeEntry(
+            "game", "Oversized", Path("C:/virtual/oversized"), "", 1.0,
+            instrument_ids=(0x00, 0x01, 0x02, 0x04, 0x05, 0x06, 0x07, 0x08),
+        )
+        self.assertEqual(oversized.instrument_count, 8)
+        self.assertEqual(oversized.required_players, 5)
+        self.assertTrue(oversized.exceeds_ensemble_limit)
+
     def test_crash_log_redacts_machine_local_absolute_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             log_path = Path(temp) / "crash.log"
@@ -120,8 +149,20 @@ class HomePageTests(unittest.TestCase):
             newer = game_dir / "newer.bdo"
             older.write_bytes(b"first")
             newer.write_bytes(b"second")
+            ensemble = game_dir / "ensemble.bdo"
+            encoded, _summary = gui.channel_groups_to_bdo(
+                120,
+                4,
+                [
+                    ([gui.Note(60, 90, 0.0, 250.0, 0)], 0, False),
+                    ([gui.Note(64, 90, 0.0, 250.0, 0)], 1, False),
+                ],
+                instrument_map={0: 0x0B, 1: 0x11},
+            )
+            ensemble.write_bytes(encoded)
             os.utime(older, (10, 10))
             os.utime(newer, (20, 20))
+            os.utime(ensemble, (30, 30))
             (project_dir / "project.json").write_text(
                 json.dumps(
                     {
@@ -136,7 +177,12 @@ class HomePageTests(unittest.TestCase):
             scores = gui.scan_game_scores(game_dir)
             projects = gui.scan_local_projects(root / "auto_save")
 
-            self.assertEqual([item.label for item in scores], ["newer", "older"])
+            self.assertEqual(
+                [item.label for item in scores],
+                ["ensemble", "newer", "older"],
+            )
+            self.assertEqual(scores[0].instrument_ids, (0x0B, 0x11))
+            self.assertEqual(scores[0].required_players, 2)
             self.assertEqual(projects[0].label, "Local Demo")
             visible = f"{projects[0].label} {projects[0].detail}"
             self.assertNotIn("123456", visible)
@@ -187,6 +233,7 @@ class HomePageTests(unittest.TestCase):
                         "dense compact regression",
                         immediate=True,
                     )
+                    assert window._wait_for_autosave_idle()
                     project_path = (
                         window.autosave_project_dir / "project.json"
                     )
@@ -266,13 +313,21 @@ class HomePageTests(unittest.TestCase):
                     assert window.game_score_list.count() == 1
                     assert window.project_list.count() >= 1
                     assert window.game_score_list.item(0).text().splitlines()[0] == "score-one"
-                    assert window.toolbar_import_btn.isHidden()
-                    assert window.convert_button.isHidden()
+                    window.home_search.setText("score-one")
+                    app.processEvents()
+                    assert not window.game_score_list.item(0).isHidden()
+                    assert window.game_score_count.text() == "1"
+                    assert window.project_count.text() == "0"
+                    window.home_search.clear()
+                    assert not window.toolbar_import_btn.isHidden()
+                    assert not window.convert_button.isHidden()
+                    assert not window.convert_button.isEnabled()
                     assert window.status_label.text() != "发现自动保存工程"
                     assert "发现自动保存工程" not in window.inspector_text.text()
                     window._show_workspace()
                     assert not window.toolbar_import_btn.isHidden()
                     assert not window.convert_button.isHidden()
+                    assert window.convert_button.isEnabled()
                     source = root / "source.mid"
                     midi = mido.MidiFile(ticks_per_beat=480)
                     midi_track = mido.MidiTrack()
@@ -325,9 +380,14 @@ class HomePageTests(unittest.TestCase):
                     assert abs(window.reference_audio.player.position() - 500) < 80
                     window._stop_preview(reset_playhead=True)
                     assert window.timeline.playhead_ms == 0.0
+                    assert window._wait_for_autosave_idle()
                     project_files = list(autosave_dir.glob("*/project.json"))
                     assert len(project_files) == 1
                     payload = json.loads(project_files[0].read_text(encoding="utf-8"))
+                    project_index = json.loads(
+                        project_files[0].with_name("project.index.json").read_text(encoding="utf-8")
+                    )
+                    assert payload["project_id"] == project_index["project_id"]
                     assert payload["path_policy"] == "project-relative-v1"
                     assert payload["original_midi_path"] == ""
                     assert payload["source_midi_path"] == "source.mid"
@@ -365,12 +425,19 @@ class HomePageTests(unittest.TestCase):
                     assert sanitized["source_midi_path"] == "source.mid"
                     assert sanitized["reference_audio_path"] == ""
                     assert sanitized["reference_audio_attached"] is True
+                    window.reverb = 81
+                    window.delay = 82
+                    window.chorus = (83, 84, 85)
                     window._create_new_project("Blank Demo")
+                    assert window._wait_for_autosave_idle()
                     assert window.source_format == "project"
                     assert window.midi_path == ""
                     assert len(window.tracks) == 1
                     assert window.tracks[0].notes == []
                     assert window.reference_audio.volume_percent == 50
+                    assert (window.reverb, window.delay, window.chorus) == (
+                        0, 0, None
+                    )
                     blank_project = next(autosave_dir.glob("Blank Demo_*/project.json"))
                     blank_payload = json.loads(blank_project.read_text(encoding="utf-8"))
                     assert blank_payload["source_format"] == "project"
@@ -381,6 +448,7 @@ class HomePageTests(unittest.TestCase):
                     window.tracks[0].notes = [gui.Note(64, 88, 125.0, 375.0, 0)]
                     window.reference_audio.set_volume_percent(35)
                     window._autosave_project("test blank notes", immediate=True)
+                    assert window._wait_for_autosave_idle()
                     window._load_project(blank_project)
                     assert window.source_format == "project"
                     assert window.tracks[0].notes == [gui.Note(64, 88, 125.0, 375.0, 0)]
@@ -388,7 +456,8 @@ class HomePageTests(unittest.TestCase):
                     window.owner_id = 123
                     params = window._build_params()
                     assert params["midi_path"] == ""
-                    assert params["direct_tracks"] == window.tracks
+                    assert params["direct_tracks"] is not window.tracks
+                    assert params["direct_tracks"][0].notes == tuple(window.tracks[0].notes)
                     window.close()
                     app.processEvents()
             app.quit()
@@ -402,7 +471,7 @@ class HomePageTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
-    def test_same_title_projects_are_grouped_and_latest_project_is_open_target(self) -> None:
+    def test_same_title_projects_remain_distinct_without_shared_identity(self) -> None:
         root = Path("C:/virtual")
         entries = [
             gui.HomeEntry("project", "  Demo Song  ", root / "old" / "project.json", "old", 10),
@@ -413,13 +482,30 @@ class HomePageTests(unittest.TestCase):
 
         merged = gui.merge_home_project_entries(entries)
 
-        self.assertEqual(len(merged), 2)
-        demo = merged[0]
-        self.assertEqual(demo.kind, "project")
-        self.assertEqual(demo.path, root / "new" / "project.json")
-        self.assertEqual(demo.modified_at, 30)
-        self.assertEqual(demo.version_count, 3)
-        self.assertIn("3 个版本", demo.detail)
+        self.assertEqual(len(merged), 4)
+        self.assertEqual({entry.path for entry in merged}, {entry.path for entry in entries})
+        self.assertTrue(all(entry.version_count == 1 for entry in merged))
+
+    def test_related_versions_remain_individually_openable(self) -> None:
+        root = Path("C:/virtual")
+        project_id = "4c792f3e-83e2-4fc6-901c-4d8e6a69eb2e"
+        merged = gui.merge_home_project_entries([
+            gui.HomeEntry(
+                "project", "Song", root / "old" / "project.json", "old", 10,
+                project_id=project_id,
+            ),
+            gui.HomeEntry(
+                "project", "Song renamed", root / "new" / "project.json", "new", 20,
+                project_id=project_id,
+            ),
+        ])
+        self.assertEqual([entry.path for entry in merged], [
+            root / "new" / "project.json",
+            root / "old" / "project.json",
+        ])
+        self.assertEqual([entry.version_index for entry in merged], [2, 1])
+        self.assertTrue(all(entry.version_count == 2 for entry in merged))
+        self.assertTrue(all("版本" in entry.detail for entry in merged))
 
     def test_repeated_recent_path_does_not_inflate_version_count(self) -> None:
         path = Path("C:/virtual/source.mid")

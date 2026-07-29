@@ -34,6 +34,32 @@ def _user_data_dir() -> Path:
     return Path.home() / "AppData" / "Local" / "BDO Music Composer"
 
 
+def user_documents_dir() -> Path:
+    """Return the redirected Windows Documents folder when it is configured.
+
+    ``Path.home() / "Documents"`` is wrong for common OneDrive and domain
+    redirections.  Explorer stores the expandable known-folder path in the
+    current-user registry hive; keep a portable fallback for non-Windows and
+    restricted launch environments.
+    """
+
+    if sys.platform == "win32":
+        try:
+            import winreg
+
+            key_path = (
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+            )
+            documents_id = "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                value, _value_type = winreg.QueryValueEx(key, documents_id)
+            if value:
+                return Path(os.path.expandvars(str(value))).expanduser()
+        except (ImportError, OSError, TypeError, ValueError):
+            pass
+    return Path.home() / "Documents"
+
+
 def _local_cache_dir(name: str, override_name: str) -> Path:
     override = os.environ.get(override_name)
     if override:
