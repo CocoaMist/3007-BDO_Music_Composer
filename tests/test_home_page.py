@@ -459,6 +459,8 @@ class HomePageTests(unittest.TestCase):
                     assert params["direct_tracks"] is not window.tracks
                     assert params["direct_tracks"][0].notes == tuple(window.tracks[0].notes)
                     window.close()
+                    assert window._wait_for_autosave_idle(timeout_ms=20_000)
+                    window.close()
                     app.processEvents()
             app.quit()
             """
