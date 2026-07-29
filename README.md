@@ -1,6 +1,6 @@
 # BDO Music Composer
 
-Current stable release: **v1.0.0**
+Current release: **[v1.0.0](https://github.com/CocoaMist/3007-BDO_Music_Composer/releases/tag/v1.0.0)** · [Download for Windows](https://github.com/CocoaMist/3007-BDO_Music_Composer/releases/download/v1.0.0/BDO-Music-Composer.exe) · [Report an issue](https://github.com/CocoaMist/3007-BDO_Music_Composer/issues)
 
 <p align="center">
   <img src="assets/icons/app_icon.png" width="160" alt="BDO Music Composer icon">
@@ -8,7 +8,56 @@ Current stable release: **v1.0.0**
 
 An unofficial Windows desktop workstation for arranging MIDI, editing notes, previewing user-supplied game samples, and exporting Black Desert Online v9 music scores.
 
-中文简介：这是一个面向《黑色沙漠》作曲系统的本地 MIDI 编排工作站。从标准 MIDI 导入开始，可以在时间轴与钢琴卷帘中继续编辑音符、分配 BDO 乐器、调整奏法与力度、使用自己合法准备的音源包进行近似试听，最后从当前编辑模型导出 BDO v9 曲谱。
+## v1.0.0 public release
+
+### 简体中文
+
+v1.0.0 已公开发布。感谢 Reddit 和《黑色沙漠》音乐社区的关注与期待！这是项目的
+第一个稳定主版本，MIDI 编辑、工程保存、近似试听、转换检查和 BDO v9 导出等核心
+流程已经过自动化与冻结程序验证。不过，不同 Windows、声卡、MIDI 文件及游戏环境
+下仍可能出现一些小问题，我们正在持续排查和修复。
+
+如果遇到问题，欢迎在 [Issues](https://github.com/CocoaMist/3007-BDO_Music_Composer/issues)
+中提供版本号、复现步骤和已脱敏的日志。请勿上传 Owner ID、角色名、私人曲谱、游戏
+资源或本地绝对路径。
+
+### 繁體中文
+
+v1.0.0 已公開發布。感謝 Reddit 與《黑色沙漠》音樂社群的關注和期待！這是專案的
+第一個穩定主版本，MIDI 編輯、專案儲存、近似試聽、轉換檢查與 BDO v9 匯出等核心
+流程均已通過自動化及凍結程式驗證。不過，在不同 Windows、音效裝置、MIDI 檔案及
+遊戲環境中仍可能出現一些小問題，我們正在持續調查與修正。
+
+如遇問題，歡迎在 [Issues](https://github.com/CocoaMist/3007-BDO_Music_Composer/issues)
+提供版本號、重現步驟與已移除敏感資訊的記錄。請勿上傳 Owner ID、角色名稱、私人
+樂譜、遊戲資源或本機絕對路徑。
+
+### English
+
+v1.0.0 is now publicly available. Thank you to everyone on Reddit and in the
+Black Desert music community who has shown interest in the project. This is the
+first stable major release: the core MIDI editing, project persistence,
+approximate preview, conversion checks, and BDO v9 export workflows have passed
+automated and frozen-application verification. Minor bugs or environment-specific
+issues may still appear across different Windows systems, audio devices, MIDI
+files, and game environments. They are being actively investigated and fixed.
+
+If you find a problem, please open an [Issue](https://github.com/CocoaMist/3007-BDO_Music_Composer/issues)
+with the version, reproduction steps, and sanitized logs. Do not upload Owner IDs,
+character names, private scores, game assets, or local absolute paths.
+
+### 한국어
+
+v1.0.0이 공개되었습니다. Reddit과 검은사막 음악 커뮤니티에서 관심을 보여 주시고
+기대해 주신 모든 분께 감사드립니다. 이번 버전은 첫 번째 안정화 메이저 릴리스로,
+MIDI 편집, 프로젝트 저장, 근사 미리듣기, 변환 검사 및 BDO v9 악보 내보내기 핵심
+과정이 자동화 테스트와 패키징된 프로그램 검증을 통과했습니다. 다만 Windows 환경,
+오디오 장치, MIDI 파일 및 게임 환경에 따라 작은 버그나 호환성 문제가 발생할 수
+있으며, 현재 지속적으로 조사하고 수정하고 있습니다.
+
+문제를 발견하면 버전, 재현 단계, 민감한 정보를 제거한 로그와 함께
+[Issues](https://github.com/CocoaMist/3007-BDO_Music_Composer/issues)에 제보해 주세요.
+Owner ID, 캐릭터 이름, 개인 악보, 게임 리소스 또는 로컬 절대 경로는 업로드하지 마세요.
 
 > [!IMPORTANT]
 > This is an independent community project. It is not affiliated with, endorsed by, or supported by Pearl Abyss. No game assets are distributed in this repository. Users must supply their own legally obtained game files and audio extracts.
@@ -138,6 +187,10 @@ in-game evidence workflow.
 
 ## Current status and limitations
 
+- v1.0.0 is the first public stable major release. Core workflows pass the
+  automated regression and frozen-startup gates, but minor bugs and
+  hardware/environment-specific compatibility issues may still exist. Active
+  investigation and maintenance are ongoing.
 - The editor and BDO v9 serialization path are functional and covered by automated tests.
 - The project is intentionally developed as a small BDO score laboratory for the maintainer and friends, not as a general DAW or commercial product.
 - Conversion checks use a versioned, evidence-labelled game profile; issues can locate affected tracks/notes and destructive export changes are blocked.
@@ -179,10 +232,10 @@ analysis is enabled inside its embedded note-editor mode.
 Basic Pitch and its scientific/native dependency closure retain their upstream
 terms. The Basic Pitch 0.4.0 code and bundled ONNX model are covered by the
 official Apache-2.0 release tree and preserved NOTICE, as recorded in the
-[license evidence](docs/BASIC_PITCH_LICENSE_REVIEW.md). The sole Windows
-artifact must still not be uploaded publicly until the exact generated
-dependency inventory, native-library notices, and complete bundled notice set
-have passed the checked-in release gate.
+[license evidence](docs/BASIC_PITCH_LICENSE_REVIEW.md). The published v1.0.0
+Windows artifact passed the checked-in release gate for its exact generated
+dependency inventory, native-library notices, and complete bundled notice set.
+Every future public artifact must pass that gate again before upload.
 
 ### Local sample packs
 
@@ -254,9 +307,10 @@ dependency/license inventory from the active environment and embeds it with
 the notices.
 
 The Basic Pitch model evidence and the exact native/transitive notice review
-for v1.0.0 are recorded in `packaging/transcription_release_policy.json`.
-`build.ps1 -PublicRelease` remains fail-closed to that approved inventory
-digest, so any dependency or artifact change requires a new review. See
+for the published v1.0.0 build are recorded in
+`packaging/transcription_release_policy.json`. The release passed this exact
+inventory gate. `build.ps1 -PublicRelease` remains fail-closed to the approved
+digest, so any future dependency or artifact change requires a new review. See
 [Windows packaging](docs/WINDOWS_PACKAGING.md).
 
 The executable never embeds extracted game audio, personal settings, Owner IDs,
@@ -402,7 +456,7 @@ testers, and the wider Black Desert music community are thanked for support,
 testing, music exchange, and public discussion of score files, instrument IDs,
 and game UI behavior.
 
-Before public release, inspect the source archive and executable to confirm that
+Before every public release, inspect the source archive and executable to confirm that
 historical vendor modules and private/generated artifacts are absent.
 
 ## Contributing
