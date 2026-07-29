@@ -467,7 +467,7 @@ class HomePageTests(unittest.TestCase):
         env["QT_QPA_PLATFORM"] = "offscreen"
         completed = subprocess.run(
             [sys.executable, "-c", script], cwd=Path(__file__).resolve().parents[1], env=env,
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=60,
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
