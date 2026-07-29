@@ -293,6 +293,7 @@ class HomePageTests(unittest.TestCase):
             import mido
             from pathlib import Path
             from unittest.mock import patch
+            from PySide6.QtCore import QEvent
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication
             import pyside_bdo_gui as gui
@@ -412,6 +413,7 @@ class HomePageTests(unittest.TestCase):
                         project_files[0].parent / payload["source_midi_path"]
                     ).resolve()
                     window._load_project(project_files[0])
+                    assert window._wait_for_autosave_idle()
                     assert Path(window.midi_path).resolve() == source_copy
                     assert window.reference_layer_settings == (
                         payload["reference_layers"]
@@ -450,6 +452,7 @@ class HomePageTests(unittest.TestCase):
                     window._autosave_project("test blank notes", immediate=True)
                     assert window._wait_for_autosave_idle()
                     window._load_project(blank_project)
+                    assert window._wait_for_autosave_idle()
                     assert window.source_format == "project"
                     assert window.tracks[0].notes == [gui.Note(64, 88, 125.0, 375.0, 0)]
                     assert window.reference_audio.volume_percent == 35
@@ -463,6 +466,9 @@ class HomePageTests(unittest.TestCase):
                     window.close()
                     app.processEvents()
                     assert window.reference_audio.player.audioOutput() is None
+                    window.deleteLater()
+                    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+                    app.processEvents()
             app.quit()
             """
         )
