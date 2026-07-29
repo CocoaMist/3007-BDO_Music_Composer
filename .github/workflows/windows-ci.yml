@@ -20,7 +20,6 @@ jobs:
     env:
       PYTHONUTF8: "1"
       QT_QPA_PLATFORM: offscreen
-      BDO_USER_DATA_DIR: ${{ runner.temp }}\bdo-music-composer-ci
 
     steps:
       - name: Check out repository
@@ -51,5 +50,6 @@ jobs:
       - name: Run full regression suite
         shell: pwsh
         run: |
+          $env:BDO_USER_DATA_DIR = Join-Path $env:RUNNER_TEMP "bdo-music-composer-ci"
           New-Item -ItemType Directory -Force -Path $env:BDO_USER_DATA_DIR | Out-Null
           .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -q
