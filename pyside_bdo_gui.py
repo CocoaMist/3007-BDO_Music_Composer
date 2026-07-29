@@ -13159,6 +13159,14 @@ class ReferenceAudioController(QObject):
         self._pending_project_position_ms = None
         self.player.stop()
 
+    def shutdown(self) -> None:
+        """Release multimedia backends before the owning window is destroyed."""
+
+        self.set_audio_path(None, notify=False)
+        # A source-less QMediaPlayer can still retain the platform audio backend.
+        # Detach it explicitly so headless/no-device Windows processes can exit.
+        self.player.setAudioOutput(None)
+
     def project_to_audio(self, project_ms: float) -> float:
         return float(project_ms) - self._project_offset_ms
 
@@ -24111,8 +24119,8 @@ class MidiToBdoWindow(QMainWindow):
             return
         if self.active_transcription_editor is not None:
             self.active_transcription_editor.release_transcription_resources()
-        self.reference_audio.set_audio_path(None, notify=False)
         self._stop_preview()
+        self.reference_audio.shutdown()
         self.realtime_audio.stop()
         self.workspace_close_pending = False
         super().closeEvent(event)

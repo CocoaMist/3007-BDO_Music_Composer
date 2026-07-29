@@ -462,6 +462,7 @@ class HomePageTests(unittest.TestCase):
                     assert window._wait_for_autosave_idle(timeout_ms=20_000)
                     window.close()
                     app.processEvents()
+                    assert window.reference_audio.player.audioOutput() is None
             app.quit()
             """
         )
