@@ -362,27 +362,32 @@ class HomePageTests(unittest.TestCase):
                         app.processEvents()
                     print("checkpoint:reference-loaded", flush=True)
                     window._play_preview()
-                    QTest.qWait(220)
-                    app.processEvents()
-                    assert window.reference_audio.is_playing
-                    playback_deadline = time.monotonic() + 2.0
-                    while (
-                        window.timeline.playhead_ms <= 50
-                        and time.monotonic() < playback_deadline
-                    ):
-                        QTest.qWait(20)
+                    if window.realtime_audio.available():
+                        QTest.qWait(220)
                         app.processEvents()
-                    assert window.timeline.playhead_ms > 50
-                    window._pause_preview()
-                    paused_at = window.timeline.playhead_ms
-                    QTest.qWait(80)
-                    app.processEvents()
-                    assert not window.reference_audio.is_playing
-                    assert abs(window.timeline.playhead_ms - paused_at) < 30
-                    window._seek_preview(500.0)
-                    assert abs(window.reference_audio.player.position() - 500) < 80
-                    window._stop_preview(reset_playhead=True)
-                    assert window.timeline.playhead_ms == 0.0
+                        assert window.reference_audio.is_playing
+                        playback_deadline = time.monotonic() + 2.0
+                        while (
+                            window.timeline.playhead_ms <= 50
+                            and time.monotonic() < playback_deadline
+                        ):
+                            QTest.qWait(20)
+                            app.processEvents()
+                        assert window.timeline.playhead_ms > 50
+                        window._pause_preview()
+                        paused_at = window.timeline.playhead_ms
+                        QTest.qWait(80)
+                        app.processEvents()
+                        assert not window.reference_audio.is_playing
+                        assert abs(window.timeline.playhead_ms - paused_at) < 30
+                        window._seek_preview(500.0)
+                        assert abs(window.reference_audio.player.position() - 500) < 80
+                        window._stop_preview(reset_playhead=True)
+                        assert window.timeline.playhead_ms == 0.0
+                    else:
+                        app.processEvents()
+                        assert not window.reference_audio.is_playing
+                        assert window.status_label.text() == "无可用音频设备"
                     assert window._wait_for_autosave_idle()
                     print("checkpoint:preview-and-autosave", flush=True)
                     project_files = list(autosave_dir.glob("*/project.json"))

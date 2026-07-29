@@ -23239,6 +23239,14 @@ class MidiToBdoWindow(QMainWindow):
                 tr("当前没有可试听轨道，请取消静音或 Solo。"),
             )
             return
+        if not self.realtime_audio.available():
+            # QAudioSink construction can block inside the Windows backend when
+            # the machine has no output device.  Fail before starting either
+            # the real-time engine or the reference QMediaPlayer.
+            self.status_label.setText(tr("无可用音频设备"))
+            self.show_toast(tr("无可用音频设备"), kind="warning")
+            self._sync_preview_state()
+            return
         if start_ms >= self.timeline._timeline_end_ms() - 1:
             start_ms = 0.0
             self.timeline.set_playhead(0.0)
