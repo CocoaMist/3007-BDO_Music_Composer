@@ -3,6 +3,13 @@
 Current release: **[v1.0.0](https://github.com/CocoaMist/3007-BDO_Music_Composer/releases/tag/v1.0.0)** · [Download for Windows](https://github.com/CocoaMist/3007-BDO_Music_Composer/releases/download/v1.0.0/BDO-Music-Composer.exe) · [Report an issue](https://github.com/CocoaMist/3007-BDO_Music_Composer/issues)
 
 <p align="center">
+  🌐 <a href="#简体中文">简体中文</a> ·
+  <a href="#繁體中文">繁體中文</a> ·
+  <a href="#english">English</a> ·
+  <a href="#한국어">한국어</a>
+</p>
+
+<p align="center">
   <img src="assets/icons/app_icon.png" width="160" alt="BDO Music Composer icon">
 </p>
 
