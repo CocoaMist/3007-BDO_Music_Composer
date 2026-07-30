@@ -820,8 +820,9 @@ class TranscriptionEditorQtTests(unittest.TestCase):
 
             app = QApplication([])
             editor = Editor()
+            import piano_roll_canvas
             with patch.object(
-                pyside_bdo_gui,
+                piano_roll_canvas,
                 "SpectrogramTileController",
                 TileController,
             ):
@@ -1001,8 +1002,9 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             image = QImage(canvas.size(), QImage.Format_ARGB32)
             image.fill(0)
             # The semantic builder belongs to setter/review transitions only.
+            import piano_roll_canvas
             with patch.object(
-                pyside_bdo_gui,
+                piano_roll_canvas,
                 "build_melody_line_segments",
                 side_effect=AssertionError("analysis reached paintEvent"),
             ):

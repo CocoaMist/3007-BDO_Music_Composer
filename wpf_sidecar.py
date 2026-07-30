@@ -28,6 +28,12 @@ from bdo_profile import load_bdo_profile  # noqa: E402
 from bdo_score import read_bdo_score  # noqa: E402
 from bdo_validation import ValidationContext, validate_tracks  # noqa: E402
 from bdo_instrument_adaptation import articulation_pairs_by_instrument  # noqa: E402
+from conversion_settings import ConversionSettings  # noqa: E402
+from pitch_transform import (  # noqa: E402
+    PitchTransformPlan,
+    track_uses_percussion_pitch_semantics,
+    transpose_notes,
+)
 from optimization import OptimizationIntensity, OptimizerConfig  # noqa: E402
 from optimization.plugin_api import tracks_fingerprint  # noqa: E402
 from optimization.plugin_host import analyse_with_algorithm, discover_host_algorithms  # noqa: E402
@@ -59,6 +65,33 @@ class WorkerTrack:
 
 def _settings(payload: dict[str, Any]) -> dict[str, Any]:
     return dict(payload.get("conversion_settings") or {})
+
+
+def _conversion_settings(payload: dict[str, Any]) -> ConversionSettings:
+    return ConversionSettings.from_project_payload(
+        _settings(payload),
+        source_format=str(payload.get("source_format") or "midi"),
+    )
+
+
+def _pitch_transform(payload: dict[str, Any]) -> PitchTransformPlan:
+    conversion = _conversion_settings(payload)
+    return PitchTransformPlan.from_payload(
+        payload.get("pitch_transform"),
+        default_global_semitones=conversion.transpose,
+    ).with_global(conversion.transpose)
+
+
+def _legacy_import_conversion_payload(source_format: str) -> dict[str, Any]:
+    settings = ConversionSettings.legacy_project_defaults(
+        source_format
+    ).with_updates(velocity_mode="preserve")
+    return {
+        **settings.to_payload(),
+        "reverb": 0,
+        "delay": 0,
+        "chorus": None,
+    }
 
 
 def _project_from_midi(midi_path: str) -> dict[str, Any]:
@@ -99,11 +132,8 @@ def _project_from_midi(midi_path: str) -> dict[str, Any]:
         "time_sig": int(time_sig),
         "tempo_changes": [],
         "lyric_events": [],
-        "conversion_settings": {
-            "transpose": 0, "velocity_mode": "preserve", "reverb": 0, "delay": 0,
-            "chorus": None, "bpm_override": None, "vel_range": None, "vel_floor": None,
-            "vel_step": None, "apply_sustain": True, "flatten_tempo": False,
-        },
+        "conversion_settings": _legacy_import_conversion_payload("midi"),
+        "pitch_transform": PitchTransformPlan().to_payload(),
         "tracks": tracks,
         "research": {"profile_id": "bdo-global-v9-2026.07", "ab_experiments": []},
     }
@@ -162,11 +192,8 @@ def _project_from_bdo(score_path: str) -> dict[str, Any]:
         "time_sig": int(snapshot.time_signature),
         "tempo_changes": [],
         "lyric_events": [],
-        "conversion_settings": {
-            "transpose": 0, "velocity_mode": "preserve", "reverb": 0, "delay": 0,
-            "chorus": None, "bpm_override": None, "vel_range": None, "vel_floor": None,
-            "vel_step": None, "apply_sustain": True, "flatten_tempo": False,
-        },
+        "conversion_settings": _legacy_import_conversion_payload("bdo"),
+        "pitch_transform": PitchTransformPlan().to_payload(),
         "tracks": tracks,
         "research": {"profile_id": "bdo-global-v9-2026.07", "ab_experiments": []},
     }
@@ -225,11 +252,13 @@ def _issues(payload: dict[str, Any]) -> list[dict[str, Any]]:
         articulation_map=articulation_pairs_by_instrument(),
     )
     settings = _settings(payload)
+    conversion = _conversion_settings(payload)
     context = ValidationContext(
-        transpose=int(settings.get("transpose", 0)), active_track_ids=frozenset(track.track_id for track in tracks),
+        transpose=conversion.transpose, active_track_ids=frozenset(track.track_id for track in tracks),
         instrument_names=BDO_INSTRUMENT_NAMES, gm_drum_map={}, serialize_instrument=lambda track: track.bdo_instrument_id,
-        velocity_mode=str(settings.get("velocity_mode", "preserve")),
+        velocity_mode=conversion.velocity_mode,
         effects=(int(settings.get("reverb", 0)), int(settings.get("delay", 0)), settings.get("chorus")),
+        pitch_plan=_pitch_transform(payload),
     )
     for issue in validate_tracks(tracks, profile, context):
         issues.append({"code": issue.code, "severity": issue.severity, "message": issue.message,
@@ -244,7 +273,22 @@ def _export(payload: dict[str, Any], out_path: str) -> dict[str, Any]:
         return {"exported": False, "issues": issues}
     tracks = _active(_tracks(payload))
     settings = _settings(payload)
-    groups = [([note._replace(dur=max(1.0, note.dur * track.duration_scale)) for note in track.notes], track.gm_program, track.is_percussion) for track in tracks]
+    transform = _conversion_settings(payload).export_transform_parameters()
+    pitch_plan = _pitch_transform(payload)
+    groups = [
+        (
+            [
+                note._replace(dur=max(1.0, note.dur * track.duration_scale))
+                for note in transpose_notes(
+                    track.notes,
+                    pitch_plan.effective_track_semitones(track),
+                )
+            ],
+            track.gm_program,
+            track_uses_percussion_pitch_semantics(track),
+        )
+        for track in tracks
+    ]
     instrument_map = {index: track.bdo_instrument_id for index, track in enumerate(tracks)}
     vel_scales = {index: track.volume_scale for index, track in enumerate(tracks) if track.volume_scale != 1.0}
     articulation_map = {index: track.articulation_type for index, track in enumerate(tracks) if track.articulation_type is not None}
@@ -260,11 +304,11 @@ def _export(payload: dict[str, Any], out_path: str) -> dict[str, Any]:
     velocity_b_maps = {index: track.bdo_source_note_records for index, track in enumerate(tracks) if track.bdo_source_note_records}
     data, summary = channel_groups_to_bdo(
         int(payload.get("bpm", 120)), int(payload.get("time_sig", 4)), groups,
-        bpm_override=settings.get("bpm_override"), char_name=str(payload.get("char_name") or "MIDI"),
-        vel_range=settings.get("vel_range") if settings.get("velocity_mode") == "rescale" else None,
-        vel_floor=settings.get("vel_floor") if settings.get("velocity_mode") in {"floor", "stepped"} else None,
-        vel_step=settings.get("vel_step") if settings.get("velocity_mode") == "stepped" else None,
-        vel_layered=settings.get("velocity_mode") == "layered", transpose=int(settings.get("transpose", 0)),
+        bpm_override=transform["bpm_override"], char_name=str(payload.get("char_name") or "MIDI"),
+        vel_range=transform["vel_range"],
+        vel_floor=transform["vel_floor"],
+        vel_step=transform["vel_step"],
+        vel_layered=transform["vel_layered"], transpose=0,
         owner_id=int(payload.get("owner_id", 0)), instrument_map=instrument_map,
         reverb=int(settings.get("reverb", 0)), delay=int(settings.get("delay", 0)), chorus=settings.get("chorus"),
         vel_scales=vel_scales or None, articulation_map=articulation_map or None, preserve_note_types=True,

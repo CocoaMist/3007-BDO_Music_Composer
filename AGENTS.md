@@ -1,6 +1,8 @@
 # AGENTS.md — AI and contributor operating guide
 
-Read this file before editing the repository. Then read `docs/AI_CONTEXT.md` for the task-specific routing map.
+Read this file before editing the repository. Then choose a complete localized
+README from the root language hub, read `docs/AGENT_HANDOFF.md`, and use
+`docs/AI_CONTEXT.md` for the task-specific routing map.
 
 ## Mission
 
@@ -8,10 +10,13 @@ BDO Music Composer is an unofficial PySide6 MIDI editor and Black Desert music-s
 
 ## Start here
 
-1. `README.md` — product scope, setup, limitations, and public-release warnings.
-2. `docs/ARCHITECTURE.md` — components and end-to-end data flow.
-3. `docs/AI_CONTEXT.md` — change routing, invariants, and validation matrix.
-4. Relevant domain reference under `docs/` only after the three files above.
+1. `README.md` — language selector and Agent entry point.
+2. One complete localized guide: `README.zh-CN.md`, `README.en.md`,
+   `README.ja.md`, or `README.ko.md`.
+3. `docs/AGENT_HANDOFF.md` — safe takeover, implementation, validation, and handoff workflow.
+4. `docs/ARCHITECTURE.md` — components and end-to-end data flow.
+5. `docs/AI_CONTEXT.md` — change routing, invariants, and validation matrix.
+6. Relevant domain reference under `docs/` only after the files above.
 
 ## Commands
 

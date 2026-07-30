@@ -21,6 +21,7 @@ class TranscriptionCandidateProjectionTests(unittest.TestCase):
             from PySide6.QtWidgets import QApplication, QWidget
 
             from bdo_transcription import TranscriptionCandidate
+            import piano_roll_canvas
             import pyside_bdo_gui
             from pyside_bdo_gui import PianoRollCanvas
 
@@ -65,7 +66,7 @@ class TranscriptionCandidateProjectionTests(unittest.TestCase):
                 ),
             )
 
-            original_builder = pyside_bdo_gui.build_melody_line_segments
+            original_builder = piano_roll_canvas.build_melody_line_segments
             guide_sources = []
 
             def recording_builder(values, candidate_ids, **kwargs):
@@ -73,7 +74,7 @@ class TranscriptionCandidateProjectionTests(unittest.TestCase):
                 return original_builder(values, candidate_ids, **kwargs)
 
             with patch.object(
-                pyside_bdo_gui,
+                piano_roll_canvas,
                 "build_melody_line_segments",
                 side_effect=recording_builder,
             ):

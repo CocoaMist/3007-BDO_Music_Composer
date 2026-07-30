@@ -55,7 +55,7 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
                 "tracks": [],
             }
         )
-        self.assertEqual(payload["schema_version"], 9)
+        self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA)
         self.assertEqual(payload["reference_audio_offset_ms"], -250.5)
         self.assertEqual(payload["beat_origin_ms"], 0.0)
         self.assertEqual(
@@ -70,7 +70,7 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
         self.assertEqual(payload["transcription_assist_review"], {})
 
     def test_current_project_migration_is_idempotent_and_isolated(self) -> None:
-        source = {"schema_version": 9, "tracks": []}
+        source = {"schema_version": CURRENT_PROJECT_SCHEMA, "tracks": []}
         first = migrate_project(source)
         second = migrate_project(first)
         self.assertEqual(first, second)
@@ -79,7 +79,10 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
             {"version": 4, "cleanup_profile": "preserve"},
         )
         first["transcription_review"]["changed"] = True
-        self.assertEqual(source, {"schema_version": 9, "tracks": []})
+        self.assertEqual(
+            source,
+            {"schema_version": CURRENT_PROJECT_SCHEMA, "tracks": []},
+        )
 
     def test_v7_cleanup_choice_migrates_to_preserve_without_losing_review(self) -> None:
         source = {
@@ -95,7 +98,7 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
 
         payload = migrate_project(source)
 
-        self.assertEqual(payload["schema_version"], 9)
+        self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA)
         self.assertEqual(
             payload["transcription_review"],
             {
@@ -135,7 +138,7 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
                 "transcription_review": review,
             }
         )
-        self.assertEqual(payload["schema_version"], 9)
+        self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA)
         self.assertEqual(
             payload["transcription_review"],
             {
@@ -159,7 +162,7 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(payload["schema_version"], 9)
+        self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA)
         self.assertEqual(
             payload["transcription_review"]["cleanup_profile"],
             "preserve",
@@ -169,11 +172,26 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
     def test_v8_reference_layers_preserve_pre_control_visual_strength(self) -> None:
         payload = migrate_project({"schema_version": 8, "tracks": []})
 
-        self.assertEqual(payload["schema_version"], 9)
+        self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA)
         self.assertEqual(payload["reference_layers"]["ghost_opacity_percent"], 100)
         self.assertEqual(
             payload["reference_layers"]["background_opacity_percent"],
             100,
+        )
+
+    def test_v9_pitch_transform_migration_uses_saved_global_transpose(self) -> None:
+        payload = migrate_project(
+            {
+                "schema_version": 9,
+                "conversion_settings": {"transpose": -8},
+                "tracks": [{"track_id": 7}],
+            }
+        )
+
+        self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA)
+        self.assertEqual(
+            payload["pitch_transform"],
+            {"global_semitones": -8, "track_overrides": []},
         )
 
     def test_new_reference_layers_are_bounded_and_quiet(self) -> None:

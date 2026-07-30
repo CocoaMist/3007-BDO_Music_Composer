@@ -7,8 +7,10 @@ import math
 from pathlib import Path
 from typing import Any, Mapping
 
+from pitch_transform import PitchTransformPlan
 
-CURRENT_PROJECT_SCHEMA = 9
+
+CURRENT_PROJECT_SCHEMA = 10
 REFERENCE_LAYER_SETTINGS_VERSION = 3
 
 
@@ -176,6 +178,26 @@ def resolve_project_file_reference(
     return candidate
 
 
+def _normalized_pitch_transform(result: Mapping[str, Any]) -> dict[str, Any]:
+    conversion = result.get("conversion_settings")
+    conversion_source = conversion if isinstance(conversion, Mapping) else {}
+    pitch_source = result.get("pitch_transform")
+    pitch_mapping = pitch_source if isinstance(pitch_source, Mapping) else {}
+    try:
+        global_semitones = int(
+            conversion_source.get(
+                "transpose",
+                pitch_mapping.get("global_semitones", 0),
+            )
+        )
+    except (TypeError, ValueError, OverflowError):
+        global_semitones = 0
+    return PitchTransformPlan.from_payload(
+        pitch_source,
+        default_global_semitones=global_semitones,
+    ).with_global(global_semitones).to_payload()
+
+
 def migrate_project(payload: Mapping[str, Any]) -> dict[str, Any]:
     result = deepcopy(dict(payload))
     version = int(result.get("schema_version", result.get("version", 1)))
@@ -233,6 +255,10 @@ def migrate_project(payload: Mapping[str, Any]) -> dict[str, Any]:
         )
         result["schema_version"] = 9
         version = 9
+    if version == 9:
+        result["pitch_transform"] = _normalized_pitch_transform(result)
+        result["schema_version"] = 10
+        version = 10
     # A hand-written current project can omit optional fields.  Keep migration
     # idempotent and give every current project the same safe defaults.
     result.setdefault("reference_audio_offset_ms", 0.0)
@@ -244,6 +270,7 @@ def migrate_project(payload: Mapping[str, Any]) -> dict[str, Any]:
     result["reference_layers"] = normalize_reference_layer_settings(
         result.get("reference_layers")
     )
+    result["pitch_transform"] = _normalized_pitch_transform(result)
     result["schema_version"] = version
     result.pop("version", None)
     return result

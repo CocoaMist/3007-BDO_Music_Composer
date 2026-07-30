@@ -161,6 +161,7 @@ class TranscriptionSemanticCanvasUiTests(unittest.TestCase):
 
             from bdo_transcription_harmony import HarmonyAnalysisCancelled
             import pyside_bdo_gui as gui
+            import transcription_workers as workers
 
             app = QApplication([])
             worker = gui.TranscriptionAssistAnalysisWorker(
@@ -187,9 +188,9 @@ class TranscriptionSemanticCanvasUiTests(unittest.TestCase):
                 callback_checks.append(cancelled())
                 raise HarmonyAnalysisCancelled("cancelled")
 
-            gui.load_transcription_evidence = lambda *_args: object()
-            gui.load_transcription_frame_times = lambda *_args: object()
-            gui.analyse_harmony = cancelling_harmony
+            workers.load_transcription_evidence = lambda *_args: object()
+            workers.load_transcription_frame_times = lambda *_args: object()
+            workers.analyse_harmony = cancelling_harmony
 
             events = []
             worker.cancelled.connect(

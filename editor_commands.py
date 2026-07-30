@@ -15,12 +15,16 @@ class ProjectSnapshot:
     chorus: tuple[int, int, int] | None
     transcription_state: object | None = None
     transcription_assist_state: object | None = None
+    conversion_settings: object | None = None
+    pitch_transform_plan: object | None = None
 
     @classmethod
     def capture(cls, tracks: Sequence[object], reverb: int, delay: int,
                 chorus: tuple[int, int, int] | None,
                 transcription_state: object | None = None,
                 transcription_assist_state: object | None = None,
+                conversion_settings: object | None = None,
+                pitch_transform_plan: object | None = None,
                 ) -> "ProjectSnapshot":
         return cls(
             tuple(deepcopy(list(tracks))),
@@ -29,6 +33,8 @@ class ProjectSnapshot:
             deepcopy(chorus),
             deepcopy(transcription_state),
             deepcopy(transcription_assist_state),
+            deepcopy(conversion_settings),
+            deepcopy(pitch_transform_plan),
         )
 
     def restored_tracks(self) -> list:
@@ -39,6 +45,12 @@ class ProjectSnapshot:
 
     def restored_transcription_assist_state(self) -> object | None:
         return deepcopy(self.transcription_assist_state)
+
+    def restored_conversion_settings(self) -> object | None:
+        return deepcopy(self.conversion_settings)
+
+    def restored_pitch_transform_plan(self) -> object | None:
+        return deepcopy(self.pitch_transform_plan)
 
 
 class ProjectCommandStack:

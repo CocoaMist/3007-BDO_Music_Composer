@@ -8,6 +8,7 @@ import unittest
 from bdo_profile import load_bdo_profile
 from bdo_validation import ValidationContext, validate_tracks
 from project_paths import PROFILES_DIR
+from pitch_transform import PitchTransformPlan
 
 
 Note = namedtuple("Note", "pitch vel start dur ntype")
@@ -92,6 +93,61 @@ class BdoProfileValidationTests(unittest.TestCase):
         self.assertEqual(pitch_issue.track_id, 4)
         self.assertEqual(pitch_issue.note_indices, (0,))
         self.assertTrue(any(item.code == "export.velocity_scale" for item in issues))
+
+    def test_validator_uses_same_track_pitch_plan_as_export(self) -> None:
+        first = Track(4, [Note(47, 90, 0, 200, 0)], 11)
+        second = Track(5, [Note(60, 90, 0, 200, 0)], 11)
+        base = self.context([first, second])
+        plan = PitchTransformPlan(0).with_track_octave(4, 12)
+        context = ValidationContext(
+            base.transpose,
+            base.active_track_ids,
+            base.instrument_names,
+            base.gm_drum_map,
+            base.serialize_instrument,
+            pitch_plan=plan,
+        )
+
+        issues = validate_tracks([first, second], self.profile, context)
+
+        self.assertFalse(any(
+            item.code == "pitch.instrument_unsupported"
+            and item.track_id == 4
+            for item in issues
+        ))
+        transpose = next(
+            item for item in issues
+            if item.code == "export.transpose" and item.track_id == 4
+        )
+        self.assertEqual(dict(transpose.message_values)["transpose"], 12)
+        self.assertFalse(any(
+            item.code == "export.transpose" and item.track_id == 5
+            for item in issues
+        ))
+
+    def test_bdo_drum_target_is_exempt_when_source_flag_is_melodic(self) -> None:
+        track = Track(
+            8,
+            [Note(48, 90, 0, 200, 99)],
+            0x0D,
+            is_percussion=False,
+        )
+        base = self.context([track])
+        context = ValidationContext(
+            -8,
+            base.active_track_ids,
+            base.instrument_names,
+            base.gm_drum_map,
+            base.serialize_instrument,
+            pitch_plan=PitchTransformPlan(-8),
+        )
+
+        issues = validate_tracks([track], self.profile, context)
+
+        self.assertFalse(any(
+            item.code == "export.transpose" for item in issues
+        ))
+        self.assertFalse(any(item.severity == "error" for item in issues))
 
     def test_approximate_instrument_range_warns_without_hard_rejection(self) -> None:
         track = Track(
