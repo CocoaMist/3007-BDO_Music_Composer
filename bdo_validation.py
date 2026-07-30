@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from string import Formatter
 from typing import Callable, Mapping, Sequence
 
+from pitch_transform import PitchTransformPlan
+
 from bdo_profile import BdoProfile
 from bdo_track_effects import (
     GAME_PERCENT_MAX,
@@ -165,6 +167,15 @@ class ValidationContext:
     sample_only_percussion_ids: frozenset[int] = frozenset()
     velocity_mode: str = "preserve"
     effects: tuple[int, int, tuple[int, int, int] | None] = (0, 0, None)
+    pitch_plan: PitchTransformPlan | None = None
+
+    def effective_transpose(self, track: object) -> int:
+        if self.pitch_plan is None:
+            return int(self.transpose)
+        return self.pitch_plan.effective_semitones(
+            int(getattr(track, "track_id")),
+            is_drum=bool(getattr(track, "is_percussion", False)),
+        )
 
 
 def _evidence(profile: BdoProfile, instrument_id: int) -> tuple[str, str]:
@@ -183,6 +194,7 @@ def validate_tracks(
     for track in tracks:
         track_id = int(track.track_id)
         instrument_id = int(track.bdo_instrument_id)
+        effective_transpose = context.effective_transpose(track)
         serialized_id = int(context.serialize_instrument(track))
         evidence, status = _evidence(profile, instrument_id)
         notes = list(track.notes)
@@ -292,7 +304,7 @@ def validate_tracks(
                 evidence=evidence, evidence_status=status,
             ))
         else:
-            shifted = [int(note.pitch) + context.transpose for note in notes]
+            shifted = [int(note.pitch) + effective_transpose for note in notes]
             broad_invalid = tuple(
                 index for index, pitch in enumerate(shifted)
                 if pitch < 12 or pitch > 119
@@ -331,11 +343,16 @@ def validate_tracks(
                         evidence=evidence, evidence_status=status,
                     ))
 
-        if context.transpose and notes and instrument_id != profile.drum_instrument_id:
+        if (
+            effective_transpose
+            and notes
+            and not bool(track.is_percussion)
+            and instrument_id != profile.drum_instrument_id
+        ):
             issues.append(_issue(
                 "export.transpose", "info",
                 "导出会将此轨道全部音符移调 {transpose:+d} 半音。",
-                values={"transpose": context.transpose},
+                values={"transpose": effective_transpose},
                 track_id=track_id, note_indices=tuple(range(len(notes))),
                 evidence=evidence, evidence_status=status,
             ))

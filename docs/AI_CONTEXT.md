@@ -2,20 +2,28 @@
 
 This document helps an AI agent find the correct subsystem without scanning every research file.
 
+Before using this routing map, read the repository rules in `AGENTS.md`, choose
+one complete localized README from the root language hub, and follow the
+handoff workflow in `docs/AGENT_HANDOFF.md`. Current structural and performance
+candidates are tracked in `docs/OPTIMIZATION_EXTENSION_ROADMAP.md`.
+
 ## Task router
 
 | User request | Read first | Likely edit |
 |---|---|---|
-| Main window/timeline UI | `TimelineCanvas`, `MidiToBdoWindow._build_*`, `fluent_theme.py` | `pyside_bdo_gui.py`, `fluent_theme.py` |
+| Main-window composition / toolbar | `MidiToBdoWindow._build_*`, `MainWindowStyleMixin`, `fluent_theme.py` | `pyside_bdo_gui.py`, `main_window_style.py`, `fluent_theme.py` |
+| Timeline behavior / painting | visible note indexes, reference-audio protocol, track interactions | `timeline_canvas.py`, `editor_models.py`, thin signal adapters in `pyside_bdo_gui.py` |
+| Application settings / local source fields | dialog host contract and Qt-free source normalization | `application_settings_dialog.py`, `audio_source_settings.py`, thin apply adapter in `pyside_bdo_gui.py` |
+| Track pitch / Aux / master-effect dialogs | structural track contract and raw-byte preservation | `track_settings_dialogs.py`, `bdo_track_effects.py`, thin apply adapters in `pyside_bdo_gui.py` |
 | Home page/unified projects | bounded scanners and safe project index, `MidiToBdoWindow._build_home_page` | `home_catalog.py`, `project_persistence.py`, `pyside_bdo_gui.py`, `i18n.py` |
 | Open/edit a BDO v9 score | `read_bdo_score`, `track_states_from_bdo_score`, `MidiToBdoWindow._load_bdo_info` | `bdo_score.py`, `pyside_bdo_gui.py` |
-| Piano-roll behavior | `PianoRollCanvas`, `MidiNoteEditorDialog` | `pyside_bdo_gui.py` |
-| Instrument-specific editor lanes/roles | verified vs preview vs recommended boundaries | `bdo_instrument_adaptation.py`, `pyside_bdo_gui.py` |
-| Timeline instrument artwork | packaged original icons, local override, vector fallback | `assets/README.md`, `bdo_instrument_lane_art_qt.py`, `pyside_bdo_gui.py` |
+| Piano-roll behavior | `PianoRollCanvas`, `VelocityLaneCanvas`, `MidiNoteEditorDialog` | `piano_roll_canvas.py`, `midi_note_editor.py` |
+| Instrument-specific editor lanes/roles | verified vs preview vs recommended boundaries | `bdo_instrument_adaptation.py`, `editor_models.py`, `midi_note_editor.py` |
+| Timeline instrument artwork | packaged original icons, local override, vector fallback | `assets/README.md`, `bdo_instrument_lane_art_qt.py`, `timeline_canvas.py` |
 | Local game-art import | allow-listed PAZ/CSS/sprite import, local cache only | `tools/import_bdo_game_art.py` |
 | Timeline process telemetry | current-process CPU/RAM plus callback-owned audio counters | `process_metrics.py`, `MidiToBdoWindow._build_performance_strip` |
 | Local homepage examples | sanitized local manifest, attribution, no bundled user MIDI | `tools/install_example_project.py`, `scan_example_projects` |
-| MIDI optimization | package README, configs/reports/tests | `optimization/` |
+| MIDI optimization | package README, configs/reports/tests, Qt analysis boundary | `optimization/`, `optimizer_dialog.py` |
 | Optimizer packages / Marnian | `optimization/README.md`, `docs/MARNIAN_MUSE_OPTIONAL_BOUNDARY.md` | `optimization/plugin_api.py`, `optimization/plugin_loader.py`, `optimization/plugin_host.py` |
 | Articulation recommendation | profile + technique registry | `bdo_articulation_profiles.py`, `bdo_techniques.py` |
 | Harmony/role analysis | theory context | `bdo_music_theory.py` |
@@ -23,11 +31,11 @@ This document helps an AI agent find the correct subsystem without scanning ever
 | Lyrics | lyric expression mode | `bdo_lyrics.py` |
 | Preview/audio timing | shared lifecycle, engine and tests | `bdo_audio_lifecycle.py`, `bdo_realtime_audio.py`, `bdo_sample_renderer.py` |
 | Game mixer/effects | track volume, Aux/master byte layers, raw compatibility | `bdo_track_effects.py`, `docs/BDO_MIXER_EFFECTS.md` |
-| Transcription backend/cache/re-decode | `TranscriptionBackend`, `EvidenceDescriptor`, cache tests | `bdo_transcription.py` |
+| Transcription backend/cache/re-decode | `TranscriptionBackend`, `EvidenceDescriptor`, cache tests | `bdo_transcription.py`, `transcription_workers.py` |
 | Fragment annotation/cleanup/lineage | `postprocess_frame_events`, v3 benchmark protocol, postprocess tests | `bdo_transcription_postprocess.py`, `bdo_transcription.py`, `bdo_transcription_session.py` |
-| Candidate review/routing/project apply | `TranscriptionSession`, review/session tests | `bdo_transcription_session.py`, `pyside_bdo_gui.py` |
-| Embedded transcription editor/canvas | `MidiNoteEditorDialog`, `PianoRollCanvas`, offscreen UI tests | `pyside_bdo_gui.py`, `transcription_editor_qt.py` |
-| Semantic blocks / transcription LOD | candidate visible indexes and paint-order tests | `PianoRollCanvas` in `pyside_bdo_gui.py` |
+| Candidate review/routing/project apply | session candidate indexes, mixed review plans, review/session tests | `bdo_transcription_session.py`, `transcription_workspace_controller.py`, thin adapters in `pyside_bdo_gui.py` and `midi_note_editor.py` |
+| Embedded transcription editor/canvas | `MidiNoteEditorDialog`, `PianoRollCanvas`, offscreen UI tests | `midi_note_editor.py`, `piano_roll_canvas.py`, `transcription_editor_qt.py` |
+| Semantic blocks / transcription LOD | candidate visible indexes and paint-order tests | `PianoRollCanvas` in `piano_roll_canvas.py` |
 | Melody-line guides | `docs/TRANSCRIPTION_VOICE_GUIDES.md`; deterministic lead/bass/harmony LOD, lineage and visible block indexes | `bdo_transcription_melody_lines.py`, `PianoRollCanvas` |
 | Transcription key/chord analysis | `KeyEstimate`, `ChordSegment`, conservative `N` tests | `bdo_transcription_harmony.py` |
 | Phrase/voice grouping and BDO Top-3 | `VoiceGroup`, `BdoInstrumentMatch`, deterministic ranking tests | `bdo_transcription_instruments.py` |
@@ -41,11 +49,18 @@ This document helps an AI agent find the correct subsystem without scanning ever
 | BDO v9 codec/binary format | `docs/BDO_V9_CODEC.md`, codec tests | `bdo_codec/` |
 | MIDI import / mappings | MIDI parser tests | `bdo_midi/` |
 | MIDI/editor-to-BDO adaptation | immutable export snapshot, atomic publication, export round-trip tests | `export_workflow.py`, `atomic_io.py`, `bdo_export/` |
+| Conversion defaults/settings lifecycle | `docs/CONVERSION_SETTINGS.md`; new-score vs legacy/BDO source policy | `conversion_settings.py`, thin adapters in `pyside_bdo_gui.py` and `export_workflow.py` |
+| Global/per-track pitch projection | `docs/CONVERSION_SETTINGS.md`; stable track IDs, drum exemption, `12k` voice adaptation | `pitch_transform.py`, `bdo_validation.py`, `export_workflow.py`, preview adapters |
 | Game rules / conversion issues | profile + validation tests | `bdo_profile.py`, `bdo_validation.py`, `data/profiles/` |
+| Revisioned conversion validation | explicit mutation boundary, cache-hit and notice tests | `model_revision.py`, `conversion_validation_controller.py`, thin adapter in `pyside_bdo_gui.py` |
+| Transcription worker/review lifecycle | generation/restart, bounded mixed history, and stale-result tests | `transcription_workspace_controller.py`, `transcription_workers.py` |
+| Project loading lifecycle | loading generation, autosave gate, migration tests | `project_lifecycle_controller.py`, `project_persistence.py` |
+| Preview transport lifecycle | session generation/state and real-time audio tests | `preview_transport_controller.py`, `bdo_realtime_audio.py` |
 | BDO score inspection / comparison | score snapshot tests | `bdo_score.py`, `scripts/inspect_bdo.py` |
 | Audio A/B research | coverage/alignment tests | `bdo_audio_research.py`, `bdo_experiments.py` |
 | Localization / regional terminology | `docs/LOCALIZATION.md`, catalog and four-locale UI tests | `i18n.py`, fixed-text producers only |
-| Credits / license links / citations | `THIRD_PARTY_NOTICES.md`, Basic Pitch license evidence | `third_party_credits.py`, Credits dialog, release docs |
+| Credits / license links / citations | `THIRD_PARTY_NOTICES.md`, Basic Pitch license evidence | `third_party_credits.py`, `acknowledgements_dialog.py`, release docs |
+| README languages / Agent handoff | root language hub, shared section markers, Agent workflow | `README.*.md`, `docs/AGENT_HANDOFF.md`, `tools/check_readme_locales.py` |
 | Windows build | spec/build script/path split | `packaging/windows/`, `project_paths.py` |
 
 ## Source-of-truth hierarchy
@@ -106,7 +121,13 @@ Do not promote an inference to “verified” without game evidence.
   cleanup-profile, selection/rejection, and pending/applied routing sidecar.
 - `TranscriptionSession`: deterministic review/routing operations and
   review-only undo/redo, with runtime `CandidateAnnotation` lineage protecting
-  reviewed candidates during full-song or interval replacement.
+  reviewed candidates during full-song or interval replacement. It is also the
+  sole owner of stable candidate order, ID lookup, start-range and overlap
+  indexes; review-only state changes do not rebuild them.
+- `TranscriptionReviewController`: Qt-free owner of the bounded interleaving
+  order between session commands and immutable assist-review snapshots. It
+  invalidates abandoned mixed redo branches but never mutates candidates,
+  tracks, widgets, or persistence.
 - `KeyEstimate` / `ChordSegment` / `HarmonyAnalysis`: conservative,
   original-audio-time harmony output with explicit alternatives and manual
   lock overlays.
@@ -130,12 +151,20 @@ Do not promote an inference to “verified” without game evidence.
   Qt-free transcription service.
 - `decode_score` / `encode_score`: lossless document decode and safe encoding.
 - `channel_groups_to_bdo`: current editor-to-codec adapter in `bdo_export`.
+- `ConversionSettings`: immutable Qt-free owner of MIDI parse and export
+  transforms. Its source constructors distinguish new-score preferences,
+  legacy project neutrality, and BDO lossless import; UI properties are only a
+  compatibility adapter.
 - `build_bdo_binary` / `encrypt_bdo`: probe-generator helpers delegated to `bdo_codec`.
 - `Localizer`: exact-source widget translation.
 
 ## Common traps
 
 - Re-reading the source MIDI during export discards manual editor changes.
+- Do not rebuild conversion-setting dictionaries in lifecycle/UI branches.
+  Replace one `ConversionSettings` snapshot and use its payload/parse/export
+  projections. Missing legacy fields must not inherit the previously open
+  score, and a BDO import must retain a neutral transform for lossless export.
 - Never pass mutable `TrackState` or note-list containers into `ConvertWorker`;
   freeze them before starting the thread. Keep the worker referenced until its
   `finished` signal and make close wait rather than destroying a live `QThread`.
@@ -176,6 +205,9 @@ Do not promote an inference to “verified” without game evidence.
 - Candidate replacement must protect rejected/pending/applied review by both
   stable candidate ID and lineage intersection. A newly merged or derived
   candidate must not overwrite a manually reviewed source candidate.
+- Candidate selection, A–B eligibility, restore, fragment selection and route
+  staging must use `TranscriptionSession` indexed queries. Do not duplicate
+  those rules with full-song loops or reach into canvas-private index arrays.
 - Evidence paint must not open/mmap NPY files, normalize matrices, run FFT/model
   work, or scan the full song. Workers generate `QImage` tiles and the GUI draws
   only visible cached tiles.
@@ -204,22 +236,25 @@ Do not promote an inference to “verified” without game evidence.
   profile index, and a 45% confidence cap when local timbre evidence is absent.
 - Keep `gm_to_bdo_instrument` as the single GM→BDO domain mapping entry point.
   UI and match presentation must not introduce another mapping table.
-- Schema v9 stores transcription-review payload v4, including
+- Schema v10 stores transcription-review payload v4, including
   `cleanup_profile`, plus manual assist review. New state defaults to
   `preserve`; schemas v1–v7 and review payloads v1–v3 also migrate to
   `preserve`, because their profile values predate actual cleanup actions.
-  Current v8/v9 review-v4 values may retain an explicit experimental
+  Current v8/v9/v10 review-v4 values may retain an explicit experimental
   `balanced`/`clean` choice. Legacy projects also keep standard analysis mode
   so historical results do not change silently. Runtime
   lineage/flags/hidden candidates, automatic harmony, groups, matches,
   evidence, and sample features are cache/runtime results. Audio identity
   mismatch must orphan old assist decisions rather than
   silently applying them.
-- Schema v9 also persists only lightweight reference-layer view state:
+- Schema v10 also persists only lightweight reference-layer view state:
   ghost-note visibility/opacity and one shared opacity for melody lines,
   Frame/Onset/Contour evidence, and spectrogram tiles.  It never serializes
   rendered tiles or audio data; v8 migration retains the former full-strength
   rendering while new projects use quieter defaults.
+- Schema v10 adds `pitch_transform`. Resolve it by stable `track_id`; never use
+  track-list position as identity. Automatic/voice overrides are `12k`, drums
+  resolve to zero, and preview/validation/export must consume the same plan.
 - Before changing/unloading reference audio, preserve applied formal notes but
   confirm loss of pending routes. A deleted target leaves an orphaned route; it
   must not silently retarget.

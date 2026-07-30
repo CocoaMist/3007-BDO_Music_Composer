@@ -8,6 +8,7 @@ remain disposable cache data.
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
@@ -808,8 +809,13 @@ class TranscriptionSession:
         self.backend_id = str(backend_id)
         self._candidates: dict[str, object] = {}
         self._ordered_candidates: tuple[object, ...] = ()
+        self._ordered_candidate_ids: tuple[str, ...] = ()
+        self._candidate_starts: tuple[float, ...] = ()
+        self._candidate_ends: tuple[float, ...] = ()
+        self._candidate_prefix_max_ends: tuple[float, ...] = ()
         self._candidate_order: dict[str, int] = {}
         self._candidate_ids_by_identity: dict[int, str] = {}
+        self._last_candidate_range_query_inspections = 0
         self._annotations: dict[str, CandidateAnnotation] = {}
         self._ordered_annotations: tuple[CandidateAnnotation, ...] = ()
         self.commands = TranscriptionReviewCommandStack(undo_limit)
@@ -842,6 +848,16 @@ class TranscriptionSession:
     @property
     def candidates(self) -> tuple[object, ...]:
         return self._ordered_candidates
+
+    @property
+    def ordered_candidate_ids(self) -> tuple[str, ...]:
+        return self._ordered_candidate_ids
+
+    @property
+    def last_candidate_range_query_inspections(self) -> int:
+        """Number of candidates inspected by the latest indexed range query."""
+
+        return self._last_candidate_range_query_inspections
 
     @property
     def annotations(self) -> tuple[CandidateAnnotation, ...]:
@@ -947,6 +963,41 @@ class TranscriptionSession:
         self._ordered_candidates = tuple(
             candidate for _candidate_id, candidate in ordered
         )
+        self._ordered_candidate_ids = tuple(
+            candidate_id for candidate_id, _candidate in ordered
+        )
+        self._candidate_starts = tuple(
+            float(
+                _candidate_value(
+                    candidate,
+                    "start_ms",
+                    "start",
+                    default=0.0,
+                )
+            )
+            for candidate in self._ordered_candidates
+        )
+        self._candidate_ends = tuple(
+            start_ms
+            + float(
+                _candidate_value(
+                    candidate,
+                    "duration_ms",
+                    "dur",
+                    default=0.0,
+                )
+            )
+            for start_ms, candidate in zip(
+                self._candidate_starts,
+                self._ordered_candidates,
+            )
+        )
+        prefix_max_ends: list[float] = []
+        maximum_end = float("-inf")
+        for end_ms in self._candidate_ends:
+            maximum_end = max(maximum_end, end_ms)
+            prefix_max_ends.append(maximum_end)
+        self._candidate_prefix_max_ends = tuple(prefix_max_ends)
         self._candidate_order = {
             candidate_id: index
             for index, (candidate_id, _candidate) in enumerate(ordered)
@@ -1115,6 +1166,105 @@ class TranscriptionSession:
         )
         return region[0] <= start_ms < region[1]
 
+    def order_candidate_ids(
+        self,
+        candidate_ids: Iterable[str],
+    ) -> tuple[str, ...]:
+        requested = {
+            candidate_id
+            for value in candidate_ids
+            if (candidate_id := _valid_candidate_id(value)) in self._candidates
+        }
+        return tuple(
+            sorted(requested, key=self._candidate_order.__getitem__)
+        )
+
+    def candidate_ids_starting_in_project_region(
+        self,
+        region: tuple[float, float],
+        *,
+        reference_audio_offset_ms: float = 0.0,
+    ) -> tuple[str, ...]:
+        """Return candidates whose projected start lies in ``[A, B)``."""
+
+        start_project_ms, end_project_ms = map(float, region)
+        if end_project_ms <= start_project_ms:
+            self._last_candidate_range_query_inspections = 0
+            return ()
+        offset_ms = float(reference_audio_offset_ms)
+        first = bisect_left(
+            self._candidate_starts,
+            start_project_ms - offset_ms,
+        )
+        last = bisect_left(
+            self._candidate_starts,
+            end_project_ms - offset_ms,
+        )
+        self._last_candidate_range_query_inspections = max(0, last - first)
+        return self._ordered_candidate_ids[first:last]
+
+    def candidate_ids_overlapping_audio_range(
+        self,
+        start_audio_ms: float,
+        end_audio_ms: float,
+    ) -> tuple[str, ...]:
+        """Return candidates overlapping one audio-time half-open interval."""
+
+        start_ms = float(start_audio_ms)
+        end_ms = float(end_audio_ms)
+        if end_ms <= start_ms or not self._ordered_candidate_ids:
+            self._last_candidate_range_query_inspections = 0
+            return ()
+        # The monotonic prefix maximum skips every early candidate that is
+        # guaranteed to end at or before the requested interval.  The final
+        # predicate is still checked because candidate durations may overlap.
+        first = bisect_right(self._candidate_prefix_max_ends, start_ms)
+        last = bisect_left(self._candidate_starts, end_ms)
+        self._last_candidate_range_query_inspections = max(0, last - first)
+        return tuple(
+            self._ordered_candidate_ids[index]
+            for index in range(first, last)
+            if self._candidate_ends[index] > start_ms
+        )
+
+    def eligible_candidate_ids(
+        self,
+        *,
+        reference_audio_offset_ms: float = 0.0,
+        include_routed: bool = False,
+    ) -> tuple[str, ...]:
+        """Resolve selected-first/A-B review scope in stable candidate order."""
+
+        state = self.state
+        if state.selected_candidate_ids:
+            self._last_candidate_range_query_inspections = 0
+            return self.order_candidate_ids(
+                state.selected_candidate_ids.difference(
+                    state.rejected_candidate_ids
+                )
+            )
+        if state.region is None:
+            self._last_candidate_range_query_inspections = 0
+            return ()
+        candidates = self.candidate_ids_starting_in_project_region(
+            state.region,
+            reference_audio_offset_ms=reference_audio_offset_ms,
+        )
+        routed = (
+            set()
+            if include_routed
+            else {
+                route.candidate_id
+                for route in (*state.pending_routes, *state.applied_routes)
+            }
+        )
+        return tuple(
+            candidate_id
+            for candidate_id in candidates
+            if candidate_id not in state.rejected_candidate_ids
+            and candidate_id not in routed
+        )
+
     def resolve_route_candidate_ids(
         self, candidate_ids: Iterable[str] | None = None
     ) -> tuple[str, ...]:
@@ -1125,27 +1275,13 @@ class TranscriptionSession:
         empty tuple, preventing accidental whole-song writes.
         """
 
-        if candidate_ids is not None:
-            requested = {
-                candidate_id
-                for value in candidate_ids or ()
-                if (candidate_id := _valid_candidate_id(value)) is not None
-            }
-        elif self.state.selected_candidate_ids:
-            requested = set(self.state.selected_candidate_ids)
-        elif self.state.region is not None:
-            routed = {
-                route.candidate_id
-                for route in (*self.state.pending_routes, *self.state.applied_routes)
-            }
-            requested = {
-                candidate_id
-                for candidate_id, candidate in self._candidates.items()
-                if candidate_id not in routed
-                and self._candidate_starts_in_region(candidate, self.state.region)
-            }
-        else:
-            return ()
+        if candidate_ids is None:
+            return self.eligible_candidate_ids()
+        requested = {
+            candidate_id
+            for value in candidate_ids or ()
+            if (candidate_id := _valid_candidate_id(value)) is not None
+        }
         requested.difference_update(self.state.rejected_candidate_ids)
         requested.intersection_update(self._candidates)
         return tuple(

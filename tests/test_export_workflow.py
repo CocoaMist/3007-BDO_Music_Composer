@@ -6,12 +6,20 @@ from unittest.mock import patch
 
 from bdo_midi import Note
 from bdo_score import read_bdo_score
-from export_workflow import execute_export, freeze_export_tracks
+from conversion_settings import ConversionSettings
+from export_workflow import (
+    ExportRequest,
+    execute_export,
+    freeze_export_tracks,
+    prepare_export,
+)
+from pitch_transform import PitchTransformPlan
 
 
 @dataclass
 class MutableTrack:
     notes: list
+    track_id: int = 0
     gm_program: int = 0
     is_percussion: bool = False
     bdo_instrument_id: int = 0x0B
@@ -49,13 +57,8 @@ class ExportWorkflowTests(unittest.TestCase):
                 "bdo_source_document": None,
                 "bpm_for_temp": 120,
                 "time_sig_for_temp": 4,
-                "bpm_override": None,
+                "conversion_settings": ConversionSettings.bdo_import_defaults(),
                 "char_name": "MIDI",
-                "vel_range": None,
-                "vel_floor": None,
-                "vel_step": None,
-                "vel_layered": False,
-                "transpose": 0,
                 "owner_id": 123,
                 "reverb": 0,
                 "delay": 0,
@@ -117,6 +120,81 @@ class ExportWorkflowTests(unittest.TestCase):
             self.assertEqual(result[0], str(output))
             self.assertEqual(result[3], "")
             self.assertIn("PermissionError", result[4])
+
+    def test_typed_request_applies_stable_per_track_octaves_once(self) -> None:
+        snapshots = freeze_export_tracks(
+            [
+                MutableTrack(
+                    [Note(60, 90, 0.0, 250.0, 0)],
+                    track_id=7,
+                ),
+                MutableTrack(
+                    [Note(72, 90, 300.0, 250.0, 0)],
+                    track_id=9,
+                ),
+            ]
+        )
+        conversion = ConversionSettings.bdo_import_defaults().with_updates(
+            transpose=-8
+        )
+        plan = (
+            PitchTransformPlan(-8)
+            .with_track_octave(7, 12)
+            .with_track_octave(9, -12)
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "score.bdo"
+            request = ExportRequest(
+                direct_tracks=snapshots,
+                bpm=120,
+                time_signature=4,
+                out_path=output,
+                character_name="MIDI",
+                owner_id=123,
+                conversion=conversion,
+                pitch_plan=plan,
+                reverb=0,
+                delay=0,
+                chorus=None,
+                game_dir=root / "game",
+                track_volumes=((0, 70), (1, 70)),
+                track_settings=((0, (0,) * 8), (1, (0,) * 8)),
+            )
+
+            prepared = prepare_export(request)
+
+            self.assertFalse(output.exists())
+            output.write_bytes(prepared.data)
+            snapshot = read_bdo_score(output)
+            pitches = sorted(
+                note.pitch
+                for track in snapshot.tracks
+                for note in track.notes
+            )
+            self.assertEqual(pitches, [52, 64])
+
+    def test_typed_request_rejects_divergent_global_pitch_sources(self) -> None:
+        snapshot = freeze_export_tracks(
+            [MutableTrack([Note(60, 90, 0.0, 250.0, 0)])]
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with self.assertRaises(ValueError):
+                ExportRequest(
+                    direct_tracks=snapshot,
+                    bpm=120,
+                    time_signature=4,
+                    out_path=root / "score.bdo",
+                    character_name="MIDI",
+                    owner_id=123,
+                    conversion=ConversionSettings.bdo_import_defaults(),
+                    pitch_plan=PitchTransformPlan(12),
+                    reverb=0,
+                    delay=0,
+                    chorus=None,
+                    game_dir=root / "game",
+                )
 
 
 if __name__ == "__main__":

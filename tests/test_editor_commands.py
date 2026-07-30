@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import unittest
 
+from conversion_settings import ConversionSettings
 from editor_commands import ProjectCommandStack, ProjectSnapshot
+from pitch_transform import PitchTransformPlan
 
 
 @dataclass
@@ -43,6 +45,40 @@ class EditorCommandTests(unittest.TestCase):
     def test_old_capture_call_keeps_optional_transcription_state_none(self) -> None:
         snapshot = ProjectSnapshot.capture([Track(1, [])], 0, 0, None)
         self.assertIsNone(snapshot.transcription_state)
+        self.assertIsNone(snapshot.conversion_settings)
+
+    def test_snapshot_restores_conversion_settings_atomically(self) -> None:
+        settings = ConversionSettings(
+            bpm_override=148,
+            transpose=-8,
+            velocity_mode="floor",
+            vel_floor=42,
+        )
+        snapshot = ProjectSnapshot.capture(
+            [Track(1, [])],
+            0,
+            0,
+            None,
+            conversion_settings=settings,
+        )
+        restored = snapshot.restored_conversion_settings()
+        self.assertEqual(restored, settings)
+        self.assertIsNot(restored, settings)
+
+    def test_snapshot_restores_track_pitch_plan_atomically(self) -> None:
+        plan = PitchTransformPlan(-8).with_track_octave(7, 12)
+        snapshot = ProjectSnapshot.capture(
+            [Track(7, [])],
+            0,
+            0,
+            None,
+            pitch_transform_plan=plan,
+        )
+
+        restored = snapshot.restored_pitch_transform_plan()
+
+        self.assertEqual(restored, plan)
+        self.assertIsNot(restored, plan)
 
 
 if __name__ == "__main__":

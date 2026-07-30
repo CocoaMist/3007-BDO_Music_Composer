@@ -85,7 +85,9 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
                 assert "合并" in notice["attentions"][0]
 
             first.notes = [Note(1, 90, 0.0, 300.0, 0)]
-            window.timeline.set_tracks(window.tracks)
+            # Direct test mutation must cross the same explicit model-revision
+            # boundary used by real editor commits.
+            window._refresh_tracks()
             window._refresh_timeline_validation()
             assert len(toast_calls) == 2
             assert toast_calls[-1][1] == "error"

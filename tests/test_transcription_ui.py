@@ -122,7 +122,8 @@ class TranscriptionUiTests(unittest.TestCase):
             import pyside_bdo_gui as gui
 
             app = QApplication([])
-            real_fingerprint = gui.transcription_audio_fingerprint
+            import transcription_workers as workers
+            real_fingerprint = workers.transcription_audio_fingerprint
             with tempfile.TemporaryDirectory() as folder:
                 audio = Path(folder) / "reference.wav"
                 audio.write_bytes(b"first-audio")
@@ -135,8 +136,8 @@ class TranscriptionUiTests(unittest.TestCase):
                     audio.write_bytes(b"other-audio")
                     return marker
 
-                gui.load_cached_transcription_result = changing_load
-                worker = gui.TranscriptionCacheLoadWorker(
+                workers.load_cached_transcription_result = changing_load
+                worker = workers.TranscriptionCacheLoadWorker(
                     "a" * 24,
                     audio_path=audio,
                     expected_audio_fingerprint=expected,
@@ -158,8 +159,8 @@ class TranscriptionUiTests(unittest.TestCase):
                         time.sleep(0.002)
                     raise gui.TranscriptionCancelled("cancelled")
 
-                gui.transcription_audio_fingerprint = cancellable_fingerprint
-                cancelled_worker = gui.TranscriptionCacheLoadWorker(
+                workers.transcription_audio_fingerprint = cancellable_fingerprint
+                cancelled_worker = workers.TranscriptionCacheLoadWorker(
                     "b" * 24,
                     audio_path=audio,
                 )
@@ -174,7 +175,7 @@ class TranscriptionUiTests(unittest.TestCase):
                 app.processEvents()
                 assert cancelled_events == [True]
 
-            gui.transcription_audio_fingerprint = real_fingerprint
+            workers.transcription_audio_fingerprint = real_fingerprint
             app.quit()
             """
         )
@@ -620,7 +621,8 @@ class TranscriptionUiTests(unittest.TestCase):
                 raise gui.TranscriptionCancelled("cancelled")
 
             gui.transcription_backend_quick_status = lambda: (True, "")
-            gui.transcribe_reference_audio = cancellable_transcription
+            import transcription_workers as workers
+            workers.transcribe_reference_audio = cancellable_transcription
 
             app = QApplication([])
             track = gui.TrackState(
@@ -705,7 +707,8 @@ class TranscriptionUiTests(unittest.TestCase):
                 return old_result
 
             gui.transcription_backend_quick_status = lambda: (True, "")
-            gui.transcribe_reference_audio = quick_transcription
+            import transcription_workers as workers
+            workers.transcribe_reference_audio = quick_transcription
 
             app = QApplication([])
             window = gui.MidiToBdoWindow()
@@ -778,8 +781,9 @@ class TranscriptionUiTests(unittest.TestCase):
                 )
                 return TranscriptionResult((), "strict-cache")
 
-            gui.transcribe_reference_audio = strict_transcription
-            worker = gui.TranscriptionAnalysisWorker(
+            import transcription_workers as workers
+            workers.transcribe_reference_audio = strict_transcription
+            worker = workers.TranscriptionAnalysisWorker(
                 Path.cwd() / "README.md",
                 analysis_mode="mixed_enhanced",
                 sensitivity="sensitive",
@@ -803,8 +807,8 @@ class TranscriptionUiTests(unittest.TestCase):
                 return TranscriptionResult((), "legacy-cache")
 
             gui.append_crash_log = lambda *_args, **_kwargs: None
-            gui.transcribe_reference_audio = legacy_adapter
-            legacy_worker = gui.TranscriptionAnalysisWorker(
+            workers.transcribe_reference_audio = legacy_adapter
+            legacy_worker = workers.TranscriptionAnalysisWorker(
                 Path.cwd() / "README.md",
                 cleanup_profile="balanced",
             )

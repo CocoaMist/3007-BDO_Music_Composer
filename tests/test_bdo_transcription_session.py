@@ -474,6 +474,66 @@ class TranscriptionSessionTests(unittest.TestCase):
         )
         candidate_id.assert_not_called()
 
+    def test_project_region_query_uses_bounded_start_index(self) -> None:
+        session = TranscriptionSession(
+            [
+                self.candidate(f"candidate-{index}", index * 10.0)
+                for index in range(20_000)
+            ]
+        )
+        session.set_region(51_000.0, 51_101.0)
+
+        with patch.object(
+            session,
+            "candidate_id",
+            wraps=session.candidate_id,
+        ) as candidate_id:
+            eligible = session.eligible_candidate_ids(
+                reference_audio_offset_ms=1_000.0
+            )
+
+        self.assertEqual(
+            eligible,
+            tuple(f"candidate-{index}" for index in range(5_000, 5_011)),
+        )
+        self.assertEqual(session.last_candidate_range_query_inspections, 11)
+        candidate_id.assert_not_called()
+
+        session.reject(["candidate-5002"])
+        session.route_to_track(7, ["candidate-5003"])
+        filtered = session.eligible_candidate_ids(
+            reference_audio_offset_ms=1_000.0
+        )
+        self.assertNotIn("candidate-5002", filtered)
+        self.assertNotIn("candidate-5003", filtered)
+        self.assertIn(
+            "candidate-5003",
+            session.eligible_candidate_ids(
+                reference_audio_offset_ms=1_000.0,
+                include_routed=True,
+            ),
+        )
+
+    def test_audio_overlap_query_skips_proven_ended_prefix(self) -> None:
+        session = TranscriptionSession(
+            [
+                replace(self.candidate("early", 0.0), duration_ms=10.0),
+                replace(self.candidate("long", 50.0), duration_ms=1_000.0),
+                replace(self.candidate("ended", 450.0), duration_ms=50.0),
+                replace(self.candidate("inside", 550.0), duration_ms=100.0),
+                replace(self.candidate("boundary", 600.0), duration_ms=50.0),
+            ]
+        )
+
+        self.assertEqual(
+            session.candidate_ids_overlapping_audio_range(500.0, 600.0),
+            ("long", "inside"),
+        )
+        self.assertLess(
+            session.last_candidate_range_query_inspections,
+            len(session.candidates),
+        )
+
     def test_region_redecode_replaces_only_unreviewed_and_deduplicates(self) -> None:
         rejected = self.candidate("rejected", 20, 60)
         routed = self.candidate("routed", 60, 62)

@@ -19,6 +19,7 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
             from i18n import install_localizer, trf
             from pyside_bdo_gui import (
                 MidiOptimizeDialog,
+                MidiToBdoWindow,
                 Note,
                 TrackState,
                 _optimizer_diagnostic_value,
@@ -41,6 +42,22 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
             parent.delay = 0
             parent.chorus = (0, 0, 0)
             dialog = MidiOptimizeDialog(parent, source_tracks=[track])
+            assert dialog.windowTitle() == "MIDI 优化"
+            assert dialog.scope_combo.count() == 2
+            assert dialog.scope == "global"
+            assert dialog.target_track_id is None
+            assert "可调整全局效果" in dialog.scope_summary_label.text()
+            import optimizer_dialog as optimizer_dialog_module
+            original_discovery = optimizer_dialog_module.discover_host_algorithms
+            optimizer_dialog_module.discover_host_algorithms = lambda: (_ for _ in ()).throw(
+                AssertionError("scope changes must not rescan algorithm packages")
+            )
+            dialog.scope_combo.setCurrentIndex(1)
+            assert dialog.scope == "single_track"
+            assert dialog.target_track_id == 1
+            assert "不修改全局效果" in dialog.scope_summary_label.text()
+            dialog.scope_combo.setCurrentIndex(0)
+            optimizer_dialog_module.discover_host_algorithms = original_discovery
             assert dialog.algorithm_combo.count() >= 1
             assert dialog.intensity_combo.count() == 3
             assert not dialog.apply_button.isEnabled()
@@ -59,6 +76,7 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
             app.processEvents()
             translations.set_language("en_US")
             assert dialog.analyse_button.text() == "Analyze Optimization"
+            assert dialog.scope_combo.itemText(0) == "Entire Project"
             assert "exceeds the optimizer note limit" in dialog.summary_label.text()
             diagnostic = trf(
                 "算法包：{item}",
@@ -70,6 +88,7 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
             assert "../payload.py" in diagnostic
             translations.set_language("ja_JP")
             assert dialog.analyse_button.text() == "最適化を解析"
+            assert dialog.scope_combo.itemText(0) == "プロジェクト全体"
             assert "ノート数上限" in dialog.summary_label.text()
             diagnostic = trf(
                 "算法包：{item}",
@@ -80,6 +99,7 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
             assert "安全でないパス" in diagnostic
             translations.set_language("ko_KR")
             assert dialog.analyse_button.text() == "최적화 분석"
+            assert dialog.scope_combo.itemText(0) == "전체 프로젝트"
             assert "음표 수 제한" in dialog.summary_label.text()
             diagnostic = trf(
                 "算法包：{item}",
@@ -147,6 +167,16 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
             assert not dialog.apply_button.isEnabled()
             assert dialog.summary_label.text() == "设置已更新，点击分析优化刷新预览。"
             dialog.close()
+            locked = MidiToBdoWindow.create_midi_optimize_dialog(
+                parent,
+                1,
+                source_tracks=[track],
+            )
+            assert locked.scope == "single_track"
+            assert locked.target_track_id == 1
+            assert not locked.scope_combo.isEnabled()
+            assert "范围锁定" in locked.scope_help_label.text()
+            locked.close()
             from pyside_bdo_gui import MidiNoteEditorDialog
             editor = MidiNoteEditorDialog(parent, track, 120, 4)
             assert editor.ghost_box.isChecked()

@@ -162,7 +162,7 @@ class TranslationCatalogTests(unittest.TestCase):
 
     def test_core_workflow_is_translated_in_every_catalog(self):
         required = {
-            "导入 MIDI", "打开工程", "全局优化", "设置", "转换",
+            "导入 MIDI", "打开工程", "MIDI 优化", "设置", "转换",
             "新建轨道", "删除轨道", "音符属性", "优化此轨", "界面语言",
         }
         for language, catalog in TRANSLATIONS.items():
@@ -282,8 +282,11 @@ class TranslationCatalogTests(unittest.TestCase):
             for pairs in articulation_pairs_by_instrument().values()
             for _ntype, label in pairs
         }
-        source_path = Path(__file__).resolve().parents[1] / "pyside_bdo_gui.py"
-        tree = ast.parse(source_path.read_text(encoding="utf-8-sig"))
+        source_path = (
+            Path(__file__).resolve().parents[1]
+            / "editor_articulation_data.py"
+        )
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
         hints = set()
         for node in tree.body:
             if (
@@ -544,7 +547,19 @@ class TranslationCatalogTests(unittest.TestCase):
         }
         translation_names = {"_tr", "tr", "trf"}
         failures: list[str] = []
-        for filename in ("pyside_bdo_gui.py", "transcription_editor_qt.py"):
+        for filename in (
+            "pyside_bdo_gui.py",
+            "application_settings_dialog.py",
+            "conversion_check_dialog.py",
+            "midi_note_editor.py",
+            "optimizer_dialog.py",
+            "piano_roll_canvas.py",
+            "reference_audio_controller.py",
+            "timeline_canvas.py",
+            "track_settings_dialogs.py",
+            "transcription_editor_qt.py",
+            "ui_notifications.py",
+        ):
             path = Path(__file__).resolve().parents[1] / filename
             tree = ast.parse(path.read_text(encoding="utf-8-sig"))
             parents: dict[ast.AST, ast.AST] = {}

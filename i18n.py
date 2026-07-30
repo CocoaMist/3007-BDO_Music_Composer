@@ -260,7 +260,7 @@ EN = {
     "未找到游戏曲谱": "No game scores found", "未找到本地项目": "No local projects found",
     "暂无最近记录": "No recent items",
     "设置": "Settings", "致谢": "Credits", "转换": "Export", "时间轴": "Timeline",
-    "导入 MIDI": "Import MIDI", "打开工程": "Open Project", "新建项目": "New Project", "全局优化": "Optimize All",
+    "导入 MIDI": "Import MIDI", "打开工程": "Open Project", "新建项目": "New Project",
     "项目名称": "Project name", "未命名项目": "Untitled Project",
     "{project} · 空白项目": "{project} · Blank Project", "空白项目已创建": "Blank project created",
     "空白项目已创建；双击轨道即可添加音符。": "Blank project created; double-click the track to add notes.",
@@ -315,7 +315,7 @@ EN = {
     "声音效果": "Sound Effects", "修复音块": "Repair Notes", "平衡力度": "Balance Velocity",
     "乐理分析（保守）": "Music Theory (Conservative)", "柔性对齐": "Soft Quantize",
     "应用游戏安全优化": "Apply Game-safe Optimization", "详细说明 ▸": "Details ▸",
-    "详细说明 ▾": "Details ▾", "单轨优化": "Track Optimization", "全局 MIDI 优化": "Global MIDI Optimization",
+    "详细说明 ▾": "Details ▾",
     "转换检查": "Export Check", "复制报告": "Copy Report", "轨道 FX": "AuxSend",
     "默认": "Default", "玛勒尼斯音源": "Marnian Timbre", "单声道（Basic）": "Mono (Basic)",
     "双声（Stereo）": "Stereo", "增强（Super）": "Super", "超级增强（Super Octave）": "Super Octave",
@@ -352,7 +352,7 @@ JA = {
     "未找到游戏曲谱": "ゲーム楽譜が見つかりません", "未找到本地项目": "ローカルプロジェクトが見つかりません",
     "暂无最近记录": "最近の項目はありません",
     "设置": "設定", "致谢": "クレジット", "转换": "書き出し", "时间轴": "タイムライン",
-    "导入 MIDI": "MIDIを読み込む", "打开工程": "プロジェクトを開く", "新建项目": "新規プロジェクト", "全局优化": "全体を最適化",
+    "导入 MIDI": "MIDIを読み込む", "打开工程": "プロジェクトを開く", "新建项目": "新規プロジェクト",
     "项目名称": "プロジェクト名", "未命名项目": "名称未設定プロジェクト",
     "{project} · 空白项目": "{project} · 空のプロジェクト", "空白项目已创建": "空のプロジェクトを作成しました",
     "空白项目已创建；双击轨道即可添加音符。": "空のプロジェクトを作成しました。トラックをダブルクリックしてノートを追加できます。",
@@ -406,8 +406,8 @@ JA = {
     "分析奏法": "奏法を分析", "轻微自然化": "軽いヒューマナイズ", "声音效果": "サウンドエフェクト",
     "修复音块": "ノートを修復", "平衡力度": "ベロシティを調整", "乐理分析（保守）": "楽理分析（保守的）",
     "柔性对齐": "ソフトクオンタイズ", "应用游戏安全优化": "ゲーム安全最適化を適用",
-    "详细说明 ▸": "詳細 ▸", "详细说明 ▾": "詳細 ▾", "单轨优化": "トラック最適化",
-    "全局 MIDI 优化": "MIDI全体最適化", "转换检查": "書き出しチェック", "复制报告": "レポートをコピー",
+    "详细说明 ▸": "詳細 ▸", "详细说明 ▾": "詳細 ▾",
+    "转换检查": "書き出しチェック", "复制报告": "レポートをコピー",
     "轨道 FX": "AuxSend", "默认": "デフォルト", "玛勒尼斯音源": "マルニアン音色",
     "单声道（Basic）": "モノ（Basic）", "双声（Stereo）": "ステレオ", "增强（Super）": "Super",
     "超级增强（Super Octave）": "Super Octave", "感谢，让音乐工具成为可能": "この音楽ツールを支えてくださった皆様へ",
@@ -441,7 +441,7 @@ KO = {
     "未找到游戏曲谱": "게임 악보를 찾을 수 없습니다", "未找到本地项目": "로컬 프로젝트를 찾을 수 없습니다",
     "暂无最近记录": "최근 항목이 없습니다",
     "设置": "설정", "致谢": "크레딧", "转换": "내보내기", "时间轴": "타임라인",
-    "导入 MIDI": "MIDI 가져오기", "打开工程": "프로젝트 열기", "新建项目": "새 프로젝트", "全局优化": "전체 최적화",
+    "导入 MIDI": "MIDI 가져오기", "打开工程": "프로젝트 열기", "新建项目": "새 프로젝트",
     "项目名称": "프로젝트 이름", "未命名项目": "제목 없는 프로젝트",
     "{project} · 空白项目": "{project} · 빈 프로젝트", "空白项目已创建": "빈 프로젝트를 만들었습니다",
     "空白项目已创建；双击轨道即可添加音符。": "빈 프로젝트를 만들었습니다. 트랙을 두 번 클릭해 음표를 추가하세요.",
@@ -495,8 +495,8 @@ KO = {
     "分析奏法": "주법 분석", "轻微自然化": "가벼운 휴머니즈", "声音效果": "사운드 효과",
     "修复音块": "노트 복구", "平衡力度": "벨로시티 균형", "乐理分析（保守）": "음악 이론 분석(보수적)",
     "柔性对齐": "소프트 퀀타이즈", "应用游戏安全优化": "게임 안전 최적화 적용",
-    "详细说明 ▸": "상세 ▸", "详细说明 ▾": "상세 ▾", "单轨优化": "트랙 최적화",
-    "全局 MIDI 优化": "전체 MIDI 최적화", "转换检查": "내보내기 검사", "复制报告": "보고서 복사",
+    "详细说明 ▸": "상세 ▸", "详细说明 ▾": "상세 ▾",
+    "转换检查": "내보내기 검사", "复制报告": "보고서 복사",
     "轨道 FX": "AuxSend", "默认": "기본값", "玛勒尼斯音源": "마르니언 음색",
     "单声道（Basic）": "모노(Basic)", "双声（Stereo）": "스테레오", "增强（Super）": "Super",
     "超级增强（Super Octave）": "Super Octave", "感谢，让音乐工具成为可能": "이 음악 도구를 가능하게 해주신 분들께",
@@ -569,6 +569,13 @@ EN.update({
 })
 EN.update({
     "优化算法": "Optimization Algorithm", "算法包目录": "Algorithm Packages",
+    "优化范围": "Optimization Scope", "整个工程": "Entire Project",
+    "选择作用范围，分析预览后再应用；不会跳过游戏安全校验。": "Choose a scope, analyze the preview, then apply it; game-safety validation is never skipped.",
+    "单轨 · Track {track_id} · {track}": "Single Track · Track {track_id} · {track}",
+    "整个工程 · 可写轨道 {selected}/{total} · 可调整全局效果": "Entire Project · Writable Tracks {selected}/{total} · Global Effects Allowed",
+    "单轨 · Track {track_id} · 读取全曲上下文 · 不修改全局效果": "Single Track · Track {track_id} · Full-Song Context · No Global Effects",
+    "全局模式读取全部轨道；静音和独奏不改变作用域，可在“详细信息”中限制允许写入的轨道。": "Global mode reads every track; Mute and Solo do not change scope. Limit writable tracks under Details.",
+    "范围锁定为当前草稿轨道；读取全曲上下文，但只写入该轨道。": "Scope is locked to the current draft track; full-song context is read, but only this track is modified.",
     "优化强度": "Optimization Intensity", "保守": "Conservative", "均衡": "Balanced", "深入": "Deep",
     "选择算法和强度，然后分析优化。": "Choose an algorithm and intensity, then analyze.",
     "分析优化": "Analyze Optimization", "详细信息 ▸": "Details ▸", "详细信息 ▾": "Details ▾",
@@ -642,6 +649,13 @@ JA.update({
 })
 JA.update({
     "优化算法": "最適化アルゴリズム", "算法包目录": "アルゴリズムパッケージ",
+    "优化范围": "最適化範囲", "整个工程": "プロジェクト全体",
+    "选择作用范围，分析预览后再应用；不会跳过游戏安全校验。": "対象範囲を選び、プレビューを解析してから適用します。ゲーム安全検証は省略されません。",
+    "单轨 · Track {track_id} · {track}": "単一トラック · Track {track_id} · {track}",
+    "整个工程 · 可写轨道 {selected}/{total} · 可调整全局效果": "プロジェクト全体 · 書き込み可能 {selected}/{total} · 全体エフェクト変更可",
+    "单轨 · Track {track_id} · 读取全曲上下文 · 不修改全局效果": "単一トラック · Track {track_id} · 全曲コンテキスト参照 · 全体エフェクト変更なし",
+    "全局模式读取全部轨道；静音和独奏不改变作用域，可在“详细信息”中限制允许写入的轨道。": "全体モードは全トラックを参照します。Mute/Soloは範囲に影響せず、［詳細］で書き込み可能トラックを制限できます。",
+    "范围锁定为当前草稿轨道；读取全曲上下文，但只写入该轨道。": "範囲は現在の下書きトラックに固定されています。全曲を参照しますが、このトラックだけを変更します。",
     "优化强度": "最適化の強度", "保守": "保守的", "均衡": "バランス", "深入": "詳細",
     "选择算法和强度，然后分析优化。": "アルゴリズムと強度を選択して解析してください。",
     "分析优化": "最適化を解析", "详细信息 ▸": "詳細 ▸", "详细信息 ▾": "詳細 ▾",
@@ -715,6 +729,13 @@ KO.update({
 })
 KO.update({
     "优化算法": "최적화 알고리즘", "算法包目录": "알고리즘 패키지",
+    "优化范围": "최적화 범위", "整个工程": "전체 프로젝트",
+    "选择作用范围，分析预览后再应用；不会跳过游戏安全校验。": "범위를 선택하고 미리보기를 분석한 뒤 적용합니다. 게임 안전 검증은 생략되지 않습니다.",
+    "单轨 · Track {track_id} · {track}": "단일 트랙 · Track {track_id} · {track}",
+    "整个工程 · 可写轨道 {selected}/{total} · 可调整全局效果": "전체 프로젝트 · 쓰기 가능 트랙 {selected}/{total} · 전체 효과 조정 가능",
+    "单轨 · Track {track_id} · 读取全曲上下文 · 不修改全局效果": "단일 트랙 · Track {track_id} · 전체 곡 맥락 참조 · 전체 효과 변경 없음",
+    "全局模式读取全部轨道；静音和独奏不改变作用域，可在“详细信息”中限制允许写入的轨道。": "전체 모드는 모든 트랙을 참조합니다. 음소거와 Solo는 범위를 바꾸지 않으며 세부 정보에서 쓰기 가능한 트랙을 제한할 수 있습니다.",
+    "范围锁定为当前草稿轨道；读取全曲上下文，但只写入该轨道。": "범위가 현재 초안 트랙으로 고정됩니다. 전체 곡 맥락을 읽지만 이 트랙만 변경합니다.",
     "优化强度": "최적화 강도", "保守": "보수적", "均衡": "균형", "深入": "심층",
     "选择算法和强度，然后分析优化。": "알고리즘과 강도를 선택한 뒤 분석하세요.",
     "分析优化": "최적화 분석", "详细信息 ▸": "세부 정보 ▸", "详细信息 ▾": "세부 정보 ▾",
@@ -5857,6 +5878,67 @@ KO.update({
     "需要注意": "주의 필요",
     "发现 {count} 个导出错误；对应轨道已标红，可点击轨道标记查看。": "내보내기 오류 {count}개를 발견했습니다. 해당 트랙은 빨간색으로 표시되며 트랙 마커를 클릭해 확인할 수 있습니다.",
     "{count} 条轨道使用相同乐器；已标为琥珀色，导出时会合并。": "{count}개 트랙이 같은 악기를 사용합니다. 호박색으로 표시되며 내보낼 때 병합됩니다.",
+})
+
+
+EN.update({
+    "轨道八度…": "Track Octave…",
+    "轨道八度": "Track Octave",
+    "只做声部八度适配，不改动工程中的原始音符；试听、检查和导出会使用同一结果。": (
+        "Adapts only the voice octave without changing source notes; preview, "
+        "validation, and export use the same result."
+    ),
+    "跟随全局": "Follow Global",
+    "{octaves:+d} 个八度（{semitones:+d} 半音）": (
+        "{octaves:+d} octaves ({semitones:+d} semitones)"
+    ),
+    "声部八度": "Voice Octave",
+    "全局 {global_transpose:+d} + 轨道 {track_transpose:+d} = 最终 {effective:+d} 半音": (
+        "Global {global_transpose:+d} + track {track_transpose:+d} = "
+        "{effective:+d} semitones effective"
+    ),
+    "{track} · 轨道八度 {track_transpose:+d} · 最终移调 {effective:+d} 半音": (
+        "{track} · track octave {track_transpose:+d} · "
+        "{effective:+d} semitones effective"
+    ),
+})
+
+JA.update({
+    "轨道八度…": "トラック・オクターブ…",
+    "轨道八度": "トラック・オクターブ",
+    "只做声部八度适配，不改动工程中的原始音符；试听、检查和导出会使用同一结果。": (
+        "元のノートを変更せず声部のオクターブだけを調整します。試聴、検証、書き出しは同じ結果を使用します。"
+    ),
+    "跟随全局": "グローバルに従う",
+    "{octaves:+d} 个八度（{semitones:+d} 半音）": (
+        "{octaves:+d} オクターブ（{semitones:+d} 半音）"
+    ),
+    "声部八度": "声部オクターブ",
+    "全局 {global_transpose:+d} + 轨道 {track_transpose:+d} = 最终 {effective:+d} 半音": (
+        "全体 {global_transpose:+d} + トラック {track_transpose:+d} = 最終 {effective:+d} 半音"
+    ),
+    "{track} · 轨道八度 {track_transpose:+d} · 最终移调 {effective:+d} 半音": (
+        "{track} · トラック・オクターブ {track_transpose:+d} · 最終移調 {effective:+d} 半音"
+    ),
+})
+
+KO.update({
+    "轨道八度…": "트랙 옥타브…",
+    "轨道八度": "트랙 옥타브",
+    "只做声部八度适配，不改动工程中的原始音符；试听、检查和导出会使用同一结果。": (
+        "원본 음표를 바꾸지 않고 성부 옥타브만 조정합니다. 미리듣기, 검사, 내보내기는 같은 결과를 사용합니다."
+    ),
+    "跟随全局": "전역 설정 따르기",
+    "{octaves:+d} 个八度（{semitones:+d} 半音）": (
+        "{octaves:+d} 옥타브({semitones:+d} 반음)"
+    ),
+    "声部八度": "성부 옥타브",
+    "全局 {global_transpose:+d} + 轨道 {track_transpose:+d} = 最终 {effective:+d} 半音": (
+        "전역 {global_transpose:+d} + 트랙 {track_transpose:+d} = 최종 {effective:+d} 반음"
+    ),
+    "{track} · 轨道八度 {track_transpose:+d} · 最终移调 {effective:+d} 半音": (
+        "{track} · 트랙 옥타브 {track_transpose:+d} · 최종 조옮김 {effective:+d} 반음"
+    ),
 })
 
 

@@ -28,7 +28,7 @@
 | 键盘 / 合成器 | `07, 11, 14, 18, 1C, 20` |
 | 打击乐 | `04, 05, 0D, 13` |
 
-具体名称、游戏音域、奏法编号和采样键位继续以 `README.md`、`pyside_bdo_gui.py`、游戏 `list*` 反解数据及 Wwise 映射为项目内事实来源。真实乐器资料用于判断“是否自然”，不能覆盖游戏实测音域。
+具体名称、游戏音域、奏法编号和采样键位继续以完整语言文档 `README.zh-CN.md`、`pyside_bdo_gui.py`、游戏 `list*` 反解数据及 Wwise 映射为项目内事实来源。根 `README.md` 仅作为语言入口。真实乐器资料用于判断“是否自然”，不能覆盖游戏实测音域。
 
 ## 3. 不可变规则
 
@@ -165,4 +165,3 @@ score = technique_match
 - Philharmonia 乐器资料总览（弦乐、木管、铜管、打击、竖琴与键盘）：https://philharmonia.co.uk/resources/instruments/
 - Philharmonia 打击乐资料：https://philharmonia.co.uk/resources/instruments/percussion/
 - Yamaha 直笛演奏资料（气息、泛音、滑音）：https://www.yamaha.com/en/musical_instrument_guide/recorder/play/
-

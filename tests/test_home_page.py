@@ -12,6 +12,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pyside_bdo_gui as gui
+import crash_logging
 from home_catalog import GAME_SCORE_METADATA_MAX_BYTES, game_score_instrument_ids
 
 
@@ -48,7 +49,7 @@ class HomePageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             log_path = Path(temp) / "crash.log"
             private_path = r"C:\Users\Private Name\Music\reference.wav"
-            with patch.object(gui, "CRASH_LOG_PATH", log_path):
+            with patch.object(crash_logging, "CRASH_LOG_PATH", log_path):
                 gui.append_crash_log(
                     f"Could not read {private_path}",
                     f'Traceback:\n  File "{private_path}", line 4\n{private_path}',
@@ -62,7 +63,7 @@ class HomePageTests(unittest.TestCase):
     def test_transcription_logger_persists_exception_chain(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             log_path = Path(temp) / "crash.log"
-            with patch.object(gui, "CRASH_LOG_PATH", log_path):
+            with patch.object(crash_logging, "CRASH_LOG_PATH", log_path):
                 gui.install_crash_logging()
                 try:
                     raise ModuleNotFoundError(

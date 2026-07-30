@@ -142,6 +142,19 @@ legacy drum encoding may be timing/velocity-cleaned but cannot be duplicated or
 invented.  Such source issues stay visible as diagnostics and remain owned by
 the conversion-check/export gate rather than disabling the optimizer dialog.
 
+`optimizer_dialog.py` exposes one **MIDI Optimization** workbench instead of
+separate global and track dialogs. Scope is a first-level control shown before
+algorithm and intensity. Entire-project scope remains a real domain capability:
+it may write multiple allowed tracks, emit derived tracks, and adjust global
+effects. Single-track scope may read the complete song context but can write only
+its target track and cannot emit global-effect changes. A dialog opened from the
+main toolbar or a track context action may switch scope; the note editor passes a
+draft track collection and therefore locks the control to that track. Every scope
+change invalidates the preview and re-filters algorithms by declared scope before
+analysis. Scope filtering reuses cached descriptors and does not rescan plugin
+packages; only the explicit refresh action performs discovery. The main window
+applies the dialog's final scope, never the scope that happened to open it.
+
 `bdo_profile.py` loads the versioned game constraint profile. `bdo_validation.py`
 produces location-aware `ValidationIssue` values and is the export gate;
 known note loss, unsupported pitches, illegal articulations, and unmapped drums
@@ -440,7 +453,10 @@ internal renderer. The UI labels the generic route as non-game audio.
 Game-candidate A/B review remains sample-backed and never silently substitutes
 the procedural preview, so evidence semantics stay intact. See
 [audio source strategy](AUDIO_SOURCE_STRATEGY.md) for the third-party SoundFont
-release gate.
+release gate. The pure `bdo_midi.gm_preview` policy now defines complete,
+fail-closed BDO-to-GM bank/program, Marnian-mode layer, and semantic drum-lane
+routes for that future backend; it is preview-only and cannot affect import or
+export.
 
 The timeline reserves a compact 34 px reference row while no MP3/WAV is loaded
 and expands it to the standard lane height only for a loaded or loading source.
@@ -509,9 +525,12 @@ experiment metadata, never local paths or audio assets.
 
 ## Export
 
-`MidiToBdoWindow._build_params()` freezes active `TrackState` values into
-immutable `ExportTrackSnapshot` objects before the worker starts. The worker
-therefore never races later editor mutations. An unchanged imported BDO
+`MidiToBdoWindow._build_params()` freezes active `TrackState` values into a
+typed immutable `ExportRequest`, including detached `ExportTrackSnapshot`
+objects and the shared `PitchTransformPlan`, before the worker starts. The
+worker therefore never races later editor mutations. `prepare_export()` owns
+the pure transform/encoding phase; `publish_export()` owns atomic output and
+best-effort game-directory installation. An unchanged imported BDO
 document is emitted byte-for-byte;
 edited documents preserve bound dual velocities, track volume/settings, and
 then use deterministic canonical encoding through `export_workflow`,
@@ -549,13 +568,17 @@ account limit; the native composition UI receives `noteCount` dynamically.
   beside the distributable executable or under `sys._MEIPASS`.
 - Transcription evidence is a disposable user cache under Local AppData (or the
   explicit `BDO_TRANSCRIPTION_CACHE` override), never under `sys._MEIPASS`.
-- Project schema v9 persists `reference_audio_offset_ms`, `beat_origin_ms`,
+- Project schema v10 persists `reference_audio_offset_ms`, `beat_origin_ms`,
   the transcription analysis mode, and lightweight `transcription_review`
   payload v4 (including `cleanup_profile`) plus
   `transcription_assist_review`.  Its `reference_layers` view state keeps
   ghost-note visibility/opacity plus shared background opacity and the
   melody/evidence/spectrogram switches.  Schema v8 migration uses 100% layer
   strength to preserve its old rendering; new projects use quieter defaults.
+  Schema v10 also persists a `pitch_transform` plan keyed by stable logical
+  track ID. The global value mirrors `ConversionSettings.transpose`;
+  per-track UI overrides are octave-only, drums are exempt, and v9 migration
+  starts with an empty override list.
   New projects default cleanup to `preserve`;
   schemas v1–v7 and review payloads v1–v3 also migrate to `preserve`, because
   their saved profile values predate real automatic actions. A v8/review-v4
@@ -603,9 +626,11 @@ account limit; the native composition UI receives `noteCount` dynamically.
 ## Performance strategy
 
 - `TranscriptionSession` maintains stable candidate-order and annotation
-  projections. Explicit review/routing actions use those indexes instead of
-  rescanning and resorting the full candidate set; A-B replacement deduplicates
-  through exact pitch/onset buckets while preserving the original predicate.
+  projections plus start/end range indexes. Explicit review/routing actions use
+  those indexes instead of rescanning and resorting the full candidate set;
+  selected-first/A-B scopes use binary search, chord overlap skips prefixes
+  proven to have ended, and A-B replacement deduplicates through exact
+  pitch/onset buckets while preserving the original predicate.
 - Evidence decoding projects each distinct frame-event fact set to exact
   milliseconds and a stable candidate ID once per decode. Lineage-only changes
   reuse that projection; only a merge that creates new frame boundaries needs
@@ -670,8 +695,9 @@ account limit; the native composition UI receives `noteCount` dynamically.
 `fluent_theme.py` selects the newest available native Windows widget style
 (`windows11`, with compatibility fallbacks), applies the application's fixed
 dark palette, and owns the shared Fluent-inspired component rules and monochrome
-line icons. `pyside_bdo_gui.py` supplies the BDO-branded base QSS and keeps the
-timeline, piano roll, and velocity lane custom-painted. The piano-roll keyboard
+line icons. `main_window_style.py` supplies the BDO-branded base QSS;
+`timeline_canvas.py` and `piano_roll_canvas.py` keep the timeline, piano roll,
+and velocity lane custom-painted. The piano-roll keyboard
 uses dark natural-key beds with shorter raised black keys and right-aligned pitch
 labels; the roll uses the game's charcoal, beige, brown and green composition
 palette. Its visible snap grid uses the existing `1/4` through `1/64` quantize
@@ -687,6 +713,35 @@ domains: export identity, MIDI/velocity processing, and local audio/appearance.
 Score-wide master effects live in a separate workspace-toolbar dialog, while
 per-instrument Aux sends remain in each timeline row's Track FX editor. Neither
 surface owns or writes the other layer.
+Large widgets and workers no longer live inside the main-window module:
+`application_settings_dialog.py` owns the settings UI and its game-art import
+worker, `track_settings_dialogs.py` owns pitch/Aux/master-effect editors, and
+`conversion_check_dialog.py` and `optimizer_dialog.py` own their focused
+validation/analysis flows. `acknowledgements_dialog.py` owns the complete
+credits/license presentation while `third_party_credits.py` remains its
+Qt-free curated data source. `timeline_canvas.py`, `piano_roll_canvas.py`, and
+`midi_note_editor.py` own the large editing surfaces; `editor_models.py` is their
+Qt-free shared track/note-lane boundary. `reference_audio_controller.py` and
+`transcription_workers.py` isolate multimedia and background worker lifecycles.
+`ui_controls.py` and `ui_notifications.py` own shared primitives.
+`audio_source_settings.py` is the Qt-free normalization boundary shared by
+settings persistence and preview selection. Extracted modules must not import
+`pyside_bdo_gui`; the main module re-exports public classes for compatibility,
+connects signals, and applies accepted values to the mutable project model.
+`model_revision.py` provides the explicit mutation token used by
+`conversion_validation_controller.py`; one immutable validation snapshot is
+reused only while model revision and UI-language scope remain unchanged.
+`transcription_workspace_controller.py`, `project_lifecycle_controller.py`,
+and `preview_transport_controller.py` own Qt-free lifecycle/generation state.
+The transcription controller also owns the bounded mixed session/assist action
+order and immutable assist-review undo/redo snapshots; `TranscriptionSession`
+continues to own candidate-domain commands and the stable ID/start/end indexes
+used by selected-first/A-B and interval-overlap queries. Candidate indexes are
+rebuilt only when a candidate set is published; ordinary review mutations do
+not reindex. The preview controller classifies a
+Play request as wait, resume, or start without invoking the audio engine. These
+controllers do not perform file I/O, DSP, or mutate tracks; the main window
+remains the side-effect adapter for the command workflows not yet migrated.
 The fixed top toolbar is shared by the home and workspace pages. A fixed-width
 ensemble identity block anchors its left edge: the original musician portrait,
 numeric performer count, and five square capacity lights move as one unit. They
@@ -699,7 +754,9 @@ committed while top-level painting is suspended so a page switch cannot expose
 an intermediate toolbar layout.
 The acknowledgements dialog shares the same charcoal surfaces, amber accents,
 panel rhythm, and button hierarchy as the editor instead of defining a separate
-feature palette. Its curated entries come from `third_party_credits.py`; every
+feature palette. Its Qt layout and escaped HTML live in
+`acknowledgements_dialog.py`; curated entries come from
+`third_party_credits.py`. Every
 software/research row carries a license/usage label and a clickable GitHub URL,
 while the exact transitive build inventory remains a separate generated
 artifact embedded in the executable.
