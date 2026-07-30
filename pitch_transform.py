@@ -25,6 +25,7 @@ PITCH_OVERRIDE_PROVENANCES = frozenset(
 
 MIN_PITCH_OFFSET = -48
 MAX_PITCH_OFFSET = 48
+BDO_DRUM_INSTRUMENT_ID = 0x0D
 
 
 def _bounded_offset(value: object) -> int:
@@ -34,6 +35,28 @@ def _bounded_offset(value: object) -> int:
             f"pitch offset must be in [{MIN_PITCH_OFFSET}, {MAX_PITCH_OFFSET}]"
         )
     return offset
+
+
+def track_uses_percussion_pitch_semantics(
+    track: object,
+    *,
+    drum_instrument_id: int = BDO_DRUM_INSTRUMENT_ID,
+) -> bool:
+    """Return whether pitch transforms must treat a track as percussion.
+
+    ``is_percussion`` records source/MIDI semantics, while assigning the BDO
+    drum-set instrument changes the destination semantics without necessarily
+    mutating that source flag. Preview, validation and export must honor either
+    signal so a mapped drum track is never transposed as a melody track.
+    """
+
+    if bool(getattr(track, "is_percussion", False)):
+        return True
+    try:
+        instrument_id = int(getattr(track, "bdo_instrument_id"))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return False
+    return instrument_id == int(drum_instrument_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,6 +247,22 @@ class PitchTransformPlan:
     ) -> int:
         return self.resolve(track_id, is_drum=is_drum).effective_semitones
 
+    def effective_track_semitones(
+        self,
+        track: object,
+        *,
+        drum_instrument_id: int = BDO_DRUM_INSTRUMENT_ID,
+    ) -> int:
+        """Resolve one track through the shared percussion classification."""
+
+        return self.effective_semitones(
+            int(getattr(track, "track_id")),
+            is_drum=track_uses_percussion_pitch_semantics(
+                track,
+                drum_instrument_id=drum_instrument_id,
+            ),
+        )
+
     def with_global(self, semitones: int) -> "PitchTransformPlan":
         return replace(self, global_semitones=semitones)
 
@@ -278,11 +317,8 @@ class PitchTransformPlan:
         if tracks is None:
             return not self.global_semitones and not self.track_overrides
         return all(
-            not self.effective_semitones(
-                int(getattr(track, "track_id", index)),
-                is_drum=bool(getattr(track, "is_percussion", False)),
-            )
-            for index, track in enumerate(tracks)
+            not self.effective_track_semitones(track)
+            for track in tracks
         )
 
 
@@ -304,6 +340,7 @@ def transpose_notes(
 __all__ = [
     "MAX_PITCH_OFFSET",
     "MIN_PITCH_OFFSET",
+    "BDO_DRUM_INSTRUMENT_ID",
     "PITCH_OVERRIDE_MODE_OCTAVE",
     "PITCH_OVERRIDE_MODE_SEMITONE",
     "PITCH_OVERRIDE_PROVENANCE_AUTO",
@@ -311,5 +348,6 @@ __all__ = [
     "PitchTransformPlan",
     "ResolvedTrackPitch",
     "TrackPitchOverride",
+    "track_uses_percussion_pitch_semantics",
     "transpose_notes",
 ]

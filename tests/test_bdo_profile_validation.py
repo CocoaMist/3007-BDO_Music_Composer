@@ -125,6 +125,30 @@ class BdoProfileValidationTests(unittest.TestCase):
             for item in issues
         ))
 
+    def test_bdo_drum_target_is_exempt_when_source_flag_is_melodic(self) -> None:
+        track = Track(
+            8,
+            [Note(48, 90, 0, 200, 99)],
+            0x0D,
+            is_percussion=False,
+        )
+        base = self.context([track])
+        context = ValidationContext(
+            -8,
+            base.active_track_ids,
+            base.instrument_names,
+            base.gm_drum_map,
+            base.serialize_instrument,
+            pitch_plan=PitchTransformPlan(-8),
+        )
+
+        issues = validate_tracks([track], self.profile, context)
+
+        self.assertFalse(any(
+            item.code == "export.transpose" for item in issues
+        ))
+        self.assertFalse(any(item.severity == "error" for item in issues))
+
     def test_approximate_instrument_range_warns_without_hard_rejection(self) -> None:
         track = Track(
             6,

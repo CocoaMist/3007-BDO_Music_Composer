@@ -90,8 +90,15 @@ effective semitones = global semitones + track octave override
 - Track overrides authored by the current UI are octave-only (`12k`). An
   arbitrary semitone override has a separate explicit mode so it cannot be
   confused with automatic voice-range adaptation.
-- Percussion is always resolved to zero. Source `Note.pitch` values remain
-  unchanged; preview and export receive detached projected notes.
+- Percussion is always resolved to zero. The shared
+  `track_uses_percussion_pitch_semantics()` boundary classifies both a
+  percussion MIDI source and any track currently assigned to the BDO drum-set
+  target (`0x0D`) as percussion. Consumers must use
+  `PitchTransformPlan.effective_track_semitones()` and the same classification
+  for serialization so preview, validation, PySide export, and WPF export
+  cannot disagree after an instrument remap. Source `Note.pitch` values and
+  the source-facing `is_percussion` flag remain unchanged; preview and export
+  receive detached projected notes.
 - Timeline range hints, structured validation, the piano-roll preview, the
   main preview, PySide export, and the WPF sidecar all use the same plan.
 - Right-clicking a melodic track opens **Track Octave**. The operation is

@@ -72,7 +72,11 @@ from editor_models import (
 from fluent_theme import FluentSymbol, fluent_icon_size, set_fluent_symbol
 from i18n import tr, trf, trfv, trv
 from piano_roll_canvas import PianoRollCanvas, VelocityLaneCanvas
-from pitch_transform import PitchTransformPlan, transpose_notes
+from pitch_transform import (
+    PitchTransformPlan,
+    track_uses_percussion_pitch_semantics,
+    transpose_notes,
+)
 from project_paths import WWISE_MIDI_MAP_PATH
 from project_schema import normalize_reference_layer_settings
 from transcription_editor_qt import (
@@ -128,12 +132,8 @@ class MidiNoteEditorDialog(QDialog):
             if isinstance(pitch_plan, PitchTransformPlan)
             else PitchTransformPlan(int(transpose))
         )
-        self.transpose = self.pitch_transform_plan.effective_semitones(
-            track.track_id,
-            is_drum=bool(
-                track.is_percussion
-                or int(track.bdo_instrument_id) == 0x0D
-            ),
+        self.transpose = self.pitch_transform_plan.effective_track_semitones(
+            track
         )
         self.instrument_adaptation = instrument_editor_display_adaptation(
             int(track.bdo_instrument_id)
@@ -2185,11 +2185,10 @@ class MidiNoteEditorDialog(QDialog):
                 )
                 or not CANDIDATE_NOTE_POLICY.pitch_is_valid_for_melodic_track(
                     candidate.pitch,
-                    is_percussion=target.is_percussion,
+                    is_percussion=track_uses_percussion_pitch_semantics(target),
                     instrument_id=target.bdo_instrument_id,
-                    transpose=self.pitch_transform_plan.effective_semitones(
-                        target.track_id,
-                        is_drum=bool(target.is_percussion),
+                    transpose=self.pitch_transform_plan.effective_track_semitones(
+                        target
                     ),
                     supported_pitches=supported,
                 )

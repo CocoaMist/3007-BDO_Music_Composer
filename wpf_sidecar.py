@@ -29,7 +29,11 @@ from bdo_score import read_bdo_score  # noqa: E402
 from bdo_validation import ValidationContext, validate_tracks  # noqa: E402
 from bdo_instrument_adaptation import articulation_pairs_by_instrument  # noqa: E402
 from conversion_settings import ConversionSettings  # noqa: E402
-from pitch_transform import PitchTransformPlan, transpose_notes  # noqa: E402
+from pitch_transform import (  # noqa: E402
+    PitchTransformPlan,
+    track_uses_percussion_pitch_semantics,
+    transpose_notes,
+)
 from optimization import OptimizationIntensity, OptimizerConfig  # noqa: E402
 from optimization.plugin_api import tracks_fingerprint  # noqa: E402
 from optimization.plugin_host import analyse_with_algorithm, discover_host_algorithms  # noqa: E402
@@ -277,14 +281,11 @@ def _export(payload: dict[str, Any], out_path: str) -> dict[str, Any]:
                 note._replace(dur=max(1.0, note.dur * track.duration_scale))
                 for note in transpose_notes(
                     track.notes,
-                    pitch_plan.effective_semitones(
-                        track.track_id,
-                        is_drum=track.is_percussion,
-                    ),
+                    pitch_plan.effective_track_semitones(track),
                 )
             ],
             track.gm_program,
-            track.is_percussion,
+            track_uses_percussion_pitch_semantics(track),
         )
         for track in tracks
     ]

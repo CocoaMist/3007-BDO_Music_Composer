@@ -196,6 +196,50 @@ class ExportWorkflowTests(unittest.TestCase):
                     game_dir=root / "game",
                 )
 
+    def test_bdo_drum_target_never_uses_melodic_transpose_or_serialization(self) -> None:
+        snapshots = freeze_export_tracks([
+            MutableTrack(
+                [Note(48, 90, 0.0, 250.0, 99)],
+                track_id=7,
+                is_percussion=False,
+                bdo_instrument_id=0x0D,
+            )
+        ])
+        conversion = ConversionSettings.bdo_import_defaults().with_updates(
+            transpose=-8
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "drums.bdo"
+            request = ExportRequest(
+                direct_tracks=snapshots,
+                bpm=120,
+                time_signature=4,
+                out_path=output,
+                character_name="MIDI",
+                owner_id=123,
+                conversion=conversion,
+                pitch_plan=PitchTransformPlan(-8),
+                reverb=0,
+                delay=0,
+                chorus=None,
+                game_dir=root / "game",
+                track_volumes=((0, 70),),
+                track_settings=((0, (0,) * 8),),
+            )
+
+            output.write_bytes(prepare_export(request).data)
+            notes = [
+                note
+                for track in read_bdo_score(output).tracks
+                for note in track.notes
+            ]
+
+        self.assertEqual(
+            [(note.pitch, note.ntype) for note in notes],
+            [(48, 99)],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

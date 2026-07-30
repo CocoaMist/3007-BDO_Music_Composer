@@ -65,6 +65,18 @@ class PitchTransformUiTests(unittest.TestCase):
             assert window._effective_track_transpose(restored) == -8
             assert window._pitch_transform_plan.override_for(restored.track_id) is None
 
+            # A melodic MIDI source can be remapped to the BDO drum-set target.
+            # Preview must then use the same percussion pitch semantics as
+            # validation and export without mutating the formal source flag.
+            restored.is_percussion = False
+            restored.bdo_instrument_id = 0x0D
+            restored.notes = [gui.Note(48, 90, 0.0, 250.0, 99)]
+            assert window._effective_track_transpose(restored) == 0
+            drum_preview = window._project_tracks_for_preview([restored])
+            assert drum_preview[0].is_percussion
+            assert drum_preview[0].notes[0].pitch == 48
+            assert not restored.is_percussion
+
             window.close()
             app.processEvents()
             app.quit()

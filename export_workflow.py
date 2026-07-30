@@ -11,7 +11,11 @@ from bdo_codec import document_matches_logical_tracks, encode_score, score_summa
 from bdo_export import channel_groups_to_bdo
 from bdo_midi import MARNIAN_SYNTH_INSTRUMENT_IDS, MARNIAN_SYNTH_MODE_OFFSETS
 from conversion_settings import ConversionSettings
-from pitch_transform import PitchTransformPlan, transpose_notes
+from pitch_transform import (
+    PitchTransformPlan,
+    track_uses_percussion_pitch_semantics,
+    transpose_notes,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,9 +236,11 @@ def prepare_export(request: ExportRequest) -> PreparedExport:
     direct_tracks = request.direct_tracks
     channel_groups = []
     for track in direct_tracks:
-        effective_transpose = request.pitch_plan.effective_semitones(
-            track.track_id,
-            is_drum=track.is_percussion,
+        percussion_pitch_semantics = track_uses_percussion_pitch_semantics(
+            track
+        )
+        effective_transpose = request.pitch_plan.effective_track_semitones(
+            track
         )
         projected_notes = transpose_notes(track.notes, effective_transpose)
         channel_groups.append(
@@ -246,7 +252,7 @@ def prepare_export(request: ExportRequest) -> PreparedExport:
                     for note in projected_notes
                 ],
                 track.gm_program,
-                track.is_percussion,
+                percussion_pitch_semantics,
             )
         )
     direct_instrument_map = {

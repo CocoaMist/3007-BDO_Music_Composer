@@ -31,7 +31,10 @@ from editor_models import (
 )
 from editor_ui_helpers import add_instrument_submenus, articulation_color
 from i18n import tr, trf, trv
-from pitch_transform import PitchTransformPlan
+from pitch_transform import (
+    PitchTransformPlan,
+    track_uses_percussion_pitch_semantics,
+)
 from project_paths import ASSETS_DIR
 
 
@@ -539,9 +542,8 @@ class TimelineCanvas(QWidget):
 
     def _note_has_conversion_problem(self, track: TrackState, pitch: int) -> bool:
         canonical_drum_lanes = track_uses_canonical_drum_lanes(track)
-        effective_transpose = self.pitch_transform_plan.effective_semitones(
-            track.track_id,
-            is_drum=bool(track.is_percussion),
+        effective_transpose = self.pitch_transform_plan.effective_track_semitones(
+            track
         )
         cache_key = (
             int(track.bdo_instrument_id),
@@ -1703,7 +1705,7 @@ class TimelineCanvas(QWidget):
         edit_notes_action = menu.addAction(tr("编辑音符…"))
         pitch_action = menu.addAction(tr("轨道八度…"))
         pitch_action.setEnabled(
-            not track.is_percussion and int(track.bdo_instrument_id) != 0x0D
+            not track_uses_percussion_pitch_semantics(track)
         )
         menu.addSeparator()
         optimize_action = menu.addAction(tr("优化此轨道"))

@@ -293,6 +293,7 @@ from conversion_settings import (  # noqa: E402
 )
 from pitch_transform import (  # noqa: E402
     PitchTransformPlan,
+    track_uses_percussion_pitch_semantics,
     transpose_notes,
 )
 from audio_source_settings import (  # noqa: E402
@@ -3798,12 +3799,8 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         return None
 
     def _effective_track_transpose(self, track: TrackState) -> int:
-        return self._pitch_transform_plan.effective_semitones(
-            track.track_id,
-            is_drum=bool(
-                track.is_percussion
-                or int(track.bdo_instrument_id) == 0x0D
-            ),
+        return self._pitch_transform_plan.effective_track_semitones(
+            track
         )
 
     def _project_tracks_for_preview(
@@ -3815,6 +3812,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         return [
             replace(
                 track,
+                is_percussion=track_uses_percussion_pitch_semantics(track),
                 notes=list(
                     transpose_notes(
                         track.notes,

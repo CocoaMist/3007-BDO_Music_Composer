@@ -67,6 +67,46 @@ class WpfSidecarTests(unittest.TestCase):
             ]
             self.assertEqual(pitches, [72])
 
+    def test_drum_target_with_melodic_source_flag_stays_at_canonical_pitch(self) -> None:
+        project = self.project()
+        project["conversion_settings"]["transpose"] = -8
+        project["pitch_transform"] = {
+            "global_semitones": -8,
+            "track_overrides": [],
+        }
+        project["tracks"][0].update({
+            "is_percussion": False,
+            "bdo_instrument_id": 0x0D,
+            "notes": [[48, 90, 0, 250, 99]],
+        })
+
+        issues = wpf_sidecar.dispatch(
+            "validate_project", {"project": project}
+        )["issues"]
+        self.assertFalse(any(
+            issue["code"] == "export.transpose" for issue in issues
+        ))
+        self.assertFalse(any(
+            issue["severity"] == "error" for issue in issues
+        ))
+
+        with tempfile.TemporaryDirectory() as directory:
+            out_path = Path(directory) / "drums.bdo"
+            result = wpf_sidecar.dispatch(
+                "export_bdo",
+                {"project": project, "out_path": str(out_path)},
+            )
+            self.assertTrue(result["exported"])
+            notes = [
+                note
+                for track in read_bdo_score(out_path).tracks
+                for note in track.notes
+            ]
+        self.assertEqual(
+            [(note.pitch, note.ntype) for note in notes],
+            [(48, 99)],
+        )
+
     def test_invalid_meter_blocks_export(self) -> None:
         project = self.project(); project["time_sig"] = 3
         result = wpf_sidecar.dispatch("export_bdo", {"project": project, "out_path": "ignored"})

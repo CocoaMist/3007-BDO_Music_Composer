@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import namedtuple
+from types import SimpleNamespace
 import unittest
 
 from pitch_transform import (
@@ -8,6 +9,7 @@ from pitch_transform import (
     PITCH_OVERRIDE_PROVENANCE_AUTO,
     PitchTransformPlan,
     TrackPitchOverride,
+    track_uses_percussion_pitch_semantics,
     transpose_notes,
 )
 
@@ -37,6 +39,18 @@ class PitchTransformTests(unittest.TestCase):
 
         self.assertTrue(resolved.drum_exempt)
         self.assertEqual(resolved.effective_semitones, 0)
+
+    def test_bdo_drum_target_is_percussion_even_with_melodic_source_flag(self) -> None:
+        track = SimpleNamespace(
+            track_id=3,
+            is_percussion=False,
+            bdo_instrument_id=0x0D,
+        )
+        plan = PitchTransformPlan(-8).with_track_octave(3, 24)
+
+        self.assertTrue(track_uses_percussion_pitch_semantics(track))
+        self.assertEqual(plan.effective_track_semitones(track), 0)
+        self.assertTrue(plan.is_neutral([track]))
 
     def test_octave_policy_rejects_non_octave_automatic_offsets(self) -> None:
         with self.assertRaises(ValueError):

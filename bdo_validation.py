@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from string import Formatter
 from typing import Callable, Mapping, Sequence
 
-from pitch_transform import PitchTransformPlan
+from pitch_transform import (
+    PitchTransformPlan,
+    track_uses_percussion_pitch_semantics,
+)
 
 from bdo_profile import BdoProfile
 from bdo_track_effects import (
@@ -169,12 +172,24 @@ class ValidationContext:
     effects: tuple[int, int, tuple[int, int, int] | None] = (0, 0, None)
     pitch_plan: PitchTransformPlan | None = None
 
-    def effective_transpose(self, track: object) -> int:
+    def effective_transpose(
+        self,
+        track: object,
+        *,
+        drum_instrument_id: int = 0x0D,
+    ) -> int:
         if self.pitch_plan is None:
-            return int(self.transpose)
-        return self.pitch_plan.effective_semitones(
-            int(getattr(track, "track_id")),
-            is_drum=bool(getattr(track, "is_percussion", False)),
+            return (
+                0
+                if track_uses_percussion_pitch_semantics(
+                    track,
+                    drum_instrument_id=drum_instrument_id,
+                )
+                else int(self.transpose)
+            )
+        return self.pitch_plan.effective_track_semitones(
+            track,
+            drum_instrument_id=drum_instrument_id,
         )
 
 
@@ -194,7 +209,10 @@ def validate_tracks(
     for track in tracks:
         track_id = int(track.track_id)
         instrument_id = int(track.bdo_instrument_id)
-        effective_transpose = context.effective_transpose(track)
+        effective_transpose = context.effective_transpose(
+            track,
+            drum_instrument_id=profile.drum_instrument_id,
+        )
         serialized_id = int(context.serialize_instrument(track))
         evidence, status = _evidence(profile, instrument_id)
         notes = list(track.notes)
