@@ -820,7 +820,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
 
             app = QApplication([])
             editor = Editor()
-            import piano_roll_canvas
+            import bdo_music_composer.ui.editor.piano_roll_canvas as piano_roll_canvas
             with patch.object(
                 piano_roll_canvas,
                 "SpectrogramTileController",
@@ -1002,7 +1002,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             image = QImage(canvas.size(), QImage.Format_ARGB32)
             image.fill(0)
             # The semantic builder belongs to setter/review transitions only.
-            import piano_roll_canvas
+            import bdo_music_composer.ui.editor.piano_roll_canvas as piano_roll_canvas
             with patch.object(
                 piano_roll_canvas,
                 "build_melody_line_segments",

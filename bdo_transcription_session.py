@@ -779,6 +779,27 @@ class TranscriptionReviewCommandStack:
         self._undo.clear()
         self._redo.clear()
 
+    def checkpoint(
+        self,
+    ) -> tuple[
+        tuple[TranscriptionReviewSnapshot, ...],
+        tuple[TranscriptionReviewSnapshot, ...],
+    ]:
+        """Freeze list ownership so a failed project commit can restore it."""
+
+        return tuple(self._undo), tuple(self._redo)
+
+    def restore_checkpoint(
+        self,
+        checkpoint: tuple[
+            tuple[TranscriptionReviewSnapshot, ...],
+            tuple[TranscriptionReviewSnapshot, ...],
+        ],
+    ) -> None:
+        undo, redo = checkpoint
+        self._undo = list(undo[-self.limit:])
+        self._redo = list(redo)
+
     def discard_redo(self) -> None:
         """Invalidate only the abandoned redo branch."""
 

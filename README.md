@@ -25,8 +25,15 @@ v1.0.0 is the first public stable major release. Core editor, autosave, optimiza
 
 The application processes MIDI, Owner IDs, audio, autosaves, and exported scores locally. It does not include account login, telemetry, file upload, an OpenAI API client, extracted game audio, or game-owned artwork.
 
+The staged no-shim package migration has reduced root Python files from 89 to
+69, then 56, and now 52. The latest stages colocated five related Qt owners
+under `bdo_music_composer/ui/editor/` and centralized version/repository
+metadata in `bdo_music_composer/app/application_metadata.py`; a 7-to-10-file
+root remains a future direction.
+
 ## Quick links
 
+- [Documentation index](docs/README.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [AI change-routing context](docs/AI_CONTEXT.md)
 - [Agent handoff guide](docs/AGENT_HANDOFF.md)

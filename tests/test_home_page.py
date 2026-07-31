@@ -12,7 +12,9 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pyside_bdo_gui as gui
-import crash_logging
+from bdo_music_composer.app import crash_logging
+from bdo_export import channel_groups_to_bdo
+from bdo_midi import Note
 from home_catalog import GAME_SCORE_METADATA_MAX_BYTES, game_score_instrument_ids
 
 
@@ -151,12 +153,12 @@ class HomePageTests(unittest.TestCase):
             older.write_bytes(b"first")
             newer.write_bytes(b"second")
             ensemble = game_dir / "ensemble.bdo"
-            encoded, _summary = gui.channel_groups_to_bdo(
+            encoded, _summary = channel_groups_to_bdo(
                 120,
                 4,
                 [
-                    ([gui.Note(60, 90, 0.0, 250.0, 0)], 0, False),
-                    ([gui.Note(64, 90, 0.0, 250.0, 0)], 1, False),
+                    ([Note(60, 90, 0.0, 250.0, 0)], 0, False),
+                    ([Note(64, 90, 0.0, 250.0, 0)], 1, False),
                 ],
                 instrument_map={0: 0x0B, 1: 0x11},
             )

@@ -1276,7 +1276,6 @@ class BdoRealtimeAudioEngine(QObject):
                 chorus_send,
             ))
             duration_scale = float(getattr(track, "duration_scale", 1.0))
-            volume_scale = float(getattr(track, "volume_scale", 1.0))
             for note_index, note in enumerate(getattr(track, "notes", ())):
                 if note_index % 256 == 0:
                     self._raise_if_preload_cancelled(cancel_event)
@@ -1339,11 +1338,8 @@ class BdoRealtimeAudioEngine(QObject):
                         loop_end = round(rate * 0.80)
                     fade_out_frames = release_frames
                 velocity = max(
-                    1,
-                    min(
-                        127,
-                        round(float(getattr(note, "vel", 96)) * volume_scale),
-                    ),
+                    0,
+                    min(127, round(float(getattr(note, "vel", 96)))),
                 )
                 events.append(_Event(
                     frame=frame,
@@ -1482,7 +1478,7 @@ class BdoRealtimeAudioEngine(QObject):
             for note_index, note in enumerate(track.notes):
                 if note_index % 256 == 0:
                     self._raise_if_preload_cancelled(cancel_event)
-                velocity = max(1, min(127, round(float(note.vel) * track.volume_scale)))
+                velocity = max(0, min(127, round(float(note.vel))))
                 ntype = int(getattr(note, "ntype", 0) or track.articulation_type or 0)
                 route_ntype = preview_route_ntype(instrument_id, ntype)
                 pitch = resolve_bdo_pitch(

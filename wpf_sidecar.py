@@ -24,11 +24,19 @@ from bdo_midi import (  # noqa: E402
     parse_midi,
 )
 from bdo_export import channel_groups_to_bdo  # noqa: E402
-from bdo_profile import load_bdo_profile  # noqa: E402
+from bdo_music_composer.app.game_profile_provider import (  # noqa: E402
+    get_bdo_profile,
+)
 from bdo_score import read_bdo_score  # noqa: E402
+from bdo_track_effects import DEFAULT_TRACK_VOLUME  # noqa: E402
 from bdo_validation import ValidationContext, validate_tracks  # noqa: E402
 from bdo_instrument_adaptation import articulation_pairs_by_instrument  # noqa: E402
-from conversion_settings import ConversionSettings  # noqa: E402
+from conversion_settings import (  # noqa: E402
+    MATERIALIZED_VELOCITY_MODES,
+    VELOCITY_MODE_PRESERVE,
+    ConversionSettings,
+)
+from game_score_model import serialized_game_instrument_id  # noqa: E402
 from pitch_transform import (  # noqa: E402
     PitchTransformPlan,
     track_uses_percussion_pitch_semantics,
@@ -37,7 +45,9 @@ from pitch_transform import (  # noqa: E402
 from optimization import OptimizationIntensity, OptimizerConfig  # noqa: E402
 from optimization.plugin_api import tracks_fingerprint  # noqa: E402
 from optimization.plugin_host import analyse_with_algorithm, discover_host_algorithms  # noqa: E402
-from project_schema import CURRENT_PROJECT_SCHEMA  # noqa: E402
+from bdo_music_composer.project.project_schema import (  # noqa: E402
+    CURRENT_PROJECT_SCHEMA,
+)
 
 @dataclass(slots=True)
 class WorkerTrack:
@@ -57,7 +67,7 @@ class WorkerTrack:
     effect_settings_placeholder: dict[str, Any] | None = None
     performance_controls: list[Any] | None = None
     notes_optimized: bool = False
-    bdo_track_volume: int = 70
+    bdo_track_volume: int = DEFAULT_TRACK_VOLUME
     bdo_track_settings: tuple[int, ...] = (0,) * 8
     bdo_source_group_index: int | None = None
     bdo_source_note_records: tuple[tuple, ...] = ()
@@ -85,7 +95,7 @@ def _pitch_transform(payload: dict[str, Any]) -> PitchTransformPlan:
 def _legacy_import_conversion_payload(source_format: str) -> dict[str, Any]:
     settings = ConversionSettings.legacy_project_defaults(
         source_format
-    ).with_updates(velocity_mode="preserve")
+    ).with_updates(velocity_mode=VELOCITY_MODE_PRESERVE)
     return {
         **settings.to_payload(),
         "reverb": 0,
@@ -112,7 +122,7 @@ def _project_from_midi(midi_path: str) -> dict[str, Any]:
             "marnian_synth_mode": "basic",
             "notes_optimized": False,
             "performance_controls": [],
-            "bdo_track_volume": 70,
+            "bdo_track_volume": DEFAULT_TRACK_VOLUME,
             "bdo_track_settings": [0] * 8,
             "bdo_source_group_index": None,
             "bdo_source_note_records": [],
@@ -219,7 +229,9 @@ def _tracks(payload: dict[str, Any]) -> list[WorkerTrack]:
             marnian_synth_mode=str(raw.get("marnian_synth_mode", "basic")), color=str(raw.get("color", "#d88c6f")),
             effect_settings_placeholder=dict(raw.get("effect_settings_placeholder") or {}),
             performance_controls=list(raw.get("performance_controls") or []), notes_optimized=bool(raw.get("notes_optimized", False)),
-            bdo_track_volume=int(raw.get("bdo_track_volume", 70)),
+            bdo_track_volume=int(
+                raw.get("bdo_track_volume", DEFAULT_TRACK_VOLUME)
+            ),
             bdo_track_settings=tuple(int(value) for value in raw.get("bdo_track_settings", [0] * 8)),
             bdo_source_group_index=(int(raw["bdo_source_group_index"]) if raw.get("bdo_source_group_index") is not None else None),
             bdo_source_note_records=tuple(tuple(record) for record in raw.get("bdo_source_note_records", []) if isinstance(record, (list, tuple)) and len(record) >= 6),
@@ -227,9 +239,10 @@ def _tracks(payload: dict[str, Any]) -> list[WorkerTrack]:
     return result
 
 
-def _active(tracks: list[WorkerTrack]) -> list[WorkerTrack]:
-    solos = [track for track in tracks if track.solo]
-    return solos if solos else [track for track in tracks if not track.muted]
+def _formal(tracks: list[WorkerTrack]) -> list[WorkerTrack]:
+    """Return the score scope; Mute/Solo are local monitoring state only."""
+
+    return list(tracks)
 
 
 def _issues(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -240,22 +253,25 @@ def _issues(payload: dict[str, Any]) -> list[dict[str, Any]]:
         issues.append({"code": "meter.unsupported", "severity": "error", "message": "BDO v9 仅支持 /4 拍号"})
     if not int(payload.get("owner_id", 0)):
         issues.append({"code": "owner.missing", "severity": "error", "message": "缺少有效 Owner ID"})
-    for track in _active(_tracks(payload)):
+    for track in _formal(_tracks(payload)):
         if not 0 <= track.bdo_instrument_id <= 255:
             issues.append({"code": "instrument.invalid", "severity": "error", "message": "乐器 ID 无效", "track_id": track.track_id})
         for index, note in enumerate(track.notes):
             if not 0 <= note.pitch <= 127 or note.dur <= 0:
                 issues.append({"code": "note.invalid", "severity": "error", "message": "音符音高或时值无效", "track_id": track.track_id, "note_indices": [index]})
-    tracks = _active(_tracks(payload))
-    profile = load_bdo_profile(
-        ROOT / "data" / "profiles" / "bdo_global_v9.json",
-        articulation_map=articulation_pairs_by_instrument(),
-    )
+    tracks = _formal(_tracks(payload))
+    profile = get_bdo_profile()
     settings = _settings(payload)
     conversion = _conversion_settings(payload)
+    if conversion.velocity_mode not in MATERIALIZED_VELOCITY_MODES:
+        issues.append({
+            "code": "game_model.velocity_unmaterialized",
+            "severity": "error",
+            "message": "力度策略尚未写入音符，已阻止隐藏变换导出",
+        })
     context = ValidationContext(
         transpose=conversion.transpose, active_track_ids=frozenset(track.track_id for track in tracks),
-        instrument_names=BDO_INSTRUMENT_NAMES, gm_drum_map={}, serialize_instrument=lambda track: track.bdo_instrument_id,
+        instrument_names=BDO_INSTRUMENT_NAMES, gm_drum_map={}, serialize_instrument=serialized_game_instrument_id,
         velocity_mode=conversion.velocity_mode,
         effects=(int(settings.get("reverb", 0)), int(settings.get("delay", 0)), settings.get("chorus")),
         pitch_plan=_pitch_transform(payload),
@@ -271,7 +287,7 @@ def _export(payload: dict[str, Any], out_path: str) -> dict[str, Any]:
     issues = _issues(payload)
     if any(item["severity"] == "error" for item in issues):
         return {"exported": False, "issues": issues}
-    tracks = _active(_tracks(payload))
+    tracks = _formal(_tracks(payload))
     settings = _settings(payload)
     transform = _conversion_settings(payload).export_transform_parameters()
     pitch_plan = _pitch_transform(payload)
@@ -289,8 +305,10 @@ def _export(payload: dict[str, Any], out_path: str) -> dict[str, Any]:
         )
         for track in tracks
     ]
-    instrument_map = {index: track.bdo_instrument_id for index, track in enumerate(tracks)}
-    vel_scales = {index: track.volume_scale for index, track in enumerate(tracks) if track.volume_scale != 1.0}
+    instrument_map = {
+        index: serialized_game_instrument_id(track)
+        for index, track in enumerate(tracks)
+    }
     articulation_map = {index: track.articulation_type for index, track in enumerate(tracks) if track.articulation_type is not None}
     track_volumes = {index: track.bdo_track_volume for index, track in enumerate(tracks)}
     track_settings_map = {}
@@ -311,7 +329,7 @@ def _export(payload: dict[str, Any], out_path: str) -> dict[str, Any]:
         vel_layered=transform["vel_layered"], transpose=0,
         owner_id=int(payload.get("owner_id", 0)), instrument_map=instrument_map,
         reverb=int(settings.get("reverb", 0)), delay=int(settings.get("delay", 0)), chorus=settings.get("chorus"),
-        vel_scales=vel_scales or None, articulation_map=articulation_map or None, preserve_note_types=True,
+        vel_scales=None, articulation_map=articulation_map or None, preserve_note_types=True,
         track_volumes=track_volumes, track_settings_map=track_settings_map,
         velocity_b_maps=velocity_b_maps or None,
     )
@@ -334,10 +352,7 @@ def _algorithm_descriptors() -> tuple[list[dict[str, Any]], tuple[Any, ...]]:
 
 def _optimizer_maps() -> tuple[dict[int, frozenset[int]], dict[int, list[tuple[int, str]]], frozenset[int]]:
     articulation_map = articulation_pairs_by_instrument()
-    profile = load_bdo_profile(
-        ROOT / "data" / "profiles" / "bdo_global_v9.json",
-        articulation_map=articulation_map,
-    )
+    profile = get_bdo_profile()
     pitches: dict[int, frozenset[int]] = {}
     articulations: dict[int, list[tuple[int, str]]] = {}
     for instrument_id, rule in profile.instruments.items():

@@ -25,6 +25,9 @@ class UiLayoutSmokeTests(unittest.TestCase):
                 MasterEffectsDialog, ReferenceAudioController,
                 SettingsDialog, StartupSplash, TrackFxDialog, TrackState,
             )
+            from bdo_music_composer.ui.ui_notifications import (
+                show_global_toast,
+            )
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -230,7 +233,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             toast_margins = toast.layout().contentsMargins()
             assert toast_margins.top() == toast_margins.bottom() == 8
             assert toast.height() <= 44
-            assert toast.y() == main_toolbar.geometry().bottom() + 9
+            assert toast.y() + toast.height() == window.contentsRect().bottom() + 1 - 16
             assert 0 <= toast.x() <= window.width() - toast.width()
             QTest.qWait(190)
             assert toast.opacity.opacity() > 0.9
@@ -242,6 +245,17 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert inspector is None
             performance_strip = window.findChild(QFrame, "PerformanceStrip")
             assert performance_strip is not None
+            window._show_workspace()
+            workspace_toast = window.show_toast(
+                "工作区底部提示", duration_ms=80
+            )
+            app.processEvents()
+            performance_top = performance_strip.mapTo(
+                window, QPoint(0, 0)
+            ).y()
+            assert workspace_toast.y() + workspace_toast.height() == performance_top - 8
+            window._switch_main_page(window.home_page, home=True)
+            app.processEvents()
             assert window.workspace_page.layout().count() == 2
             assert window.findChild(QFrame, "InfoBar") is None
             assert window.status_label.isHidden()
@@ -295,6 +309,16 @@ class UiLayoutSmokeTests(unittest.TestCase):
             settings_footer_margins = settings.settings_footer.layout().contentsMargins()
             assert settings_footer_margins.left() == settings_footer_margins.right() == 24
             assert settings_footer_margins.top() == settings_footer_margins.bottom() == 10
+            settings_toast = show_global_toast(
+                settings, "设置底部提示", duration_ms=80
+            )
+            app.processEvents()
+            settings_footer_top = settings.settings_footer.mapTo(
+                settings, QPoint(0, 0)
+            ).y()
+            assert settings_toast.y() + settings_toast.height() == settings_footer_top - 8
+            assert 0 <= settings_toast.x()
+            assert settings_toast.x() + settings_toast.width() <= settings.width()
             settings_sections = settings.findChildren(QFrame, "SettingsSection")
             assert settings_sections
             assert all(
@@ -445,7 +469,14 @@ class UiLayoutSmokeTests(unittest.TestCase):
             editor_toast = getattr(editor, "_global_toast", None)
             assert isinstance(editor_toast, GlobalToast)
             assert "Ctrl+拖动复制" in editor_toast.message.text()
-            assert editor_toast.y() >= workspace.geometry().top()
+            editor_footer = editor.findChild(QFrame, "EditorFooter")
+            assert editor_footer is not None
+            editor_footer_top = editor_footer.mapTo(
+                editor, QPoint(0, 0)
+            ).y()
+            assert editor_toast.y() + editor_toast.height() == editor_footer_top - 8
+            assert 0 <= editor_toast.x()
+            assert editor_toast.x() + editor_toast.width() <= editor.width()
             editor.note_mode_button.click()
             app.processEvents()
             assert top_inspector.height() == inspector_height

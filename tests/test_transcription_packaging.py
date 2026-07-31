@@ -68,6 +68,13 @@ class TranscriptionPackagingTests(unittest.TestCase):
         icon_root = PROJECT_ROOT / "assets" / "instruments" / "ai_v1"
         self.assertEqual(12, len(tuple(icon_root.glob("*.png"))))
 
+    def test_public_spec_does_not_bundle_internal_release_notes(self) -> None:
+        spec = (
+            PROJECT_ROOT / "packaging" / "windows" / "BDOMusicComposer.spec"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn('"release_notes.json"', spec)
+        self.assertNotIn('"data" / "releases"', spec)
+
     def test_single_build_entry_uses_unified_spec_and_product_name(self) -> None:
         build_script = (
             PROJECT_ROOT

@@ -721,6 +721,306 @@ class TranscriptionEditorCommitUiTests(unittest.TestCase):
             completed.stdout + completed.stderr,
         )
 
+    def test_commit_plan_error_leaves_project_and_session_unchanged(self) -> None:
+        completed = _run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication, QMessageBox
+
+            from bdo_transcription_session import (
+                TranscriptionEditorCommit,
+                TranscriptionSession,
+            )
+            from pyside_bdo_gui import MidiToBdoWindow, Note, TrackState
+            from transcription_commit_plan import (
+                CommitPlanError,
+                CommitPlanErrorCode,
+            )
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            window._stop_preview = lambda *_args, **_kwargs: None
+            window.show_toast = lambda *_args, **_kwargs: None
+
+            snapshot_calls = []
+            autosaves = []
+            warnings = []
+            window._push_project_snapshot = (
+                lambda: snapshot_calls.append(True)
+            )
+            window._autosave_project = (
+                lambda reason, **kwargs: autosaves.append((reason, kwargs))
+            )
+            QMessageBox.warning = (
+                lambda *args, **kwargs: warnings.append((args, kwargs))
+            )
+
+            original_note = Note(55, 72, 10.0, 120.0, 0)
+            current = TrackState(
+                1,
+                [original_note],
+                0,
+                False,
+                "current",
+                0x0B,
+                notes_optimized=True,
+            )
+            window.tracks = [current]
+            window.timeline.set_tracks(window.tracks)
+
+            session = TranscriptionSession(
+                (),
+                cache_key="cache-key",
+                analysis_fingerprint="audio-fingerprint",
+            )
+            window.transcription_session = session
+            def fail_preflight(*_args, **_kwargs):
+                raise CommitPlanError(
+                    CommitPlanErrorCode.DUPLICATE_TRACK_ID,
+                    "1",
+                )
+            window._build_transcription_commit_plan = fail_preflight
+            request = TranscriptionEditorCommit(
+                current_track_id=1,
+                draft_notes=(original_note,),
+                cache_key="cache-key",
+                analysis_fingerprint="audio-fingerprint",
+            )
+
+            tracks_before = tuple(window.tracks)
+            notes_before = tuple(tuple(track.notes) for track in window.tracks)
+            optimized_before = tuple(
+                track.notes_optimized for track in window.tracks
+            )
+            session_state_before = session.state
+            undo_before = tuple(window.project_commands._undo)
+
+            report = window._commit_note_editor(request)
+
+            assert report is None
+            assert snapshot_calls == []
+            assert tuple(window.tracks) == tracks_before
+            assert window.tracks[0] is current
+            assert tuple(tuple(track.notes) for track in window.tracks) == notes_before
+            assert tuple(
+                track.notes_optimized for track in window.tracks
+            ) == optimized_before
+            assert session.state is session_state_before
+            assert session.state.pending_routes == ()
+            assert session.state.applied_routes == ()
+            assert tuple(window.project_commands._undo) == undo_before
+            assert autosaves == []
+            assert len(warnings) == 1
+            assert warnings[0][0][0] is window
+
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_model_failure_rolls_back_but_view_failure_still_autosaves(
+        self,
+    ) -> None:
+        completed = _run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication, QMessageBox
+
+            from bdo_transcription import TranscriptionCandidate
+            from bdo_transcription_session import (
+                CandidateRoute,
+                TranscriptionEditorCommit,
+                TranscriptionSession,
+            )
+            from pyside_bdo_gui import MidiToBdoWindow, Note, TrackState
+
+            app = QApplication([])
+            warnings = []
+            QMessageBox.warning = (
+                lambda *args, **kwargs: warnings.append((args, kwargs))
+            )
+
+            def prepared_window():
+                window = MidiToBdoWindow()
+                window._stop_preview = lambda *_args, **_kwargs: None
+                window.show_toast = lambda *_args, **_kwargs: None
+                window._schedule_transcription_assist_refresh = lambda: None
+                original = Note(55, 72, 10.0, 120.0, 0)
+                candidate = TranscriptionCandidate(
+                    60,
+                    90,
+                    500.0,
+                    200.0,
+                    0.9,
+                    candidate_id="transaction-candidate",
+                )
+                session = TranscriptionSession(
+                    (candidate,),
+                    cache_key="cache-key",
+                    analysis_fingerprint="audio-fingerprint",
+                )
+                candidate_id = session.candidate_id(candidate)
+                route = CandidateRoute(candidate_id, 1)
+                session.route_to_track(1, (candidate_id,))
+                track = TrackState(
+                    1,
+                    [original],
+                    0,
+                    False,
+                    "current",
+                    0x0B,
+                    notes_optimized=True,
+                )
+                window.tracks = [track]
+                window.timeline.set_tracks(window.tracks)
+                window.transcription_session = session
+                request = TranscriptionEditorCommit(
+                    current_track_id=1,
+                    draft_notes=(
+                        original,
+                        Note(60, 90, 500.0, 200.0, 0),
+                    ),
+                    primary_routes=(route,),
+                    cache_key="cache-key",
+                    analysis_fingerprint="audio-fingerprint",
+                )
+                return window, track, session, route, request
+
+            failed, failed_track, failed_session, route, request = (
+                prepared_window()
+            )
+            failed_autosaves = []
+            failed._autosave_project = (
+                lambda *args, **kwargs: failed_autosaves.append((args, kwargs))
+            )
+            tracks_before = failed.tracks
+            state_before = failed_session.state
+            review_history_before = failed_session.commands.checkpoint()
+            project_history_before = failed.project_commands.checkpoint()
+
+            def fail_sidecar(*_args, **_kwargs):
+                raise RuntimeError("injected sidecar failure")
+
+            failed_session.commit_project_routes = fail_sidecar
+            failed_report = failed._commit_note_editor(request)
+
+            assert failed_report is None
+            assert failed.tracks is tracks_before
+            assert failed.tracks[0] is failed_track
+            assert failed_track.notes == [Note(55, 72, 10.0, 120.0, 0)]
+            assert failed_session.state is state_before
+            assert failed_session.commands.checkpoint() == review_history_before
+            assert failed.project_commands.checkpoint() == project_history_before
+            assert failed_autosaves == []
+            assert len(warnings) == 1
+
+            committed, _, committed_session, route, request = prepared_window()
+            committed_autosaves = []
+            refresh_failures = []
+            committed._autosave_project = (
+                lambda *args, **kwargs:
+                committed_autosaves.append((args, kwargs))
+            )
+            committed._log_transcription_commit_failure = (
+                lambda stage: refresh_failures.append(stage)
+            )
+            committed.timeline.set_tracks = (
+                lambda *_args, **_kwargs:
+                (_ for _ in ()).throw(RuntimeError("injected view failure"))
+            )
+
+            committed_report = committed._commit_note_editor(request)
+
+            assert committed_report is not None
+            assert committed_report.project_changed
+            assert [note.pitch for note in committed.tracks[0].notes] == [55, 60]
+            assert committed_session.state.pending_routes == ()
+            assert committed_session.state.applied_routes == (route,)
+            assert len(committed.project_commands._undo) == 1
+            assert len(committed_autosaves) == 1
+            assert "timeline refresh" in refresh_failures
+            assert len(warnings) == 1
+
+            failed.close()
+            committed.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_commit_adapter_skips_unrelated_tracks_and_rejects_duplicate_ids(
+        self,
+    ) -> None:
+        completed = _run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication, QMessageBox
+
+            from bdo_transcription_session import TranscriptionEditorCommit
+            from pyside_bdo_gui import MidiToBdoWindow, Note, TrackState
+
+            class UnrelatedTrack:
+                track_id = 99
+
+                def __init__(self):
+                    self.note_reads = 0
+
+                @property
+                def notes(self):
+                    self.note_reads += 1
+                    raise AssertionError("unrelated notes must stay lazy")
+
+            app = QApplication([])
+            warnings = []
+            QMessageBox.warning = (
+                lambda *args, **kwargs: warnings.append((args, kwargs))
+            )
+
+            window = MidiToBdoWindow()
+            current_note = Note(60, 90, 100.0, 200.0, 0)
+            current = TrackState(1, [current_note], 0, False, "current", 0x0B)
+            unrelated = UnrelatedTrack()
+            window.tracks = [current, unrelated]
+            report = window._commit_note_editor(TranscriptionEditorCommit(
+                current_track_id=1,
+                draft_notes=(current_note,),
+            ))
+
+            assert report is not None
+            assert not report.project_changed
+            assert unrelated.note_reads == 0
+            assert warnings == []
+
+            duplicate = TrackState(1, [], 0, False, "duplicate", 0x0B)
+            window.tracks = [current, duplicate]
+            rejected = window._commit_note_editor(TranscriptionEditorCommit(
+                current_track_id=1,
+                draft_notes=(current_note,),
+            ))
+            assert rejected is None
+            assert len(warnings) == 1
+            assert window.tracks == [current, duplicate]
+
+            window.tracks = [current]
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

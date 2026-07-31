@@ -636,7 +636,9 @@ class RealtimeAudioTests(unittest.TestCase):
         self.assertEqual((min(BDO_EDITOR_PITCH_RANGES[0x12]), max(BDO_EDITOR_PITCH_RANGES[0x12])), (43, 88))
         self.assertNotIn(0x13, BDO_EDITOR_PITCH_RANGES)
 
-    def test_project_preload_deduplicates_sources_before_parallel_decode(self) -> None:
+    def test_project_preload_deduplicates_sources_and_preserves_zero_velocity(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             wav_path = root / "sample.wav"
@@ -653,9 +655,10 @@ class RealtimeAudioTests(unittest.TestCase):
             self.engine._decode_wav = lambda path: (calls.append(path), _Sample(np.ones((8, 2), dtype=np.float32), 48_000, 8))[1]
             try:
                 track = SimpleNamespace(
-                    bdo_instrument_id=0x0A, marnian_synth_mode="basic", volume_scale=1.0,
+                    bdo_instrument_id=0x0A, marnian_synth_mode="basic", volume_scale=0.1,
+                    bdo_track_volume=100,
                     articulation_type=None,
-                    notes=[SimpleNamespace(pitch=60, vel=90, start=0, ntype=0),
+                    notes=[SimpleNamespace(pitch=60, vel=0, start=0, ntype=0),
                            SimpleNamespace(pitch=64, vel=90, start=100, ntype=0)],
                 )
                 events, cache, _bytes, _unverified, _duration = self.engine._prepare_project(
@@ -666,6 +669,8 @@ class RealtimeAudioTests(unittest.TestCase):
             self.assertEqual(len(calls), 1)
             self.assertEqual(len(cache), 1)
             self.assertEqual(len(events), 2)
+            self.assertEqual(events[0].gain, 0.0)
+            self.assertAlmostEqual(events[1].gain, 90 / 127.0)
 
     def test_project_preload_carries_game_gain_loop_release_and_instance_policy(
         self,

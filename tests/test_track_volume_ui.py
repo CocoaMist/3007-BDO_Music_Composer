@@ -12,6 +12,67 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TrackVolumeUiTests(unittest.TestCase):
+    def test_game_volume_commit_updates_the_shared_instrument_and_undoes_once(self) -> None:
+        script = textwrap.dedent(
+            """
+            from PySide6.QtWidgets import QApplication
+
+            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            source = TrackState(
+                1, [], 0, False, "source", 0x0B, bdo_track_volume=90
+            )
+            same_instrument = TrackState(
+                2, [], 0, False, "same", 0x0B, bdo_track_volume=70
+            )
+            other_instrument = TrackState(
+                3, [], 0, False, "other", 0x0C, bdo_track_volume=55
+            )
+            window.tracks = [source, same_instrument, other_instrument]
+            autosaves = []
+            window._autosave_project = (
+                lambda reason, immediate=False: autosaves.append(
+                    (reason, immediate)
+                )
+            )
+
+            # Timeline painting has already applied the source value when the
+            # typed commit signal reaches the main window.
+            source.bdo_track_volume = 42
+            window._on_game_instrument_volume_committed(source, 90, 42)
+            assert [track.bdo_track_volume for track in window.tracks] == [
+                42, 42, 55
+            ]
+            assert autosaves == [("game instrument volume", False)]
+
+            window._undo_project()
+            assert [track.bdo_track_volume for track in window.tracks] == [
+                90, 70, 55
+            ]
+            assert autosaves[-1] == ("project undo", True)
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
     def test_painted_game_volume_control_is_bounded_and_preserves_raw_imports(self) -> None:
         script = textwrap.dedent(
             """
@@ -47,7 +108,11 @@ class TrackVolumeUiTests(unittest.TestCase):
             assert len(volume_regions) == 1
             rect = volume_regions[0]
             changes = []
-            canvas.track_state_changed.connect(lambda: changes.append(track.bdo_track_volume))
+            canvas.game_volume_committed.connect(
+                lambda _track, previous, current: changes.append(
+                    (previous, current)
+                )
+            )
             target = QPoint(
                 round(rect.left() + rect.width() * 0.75),
                 round(rect.center().y()),
@@ -56,7 +121,7 @@ class TrackVolumeUiTests(unittest.TestCase):
             QTest.mouseRelease(canvas, Qt.LeftButton, Qt.NoModifier, target)
             app.processEvents()
             assert 74 <= track.bdo_track_volume <= 76
-            assert changes == [track.bdo_track_volume]
+            assert changes == [(118, track.bdo_track_volume)]
             assert canvas._track_volume_from_position(rect, rect.left() - 50) == 0
             assert canvas._track_volume_from_position(rect, rect.right() + 50) == 100
             assert TrackState(4, [], 0, False, "default", 0x0B).bdo_track_volume == 70

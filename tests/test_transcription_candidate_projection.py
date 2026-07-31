@@ -21,7 +21,7 @@ class TranscriptionCandidateProjectionTests(unittest.TestCase):
             from PySide6.QtWidgets import QApplication, QWidget
 
             from bdo_transcription import TranscriptionCandidate
-            import piano_roll_canvas
+            import bdo_music_composer.ui.editor.piano_roll_canvas as piano_roll_canvas
             import pyside_bdo_gui
             from pyside_bdo_gui import PianoRollCanvas
 

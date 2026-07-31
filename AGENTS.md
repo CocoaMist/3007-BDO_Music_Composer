@@ -16,7 +16,8 @@ BDO Music Composer is an unofficial PySide6 MIDI editor and Black Desert music-s
 3. `docs/AGENT_HANDOFF.md` — safe takeover, implementation, validation, and handoff workflow.
 4. `docs/ARCHITECTURE.md` — components and end-to-end data flow.
 5. `docs/AI_CONTEXT.md` — change routing, invariants, and validation matrix.
-6. Relevant domain reference under `docs/` only after the files above.
+6. `docs/README.md` — status-labelled documentation and evidence index.
+7. Relevant domain reference under `docs/` only after the files above.
 
 ## Commands
 
@@ -30,6 +31,12 @@ BDO Music Composer is an unofficial PySide6 MIDI editor and Black Desert music-s
 # Syntax check for primary entry points
 .\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
 
+# Syntax check for packaged application owners
+.\.venv\Scripts\python.exe -m compileall -q bdo_music_composer
+
+# Repository structure and private/generated artifact guard
+.\.venv\Scripts\python.exe tools\check_repository_hygiene.py
+
 # Rebuild Windows one-file executable
 powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ```
@@ -37,8 +44,30 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ## Architectural boundaries
 
 - `pyside_bdo_gui.py`: UI widgets, mutable editor state, and Qt worker lifecycle. It is large; keep new domain logic out when a focused module exists.
+- `bdo_music_composer/`: packaged application owners split by
+  `app/`, `audio/`, `editor/`, `project/`, `transcription/`, and `ui/`.
+  Package initializers stay inert; import the concrete owner module directly.
+- `bdo_music_composer/editor/`: Qt-free shared editor models, transactional
+  imports, commands, interval queries, velocity curves, revision tracking, and
+  standard-MIDI preview projection.
+- `bdo_music_composer/app/application_metadata.py`: canonical
+  application/repository identity.
+- `bdo_music_composer/app/release_notes.py`,
+  `bdo_music_composer/app/update_check.py`,
+  `bdo_music_composer/ui/update_check_qt.py`, and
+  `bdo_music_composer/ui/dialogs/release_notes_dialog.py`: dormant internal
+  release-history and stable-release-check implementation. Production home and
+  startup flows must not expose or invoke it. The optional local
+  `data/releases/release_notes.json` record may be absent, stays Git-ignored,
+  and is used only by explicit internal tests.
+- `bdo_music_composer/ui/dialogs/` and
+  `bdo_music_composer/ui/theme/`: focused Qt dialogs plus the application-level
+  semantic theme. Their package initializers stay inert.
+- `bdo_music_composer/ui/editor/`: timeline, piano-roll, velocity-lane, note
+  editor, shortcut HUD, and focused presentation helpers. Its initializer stays
+  inert and paint paths remain visible-range indexed.
 - `export_workflow.py`: immutable editor-export snapshots plus atomic output/game-directory publication.
-- `project_persistence.py`: immutable autosave snapshots and background-safe serialization; `home_catalog.py` owns bounded home-page discovery and reads only its small safe index.
+- `bdo_music_composer/project/project_persistence.py`: immutable autosave snapshots and background-safe serialization; `home_catalog.py` owns bounded home-page discovery and reads only its small safe index.
 - `atomic_io.py`: shared same-directory temporary-write/copy primitives. User-owned destinations must not be truncated in place.
 - `optimization/`: pure-ish, extensible optimization subsystem. `builtin.py` is the production pipeline and `registry.py` is the extension boundary. Game-safe mode must preserve structural invariants.
 - `bdo_midi_optimizer.py`: compatibility facade only; do not add new algorithm logic here.
@@ -81,9 +110,25 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 
 - Keep Chinese as the source language for existing fixed UI strings; update English, Japanese, and Korean catalogs for new controls.
 - Dynamic music data (track names, filenames, note names) must not be translated.
+- Every `QMenu` popup must use the application-level semantic theme in
+  `bdo_music_composer/ui/theme/fluent_theme.py`. Enabled, selected, disabled,
+  submenu, and checked states
+  must remain readable under the Windows 11 native style plus the fixed dark
+  palette. Do not add per-menu stylesheets; preserve the contrast and rendered
+  popup regression gates in `tests/test_fluent_theme.py`.
 - Large piano-roll/timeline paint paths must remain visible-range indexed and batched.
-- PyInstaller must include `assets/ui/timeline_background.png`, `assets/icons/app_icon.png`, and `data/mappings/bdo_wwise_midi_map.json`.
+- PyInstaller must include `assets/ui/timeline_background.png`,
+  `assets/icons/app_icon.png`, and
+  `data/mappings/bdo_wwise_midi_map.json`. Public packages must exclude the
+  optional local `data/releases/release_notes.json` catalog.
+- The dormant GitHub update checker has no production UI or startup entry. Only
+  explicit internal tests may invoke it. Its implementation must remain
+  asynchronous, unauthenticated, and bounded; never send Owner IDs or local
+  paths, download/execute a release, or report “current” after a failed
+  request. Startup self-tests stay network-free.
 - User data, Owner IDs, game audio, exports, autosaves, and local config never belong in the executable or Git history.
+- The optional local `data/releases/release_notes.json` internal record never
+  belongs in public Git history or an installation package.
 
 ## Change routing and required tests
 
@@ -95,11 +140,15 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 | Audio engine | real-time audio tests; check callback allocations/I/O |
 | Serializer/export | `tests/test_bdo_codec.py`, `tests/test_bdo_export_roundtrip.py`, and binary structure checks |
 | Localization | `tests/test_i18n_catalog.py` plus offscreen language-switch smoke test |
+| Dormant internal release notes/update check | `tests/test_release_notes.py`, `tests/test_update_check.py`, `tests/test_update_check_qt.py`, `tests/test_release_notes_ui.py`, optional/missing local-record behavior, production-wiring exclusion, Git-history exclusion, and public-package resource exclusion |
 | Packaging/resources | clean PyInstaller build and 10+ second startup test |
 
 ## Repository safety
 
 - Preserve unrelated working-tree changes. Never use `git reset --hard` or blanket checkout.
+- Never use `git clean -fdX` as generic cleanup: ignored paths include the
+  virtual environment, autosaves, exports, local settings, sample caches, and
+  private research workspaces.
 - Do not commit `out/`, `auto_save/`, `dist/`, `build/`, `.pyside_bdo_gui.json`, ZIP releases, or extracted game assets.
 - BDO score files may expose Owner ID and character name. Treat them as private.
 - Mapping/manifests may contain machine-local source paths. Do not add new personal paths; use configuration or environment variables.
@@ -112,6 +161,12 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ## Style
 
 - Python 3.12; prefer type hints and small helpers.
+- New root modules need a production importer or a documented standalone role;
+  list new top-level docs, scripts, and tools in their directory `README.md`.
+- The current root-Python budget is 52 after the no-shim editor/UI and
+  application-metadata migrations. Canonical version/repository identity lives
+  in `bdo_music_composer/app/application_metadata.py`. A 7-to-10-file root is
+  a long-term direction, not current state.
 - Keep binary constants named and documented. Avoid unexplained magic offsets.
 - Use `pathlib.Path` for filesystem paths.
 - Use `apply_patch` for text changes and preserve UTF-8.

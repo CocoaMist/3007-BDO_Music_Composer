@@ -13,7 +13,7 @@ from typing import Any, Mapping
 
 
 DEFAULT_CONVERSION_BPM_OVERRIDE: int | None = None
-DEFAULT_CONVERSION_TRANSPOSE = -8
+DEFAULT_CONVERSION_TRANSPOSE = 0
 LEGACY_CONVERSION_TRANSPOSE = 0
 
 VELOCITY_MODE_LAYERED = "layered"
@@ -31,6 +31,9 @@ VELOCITY_MODES = frozenset(
         VELOCITY_MODE_OFF,
         VELOCITY_MODE_PRESERVE,
     }
+)
+MATERIALIZED_VELOCITY_MODES = frozenset(
+    {VELOCITY_MODE_OFF, VELOCITY_MODE_PRESERVE}
 )
 
 VelocityPair = tuple[int, int]
@@ -71,7 +74,7 @@ class ConversionSettings:
     transpose: int = DEFAULT_CONVERSION_TRANSPOSE
     apply_sustain: bool = True
     flatten_tempo: bool = False
-    velocity_mode: str = VELOCITY_MODE_LAYERED
+    velocity_mode: str = VELOCITY_MODE_PRESERVE
     vel_range: VelocityPair | None = None
     vel_floor: int | None = None
     vel_step: VelocityStep = None
@@ -81,7 +84,7 @@ class ConversionSettings:
         object.__setattr__(self, "transpose", int(self.transpose))
         object.__setattr__(self, "apply_sustain", bool(self.apply_sustain))
         object.__setattr__(self, "flatten_tempo", bool(self.flatten_tempo))
-        mode = str(self.velocity_mode or VELOCITY_MODE_LAYERED)
+        mode = str(self.velocity_mode or VELOCITY_MODE_PRESERVE)
         if mode not in VELOCITY_MODES:
             raise ValueError(f"unsupported velocity mode: {mode}")
         object.__setattr__(self, "velocity_mode", mode)
@@ -102,15 +105,11 @@ class ConversionSettings:
         cls,
         source_format: str = "midi",
     ) -> "ConversionSettings":
-        """Return deterministic defaults for payloads predating these fields."""
+        """Return neutral defaults for payloads predating explicit transforms."""
 
         return cls(
             transpose=LEGACY_CONVERSION_TRANSPOSE,
-            velocity_mode=(
-                VELOCITY_MODE_OFF
-                if str(source_format).casefold() == "bdo"
-                else VELOCITY_MODE_LAYERED
-            ),
+            velocity_mode=VELOCITY_MODE_PRESERVE,
         )
 
     @classmethod
@@ -144,6 +143,20 @@ class ConversionSettings:
         settings = params.get("conversion_settings")
         if isinstance(settings, cls):
             return settings
+        if isinstance(settings, Mapping):
+            raw_mode = settings.get(
+                "velocity_mode",
+                VELOCITY_MODE_PRESERVE,
+            )
+            mode = str(raw_mode or VELOCITY_MODE_PRESERVE)
+            if mode not in VELOCITY_MODES:
+                raise ValueError(f"unsupported velocity mode: {mode}")
+            return cls.overlay(settings, cls.new_score_defaults())
+        if settings is not None:
+            raise TypeError(
+                "conversion_settings must be a ConversionSettings instance "
+                "or mapping"
+            )
         if params.get("vel_layered"):
             velocity_mode = VELOCITY_MODE_LAYERED
         elif params.get("vel_range") is not None:
@@ -266,5 +279,8 @@ __all__ = [
     "DEFAULT_CONVERSION_BPM_OVERRIDE",
     "DEFAULT_CONVERSION_TRANSPOSE",
     "LEGACY_CONVERSION_TRANSPOSE",
+    "MATERIALIZED_VELOCITY_MODES",
+    "VELOCITY_MODE_OFF",
+    "VELOCITY_MODE_PRESERVE",
     "VELOCITY_MODES",
 ]

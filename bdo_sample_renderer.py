@@ -410,10 +410,10 @@ def render_preview(
         track = request.track
         note = request.note
         synth_mode = request.synth_mode
-        velocity = max(
-            1,
-            min(127, round(note.vel * track.volume_scale)),
-        )
+        # Per-note velocity is already the game-native value.  The retired
+        # ``volume_scale`` field is migration-only and must never create a
+        # hidden preview/export difference.
+        velocity = max(0, min(127, round(note.vel)))
         ntype = int(
             getattr(note, "ntype", 0)
             or getattr(track, "articulation_type", 0)

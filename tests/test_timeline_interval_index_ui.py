@@ -29,6 +29,9 @@ class TimelineIntervalIndexUiTests(unittest.TestCase):
             track = TrackState(1, notes, 0, False, "dense", 0x0B)
             timeline = TimelineCanvas()
             timeline.set_tracks([track])
+            track_index = timeline._track_note_indexes[id(track)]
+            assert not isinstance(track_index, tuple)
+            assert track_index.intervals.ends[0] == 300_000.0
 
             left = 290_000.0
             right = 291_000.0

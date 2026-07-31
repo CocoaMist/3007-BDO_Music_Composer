@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import atomic_io
 from bdo_experiments import AbExperimentRecord, read_experiment_records, write_experiment_records
-from project_schema import (
+from bdo_music_composer.project.project_schema import (
     CURRENT_PROJECT_SCHEMA,
     DEFAULT_REFERENCE_LAYER_SETTINGS,
     migrate_project,
@@ -192,6 +192,11 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
         self.assertEqual(
             payload["pitch_transform"],
             {"global_semitones": -8, "track_overrides": []},
+        )
+        self.assertEqual(payload["conversion_settings"]["transpose"], -8)
+        self.assertEqual(
+            payload["conversion_settings"]["velocity_mode"],
+            "preserve",
         )
 
     def test_new_reference_layers_are_bounded_and_quiet(self) -> None:

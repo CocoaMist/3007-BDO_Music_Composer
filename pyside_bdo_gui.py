@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from bisect import bisect_left, bisect_right
-from collections import Counter, defaultdict
+from collections import defaultdict
 from collections.abc import Sequence
 from functools import lru_cache
 import faulthandler
@@ -30,7 +30,6 @@ ROOT = (
 )
 from project_paths import (
     ASSETS_DIR,
-    PROFILES_DIR,
     SAMPLE_PACK_CACHE_DIR,
     USER_DATA_DIR,
     WWISE_MIDI_MAP_PATH,
@@ -48,20 +47,11 @@ BDO_SAMPLE_MAP_PATH = WWISE_MIDI_MAP_PATH
 AUDIO_VALIDATION_PATH = DEFAULT_OUTDIR / "bdo_audio_validation_matrix.json"
 REFERENCE_AUDIO_RESYNC_THRESHOLD_MS = 1250.0
 REFERENCE_AUDIO_RESYNC_COOLDOWN_S = 5.0
-HOME_BACKGROUND_IMAGE = (
-    ASSETS_DIR / "ui" / "home" / "home_mountain_workshop_v1.jpg"
-)
-STARTUP_ART_IMAGE = ASSETS_DIR / "ui" / "loading_conductor_lineart.png"
-SHAI_ENSEMBLE_MARK_IMAGE = ASSETS_DIR / "icons" / "shai_ensemble_mark.png"
 TRANSCRIPTION_REVIEW_QUEUE_LIMIT = 240
 def _session_candidate_annotations(
     result: TranscriptionResult | None,
 ) -> tuple[CandidateAnnotation, ...]:
-    report = (
-        result.postprocess_report
-        if result is not None
-        else None
-    )
+    report = result.postprocess_report if result is not None else None
     if report is None:
         return ()
     return tuple(
@@ -73,20 +63,6 @@ def _session_candidate_annotations(
         )
         for item in report.annotations
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def install_crash_logging() -> None:
@@ -137,23 +113,17 @@ def install_crash_logging() -> None:
 try:
     import mido
     from PySide6.QtCore import (
-        QEasingCurve,
         QEvent,
         QEventLoop,
         QFile,
         QObject,
-        QPointF,
-        QPropertyAnimation,
-        QRect,
-        QRectF,
-        QSize,
         Qt,
         QThread,
         QTimer,
         QUrl,
         Signal,
     )
-    from PySide6.QtGui import QActionGroup, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QShortcut
+    from PySide6.QtGui import QActionGroup, QDesktopServices, QIcon, QKeySequence, QPainterPath, QShortcut
     from PySide6.QtMultimedia import QMediaPlayer
     from PySide6.QtWidgets import (
         QApplication,
@@ -163,7 +133,6 @@ try:
         QDialog,
         QFileDialog,
         QFrame,
-        QGraphicsOpacityEffect,
         QGridLayout,
         QHBoxLayout,
         QInputDialog,
@@ -180,8 +149,6 @@ try:
         QSpinBox,
         QStackedWidget,
         QStyle,
-        QStyledItemDelegate,
-        QStyleOptionViewItem,
         QTextEdit,
         QVBoxLayout,
         QWidget,
@@ -198,10 +165,10 @@ from bdo_midi import (  # noqa: E402
     BDO_INSTRUMENT_NAMES,
     BDO_NOTE_MAX,
     BDO_NOTE_MIN,
+    MARNIAN_SYNTH_INSTRUMENT_IDS,
     Note,
     _GM_TO_BDO_DRUM,
     gm_to_bdo_instrument,
-    parse_midi,
     unique_performance_instrument_ids,
 )
 from bdo_midi.instruments import (  # noqa: E402
@@ -209,7 +176,6 @@ from bdo_midi.instruments import (  # noqa: E402
     localized_bdo_instrument_names,
     localized_gm_program_name,
 )
-from bdo_export import channel_groups_to_bdo  # noqa: E402
 from optimization import OptimizerConfig  # noqa: E402
 from optimization.plugin_api import InvalidOptimizationPreview, OptimizationIntensity  # noqa: E402
 from optimization.plugin_host import (  # noqa: E402
@@ -219,14 +185,11 @@ from optimization.plugin_host import (  # noqa: E402
     discover_host_algorithms,
     optimizer_plugin_dir,
 )
-from bdo_profile import load_bdo_profile  # noqa: E402
+from bdo_music_composer.app.game_profile_provider import (  # noqa: E402
+    get_bdo_profile,
+)
 from bdo_track_effects import (  # noqa: E402
     GAME_PERCENT_MAX,
-    MASTER_CHORUS_FEEDBACK_INDEX,
-    MASTER_CHORUS_LFO_DEPTH_INDEX,
-    MASTER_CHORUS_LFO_FREQUENCY_INDEX,
-    MASTER_DELAY_FEEDBACK_INDEX,
-    MASTER_REVERB_TIME_INDEX,
     MasterEffects,
     TRACK_CHORUS_SEND_INDEX,
     TRACK_DELAY_SEND_INDEX,
@@ -242,7 +205,7 @@ from bdo_instrument_lane_art_qt import (  # noqa: E402
     paint_instrument_header_background,
 )
 from bdo_audio_research import sample_coverage_for_tracks  # noqa: E402
-from bdo_score import compare_scores, read_bdo_score, read_score  # noqa: E402
+from bdo_score import read_bdo_score, read_score  # noqa: E402
 from bdo_validation import (  # noqa: E402
     ValidationContext,
     ValidationIssue,
@@ -251,21 +214,19 @@ from bdo_validation import (  # noqa: E402
     localized_validation_message,
     validate_tracks,
 )
-from project_schema import (  # noqa: E402
+from bdo_music_composer.project.project_schema import (  # noqa: E402
     CURRENT_PROJECT_SCHEMA,
     DEFAULT_REFERENCE_LAYER_SETTINGS,
-    migrate_project,
     normalize_reference_layer_settings,
     project_relative_file_reference,
-    resolve_project_file_reference,
 )
-from editor_commands import ProjectCommandStack, ProjectSnapshot  # noqa: E402
-from crash_logging import (  # noqa: E402
+from bdo_music_composer.editor.editor_commands import ProjectCommandStack, ProjectSnapshot  # noqa: E402
+from bdo_music_composer.app.crash_logging import (  # noqa: E402
     CRASH_LOG_PATH,
     append_crash_log,
     redact_log_paths as _redact_log_paths,
 )
-from editor_models import (  # noqa: E402
+from bdo_music_composer.editor.editor_models import (  # noqa: E402
     ARTICULATION_ONSET_TOLERANCE_MS,
     BDO_DRUM_MAX,
     BDO_DRUM_MIN,
@@ -279,7 +240,25 @@ from editor_models import (  # noqa: E402
     same_onset_articulation_indices,
     track_uses_canonical_drum_lanes,
 )
-from editor_ui_helpers import (  # noqa: E402
+from bdo_music_composer.editor.preview_midi_writer import build_filtered_midi  # noqa: E402
+from transcription_commit_plan import (  # noqa: E402
+    CommitCandidateRecord,
+    CommitPlanError,
+    CommitPlanInput,
+    CommitTrackView,
+    TranscriptionCommitPlan,
+    plan_transcription_commit,
+)
+from bdo_music_composer.editor.editor_import import (  # noqa: E402
+    MidiImportData,
+    MidiMeterReadError,
+    TrackImportPresentation,
+    prepare_midi_import as _prepare_midi_import,
+    read_midi_time_signature_denominator,
+    tracks_from_bdo_snapshot,
+    tracks_from_project_payload as _tracks_from_project_payload,
+)
+from bdo_music_composer.ui.editor.editor_ui_helpers import (  # noqa: E402
     BDO_DYNAMIC_ARTICULATION_COLORS,
     BDO_INSTRUMENT_MENU_GROUPS,
     TRACK_COLORS,
@@ -287,16 +266,26 @@ from editor_ui_helpers import (  # noqa: E402
     articulation_color,
 )
 from conversion_settings import (  # noqa: E402
+    MATERIALIZED_VELOCITY_MODES,
+    VELOCITY_MODE_PRESERVE,
     ConversionSettings,
     DEFAULT_CONVERSION_BPM_OVERRIDE,
     DEFAULT_CONVERSION_TRANSPOSE,
+)
+from game_score_model import (  # noqa: E402
+    bake_game_velocity_transform,
+    decode_serialized_game_instrument_id,
+    formal_score_tracks,
+    inherit_game_instrument_mix,
+    preview_tracks,
+    propagate_game_instrument_mix,
 )
 from pitch_transform import (  # noqa: E402
     PitchTransformPlan,
     track_uses_percussion_pitch_semantics,
     transpose_notes,
 )
-from audio_source_settings import (  # noqa: E402
+from bdo_music_composer.app.audio_source_settings import (  # noqa: E402
     PREVIEW_SOURCE_MODES,
     audio_source_config,
     classify_audio_source,
@@ -304,23 +293,34 @@ from audio_source_settings import (  # noqa: E402
     displayed_audio_source,
     preview_source_mode,
 )
-from application_settings_dialog import (  # noqa: E402
+from bdo_music_composer.ui.dialogs.application_settings_dialog import (  # noqa: E402
     GameArtImportWorker,
     SettingsDialog,
 )
-from track_settings_dialogs import (  # noqa: E402
+from bdo_music_composer.app.application_config import (  # noqa: E402
+    load_config as _load_application_config,
+    safe_filename,
+    save_config as _save_application_config,
+)
+from bdo_music_composer.ui.dialogs.track_settings_dialogs import (  # noqa: E402
     MARNIAN_SYNTH_MODES,
     MasterEffectsDialog,
     TrackFxDialog,
     TrackPitchDialog,
 )
-from ui_controls import ElidedLabel, PillButton  # noqa: E402
-from ui_notifications import GlobalToast, show_global_toast  # noqa: E402
-from timeline_canvas import TimelineCanvas  # noqa: E402
-from piano_roll_canvas import PianoRollCanvas, VelocityLaneCanvas  # noqa: E402
-from midi_note_editor import MidiNoteEditorDialog  # noqa: E402
-from conversion_check_dialog import ConversionCheckDialog  # noqa: E402
-from optimizer_dialog import (  # noqa: E402
+from bdo_music_composer.ui.ui_controls import (  # noqa: E402
+    ElidedLabel,
+    PillButton,
+)
+from bdo_music_composer.ui.ui_notifications import (  # noqa: E402
+    GlobalToast,
+    show_global_toast,
+)
+from bdo_music_composer.ui.editor.timeline_canvas import TimelineCanvas  # noqa: E402
+from bdo_music_composer.ui.editor.piano_roll_canvas import PianoRollCanvas, VelocityLaneCanvas  # noqa: E402
+from bdo_music_composer.ui.editor.midi_note_editor import MidiNoteEditorDialog  # noqa: E402
+from bdo_music_composer.ui.dialogs.conversion_check_dialog import ConversionCheckDialog  # noqa: E402
+from bdo_music_composer.ui.dialogs.optimizer_dialog import (  # noqa: E402
     MidiOptimizeDialog,
     OptimizerAnalysisWorker,
     _optimizer_diagnostic_value,
@@ -335,33 +335,55 @@ from transcription_workers import (  # noqa: E402
     TranscriptionCacheLoadWorker,
     TranscriptionRedecodeWorker,
 )
-from main_window_style import MainWindowStyleMixin  # noqa: E402
+from bdo_music_composer.ui.theme.main_window_style import MainWindowStyleMixin  # noqa: E402
 from editor_articulation_data import (  # noqa: E402
     BDO_ARTICULATIONS,
     articulation_display_value,
 )
-from transcription_ui_helpers import (  # noqa: E402
+from bdo_music_composer.ui.transcription_ui_helpers import (  # noqa: E402
     transcription_cleanup_ui_labels as _transcription_cleanup_ui_labels,
 )
 from export_workflow import (  # noqa: E402
+    build_export_request,
     ExportRequest,
-    MARNIAN_SYNTH_INSTRUMENT_IDS,
-    MARNIAN_SYNTH_MODE_OFFSETS,
+    ExportRequestSpec,
     execute_export,
-    freeze_export_tracks,
     install_export_to_game,
     serialized_bdo_instrument_id,
 )
-from atomic_io import atomic_copy_file, atomic_write_bytes  # noqa: E402
+from export_verification import (  # noqa: E402
+    ExportVerificationReport,
+    format_export_verification_report,
+)
+from atomic_io import atomic_write_bytes  # noqa: E402
 from home_catalog import (  # noqa: E402
     HomeEntry,
     IncrementalHomeScan,
     home_timestamp as _home_timestamp,
+    merge_home_project_entries as _merge_home_project_entries,
+    scan_example_projects as _scan_example_projects,
     scan_game_scores,
     scan_local_projects,
 )
-from project_persistence import (  # noqa: E402
+from bdo_music_composer.ui.home_widgets import (  # noqa: E402
+    HOME_BACKGROUND_IMAGE,
+    HOME_INSTRUMENT_IDS_ROLE,
+    SHAI_ENSEMBLE_MARK_IMAGE,
+    EnsembleCapacityBadge,
+    HomeBackdrop,
+    HomeEntryDelegate,
+    HomeFooter,
+    HomeIdentityBadge,
+)
+from bdo_music_composer.ui.startup_widgets import (  # noqa: E402
+    STARTUP_ART_IMAGE,
+    LoadingSpinner,
+    StartupArtwork,
+    StartupSplash,
+)
+from bdo_music_composer.project.project_persistence import (  # noqa: E402
     AutosaveRequest,
+    ProjectMetadataSnapshot,
     freeze_project_tracks,
     new_project_id,
     normalize_project_id,
@@ -374,7 +396,9 @@ from bdo_sample_renderer import (  # noqa: E402
     sample_map_supports_note,
 )
 from bdo_realtime_audio import AudioEngineError, BdoRealtimeAudioEngine, bank_for_instrument  # noqa: E402
-from process_metrics import ProcessMetricsSampler  # noqa: E402
+from bdo_music_composer.app.process_metrics import (  # noqa: E402
+    ProcessMetricsSampler,
+)
 from bdo_transcription import (  # noqa: E402
     DEFAULT_TRANSCRIPTION_ANALYSIS_MODE,
     DEFAULT_TRANSCRIPTION_CLEANUP_PROFILE,
@@ -431,7 +455,6 @@ from bdo_transcription_assist import (  # noqa: E402
 from bdo_transcription_policy import CANDIDATE_NOTE_POLICY  # noqa: E402
 from bdo_transcription_session import (  # noqa: E402
     CandidateAnnotation,
-    CandidateRoute,
     TranscriptionEditorCommit,
     TranscriptionEditorCommitReport,
     TranscriptionSession,
@@ -458,7 +481,7 @@ from i18n import (  # noqa: E402
     tr_joinv,
     trv,
 )
-from fluent_theme import (  # noqa: E402
+from bdo_music_composer.ui.theme.fluent_theme import (  # noqa: E402
     FluentSymbol,
     build_fluent_stylesheet,
     configure_widget_style,
@@ -467,23 +490,35 @@ from fluent_theme import (  # noqa: E402
     set_fluent_symbol,
     system_uses_dark_theme,
 )
-from version import __version__  # noqa: E402
-from acknowledgements_dialog import AcknowledgementsDialog  # noqa: E402
-from conversion_validation_controller import (  # noqa: E402
+from bdo_music_composer.app.application_metadata import (  # noqa: E402
+    APP_NAME,
+    APP_VERSION,
+    RELEASE_NOTES_UI_ENABLED,
+    WINDOWS_APP_USER_MODEL_ID,
+)
+from bdo_music_composer.ui.dialogs.acknowledgements_dialog import AcknowledgementsDialog  # noqa: E402
+from bdo_music_composer.ui.dialogs.release_notes_dialog import ReleaseNotesDialog  # noqa: E402
+from bdo_music_composer.app.conversion_validation_controller import (  # noqa: E402
     ConversionValidationController,
 )
-from model_revision import ModelRevision  # noqa: E402
-from preview_transport_controller import (  # noqa: E402
+from bdo_music_composer.editor.model_revision import ModelRevision  # noqa: E402
+from bdo_music_composer.audio.preview_transport_controller import (  # noqa: E402
     PreviewPlayAction,
     PreviewTransportCoordinator,
 )
-from project_lifecycle_controller import ProjectLifecycleController  # noqa: E402
-from transcription_workspace_controller import (  # noqa: E402
+from bdo_music_composer.project.project_lifecycle_controller import (  # noqa: E402
+    ProjectLifecycleController,
+)
+from bdo_music_composer.project.project_document import (  # noqa: E402
+    ProjectLoadError,
+    ProjectLoadErrorCode,
+    ProjectLoadPlan,
+    prepare_project_load,
+)
+from bdo_music_composer.transcription.transcription_workspace_controller import (  # noqa: E402
     TranscriptionAnalysisCoordinator,
     TranscriptionReviewController,
 )
-
-
 
 # Full translated command rails need these widths in the widest supported
 # locale.  Below them, icon/short-label controls retain every action and expose
@@ -507,220 +542,103 @@ def _ui_bdo_instrument_source(instrument_id: int) -> str:
 def _ui_bdo_instrument_names() -> dict[int, str]:
     return localized_bdo_instrument_names(tr)
 
-
-
-
-
-
-
 def source_time_signature_denominator(midi_path: str | Path) -> int:
-    """Return the first MIDI meter denominator; BDO v9 only stores /4."""
+    """Localized compatibility wrapper around the Qt-free meter reader."""
+
     try:
-        midi = mido.MidiFile(str(midi_path), clip=True)
-        for midi_track in midi.tracks:
-            for message in midi_track:
-                if message.type == "time_signature":
-                    return int(message.denominator)
-    except Exception as exc:
+        return read_midi_time_signature_denominator(midi_path)
+    except MidiMeterReadError as exc:
         raise ValueError(
             trf(
                 "无法读取 MIDI 拍号，已阻止导出：{error}",
                 error=exc,
             )
         ) from exc
-    return 4
 
 
-def decode_marnian_instrument(instrument_id: int) -> tuple[int, str]:
-    for base_id in MARNIAN_SYNTH_INSTRUMENT_IDS:
-        for mode, offset in MARNIAN_SYNTH_MODE_OFFSETS.items():
-            if instrument_id == base_id + offset:
-                return base_id, mode
-    return instrument_id, "basic"
+decode_marnian_instrument = decode_serialized_game_instrument_id
+
+
+_TRACK_IMPORT_PRESENTATION = TrackImportPresentation(
+    colors=tuple(TRACK_COLORS),
+    bdo_instrument_name=_ui_bdo_instrument_name,
+    gm_program_name=lambda program: localized_gm_program_name(program, tr),
+    drum_track_name=lambda: tr("鼓组 · MIDI 通道 10"),
+    new_track_name=lambda track_id: trf(
+        "新建轨道 {track_id}",
+        track_id=track_id + 1,
+    ),
+)
 
 
 def track_states_from_bdo_score(snapshot) -> list[TrackState]:
-    """Collapse physical 730-note BDO chunks into logical editor tracks."""
-    grouped: dict[int, list] = {}
-    for physical_track in snapshot.tracks:
-        grouped.setdefault(int(physical_track.group_index), []).append(physical_track)
-    master_settings = {
-        (
-            int(track.settings[MASTER_REVERB_TIME_INDEX]),
-            int(track.settings[MASTER_DELAY_FEEDBACK_INDEX]),
-            int(track.settings[MASTER_CHORUS_FEEDBACK_INDEX]),
-            int(track.settings[MASTER_CHORUS_LFO_DEPTH_INDEX]),
-            int(track.settings[MASTER_CHORUS_LFO_FREQUENCY_INDEX]),
+    """Compatibility wrapper for the transactional BDO import adapter."""
+
+    return list(tracks_from_bdo_snapshot(snapshot, _TRACK_IMPORT_PRESENTATION))
+
+
+def track_states_from_project_payload(payload: dict) -> list[TrackState]:
+    """Compatibility wrapper for strict, transactional project restore."""
+
+    return list(
+        _tracks_from_project_payload(payload, _TRACK_IMPORT_PRESENTATION)
+    )
+
+
+def prepare_midi_import(
+    path: str | Path,
+    settings: ConversionSettings,
+) -> MidiImportData:
+    """Parse one MIDI through the Qt-free transactional import boundary."""
+
+    try:
+        return _prepare_midi_import(
+            path,
+            settings,
+            _TRACK_IMPORT_PRESENTATION,
         )
-        for track in snapshot.tracks
-        if len(track.settings) >= 8
-    }
-    if len(master_settings) > 1:
-        raise ValueError("BDO physical tracks contain conflicting master effect settings")
-    states: list[TrackState] = []
-    for track_id, group_index in enumerate(sorted(grouped)):
-        physical_tracks = grouped[group_index]
-        instrument_ids = {int(track.instrument_id) for track in physical_tracks}
-        if len(instrument_ids) != 1:
-            raise ValueError(f"BDO instrument group {group_index} contains mixed instrument IDs")
-        volumes = {int(track.volume) for track in physical_tracks}
-        if len(volumes) != 1:
-            raise ValueError(
-                f"BDO instrument group {group_index} contains conflicting volumes"
+    except MidiMeterReadError as exc:
+        raise ValueError(
+            trf(
+                "无法读取 MIDI 拍号，已阻止导出：{error}",
+                error=exc,
             )
-        settings_values = {
-            tuple(int(value) for value in track.settings)
-            for track in physical_tracks
-        }
-        if len(settings_values) != 1:
-            raise ValueError(
-                f"BDO instrument group {group_index} contains conflicting effect settings"
-            )
-        serialized_id = instrument_ids.pop()
-        instrument_id, marnian_mode = decode_marnian_instrument(serialized_id)
-        notes = [
-            Note(
-                int(note.pitch),
-                int(note.velocity_a),
-                float(note.start_ms),
-                float(note.duration_ms),
-                int(note.ntype),
-            )
-            for track in physical_tracks
-            for note in track.notes
-        ]
-        notes.sort(key=lambda note: (note.start, note.pitch, note.dur))
-        first_track = physical_tracks[0]
-        states.append(
-            TrackState(
-                track_id=track_id,
-                notes=notes,
-                gm_program=0,
-                is_percussion=serialized_id == 0x0D,
-                display_name=_ui_bdo_instrument_name(instrument_id),
-                bdo_instrument_id=instrument_id,
-                marnian_synth_mode=marnian_mode,
-                color=TRACK_COLORS[track_id % len(TRACK_COLORS)],
-                effect_settings_placeholder={
-                    "source_format": "bdo_v9",
-                    "track_volume": int(first_track.volume),
-                    "track_settings": list(first_track.settings),
-                    "physical_track_count": len(physical_tracks),
-                    "velocity_pair_mismatches": sum(
-                        note.velocity_a != note.velocity_b
-                        for track in physical_tracks
-                        for note in track.notes
-                    ),
-                },
-                bdo_track_volume=int(first_track.volume),
-                bdo_track_settings=tuple(int(value) for value in first_track.settings),
-                bdo_source_group_index=int(group_index),
-                bdo_source_note_records=tuple(
-                    (
-                        int(note.pitch), int(note.velocity_a), float(note.start_ms),
-                        float(note.duration_ms), int(note.ntype), int(note.velocity_b),
-                    )
-                    for track in physical_tracks for note in track.notes
-                ),
-            )
-        )
-    return states
+        ) from exc
 
 
 def scan_example_projects(directory: Path, limit: int = 8) -> list[HomeEntry]:
-    """Read small local manifests without loading full example projects."""
+    """Compatibility wrapper that injects localized example presentation."""
 
-    if not directory.is_dir():
-        return []
-    entries: list[HomeEntry] = []
-    for manifest_path in directory.glob("*/example.json"):
-        try:
-            if manifest_path.stat().st_size > 64 * 1024:
-                continue
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            project_name = str(manifest.get("project") or "project.json")
-            if Path(project_name).is_absolute() or Path(project_name).name != project_name:
-                continue
-            project_path = manifest_path.parent / project_name
-            stat = project_path.stat()
-        except (OSError, ValueError, TypeError, AttributeError):
-            continue
-        if not project_path.is_file():
-            continue
-        title = str(manifest.get("title") or manifest_path.parent.name).strip()
-        manifest_source = str(manifest.get("source") or "").strip()
-        source = manifest_source if manifest_source else trv("未知来源")
-        entries.append(HomeEntry(
-            "example",
-            title,
-            project_path,
-            trf("示例 · 来源：{source}", source=source),
-            stat.st_mtime,
-        ))
-    entries.sort(key=lambda item: (item.label.casefold(), str(item.path).casefold()))
-    return entries[:limit]
+    return _scan_example_projects(
+        directory,
+        limit,
+        unknown_source=str(trv("未知来源")),
+        format_detail=lambda source: str(
+            trf("示例 · 来源：{source}", source=source)
+        ),
+    )
 
 
 def merge_home_project_entries(
     entries: list[HomeEntry], limit: int = 80,
 ) -> list[HomeEntry]:
-    """Deduplicate paths and annotate only explicitly related project versions.
+    """Compatibility wrapper that injects localized version presentation."""
 
-    A title is display data, never identity. Legacy projects without an ID stay
-    separate even when their names match; related snapshots remain individually
-    visible and openable instead of collapsing to one latest-only target.
-    """
-    by_path: dict[str, HomeEntry] = {}
-    for entry in entries:
-        try:
-            path_key = str(entry.path.resolve()).casefold()
-        except OSError:
-            path_key = str(entry.path).casefold()
-        existing = by_path.get(path_key)
-        if existing is None or entry.modified_at >= existing.modified_at:
-            by_path[path_key] = entry
-
-    groups: dict[str, list[HomeEntry]] = {}
-    for entry in by_path.values():
-        key = (
-            f"project:{entry.project_id}"
-            if entry.kind == "project" and entry.project_id
-            else f"path:{str(entry.path).casefold()}"
-        )
-        groups.setdefault(key, []).append(entry)
-
-    merged: list[HomeEntry] = []
-    for members in groups.values():
-        members.sort(key=lambda item: item.modified_at, reverse=True)
-        version_count = len(members)
-        for offset, member in enumerate(members):
-            version_index = version_count - offset
-            detail = _home_timestamp(member.modified_at)
-            if version_count > 1:
-                detail = trf(
-                    "{time} · 版本 {index}/{count}",
-                    time=detail,
-                    index=version_index,
-                    count=version_count,
-                )
-            merged.append(replace(
-                member,
-                detail=detail,
-                version_count=version_count,
-                version_index=version_index,
-            ))
-    merged.sort(key=lambda item: item.modified_at, reverse=True)
-    return merged[:limit]
+    return _merge_home_project_entries(
+        entries,
+        limit,
+        timestamp=_home_timestamp,
+        format_version=lambda value, index, count: str(trf(
+            "{time} · 版本 {index}/{count}",
+            time=value,
+            index=index,
+            count=count,
+        )),
+    )
 
 
 
 
-
-
-BDO_PROFILE = load_bdo_profile(
-    PROFILES_DIR / "bdo_global_v9.json",
-    articulation_map=BDO_ARTICULATIONS,
-)
 
 
 def game_pitch_range_label(
@@ -761,955 +679,29 @@ def copy_export_to_game(out_path: Path, game_dir: Path) -> Path:
 
 
 def load_config() -> dict:
-    if not CONFIG_PATH.exists():
-        return {}
-    try:
-        payload = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("configuration root must be an object")
-        return payload
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
-        return {}
+    """Compatibility wrapper using the current writable config location."""
+
+    return _load_application_config(CONFIG_PATH)
 
 
 def save_config(config: dict) -> None:
-    if not isinstance(config, dict):
-        raise TypeError("configuration root must be a dictionary")
-    if CONFIG_PATH.is_file():
-        try:
-            existing = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            if not isinstance(existing, dict):
-                raise ValueError("configuration root must be an object")
-        except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-            backup = CONFIG_PATH.with_name(
-                f"{CONFIG_PATH.stem}.corrupt-{timestamp}{CONFIG_PATH.suffix}"
-            )
-            suffix = 2
-            while backup.exists():
-                backup = CONFIG_PATH.with_name(
-                    f"{CONFIG_PATH.stem}.corrupt-{timestamp}-{suffix}{CONFIG_PATH.suffix}"
-                )
-                suffix += 1
-            atomic_copy_file(CONFIG_PATH, backup)
-    encoded = json.dumps(config, ensure_ascii=False, indent=2).encode("utf-8")
-    atomic_write_bytes(CONFIG_PATH, encoded)
+    """Compatibility wrapper using the current writable config location."""
 
-
-def safe_filename(value: str, fallback: str = "project") -> str:
-    cleaned = "".join(ch if ch not in '<>:"/\\|?*' and ord(ch) >= 32 else "_" for ch in value).strip(" ._")
-    return cleaned[:80] or fallback
+    _save_application_config(CONFIG_PATH, config)
 
 
 def selected_tracks(tracks: list[TrackState]) -> list[TrackState]:
-    solo_tracks = [track for track in tracks if track.solo]
-    return solo_tracks if solo_tracks else [track for track in tracks if not track.muted]
+    """Compatibility alias for the local preview scope only."""
 
+    return list(preview_tracks(tracks))
 
-def build_filtered_midi(tracks: list[TrackState], bpm: int, time_sig: int, out_path: Path,
-                        lyric_events: list[dict] | None = None) -> None:
-    mid = mido.MidiFile(ticks_per_beat=480)
-    tempo = mido.bpm2tempo(max(1, min(240, bpm or 120)))
-    numerator = max(1, min(32, int(time_sig or 4)))
-    meta = mido.MidiTrack()
-    meta.append(mido.MetaMessage("set_tempo", tempo=tempo, time=0))
-    meta.append(mido.MetaMessage("time_signature", numerator=numerator, denominator=4, time=0))
-    lyric_midi_events = []
-    for event in lyric_events or []:
-        kind = str(event.get("kind", "lyrics"))
-        if kind not in {"lyrics", "text", "marker", "cue_marker"}:
-            continue
-        try:
-            tick = max(0, round(mido.second2tick(
-                float(event.get("time", 0.0)) / 1000.0, mid.ticks_per_beat, tempo
-            )))
-            message = mido.MetaMessage(kind, text=str(event.get("text", "")), time=0)
-        except (TypeError, ValueError):
-            continue
-        lyric_midi_events.append((tick, message))
-    last_meta_tick = 0
-    for tick, message in sorted(lyric_midi_events, key=lambda item: item[0]):
-        message.time = max(0, tick - last_meta_tick)
-        meta.append(message)
-        last_meta_tick = tick
-    meta.append(mido.MetaMessage("end_of_track", time=0))
-    mid.tracks.append(meta)
 
-    def ms_to_ticks(ms: float) -> int:
-        return max(0, round(mido.second2tick(ms / 1000.0, mid.ticks_per_beat, tempo)))
-
-    for out_index, track_state in enumerate(tracks):
-        channel = 9 if track_state.is_percussion else min(out_index, 8)
-        events: list[tuple[int, int, object]] = []
-        if not track_state.is_percussion:
-            events.append((0, 0, mido.Message("program_change", channel=channel, program=track_state.gm_program)))
-        for control in track_state.performance_controls:
-            kind = str(control.get("kind", "control_change"))
-            try:
-                tick = ms_to_ticks(float(control.get("time", 0.0)))
-                if kind == "control_change":
-                    message = mido.Message(
-                        "control_change", channel=channel,
-                        control=max(0, min(127, int(control["control"]))),
-                        value=max(0, min(127, int(control["value"]))),
-                    )
-                elif kind == "pitchwheel":
-                    message = mido.Message(
-                        "pitchwheel", channel=channel,
-                        pitch=max(-8192, min(8191, int(control["pitch"]))),
-                    )
-                elif kind == "aftertouch":
-                    message = mido.Message(
-                        "aftertouch", channel=channel,
-                        value=max(0, min(127, int(control["value"]))),
-                    )
-                elif kind == "polytouch":
-                    message = mido.Message(
-                        "polytouch", channel=channel,
-                        note=max(0, min(127, int(control["note"]))),
-                        value=max(0, min(127, int(control["value"]))),
-                    )
-                else:
-                    continue
-            except (KeyError, TypeError, ValueError):
-                continue
-            events.append((tick, 1, message))
-        for note in track_state.notes:
-            start = ms_to_ticks(note.start)
-            end = ms_to_ticks(note.start + max(1.0, note.dur * track_state.duration_scale))
-            velocity = max(1, min(127, round(note.vel)))
-            events.append((start, 1, mido.Message("note_on", channel=channel, note=note.pitch, velocity=velocity)))
-            events.append((end, 0, mido.Message("note_off", channel=channel, note=note.pitch, velocity=0)))
-        events.sort(key=lambda item: (item[0], item[1]))
-        midi_track = mido.MidiTrack()
-        last_tick = 0
-        for tick, _order, message in events:
-            message.time = max(0, tick - last_tick)
-            midi_track.append(message)
-            last_tick = tick
-        midi_track.append(mido.MetaMessage("end_of_track", time=0))
-        mid.tracks.append(midi_track)
-    mid.save(out_path)
-
-
-
-
-class HomeIdentityBadge(QPushButton):
-    """Compact one-line export identity entry for the home brand row."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._primary = tr("设置演奏者")
-        self._secondary = tr("身份待完善")
-        self._identity_complete = False
-        self.setObjectName("HomeUserButton")
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFocusPolicy(Qt.StrongFocus)
-        self.setFixedHeight(30)
-        self.setMinimumWidth(104)
-        self.setMaximumWidth(148)
-        self.setText(self._primary)
-
-    def set_identity(self, name: str, owner_id: int) -> None:
-        character_name = str(name or "").strip()
-        owner_bound = bool(owner_id)
-        self._identity_complete = bool(character_name and owner_bound)
-        self._primary = character_name or tr("设置演奏者")
-        if owner_bound:
-            self._secondary = tr("Owner ID 已绑定")
-        elif character_name:
-            self._secondary = tr("Owner ID 未设置")
-        else:
-            self._secondary = tr("身份待完善")
-        self.setText(self._primary)
-        description = f"{self._primary} · {self._secondary}"
-        self.setToolTip(description)
-        self.setAccessibleName(description)
-        self.setProperty("identityMissing", not self._identity_complete)
-        self.update()
-
-    def sizeHint(self) -> QSize:
-        return QSize(126, 30)
-
-    def paintEvent(self, event) -> None:
-        del event
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        bounds = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        if self.isDown() or self.underMouse() or self.hasFocus():
-            painter.setBrush(
-                QColor(43, 39, 32, 210)
-                if self.isDown()
-                else QColor(35, 33, 29, 176)
-            )
-            painter.setPen(QPen(QColor("#5b4c36"), 1))
-            painter.drawRoundedRect(bounds, 5.0, 5.0)
-
-        # A small neutral profile outline keeps the control recognizable
-        # without competing with the brand or looking like a second card.
-        painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(QColor("#9e8d72"), 1.2))
-        painter.drawEllipse(QRectF(11.0, 6.0, 6.0, 6.0))
-        painter.drawArc(QRectF(7.5, 12.0, 13.0, 10.0), 0, 180 * 16)
-        accent = QColor("#8ead77" if self._identity_complete else "#b8833d")
-        painter.setBrush(accent)
-        painter.setPen(QPen(QColor("#181817"), 1))
-        painter.drawEllipse(QRectF(18.0, 18.0, 6.0, 6.0))
-
-        primary_font = QFont(painter.font())
-        primary_font.setPointSize(9)
-        primary_font.setBold(self._identity_complete)
-        painter.setFont(primary_font)
-        primary_rect = QRectF(
-            30.0, 3.0, max(36.0, bounds.width() - 47.0), 24.0
-        )
-        painter.setPen(
-            QColor("#e3ddd2" if self._identity_complete else "#cdb38a")
-        )
-        painter.drawText(
-            primary_rect,
-            Qt.AlignLeft | Qt.AlignVCenter,
-            painter.fontMetrics().elidedText(
-                self._primary, Qt.ElideRight, int(primary_rect.width())
-            ),
-        )
-        painter.setPen(QColor("#6f6659"))
-        painter.drawText(
-            QRectF(bounds.right() - 16.0, 0.0, 12.0, bounds.height()),
-            Qt.AlignCenter,
-            "›",
-        )
-
-
-class EnsembleCapacityBadge(QWidget):
-    """Quiet Shai identity mark; exact capacity lives in contextual UI."""
-
-    def __init__(
-        self,
-        icon_path: Path = SHAI_ENSEMBLE_MARK_IMAGE,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setObjectName("EnsembleCapacityBadge")
-        self.setFixedSize(36, 36)
-        self._player_count = 0
-        self._description_override = ""
-        source = QPixmap(str(icon_path))
-        self._icon = source.scaled(
-            30,
-            30,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        ) if not source.isNull() else QPixmap()
-        self._refresh_description()
-
-    @property
-    def player_count(self) -> int:
-        return self._player_count
-
-    @property
-    def is_over_limit(self) -> bool:
-        return self._player_count > BDO_ENSEMBLE_PLAYER_LIMIT
-
-    def set_player_count(
-        self,
-        player_count: int,
-        description_override: str = "",
-    ) -> None:
-        normalized = max(0, int(player_count))
-        normalized_description = str(description_override or "").strip()
-        if (
-            normalized == self._player_count
-            and normalized_description == self._description_override
-        ):
-            return
-        self._player_count = normalized
-        self._description_override = normalized_description
-        self._refresh_description()
-        self.update()
-
-    def _refresh_description(self) -> None:
-        if self._description_override:
-            description = self._description_override
-        elif self._player_count <= 0:
-            description = tr("当前工程没有需要演奏的实体乐器")
-        elif self.is_over_limit:
-            description = trf(
-                "当前工程预计 {count} 人演奏，超过 {limit} 人队伍上限",
-                count=self._player_count,
-                limit=BDO_ENSEMBLE_PLAYER_LIMIT,
-            )
-        else:
-            description = trf(
-                "当前工程预计 {count}/{limit} 人演奏；同一实体乐器只计一人",
-                count=self._player_count,
-                limit=BDO_ENSEMBLE_PLAYER_LIMIT,
-            )
-        self.setToolTip(description)
-        self.setAccessibleName(tr("工程演奏人数"))
-        self.setAccessibleDescription(description)
-
-    def retranslate_dynamic_content(self) -> None:
-        self._refresh_description()
-
-    def paintEvent(self, event) -> None:
-        del event
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        active_color = QColor("#ef8178" if self.is_over_limit else "#d6aa52")
-
-        if not self._icon.isNull():
-            painter.save()
-            painter.setOpacity(0.9)
-            painter.drawPixmap(3, 3, self._icon)
-            painter.restore()
-
-        # Keep the persistent toolbar calm: a tiny status lamp carries only
-        # normal/over-limit state. Exact x/5 text remains in the workspace
-        # telemetry strip and the selected home card's tooltip.
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(
-            active_color if self._player_count > 0 else QColor("#514b40")
-        )
-        painter.drawEllipse(QRectF(27.0, 26.0, 6.0, 6.0))
-
-
-class LoadingSpinner(QWidget):
-    """Small code-drawn indeterminate indicator with no image dependency."""
-
-    def __init__(self, size: int = 42, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("LoadingSpinner")
-        self.setFixedSize(size, size)
-        self._frame = 0
-        self._timer = QTimer(self)
-        self._timer.setInterval(65)
-        self._timer.timeout.connect(self._advance)
-
-    @property
-    def frame(self) -> int:
-        return self._frame
-
-    def start(self) -> None:
-        if not self._timer.isActive():
-            self._timer.start()
-        self.update()
-
-    def stop(self) -> None:
-        self._timer.stop()
-
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        self.start()
-
-    def hideEvent(self, event) -> None:
-        self.stop()
-        super().hideEvent(event)
-
-    def _advance(self) -> None:
-        self._frame = (self._frame + 1) % 12
-        self.update()
-
-    def paintEvent(self, event) -> None:
-        del event
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.translate(self.width() / 2.0, self.height() / 2.0)
-        radius = max(7.0, min(self.width(), self.height()) / 2.0 - 5.0)
-        spoke = max(4.0, radius * 0.34)
-        line_width = max(2.0, self.width() / 15.0)
-        for index in range(12):
-            distance = (index - self._frame) % 12
-            alpha = max(38, 255 - distance * 19)
-            pen = QPen(QColor(245, 165, 36, alpha), line_width)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen)
-            painter.drawLine(
-                QPointF(0.0, -radius),
-                QPointF(0.0, -radius + spoke),
-            )
-            painter.rotate(30.0)
-
-
-class StartupArtwork(QWidget):
-    """Clipped cover rendering for the startup illustration."""
-
-    def __init__(self, image_path: Path, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("StartupArtwork")
-        self.setFixedSize(470, 734)
-        self._source = QPixmap(str(image_path))
-        self._cover = QPixmap()
-        self._refresh_cover()
-
-    @property
-    def has_artwork(self) -> bool:
-        return not self._source.isNull()
-
-    def _refresh_cover(self) -> None:
-        if self._source.isNull():
-            self._cover = QPixmap()
-            return
-        self._cover = self._source.scaled(
-            self.size(),
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-
-    def paintEvent(self, event) -> None:
-        del event
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#151515"))
-        if not self._cover.isNull():
-            source_x = max(0, (self._cover.width() - self.width()) // 2)
-            source_y = max(0, (self._cover.height() - self.height()) // 2)
-            painter.drawPixmap(
-                self.rect(),
-                self._cover,
-                self._cover.rect().adjusted(
-                    source_x,
-                    source_y,
-                    -source_x,
-                    -source_y,
-                ),
-            )
-        # Pull the bright sketch into the same dark tonal range as the home
-        # page and utility dialogs so startup does not flash a white card.
-        painter.fillRect(self.rect(), QColor(15, 15, 16, 54))
-        shade = QLinearGradient(0.0, 0.0, 0.0, float(self.height()))
-        shade.setColorAt(0.0, QColor(24, 22, 19, 0))
-        shade.setColorAt(0.62, QColor(18, 18, 19, 18))
-        shade.setColorAt(1.0, QColor(15, 15, 16, 188))
-        painter.fillRect(self.rect(), shade)
-
-
-class HomeBackdrop(QFrame):
-    """Cached full-bleed home artwork with fixed readability gradients."""
-
-    def __init__(self, image_path: Path, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("HomeShell")
-        self._source = QPixmap(str(image_path))
-        self._cover = QPixmap()
-        self._refresh_cover()
-
-    @property
-    def has_artwork(self) -> bool:
-        return not self._source.isNull()
-
-    def _refresh_cover(self) -> None:
-        if self._source.isNull() or self.width() <= 0 or self.height() <= 0:
-            self._cover = QPixmap()
-            return
-        self._cover = self._source.scaled(
-            self.size(),
-            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._refresh_cover()
-
-    def paintEvent(self, event) -> None:
-        del event
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#111214"))
-        if not self._cover.isNull():
-            # Anchor the crop to the right so the character remains visible at
-            # every supported window aspect ratio.
-            source_x = max(0, self._cover.width() - self.width())
-            source_y = max(0, (self._cover.height() - self.height()) // 2)
-            painter.drawPixmap(
-                self.rect(),
-                self._cover,
-                self._cover.rect().adjusted(
-                    source_x,
-                    source_y,
-                    0,
-                    -source_y,
-                ),
-            )
-
-        # The illustration is intentionally prominent, but a light full-image
-        # wash keeps the bright valley from competing with every control in the
-        # functional layer.  The stronger left gradient below is reserved for
-        # text readability and fades gradually instead of forming a black wall.
-        painter.fillRect(self.rect(), QColor(14, 15, 15, 24))
-
-        readability = QLinearGradient(
-            0.0,
-            0.0,
-            float(self.width()),
-            0.0,
-        )
-        readability.setColorAt(0.0, QColor(8, 9, 10, 176))
-        readability.setColorAt(0.24, QColor(9, 10, 11, 158))
-        readability.setColorAt(0.46, QColor(10, 11, 12, 102))
-        readability.setColorAt(0.66, QColor(11, 12, 13, 46))
-        readability.setColorAt(1.0, QColor(11, 12, 13, 18))
-        painter.fillRect(self.rect(), readability)
-
-        vignette = QLinearGradient(
-            0.0,
-            0.0,
-            0.0,
-            float(self.height()),
-        )
-        vignette.setColorAt(0.0, QColor(8, 9, 10, 28))
-        vignette.setColorAt(0.58, QColor(8, 9, 10, 0))
-        vignette.setColorAt(1.0, QColor(8, 9, 10, 96))
-        painter.fillRect(self.rect(), vignette)
-
-
-HOME_INSTRUMENT_IDS_ROLE = int(Qt.ItemDataRole.UserRole) + 1
-
-
-class HomeEntryDelegate(QStyledItemDelegate):
-    """Paint compact score rows with cached game-style instrument art."""
-
-    def __init__(
-        self,
-        artwork: InstrumentLaneArtwork,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.artwork = artwork
-
-    @staticmethod
-    def _row_fonts(base_font: QFont) -> tuple[QFont, QFont]:
-        label_font = QFont(base_font)
-        label_font.setBold(True)
-        detail_font = QFont(base_font)
-        if detail_font.pointSizeF() > 8.5:
-            detail_font.setPointSizeF(detail_font.pointSizeF() - 1.0)
-        return label_font, detail_font
-
-    @staticmethod
-    def _ensemble_text(instrument_count: int) -> str:
-        if instrument_count <= 0:
-            return ""
-        if instrument_count <= BDO_ENSEMBLE_PLAYER_LIMIT:
-            return trf("{count} 人", count=instrument_count)
-        return trf(
-            "上限 {limit} 人",
-            limit=BDO_ENSEMBLE_PLAYER_LIMIT,
-        )
-
-    def sizeHint(self, option, index) -> QSize:
-        styled = QStyleOptionViewItem(option)
-        self.initStyleOption(styled, index)
-        label, _separator, _detail = styled.text.partition("\n")
-        label_font, detail_font = self._row_fonts(styled.font)
-        available_width = self._available_content_width(option)
-        title_height = self._title_height(
-            label,
-            label_font,
-            available_width,
-        )
-        info_height = max(QFontMetrics(detail_font).height() + 2, 20)
-        inherited = super().sizeHint(styled, index)
-        return QSize(
-            inherited.width(),
-            max(68, 8 + title_height + 5 + info_height + 8),
-        )
-
-    def _available_content_width(self, option) -> int:
-        parent = self.parent()
-        if isinstance(parent, QListWidget):
-            width = parent.viewport().width()
-        else:
-            width = option.rect.width()
-        return max(220, int(width) - 22)
-
-    @staticmethod
-    def _title_text_flags() -> int:
-        return (
-            int(Qt.AlignmentFlag.AlignLeft)
-            | int(Qt.AlignmentFlag.AlignTop)
-            | int(Qt.TextFlag.TextWordWrap)
-            | int(Qt.TextFlag.TextWrapAnywhere)
-        )
-
-    @classmethod
-    def _title_height(cls, text: str, font: QFont, width: int) -> int:
-        metrics = QFontMetrics(font)
-        bounds = metrics.boundingRect(
-            QRect(0, 0, max(1, int(width)), 10_000),
-            cls._title_text_flags(),
-            text,
-        )
-        return max(metrics.height(), bounds.height())
-
-    def paint(self, painter: QPainter, option, index) -> None:
-        styled = QStyleOptionViewItem(option)
-        self.initStyleOption(styled, index)
-        text = styled.text
-        styled.text = ""
-        style = styled.widget.style() if styled.widget is not None else QApplication.style()
-        style.drawControl(
-            QStyle.ControlElement.CE_ItemViewItem,
-            styled,
-            painter,
-            styled.widget,
-        )
-
-        raw_ids = index.data(HOME_INSTRUMENT_IDS_ROLE)
-        instrument_ids = tuple(raw_ids) if isinstance(raw_ids, (list, tuple)) else ()
-        max_icons = 3
-        visible_ids = instrument_ids[:max_icons]
-        overflow = max(0, len(instrument_ids) - len(visible_ids))
-        icon_size = 20.0
-        icon_gap = 4.0
-        icon_slots = len(visible_ids) + int(overflow > 0)
-        icon_width = (
-            icon_slots * icon_size + max(0, icon_slots - 1) * icon_gap
-            if icon_slots
-            else 0.0
-        )
-
-        content = QRectF(option.rect).adjusted(12.0, 8.0, -10.0, -8.0)
-        player_text = self._ensemble_text(len(instrument_ids))
-        label_font, detail_font = self._row_fonts(styled.font)
-        player_font = detail_font
-        painter.save()
-        painter.setFont(player_font)
-        player_width = (
-            float(painter.fontMetrics().horizontalAdvance(player_text)) + 4.0
-            if player_text
-            else 0.0
-        )
-        painter.restore()
-        right_width = icon_width + player_width
-        if icon_slots and player_text:
-            right_width += 10.0
-        label, _separator, detail = text.partition("\n")
-        selected = bool(
-            option.state & QStyle.StateFlag.State_Selected
-        )
-
-        painter.save()
-        painter.setFont(label_font)
-        painter.setPen(QColor("#f1e9dc") if selected else QColor("#ddd8cf"))
-        label_height = float(self._title_height(
-            label,
-            label_font,
-            round(content.width()),
-        ))
-        title_rect = QRectF(
-            content.left(),
-            content.top(),
-            content.width(),
-            label_height,
-        )
-        painter.drawText(
-            title_rect,
-            self._title_text_flags(),
-            label,
-        )
-
-        painter.setFont(detail_font)
-        painter.setPen(QColor("#a99b82") if selected else QColor("#8d8982"))
-        detail_metrics = painter.fontMetrics()
-        info_top = title_rect.bottom() + 4.0
-        info_height = max(
-            float(detail_metrics.height() + 2),
-            icon_size,
-        )
-        detail_right = content.right() - right_width - (12.0 if right_width else 0.0)
-        detail_rect = QRectF(
-            content.left(),
-            info_top,
-            max(24.0, detail_right - content.left()),
-            info_height,
-        )
-        painter.drawText(
-            detail_rect,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            detail_metrics.elidedText(
-                detail,
-                Qt.TextElideMode.ElideRight,
-                max(0, round(detail_rect.width())),
-            ),
-        )
-
-        icon_x = content.right() - player_width - icon_width
-        if player_text:
-            icon_x -= 10.0 if icon_slots else 0.0
-        icon_y = info_top + (info_height - icon_size) * 0.5
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        for instrument_id in visible_ids:
-            target = QRectF(icon_x, icon_y, icon_size, icon_size)
-            image = self.artwork.pixmap_for(int(instrument_id))
-            if image is not None:
-                painter.setOpacity(0.78 if selected else 0.62)
-                painter.drawImage(target, image, QRectF(image.rect()))
-            else:
-                painter.setOpacity(0.74)
-                painter.setPen(QColor("#d7b15a"))
-                painter.drawText(
-                    target,
-                    Qt.AlignmentFlag.AlignCenter,
-                    f"{int(instrument_id):02X}",
-                )
-            icon_x += icon_size + icon_gap
-        if overflow:
-            painter.setOpacity(1.0)
-            painter.setPen(QColor("#c7b78f"))
-            painter.drawText(
-                QRectF(icon_x, icon_y, icon_size, icon_size),
-                Qt.AlignmentFlag.AlignCenter,
-                f"+{overflow}",
-            )
-        if player_text:
-            painter.setOpacity(1.0)
-            painter.setFont(player_font)
-            painter.setPen(QColor("#c6a55d") if selected else QColor("#9e8b65"))
-            painter.drawText(
-                QRectF(
-                    content.right() - player_width,
-                    info_top,
-                    player_width,
-                    info_height,
-                ),
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                player_text,
-            )
-        painter.restore()
-
-
-class StartupSplash(QWidget):
-    """Theme-aligned startup surface shown while the real window is built."""
-
-    MINIMUM_VISIBLE_MS = 1500
-    FADE_OUT_MS = 320
-
-    def __init__(self) -> None:
-        super().__init__(
-            None,
-            Qt.WindowType.SplashScreen
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint,
-        )
-        self.setObjectName("StartupSplash")
-        self.setProperty("uiSurface", "startup")
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(470, 734)
-        self._shown_at = time.monotonic()
-        self._pending_window: QWidget | None = None
-        self._finish_scheduled = False
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        card = QFrame()
-        card.setObjectName("StartupSplashCard")
-        card.setProperty("uiRole", "startupCanvas")
-        outer.addWidget(card)
-        card_layout = QGridLayout(card)
-        card_layout.setContentsMargins(0, 0, 0, 0)
-        card_layout.setSpacing(0)
-
-        self.artwork = StartupArtwork(STARTUP_ART_IMAGE)
-        card_layout.addWidget(self.artwork, 0, 0)
-
-        content = QFrame()
-        content.setObjectName("StartupOverlay")
-        content.setProperty("uiRole", "startupFooter")
-        content.setFixedWidth(self.artwork.width())
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(22, 15, 22, 17)
-        layout.setSpacing(9)
-        brand = QHBoxLayout()
-        brand.setSpacing(9)
-        eyebrow = QLabel("BDO MUSIC COMPOSER")
-        eyebrow.setObjectName("StartupEyebrow")
-        brand.addWidget(eyebrow)
-        brand.addStretch(1)
-        title = QLabel(tr("正在打开曲谱工作台"))
-        title.setObjectName("StartupTitle")
-        brand.addWidget(title)
-        layout.addLayout(brand)
-
-        activity = QHBoxLayout()
-        activity.setSpacing(12)
-        self.spinner = LoadingSpinner(34)
-        activity.addWidget(self.spinner, alignment=Qt.AlignVCenter)
-        status_group = QVBoxLayout()
-        status_group.setSpacing(3)
-        self.status_label = QLabel(tr("正在启动音乐工作台…"))
-        self.status_label.setObjectName("StartupStatus")
-        detail = QLabel(tr("本地项目和游戏曲谱只在这台电脑上读取"))
-        detail.setObjectName("StartupDetail")
-        detail.setWordWrap(True)
-        status_group.addWidget(self.status_label)
-        status_group.addWidget(detail)
-        activity.addLayout(status_group, stretch=1)
-        layout.addLayout(activity)
-        card_layout.addWidget(content, 0, 0, alignment=Qt.AlignBottom)
-
-        self.setStyleSheet(
-            """
-            QWidget#StartupSplash { background: transparent; }
-            QFrame#StartupSplashCard {
-                background: #151515;
-                border: 1px solid #4a3b27;
-                border-radius: 0;
-            }
-            QFrame#StartupOverlay {
-                background: rgba(21, 21, 21, 238);
-                border: 0;
-                border-top: 1px solid #4a3b27;
-                border-radius: 0;
-            }
-            QLabel#StartupEyebrow {
-                color: #d89b37;
-                font-family: "Microsoft YaHei UI";
-                font-size: 9px;
-                font-weight: 900;
-                letter-spacing: 2px;
-            }
-            QLabel#StartupTitle {
-                color: #d1c8b9;
-                font-family: "Microsoft YaHei UI";
-                font-size: 10px;
-                font-weight: 700;
-            }
-            QLabel#StartupStatus {
-                color: #f0c66f;
-                font-family: "Microsoft YaHei UI";
-                font-size: 13px;
-                font-weight: 800;
-            }
-            QLabel#StartupDetail {
-                color: #948e87;
-                font-family: "Microsoft YaHei UI";
-                font-size: 10px;
-            }
-            """
-        )
-        self.opacity = QGraphicsOpacityEffect(self)
-        self.opacity.setOpacity(1.0)
-        self.setGraphicsEffect(self.opacity)
-        self.fade_animation = QPropertyAnimation(self.opacity, b"opacity", self)
-        self.fade_animation.setDuration(self.FADE_OUT_MS)
-        self.fade_animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
-        self.fade_animation.finished.connect(self._complete_reveal)
-
-    def showEvent(self, event) -> None:
-        self._shown_at = time.monotonic()
-        self._finish_scheduled = False
-        self.opacity.setOpacity(1.0)
-        super().showEvent(event)
-        screen = self.screen() or QApplication.primaryScreen()
-        if screen is not None:
-            available = screen.availableGeometry()
-            self.move(available.center() - self.rect().center())
-        self.spinner.start()
-        self.raise_()
-        self.activateWindow()
-
-    def set_status(self, text: str) -> None:
-        self.status_label.setText(text)
-
-    def finish(self, window: QWidget, minimum_visible_ms: int | None = None) -> None:
-        if self._finish_scheduled:
-            return
-        self._finish_scheduled = True
-        self._pending_window = window
-        minimum = self.MINIMUM_VISIBLE_MS if minimum_visible_ms is None else max(0, minimum_visible_ms)
-        elapsed = round((time.monotonic() - self._shown_at) * 1000.0)
-        self.raise_()
-        self.activateWindow()
-        QTimer.singleShot(max(0, minimum - elapsed), self._begin_reveal)
-
-    def _begin_reveal(self) -> None:
-        self.spinner.stop()
-        self.raise_()
-        self.fade_animation.stop()
-        self.fade_animation.setStartValue(self.opacity.opacity())
-        self.fade_animation.setEndValue(0.0)
-        self.fade_animation.start()
-
-    def _complete_reveal(self) -> None:
-        window = self._pending_window
-        self.hide()
-        self._pending_window = None
-        if window is not None:
-            window.raise_()
-            window.activateWindow()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+@dataclass(frozen=True, slots=True)
+class _TrackCommitCheckpoint:
+    track: TrackState
+    notes: tuple[Note, ...]
+    notes_optimized: bool
+    articulation_type: int | None
 
 
 class ConvertWorker(QThread):
@@ -1787,7 +779,7 @@ def bdo_transcription_instrument_descriptors() -> tuple[BdoInstrumentDescriptor,
     """Build advisory descriptors from the same verified profile as export."""
 
     descriptors: list[BdoInstrumentDescriptor] = []
-    for instrument_id, rule in sorted(BDO_PROFILE.instruments.items()):
+    for instrument_id, rule in sorted(get_bdo_profile().instruments.items()):
         is_percussion = instrument_id in {0x04, 0x05, 0x0D}
         descriptors.append(
             BdoInstrumentDescriptor(
@@ -2118,7 +1110,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             app.aboutToQuit.connect(self._wait_for_background_writers_on_quit)
         else:
             self.widget_style_name = ""
-        self.setWindowTitle(f"BDO Music Composer v{__version__}")
+        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         self.resize(1360, 820)
         self.setMinimumSize(1160, 720)
 
@@ -2177,6 +1169,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         self.selected_track: TrackState | None = None
         self.bpm = 120
         self.time_sig = 4
+        self.time_sig_denominator: int | None = 4
         self.tempo_changes = 1
         self.worker: ConvertWorker | None = None
         self.audio_sources = audio_source_config(self.config)
@@ -2213,7 +1206,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         self.home_scan_session: IncrementalHomeScan | None = None
         self.home_scan_generation = 0
         self.research_metadata = {
-            "profile_id": BDO_PROFILE.profile_id,
+            "profile_id": get_bdo_profile().profile_id,
             "ab_experiments": [],
         }
         self.project_commands = ProjectCommandStack()
@@ -2612,10 +1605,12 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         self.home_library_stack.addWidget(game_card)
         overlay_layout.addWidget(self.home_library_stack, stretch=1)
 
-        local_badge = QLabel(tr("本地处理 · 不上传工程"))
-        local_badge.setObjectName("HomeLocalBadge")
-        local_badge.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        overlay_layout.addWidget(local_badge)
+        self.home_footer = HomeFooter(APP_VERSION)
+        if RELEASE_NOTES_UI_ENABLED:
+            self.home_footer.release_notes_requested.connect(
+                self._show_release_notes
+            )
+        overlay_layout.addWidget(self.home_footer)
         shell_layout.addWidget(overlay)
         shell_layout.addStretch(1)
 
@@ -3172,9 +2167,15 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
     def _reset_new_score_conversion_defaults(self) -> None:
         """Restore saved preferences or the defaults for a newly authored score."""
 
+        preferences = ConversionSettings.from_preferences(
+            self.config.get("conversion_settings")
+        )
         self._set_conversion_settings(
-            ConversionSettings.from_preferences(
-                self.config.get("conversion_settings")
+            # A velocity recipe is meaningful only while importing existing
+            # notes.  A blank authored score has nothing to materialize and
+            # must never carry a deferred export transform.
+            preferences.with_updates(
+                velocity_mode=VELOCITY_MODE_PRESERVE
             ),
             preserve_pitch_overrides=False,
         )
@@ -3227,6 +2228,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             self.owner_id = 0
             self.bpm = 120
             self.time_sig = 4
+            self.time_sig_denominator = 4
             self.tempo_changes = 1
             self.lyric_events = []
             self._reset_new_score_conversion_defaults()
@@ -3569,7 +2571,13 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         self.timeline.set_instrument_art_dir(self.instrument_art_dir)
         self.timeline.changed.connect(self._on_track_changed)
         self.timeline.track_state_changed.connect(self._on_track_filter_changed)
+        self.timeline.game_volume_committed.connect(
+            self._on_game_instrument_volume_committed
+        )
         self.timeline.instrument_changed.connect(self._on_track_instrument_changed)
+        self.timeline.mixer_unify_requested.connect(
+            self._unify_game_instrument_mix
+        )
         self.timeline.selected.connect(self._select_track)
         self.timeline.validation_requested.connect(
             self._open_track_conversion_check
@@ -3668,7 +2676,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
     def _active_ensemble_instrument_ids(self) -> tuple[int, ...]:
         return unique_performance_instrument_ids(
             serialized_bdo_instrument_id(track)
-            for track in selected_tracks(self.tracks)
+            for track in formal_score_tracks(self.tracks)
             if track.notes
         )
 
@@ -6304,33 +5312,15 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             )
         )
 
-    def _commit_note_editor(
+    def _prepare_transcription_commit_tracks(
         self,
         request: TranscriptionEditorCommit,
-    ) -> TranscriptionEditorCommitReport | None:
-        """Commit one complete note-editor draft and all staged routes.
+        tracks_by_id: dict[int, TrackState],
+        historical_track_ids: set[int],
+    ) -> tuple[dict[int, TrackState], set[int]]:
+        """Create unpublished target tracks and record failed specifications."""
 
-        Preflight is intentionally side-effect free.  When anything changes,
-        all affected tracks and the transcription sidecar are captured by one
-        project snapshot and saved once.
-        """
-
-        tracks_by_id = {int(track.track_id): track for track in self.tracks}
         existing_track_ids = set(tracks_by_id)
-        current_track = tracks_by_id.get(int(request.current_track_id))
-        draft_notes = self._normalise_editor_draft(request.draft_notes)
-        if current_track is None or draft_notes is None:
-            QMessageBox.warning(
-                self,
-                tr("无法应用音符编辑"),
-                tr("目标轨道已经失效，或草稿包含无效音符。"),
-            )
-            return None
-        state = self.transcription_session.state
-        historical_track_ids = {
-            int(route.track_id)
-            for route in (*state.pending_routes, *state.applied_routes)
-        }
         new_tracks_by_id: dict[int, TrackState] = {}
         failed_new_track_ids: set[int] = set()
         for track_id, instrument_id in request.new_track_specs:
@@ -6358,340 +5348,142 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
                     % len(TRACK_COLORS)
                 ],
             )
+            try:
+                inherit_game_instrument_mix(
+                    (*tracks_by_id.values(), new_track),
+                    new_track,
+                )
+            except (TypeError, ValueError):
+                failed_new_track_ids.add(int(track_id))
+                continue
             new_tracks_by_id[int(track_id)] = new_track
             tracks_by_id[int(track_id)] = new_track
+        return new_tracks_by_id, failed_new_track_ids
 
-        old_pending = set(state.pending_routes)
-        old_applied = set(state.applied_routes)
-        local_routes = set(request.routes)
-        all_routes = tuple(sorted(old_pending.union(local_routes)))
-        local_identity_valid = (
-            str(request.cache_key or "") == str(state.cache_key or "")
-            and str(request.analysis_fingerprint or "")
-            == str(state.analysis_fingerprint or "")
-        )
+    def _build_transcription_commit_plan(
+        self,
+        request: TranscriptionEditorCommit,
+        draft_notes: tuple[Note, ...],
+        tracks_by_id: dict[int, TrackState],
+        new_tracks_by_id: dict[int, TrackState],
+        failed_new_track_ids: set[int],
+    ) -> TranscriptionCommitPlan:
+        """Freeze UI/session values before invoking the pure route planner."""
 
-        created: set[CandidateRoute] = set()
-        satisfied: set[CandidateRoute] = set()
-        invalid: set[CandidateRoute] = set()
-        orphaned: set[CandidateRoute] = set()
-        unresolved_local: set[CandidateRoute] = set()
-        successful: set[CandidateRoute] = set()
-        additions: dict[int, list[Note]] = defaultdict(list)
-        unused_draft_indices = set(range(len(draft_notes)))
-        # A rejected/invalid staged candidate must not cross the project
-        # boundary merely because its generated Note is also present in the
-        # complete current-track draft.  Exact pre-existing notes remain
-        # protected; a modified candidate note that no longer matches is a
-        # normal manual edit by design.
-        baseline_note_counts = Counter(current_track.notes)
-        nonbaseline_draft_indices: set[int] = set()
-        for index, note in enumerate(draft_notes):
-            if baseline_note_counts[note] > 0:
-                baseline_note_counts[note] -= 1
-            else:
-                nonbaseline_draft_indices.add(index)
-        blocked_draft_indices: set[int] = set()
-        draft_by_pitch: dict[int, tuple[list[float], list[int]]] = {}
-        grouped_draft_indices: dict[int, list[int]] = defaultdict(list)
-        for index, note in enumerate(draft_notes):
-            grouped_draft_indices[int(note.pitch)].append(index)
-        for pitch, indices in grouped_draft_indices.items():
-            ordered = sorted(
-                indices,
-                key=lambda index: float(draft_notes[index].start),
+        state = self.transcription_session.state
+        route_candidate_ids = sorted({
+            route.candidate_id
+            for route in (*state.pending_routes, *request.routes)
+        })
+        candidates: list[CommitCandidateRecord] = []
+        for candidate_id in route_candidate_ids:
+            candidate = self.transcription_session.candidate_for_id(
+                candidate_id
             )
-            draft_by_pitch[pitch] = (
-                [float(draft_notes[index].start) for index in ordered],
-                ordered,
+            if candidate is None:
+                continue
+            candidates.append(
+                CommitCandidateRecord.capture(candidate_id, candidate)
             )
-        formal_by_track: dict[
-            int,
-            dict[int, tuple[list[float], list[Note]]],
-        ] = {}
-
-        def formal_index(
-            track: TrackState,
-        ) -> dict[int, tuple[list[float], list[Note]]]:
-            track_id = int(track.track_id)
-            cached = formal_by_track.get(track_id)
-            if cached is not None:
-                return cached
-            grouped: dict[int, list[Note]] = defaultdict(list)
-            for note in track.notes:
-                grouped[int(note.pitch)].append(note)
-            cached = {}
-            for pitch, notes in grouped.items():
-                ordered = sorted(
-                    notes,
-                    key=lambda note: float(note.start),
-                )
-                cached[pitch] = (
-                    [float(note.start) for note in ordered],
-                    ordered,
-                )
-            formal_by_track[track_id] = cached
-            return cached
-
-        def matching_formal_notes(
-            candidate: TranscriptionCandidate,
-            track: TrackState,
-        ) -> list[Note]:
-            starts, notes = formal_index(track).get(
-                int(candidate.pitch),
-                ([], []),
-            )
-            window_start, window_end = CANDIDATE_NOTE_POLICY.match_window(
-                candidate,
-                self.reference_audio_offset_ms,
-            )
-            first = bisect_left(starts, window_start)
-            last = bisect_right(starts, window_end)
-            return [
-                note
-                for note in notes[first:last]
-                if CANDIDATE_NOTE_POLICY.matches_note(
-                    candidate,
-                    note,
-                    self.reference_audio_offset_ms,
-                )
-            ]
-
-        def best_draft_match(
-            candidate: TranscriptionCandidate,
-            *,
-            allowed_indices: set[int] | None = None,
-        ) -> int | None:
-            starts, indices = draft_by_pitch.get(
-                int(candidate.pitch),
-                ([], []),
-            )
-            project_start = CANDIDATE_NOTE_POLICY.project_start_ms(
-                candidate,
-                self.reference_audio_offset_ms,
-            )
-            window_start, window_end = CANDIDATE_NOTE_POLICY.match_window(
-                candidate,
-                self.reference_audio_offset_ms,
-            )
-            first = bisect_left(starts, window_start)
-            last = bisect_right(starts, window_end)
-            matches = [
-                index
-                for index in indices[first:last]
-                if index in unused_draft_indices
-                if allowed_indices is None or index in allowed_indices
-                if CANDIDATE_NOTE_POLICY.matches_note(
-                    candidate,
-                    draft_notes[index],
-                    self.reference_audio_offset_ms,
-                )
-            ]
-            if not matches:
-                return None
-            return min(
-                matches,
-                key=lambda index: (
-                    abs(float(draft_notes[index].start) - project_start),
-                    abs(
-                        float(draft_notes[index].dur)
-                        - CANDIDATE_NOTE_POLICY.note_duration_ms(
-                            candidate
-                        )
-                    ),
-                    index,
+        required_track_ids = {
+            int(request.current_track_id),
+            *(
+                int(route.track_id)
+                for route in (*state.pending_routes, *request.routes)
+            ),
+            *new_tracks_by_id,
+        }
+        tracks = tuple(
+            CommitTrackView.from_track(
+                tracks_by_id[track_id],
+                effective_transpose=self._effective_track_transpose(
+                    tracks_by_id[track_id]
                 ),
             )
-
-        def block_staged_current_draft_note(
-            route: CandidateRoute,
-            candidate: TranscriptionCandidate | None,
-            *,
-            is_local: bool,
-        ) -> None:
-            if (
-                not is_local
-                or candidate is None
-                or int(route.track_id) != int(current_track.track_id)
-            ):
-                return
-            match_index = best_draft_match(
-                candidate,
-                allowed_indices=nonbaseline_draft_indices,
-            )
-            if match_index is None:
-                return
-            blocked_draft_indices.add(match_index)
-            unused_draft_indices.discard(match_index)
-            nonbaseline_draft_indices.discard(match_index)
-
-        for route in all_routes:
-            is_local = route in local_routes
-            candidate = self.transcription_session.candidate_for_id(
-                route.candidate_id
-            )
-            if (
-                candidate is not None
-                and route.candidate_id in state.rejected_candidate_ids
-            ):
-                invalid.add(route)
-                if is_local:
-                    unresolved_local.add(route)
-                    block_staged_current_draft_note(
-                        route,
-                        candidate,
-                        is_local=True,
-                    )
-                continue
-            if is_local and int(route.track_id) in failed_new_track_ids:
-                invalid.add(route)
-                unresolved_local.add(route)
-                block_staged_current_draft_note(
-                    route,
-                    candidate,
-                    is_local=True,
-                )
-                continue
-            if route in old_applied:
-                satisfied.add(route)
-                successful.add(route)
-                continue
-            if is_local and not local_identity_valid:
-                unresolved_local.add(route)
-                block_staged_current_draft_note(
-                    route,
-                    candidate,
-                    is_local=True,
-                )
-                continue
-            target = tracks_by_id.get(int(route.track_id))
-            if target is None or candidate is None:
-                orphaned.add(route)
-                if is_local:
-                    unresolved_local.add(route)
-                continue
-            if self._candidate_invalid_for_track(candidate, target):
-                invalid.add(route)
-                if is_local:
-                    unresolved_local.add(route)
-                    block_staged_current_draft_note(
-                        route,
-                        candidate,
-                        is_local=True,
-                    )
-                continue
-            if int(target.track_id) == int(current_track.track_id):
-                match_index = best_draft_match(candidate)
-                if match_index is None:
-                    if is_local:
-                        unresolved_local.add(route)
-                    continue
-                unused_draft_indices.remove(match_index)
-                if matching_formal_notes(candidate, current_track):
-                    satisfied.add(route)
-                else:
-                    created.add(route)
-                successful.add(route)
-                continue
-            target_additions = additions[int(target.track_id)]
-            if matching_formal_notes(candidate, target):
-                satisfied.add(route)
-                successful.add(route)
-                continue
-            addition = CANDIDATE_NOTE_POLICY.to_note(
-                candidate,
-                self.reference_audio_offset_ms,
-            )
-            target_additions.append(addition)
-            starts, notes = formal_index(target).setdefault(
-                int(addition.pitch),
-                ([], []),
-            )
-            insertion = bisect_right(starts, float(addition.start))
-            starts.insert(insertion, float(addition.start))
-            notes.insert(insertion, addition)
-            created.add(route)
-            successful.add(route)
-
-        final_pending = old_pending.difference(successful)
-        final_applied = old_applied.union(successful)
-        committed_draft_notes = tuple(
-            note
-            for index, note in enumerate(draft_notes)
-            if index not in blocked_draft_indices
+            for track_id in sorted(required_track_ids)
+            if track_id in tracks_by_id
         )
-        final_notes_by_id: dict[int, tuple[Note, ...]] = {
-            int(current_track.track_id): committed_draft_notes,
-        }
-        for track_id, new_notes in additions.items():
-            track = tracks_by_id[track_id]
-            final_notes_by_id[track_id] = tuple(
-                sorted(
-                    (*track.notes, *new_notes),
-                    key=lambda note: (
-                        float(note.start),
-                        int(note.pitch),
-                        float(note.dur),
-                        int(note.vel),
-                        int(note.ntype),
-                    ),
-                )
-            )
-        created_track_ids = {
-            track_id
-            for track_id in new_tracks_by_id
-            if track_id in final_notes_by_id
-            and bool(final_notes_by_id[track_id])
-        }
+        return plan_transcription_commit(CommitPlanInput(
+            current_track_id=int(request.current_track_id),
+            draft_notes=draft_notes,
+            local_routes=request.routes,
+            pending_routes=state.pending_routes,
+            applied_routes=state.applied_routes,
+            rejected_candidate_ids=state.rejected_candidate_ids,
+            candidates=tuple(candidates),
+            tracks=tracks,
+            failed_new_track_ids=frozenset(failed_new_track_ids),
+            provisional_new_track_ids=frozenset(new_tracks_by_id),
+            request_cache_key=request.cache_key,
+            request_fingerprint=request.analysis_fingerprint,
+            session_cache_key=state.cache_key,
+            session_fingerprint=state.analysis_fingerprint,
+            reference_audio_offset_ms=self.reference_audio_offset_ms,
+        ))
 
-        notes_changed = any(
-            tuple(tracks_by_id[track_id].notes) != notes
-            for track_id, notes in final_notes_by_id.items()
-        )
-        legacy_articulation_changed = (
-            current_track.articulation_type is not None
-        )
-        sidecar_changed = (
-            final_pending != old_pending or final_applied != old_applied
-        )
-        project_changed = (
-            notes_changed
-            or legacy_articulation_changed
-            or sidecar_changed
-            or bool(created_track_ids)
+    def _restore_transcription_track_checkpoint(
+        self,
+        published_tracks: list[TrackState],
+        checkpoint: tuple[_TrackCommitCheckpoint, ...],
+    ) -> None:
+        """Restore the original TrackState objects after a failed publish."""
+
+        published_tracks[:] = [item.track for item in checkpoint]
+        self.tracks = published_tracks
+        for item in checkpoint:
+            item.track.notes = list(item.notes)
+            item.track.notes_optimized = item.notes_optimized
+            item.track.articulation_type = item.articulation_type
+
+    def _log_transcription_commit_failure(self, stage: str) -> None:
+        append_crash_log(
+            f"Transcription commit {stage} failed",
+            traceback.format_exc(),
         )
 
-        if project_changed:
-            self._push_project_snapshot()
-            self._stop_preview(reset_playhead=False)
-            for track_id in sorted(created_track_ids):
-                self.tracks.append(new_tracks_by_id[track_id])
-            # Old projects could store one whole-track technique which would
-            # otherwise override every per-note edit during export.  The note
-            # editor materializes that value into its draft; committing the
-            # draft therefore completes the migration to per-note ntypes.
-            current_track.articulation_type = None
-            for track_id, notes in final_notes_by_id.items():
-                track = tracks_by_id[track_id]
-                if tuple(track.notes) == notes:
-                    continue
-                track.notes = list(notes)
-                track.notes_optimized = False
-            if sidecar_changed:
-                self.transcription_session.commit_project_routes(
-                    successful,
-                    pending_routes=final_pending,
-                )
+    def _refresh_transcription_commit_views(
+        self,
+        current_track: TrackState,
+    ) -> None:
+        try:
             self.timeline.set_tracks(self.tracks)
+        except Exception:
+            self._log_transcription_commit_failure("timeline refresh")
+        try:
             self._select_track(current_track)
             self._on_track_changed()
+        except Exception:
+            self._log_transcription_commit_failure("track refresh")
+        try:
             self._mark_conversion_check_dirty()
+        except Exception:
+            self._log_transcription_commit_failure("validation refresh")
+
+    def _finish_transcription_commit(
+        self,
+        plan: TranscriptionCommitPlan,
+        request: TranscriptionEditorCommit,
+        current_track: TrackState,
+    ) -> None:
+        """Run compensable UI and persistence work after model commit."""
+
+        try:
+            self._clear_transcription_review_history()
+        except Exception:
+            self._log_transcription_commit_failure("review cleanup")
+        self._refresh_transcription_commit_views(current_track)
+        try:
             self._autosave_project(
-                "transcription editor apply"
-                if local_routes or successful
-                else "note edit",
+                (
+                    "transcription editor apply"
+                    if request.routes or plan.successful_routes
+                    else "note edit"
+                ),
                 immediate=True,
             )
+        except Exception:
+            self._log_transcription_commit_failure("autosave schedule")
+        try:
             self.status_label.setText(
                 trf(
                     "已更新 {track} · {count} 音符",
@@ -6703,19 +5495,142 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
                 tr("音符编辑已作为一个工程操作写入；可整批撤销。"),
                 kind="success",
             )
-            # Formal Apply crosses into the project undo boundary.  Review
-            # history must not retain stale session snapshots behind it.
-            self._clear_transcription_review_history()
+        except Exception:
+            self._log_transcription_commit_failure("status refresh")
+        try:
             self._schedule_transcription_assist_refresh()
+        except Exception:
+            self._log_transcription_commit_failure("assist refresh")
 
-        report = TranscriptionEditorCommitReport(
-            tuple(created),
-            tuple(satisfied),
-            tuple(invalid),
-            tuple(orphaned),
-            tuple(unresolved_local),
-            project_changed,
+    def _apply_transcription_commit_plan(
+        self,
+        plan: TranscriptionCommitPlan,
+        *,
+        request: TranscriptionEditorCommit,
+        current_track: TrackState,
+        tracks_by_id: dict[int, TrackState],
+        new_tracks_by_id: dict[int, TrackState],
+    ) -> None:
+        """Atomically publish model state, then run compensable side effects."""
+
+        before = self._project_snapshot()
+        published_tracks = self.tracks
+        track_checkpoint = tuple(
+            _TrackCommitCheckpoint(
+                track,
+                tuple(track.notes),
+                bool(track.notes_optimized),
+                track.articulation_type,
+            )
+            for track in published_tracks
         )
+        previous_state = self.transcription_session.state
+        review_history = self.transcription_session.commands.checkpoint()
+        project_history = self.project_commands.checkpoint()
+        self._stop_preview(reset_playhead=False)
+        try:
+            if plan.sidecar_changed:
+                self.transcription_session.commit_project_routes(
+                    plan.successful_routes,
+                    pending_routes=plan.final_pending_routes,
+                )
+            for track_id in plan.created_track_ids:
+                published_tracks.append(new_tracks_by_id[track_id])
+            if plan.clear_legacy_articulation:
+                current_track.articulation_type = None
+            for track_id, notes in plan.final_notes_by_track:
+                track = tracks_by_id[track_id]
+                if tuple(track.notes) == notes:
+                    continue
+                track.notes = list(notes)
+                track.notes_optimized = False
+            self.project_commands.push(before)
+        except Exception:
+            self._restore_transcription_track_checkpoint(
+                published_tracks,
+                track_checkpoint,
+            )
+            self.transcription_session.state = previous_state
+            self.transcription_session.commands.restore_checkpoint(
+                review_history
+            )
+            self.project_commands.restore_checkpoint(project_history)
+            raise
+        self._finish_transcription_commit(
+            plan,
+            request,
+            current_track,
+        )
+
+    def _commit_note_editor(
+        self,
+        request: TranscriptionEditorCommit,
+    ) -> TranscriptionEditorCommitReport | None:
+        """Commit a normalized draft and staged routes as one project action."""
+
+        tracks_by_id = {int(track.track_id): track for track in self.tracks}
+        current_track = tracks_by_id.get(int(request.current_track_id))
+        draft_notes = self._normalise_editor_draft(request.draft_notes)
+        if (
+            len(tracks_by_id) != len(self.tracks)
+            or current_track is None
+            or draft_notes is None
+        ):
+            QMessageBox.warning(
+                self,
+                tr("无法应用音符编辑"),
+                tr("目标轨道已经失效，或草稿包含无效音符。"),
+            )
+            return None
+
+        state = self.transcription_session.state
+        historical_track_ids = {
+            int(route.track_id)
+            for route in (*state.pending_routes, *state.applied_routes)
+        }
+        new_tracks_by_id, failed_new_track_ids = (
+            self._prepare_transcription_commit_tracks(
+                request,
+                tracks_by_id,
+                historical_track_ids,
+            )
+        )
+        try:
+            plan = self._build_transcription_commit_plan(
+                request,
+                draft_notes,
+                tracks_by_id,
+                new_tracks_by_id,
+                failed_new_track_ids,
+            )
+        except CommitPlanError:
+            logging.exception("transcription commit preflight failed")
+            QMessageBox.warning(
+                self,
+                tr("无法应用音符编辑"),
+                tr("目标轨道已经失效，或草稿包含无效音符。"),
+            )
+            return None
+
+        if plan.project_changed:
+            try:
+                self._apply_transcription_commit_plan(
+                    plan,
+                    request=request,
+                    current_track=current_track,
+                    tracks_by_id=tracks_by_id,
+                    new_tracks_by_id=new_tracks_by_id,
+                )
+            except Exception:
+                self._log_transcription_commit_failure("model publish")
+                QMessageBox.warning(
+                    self,
+                    tr("无法应用音符编辑"),
+                    tr("目标轨道已经失效，或草稿包含无效音符。"),
+                )
+                return None
+
+        report = plan.report()
         self._set_transcription_status(
             trf(
                 "已应用 {created} 个音符 · 已满足 {satisfied} · "
@@ -6758,31 +5673,20 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             self._open_midi_path(Path(path))
 
     def _open_midi_path(self, path: Path) -> None:
-        if self.active_transcription_editor is not None:
-            self.active_transcription_editor.release_transcription_resources()
-        self.reference_layer_settings = normalize_reference_layer_settings(
-            DEFAULT_REFERENCE_LAYER_SETTINGS
+        import_settings = ConversionSettings.from_preferences(
+            self.config.get("conversion_settings")
         )
-        self.transcription_session = TranscriptionSession()
-        self.transcription_result = None
-        self.reference_audio.set_audio_path(None, notify=False)
-        self.reference_audio.set_volume_percent(50, notify=False)
-        self._set_reference_alignment(0.0, 0.0)
-        self.reference_audio_path = ""
-        self.reference_audio_relink_required = False
-        self.midi_path = str(path)
+        if not self._load_midi_info(
+            str(path),
+            conversion_settings=import_settings,
+        ):
+            return
         self.autosave_project_dir = None
         self.autosave_source_copy = None
         self.file_label.setProperty("i18nSkip", True)
         self.file_label.setProperty("i18nSkipText", True)
         self.file_label.setText(path.name)
         self.output_name.setText(path.stem)
-        self._reset_new_score_conversion_defaults()
-        if not self._load_midi_info(str(path)):
-            return
-        # A raw MIDI has no BDO master-effect layer. Starting from neutral
-        # values prevents the previously open score from leaking into it.
-        self._reset_master_effects()
         self.project_id = new_project_id()
         self._autosave_project("import midi", immediate=True)
         self._mark_conversion_check_dirty()
@@ -6797,18 +5701,6 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         )
 
     def _open_bdo_score_path(self, path: Path) -> None:
-        if self.active_transcription_editor is not None:
-            self.active_transcription_editor.release_transcription_resources()
-        self.reference_layer_settings = normalize_reference_layer_settings(
-            DEFAULT_REFERENCE_LAYER_SETTINGS
-        )
-        self.transcription_session = TranscriptionSession()
-        self.transcription_result = None
-        self.reference_audio.set_audio_path(None, notify=False)
-        self.reference_audio.set_volume_percent(50, notify=False)
-        self._set_reference_alignment(0.0, 0.0)
-        self.reference_audio_path = ""
-        self.reference_audio_relink_required = False
         if not self._load_bdo_info(path):
             return
         self.project_id = new_project_id()
@@ -6837,6 +5729,18 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             QMessageBox.warning(self, tr("打开游戏曲谱失败"), trf("无法读取游戏曲谱：{error}", error=exc))
             return False
 
+        if self.active_transcription_editor is not None:
+            self.active_transcription_editor.release_transcription_resources()
+        self.reference_layer_settings = normalize_reference_layer_settings(
+            DEFAULT_REFERENCE_LAYER_SETTINGS
+        )
+        self.transcription_session = TranscriptionSession()
+        self.transcription_result = None
+        self.reference_audio.set_audio_path(None, notify=False)
+        self.reference_audio.set_volume_percent(50, notify=False)
+        self._set_reference_alignment(0.0, 0.0)
+        self.reference_audio_path = ""
+        self.reference_audio_relink_required = False
         self._stop_preview()
         self.project_commands.clear()
         self._clear_track_selection()
@@ -6845,6 +5749,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         self.bdo_source_document = document
         self.bpm = int(snapshot.bpm)
         self.time_sig = int(snapshot.time_signature)
+        self.time_sig_denominator = 4
         self.tempo_changes = 1
         self.lyric_events = []
         self.owner_id = int(snapshot.owner_id)
@@ -7040,7 +5945,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
 
     def _load_project(self, project_path: Path) -> None:
         try:
-            payload = migrate_project(json.loads(project_path.read_text(encoding="utf-8")))
+            project_text = project_path.read_text(encoding="utf-8")
         except Exception as exc:
             QMessageBox.warning(
                 self,
@@ -7049,41 +5954,67 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             )
             return
 
-        loaded_project_id = (
-            normalize_project_id(payload.get("project_id"))
-            or new_project_id()
+        try:
+            plan = prepare_project_load(
+                project_path,
+                project_text,
+                _TRACK_IMPORT_PRESENTATION,
+                file_exists=lambda candidate: candidate.is_file(),
+                midi_meter_reader=read_midi_time_signature_denominator,
+            )
+        except ProjectLoadError as exc:
+            self._warn_project_load_error(exc)
+            return
+        self._commit_project_load(plan)
+
+    def _warn_project_load_error(self, error: ProjectLoadError) -> None:
+        if error.code is ProjectLoadErrorCode.MISSING_SOURCE:
+            message = tr("工程里的源文件和自动保存副本都不存在。")
+        elif error.code is ProjectLoadErrorCode.INVALID_SOURCE_REFERENCE:
+            message = trf(
+                "工程源文件路径无效（{path}）：{error}",
+                path=error.path,
+                error=error.detail,
+            )
+        elif error.code is ProjectLoadErrorCode.INVALID_TRACKS:
+            message = trf(
+                "工程轨道数据无效（{path}）：{error}",
+                path=error.path,
+                error=error.detail,
+            )
+        else:
+            message = trf(
+                "无法读取工程文件（{path}）：{error}",
+                path=error.path,
+                error=error.detail,
+            )
+        QMessageBox.warning(self, tr("打开工程失败"), message)
+
+    def _commit_project_load(self, plan: ProjectLoadPlan) -> None:
+        """Apply one fully prepared project plan as a single UI transition."""
+
+        open_request = plan.open_request
+        project_path = open_request.project_path
+        midi_path = open_request.source_path
+        source_format = open_request.source_format.value
+        research_profile_id = (
+            plan.research.profile_id or get_bdo_profile().profile_id
         )
 
-        source_format = str(payload.get("source_format") or "midi")
-        if source_format not in {"midi", "bdo", "project"}:
-            source_format = "midi"
-        legacy_absolute_paths = (
-            str(payload.get("path_policy") or "") != "project-relative-v1"
-        )
-        source_path = resolve_project_file_reference(
-            project_path.parent,
-            payload.get("source_midi_path"),
-            allow_legacy_absolute=legacy_absolute_paths,
-        )
-        original_path = resolve_project_file_reference(
-            project_path.parent,
-            payload.get("original_midi_path"),
-            allow_legacy_absolute=legacy_absolute_paths,
-        )
-        midi_path = (
-            source_path
-            if source_path is not None and source_path.is_file()
-            else original_path
-        )
-        if source_format != "project" and (
-            midi_path is None or not midi_path.is_file()
-        ):
-            QMessageBox.warning(
-                self,
-                tr("打开工程失败"),
-                tr("工程里的源文件和自动保存副本都不存在。"),
-            )
-            return
+        source_document = None
+        source_snapshot = None
+        if source_format == "bdo" and midi_path is not None:
+            try:
+                source_document = read_score(midi_path)
+                source_snapshot = read_bdo_score(
+                    midi_path,
+                    allow_trailing_data=True,
+                )
+            except Exception:
+                # The project snapshot remains authoritative. Only exact-byte
+                # reuse is unavailable when its provenance cannot be reread.
+                source_document = None
+                source_snapshot = None
 
         loading_generation = self.project_lifecycle_controller.begin_loading(
             "restore project"
@@ -7091,194 +6022,70 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         try:
             self.reference_audio.set_audio_path(None, notify=False)
             self.reference_audio.set_volume_percent(
-                int(payload.get("reference_audio_volume", 50)),
+                plan.reference.volume_percent,
                 notify=False,
             )
             self._set_reference_alignment(
-                float(payload.get("reference_audio_offset_ms", 0.0) or 0.0),
-                float(payload.get("beat_origin_ms", 0.0) or 0.0),
+                plan.reference.offset_ms,
+                plan.reference.beat_origin_ms,
             )
-            self.reference_layer_settings = (
-                normalize_reference_layer_settings(
-                    payload.get("reference_layers")
-                )
-            )
+            self.reference_layer_settings = plan.reference.layers_payload()
             self.reference_audio_path = ""
             self.reference_audio_relink_required = False
-            self.project_id = loaded_project_id
+            self.project_id = open_request.project_id
             self.autosave_project_dir = project_path.parent
-            self.autosave_source_copy = (
-                source_path
-                if source_path is not None and source_path.is_file()
-                else None
-            )
-            self.midi_path = "" if source_format == "project" else str(midi_path)
-            project_name = str(payload.get("output_name") or project_path.parent.name)
+            self.autosave_source_copy = open_request.source_copy_path
+            self.midi_path = str(midi_path) if midi_path is not None else ""
             self.file_label.setProperty(
                 "i18nSkipText",
-                source_format != "project",
+                True,
             )
             self.file_label.setProperty(
                 "i18nSkip",
-                source_format != "project",
+                True,
             )
             self.file_label.setText(
-                trf("{project} · 空白项目", project=project_name)
-                if source_format == "project"
-                else midi_path.name
+                midi_path.name
+                if midi_path is not None
+                else open_request.output_name
             )
-            self.output_name.setText(project_name if source_format == "project" else (payload.get("output_name") or midi_path.stem))
-            research = payload.get("research")
-            if isinstance(research, dict):
-                self.research_metadata = {
-                    "profile_id": str(research.get("profile_id") or BDO_PROFILE.profile_id),
-                    "ab_experiments": [
-                        dict(item) for item in research.get("ab_experiments", []) if isinstance(item, dict)
-                    ],
-                }
-            conversion_settings = payload.get("conversion_settings", {})
-            pitch_transform = payload.get("pitch_transform", {})
-            if source_format == "bdo":
-                if not self._load_bdo_info(midi_path):
-                    return
-                self._apply_conversion_settings(
-                    conversion_settings,
-                    source_format="bdo",
-                    default_master=self._current_master_effects(),
-                )
-            elif source_format == "midi":
-                self._apply_conversion_settings(
-                    conversion_settings,
-                    source_format="midi",
-                    default_master=MasterEffects(),
-                )
-                if not self._load_midi_info(str(midi_path)):
-                    return
-            else:
-                self._stop_preview()
-                self.project_commands.clear()
-                self._clear_track_selection()
-                self._apply_conversion_settings(
-                    conversion_settings,
-                    source_format="project",
-                    default_master=MasterEffects(),
-                )
-                self.bdo_source_snapshot = None
-                self.bdo_source_document = None
-                self.bpm = int(payload.get("bpm") or 120)
-                self.time_sig = int(payload.get("time_sig") or 4)
-                self.tempo_changes = int(payload.get("tempo_changes") or 1)
-                self.tracks = []
-                for index, item in enumerate(payload.get("tracks", [])):
-                    if not isinstance(item, dict) or item.get("track_id") is None:
-                        continue
-                    track_id = int(item["track_id"])
-                    instrument_id = int(item.get("bdo_instrument_id", 0x0B))
-                    self.tracks.append(
-                        TrackState(
-                            track_id=track_id,
-                            notes=[],
-                            gm_program=int(item.get("gm_program", 0)),
-                            is_percussion=bool(item.get("is_percussion", False)),
-                            display_name=str(item.get("display_name") or trf("新建轨道 {track_id}", track_id=track_id + 1)),
-                            bdo_instrument_id=instrument_id,
-                            color=TRACK_COLORS[index % len(TRACK_COLORS)],
-                            effect_settings_placeholder={
-                                "track_effects_enabled": False,
-                                "note_effects_reserved": True,
-                            },
-                        )
-                    )
-                if not self.tracks:
-                    self.tracks.append(
-                        TrackState(
-                            0,
-                            [],
-                            0,
-                            False,
-                            tr("新建轨道 1"),
-                            gm_to_bdo_instrument(0, False),
-                            color=TRACK_COLORS[0],
-                        )
-                    )
-            self._pitch_transform_plan = PitchTransformPlan.from_payload(
-                pitch_transform,
-                default_global_semitones=self.transpose,
-            ).with_global(self.transpose).pruned(
-                track.track_id for track in self.tracks
-            )
-            self.source_format = source_format
-            self.owner_id = int(payload.get("owner_id") or self.owner_id or 0)
-            self.char_name = payload.get("char_name") or self.char_name
-            saved_lyrics = payload.get("lyric_events")
-            if isinstance(saved_lyrics, list):
-                self.lyric_events = [dict(event) for event in saved_lyrics if isinstance(event, dict)]
-            saved_tracks = {
-                int(item.get("track_id")): item
-                for item in payload.get("tracks", [])
-                if isinstance(item, dict) and item.get("track_id") is not None
+            self.output_name.setText(open_request.output_name)
+            self.research_metadata = {
+                "profile_id": research_profile_id,
+                "ab_experiments": plan.research.experiments_payload(),
             }
-            for track in self.tracks:
-                item = saved_tracks.get(track.track_id)
-                if not item:
-                    continue
-                track.bdo_instrument_id = int(item.get("bdo_instrument_id", track.bdo_instrument_id))
-                track.muted = bool(item.get("muted", track.muted))
-                track.solo = bool(item.get("solo", track.solo))
-                track.volume_scale = float(item.get("volume_scale", track.volume_scale))
-                track.duration_scale = float(item.get("duration_scale", track.duration_scale))
-                track.bdo_track_volume = int(item.get("bdo_track_volume", track.bdo_track_volume))
-                raw_settings = item.get("bdo_track_settings", track.bdo_track_settings)
-                if isinstance(raw_settings, (list, tuple)) and len(raw_settings) == 8:
-                    track.bdo_track_settings = tuple(int(value) for value in raw_settings)
-                source_group = item.get("bdo_source_group_index", track.bdo_source_group_index)
-                track.bdo_source_group_index = int(source_group) if source_group is not None else None
-                raw_source_notes = item.get("bdo_source_note_records", track.bdo_source_note_records)
-                if isinstance(raw_source_notes, (list, tuple)):
-                    track.bdo_source_note_records = tuple(
-                        tuple(record) for record in raw_source_notes
-                        if isinstance(record, (list, tuple)) and len(record) >= 6
-                    )
-                art = item.get("articulation_type")
-                track.articulation_type = int(art) if art is not None else None
-                mode = str(item.get("marnian_synth_mode", "basic"))
-                track.marnian_synth_mode = mode if mode in {value for _label, value in MARNIAN_SYNTH_MODES} else "basic"
-                track.notes_optimized = bool(item.get("notes_optimized", False))
-                saved_controls = item.get("performance_controls", [])
-                if isinstance(saved_controls, list):
-                    track.performance_controls = [
-                        dict(control) for control in saved_controls if isinstance(control, dict)
-                    ]
-                saved_notes = item.get("notes")
-                if isinstance(saved_notes, list):
-                    restored_notes = []
-                    for raw_note in saved_notes:
-                        if not isinstance(raw_note, list) or len(raw_note) < 5:
-                            continue
-                        try:
-                            restored_notes.append(
-                                Note(
-                                    int(raw_note[0]),
-                                    int(raw_note[1]),
-                                    float(raw_note[2]),
-                                    float(raw_note[3]),
-                                    int(raw_note[4]),
-                                )
-                            )
-                        except (TypeError, ValueError):
-                            continue
-                    track.notes = restored_notes
+            # Project tracks/notes are authoritative for every provenance
+            # type.  Never rebuild a project from MIDI/BDO and overlay it:
+            # that resurrects deleted lanes and drops newly authored lanes.
+            self._stop_preview()
+            self.project_commands.clear()
+            self._clear_track_selection()
+            self._set_conversion_settings(
+                plan.conversion,
+                preserve_pitch_overrides=False,
+            )
+            self.reverb, self.delay, self.chorus = (
+                plan.master_effects.legacy_values()
+            )
+            self.bdo_source_snapshot = source_snapshot
+            self.bdo_source_document = source_document
+            self.bpm = plan.bpm
+            self.time_sig = plan.time_signature
+            self.time_sig_denominator = plan.time_signature_denominator
+            self.tempo_changes = plan.tempo_changes
+            self.tracks = list(plan.tracks)
+            self._pitch_transform_plan = plan.pitch_plan
+            self.source_format = source_format
+            self.owner_id = plan.owner_id
+            self.char_name = plan.character_name
+            self.lyric_events = plan.lyric_payload()
             if self.active_transcription_editor is not None:
                 self.active_transcription_editor.release_transcription_resources()
             self.transcription_result = None
-            self.transcription_session = TranscriptionSession.from_payload(
-                payload.get("transcription_review", {}),
+            self.transcription_session = TranscriptionSession(
+                state=plan.transcription_state,
             )
-            self.transcription_assist_review = (
-                TranscriptionAssistReviewState.from_payload(
-                    payload.get("transcription_assist_review", {})
-                )
-            )
+            self.transcription_assist_review = plan.assist_review
             self._clear_transcription_review_history()
             self.automatic_harmony_analysis = None
             self.automatic_instrument_match_analysis = None
@@ -7287,27 +6094,20 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             self.transcription_group_timbre_profiles = None
             self.transcription_group_timbre_revision = ""
             self.transcription_assist_previous_candidates = ()
-            saved_reference_audio = str(payload.get("reference_audio_path") or "")
-            reference_audio_was_attached = bool(
-                payload.get("reference_audio_attached", bool(saved_reference_audio))
-            )
-            saved_reference_path = resolve_project_file_reference(
-                project_path.parent,
-                saved_reference_audio,
-                allow_legacy_absolute=legacy_absolute_paths,
-            )
-            reference_audio_restored = bool(
-                saved_reference_path is not None
-                and saved_reference_path.is_file()
-                and self.reference_audio.set_audio_path(
-                    saved_reference_path,
-                    notify=False,
+            try:
+                reference_audio_restored = bool(
+                    plan.reference.candidate_path is not None
+                    and self.reference_audio.set_audio_path(
+                        plan.reference.candidate_path,
+                        notify=False,
+                    )
                 )
-            )
+            except Exception:
+                reference_audio_restored = False
             if reference_audio_restored:
                 self.reference_audio_path = self.reference_audio.audio_path
             self.reference_audio_relink_required = bool(
-                reference_audio_was_attached and not reference_audio_restored
+                plan.reference.was_attached and not reference_audio_restored
             )
             self._refresh_tracks()
             self._reset_timeline_position()
@@ -7318,7 +6118,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
                     else (None, None)
                 )
             )
-            if reference_audio_was_attached and not reference_audio_restored:
+            if plan.reference.was_attached and not reference_audio_restored:
                 self.status_label.setText(
                     tr("工程已恢复；参考音频未随工程保存，请重新载入。")
                 )
@@ -7332,7 +6132,11 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             )
         self._autosave_project("restore project", immediate=True)
         self._mark_conversion_check_dirty()
-        self._record_recent("project", project_path, self.output_name.text() or project_path.parent.name)
+        self._record_recent(
+            "project",
+            project_path,
+            self.output_name.text() or project_path.parent.name,
+        )
         self._show_workspace()
 
     def _apply_conversion_settings(
@@ -7383,15 +6187,25 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
                 stamp = time.strftime("%Y%m%d_%H%M%S")
                 project_name = safe_filename(self.output_name.text().strip(), "project")
                 self.autosave_project_dir = AUTO_SAVE_DIR / f"{project_name}_{stamp}"
-            self.autosave_project_dir.mkdir(parents=True, exist_ok=True)
             self.autosave_source_copy = None
             return None, None
         if not midi_path.is_file():
+            # Recovered project snapshots remain self-contained even when the
+            # original provenance file and its old recovery copy are gone.
+            if self.autosave_project_dir is None:
+                stamp = time.strftime("%Y%m%d_%H%M%S")
+                project_name = safe_filename(
+                    self.output_name.text().strip(),
+                    "project",
+                )
+                self.autosave_project_dir = (
+                    AUTO_SAVE_DIR / f"{project_name}_{stamp}"
+                )
+            self.autosave_source_copy = None
             return None, None
         if self.autosave_project_dir is None:
             stamp = time.strftime("%Y%m%d_%H%M%S")
             self.autosave_project_dir = AUTO_SAVE_DIR / f"{safe_filename(midi_path.stem)}_{stamp}"
-        self.autosave_project_dir.mkdir(parents=True, exist_ok=True)
         fallback_suffix = ".bdo" if self.source_format == "bdo" else ".mid"
         source_name = f"source{midi_path.suffix or fallback_suffix}"
         target = self.autosave_project_dir / source_name
@@ -7417,7 +6231,6 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         if (
             self.loading_project
             or not self.tracks
-            or (self.source_format != "project" and not getattr(self, "midi_path", None))
         ):
             return
         try:
@@ -7429,52 +6242,47 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
                 self.autosave_project_dir,
                 self.autosave_source_copy,
             )
-            metadata = {
-                "schema_version": CURRENT_PROJECT_SCHEMA,
-                "project_id": self.project_id,
-                "path_policy": "project-relative-v1",
-                "saved_at": saved_at,
-                "reason": reason,
-                "source_format": self.source_format,
-                # The source copy is recoverable inside the autosave directory.
-                # External MIDI/BDO and reference-audio locations are runtime
-                # choices and must not leak machine-local absolute paths.
-                "original_midi_path": "",
-                "source_midi_path": source_reference,
-                "output_name": self.output_name.text().strip(),
-                "owner_id": self.owner_id,
-                "char_name": self.char_name,
-                "bpm": self.bpm,
-                "time_sig": self.time_sig,
-                "tempo_changes": self.tempo_changes,
-                "lyric_events": [dict(event) for event in self.lyric_events],
-                "reference_audio_path": "",
-                "reference_audio_attached": bool(
+            metadata = ProjectMetadataSnapshot.capture(
+                schema_version=CURRENT_PROJECT_SCHEMA,
+                project_id=self.project_id,
+                saved_at=saved_at,
+                reason=reason,
+                source_format=self.source_format,
+                # Only the project-local recovery copy is serialized. External
+                # MIDI/BDO and reference paths remain runtime-only choices.
+                source_reference=source_reference,
+                output_name=self.output_name.text().strip(),
+                owner_id=self.owner_id,
+                character_name=self.char_name,
+                bpm=self.bpm,
+                time_signature=self.time_sig,
+                time_signature_denominator=self.time_sig_denominator,
+                tempo_changes=self.tempo_changes,
+                lyric_events=self.lyric_events,
+                reference_audio_attached=bool(
                     self.reference_audio_path
                     or self.reference_audio_relink_required
                 ),
-                "reference_audio_volume": self.reference_audio.volume_percent,
-                "reference_audio_offset_ms": self.reference_audio_offset_ms,
-                "beat_origin_ms": self.beat_origin_ms,
-                "transcription_review": self.transcription_session.to_payload(),
-                "transcription_assist_review": (
+                reference_audio_volume=self.reference_audio.volume_percent,
+                reference_audio_offset_ms=self.reference_audio_offset_ms,
+                beat_origin_ms=self.beat_origin_ms,
+                transcription_review=self.transcription_session.to_payload(),
+                transcription_assist_review=(
                     self.transcription_assist_review.to_payload()
                 ),
-                "reference_layers": normalize_reference_layer_settings(
+                reference_layers=normalize_reference_layer_settings(
                     self.reference_layer_settings
                 ),
-                "conversion_settings": self._conversion_settings_payload(),
-                "pitch_transform": self._pitch_transform_plan.pruned(
+                conversion_settings=self._conversion_settings_payload(),
+                pitch_transform=self._pitch_transform_plan.pruned(
                     track.track_id for track in self.tracks
                 ).to_payload(),
-                "research": dict(self.research_metadata),
-            }
+                research=self.research_metadata,
+            )
             request = AutosaveRequest(
                 project_dir=self.autosave_project_dir,
                 metadata=metadata,
                 tracks=freeze_project_tracks(self.tracks),
-                saved_at=saved_at,
-                reason=reason,
                 source_path=source_path,
                 source_copy=source_copy,
             )
@@ -7749,7 +6557,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         ), kind="success", duration_ms=3600)
 
     def _suggest_global_transpose(self) -> int | None:
-        active = selected_tracks(self.tracks)
+        active = formal_score_tracks(self.tracks)
         pitches = [
             int(note.pitch)
             + self._pitch_transform_plan.resolve(
@@ -7780,11 +6588,12 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             translate=tr,
             format_translate=trf,
         )
-        raw_evidence_status = BDO_PROFILE.evidence.status
+        profile = get_bdo_profile()
+        raw_evidence_status = profile.evidence.status
         status_source = evidence_status_source(raw_evidence_status)
         report = trf(
             "BDO Profile: {profile} · {status}\n时间差比较容差: {tolerance} ms\n\n{report}",
-            profile=BDO_PROFILE.profile_id,
+            profile=profile.profile_id,
             status=(
                 trv(status_source)
                 if status_source is not None
@@ -7809,7 +6618,9 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         }
 
     def _validation_issues(self) -> tuple[ValidationIssue, ...]:
-        active_ids = frozenset(int(track.track_id) for track in selected_tracks(self.tracks))
+        active_ids = frozenset(
+            int(track.track_id) for track in formal_score_tracks(self.tracks)
+        )
         context = ValidationContext(
             transpose=int(self.transpose),
             active_track_ids=active_ids,
@@ -7831,7 +6642,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             revision=self.model_revision.value,
             scope_key=scope_key,
             tracks=self.tracks,
-            profile=BDO_PROFILE,
+            profile=get_bdo_profile(),
             context=context,
         ).issues
 
@@ -7880,56 +6691,64 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         )
         dialog.exec()
 
-    def _load_midi_info(self, path: str) -> bool:
-        self._stop_preview()
-        self.project_commands.clear()
-        self._clear_track_selection()
+    def _show_release_notes(self) -> None:
+        if not RELEASE_NOTES_UI_ENABLED:
+            return
+        dialog = getattr(self, "_release_notes_dialog", None)
+        if dialog is None:
+            dialog = ReleaseNotesDialog.from_resource(parent=self)
+            self._release_notes_dialog = dialog
+        dialog.exec()
+
+    def _load_midi_info(
+        self,
+        path: str,
+        *,
+        conversion_settings: ConversionSettings | None = None,
+    ) -> bool:
+        settings = conversion_settings or self._conversion_settings
         try:
-            bpm, tsig, groups, tempo_changes, controls, lyric_events = parse_midi(
-                path,
-                apply_sustain=self.apply_sustain,
-                flatten_tempo=self.flatten_tempo,
-                include_controls=True,
-                include_lyrics=True,
-            )
+            imported = prepare_midi_import(path, settings)
         except Exception as exc:
-            self.tracks = []
-            self.timeline.set_tracks([])
-            self._refresh_tracks()
             self.status_label.setText(tr("载入失败"))
             self.inspector_text.setText(trf("MIDI 载入失败：{error}", error=exc))
             return False
 
-        self.bpm = bpm
+        # Everything above this point is read-only.  Commit only after the
+        # complete source has parsed and transformed successfully so a broken
+        # import cannot erase the user's open score or its undo history.
+        self._stop_preview()
+        self.project_commands.clear()
+        self._clear_track_selection()
+        if self.active_transcription_editor is not None:
+            self.active_transcription_editor.release_transcription_resources()
+        self.reference_layer_settings = normalize_reference_layer_settings(
+            DEFAULT_REFERENCE_LAYER_SETTINGS
+        )
+        self.transcription_session = TranscriptionSession()
+        self.transcription_result = None
+        self.reference_audio.set_audio_path(None, notify=False)
+        self.reference_audio.set_volume_percent(50, notify=False)
+        self._set_reference_alignment(0.0, 0.0)
+        self.reference_audio_path = ""
+        self.reference_audio_relink_required = False
+        self.midi_path = str(path)
+        self.bpm = imported.bpm
         self.source_format = "midi"
         self.bdo_source_snapshot = None
         self.bdo_source_document = None
-        self.time_sig = tsig
-        self.tempo_changes = tempo_changes
-        self.lyric_events = lyric_events
-        self.tracks = []
-        for index, (notes, gm_prog, is_perc) in enumerate(groups):
-            name = (
-                tr("鼓组 · MIDI 通道 10")
-                if is_perc
-                else localized_gm_program_name(gm_prog, tr)
-            )
-            self.tracks.append(
-                TrackState(
-                    track_id=index,
-                    notes=notes,
-                    gm_program=gm_prog,
-                    is_percussion=is_perc,
-                    display_name=name,
-                    bdo_instrument_id=gm_to_bdo_instrument(gm_prog, is_perc),
-                    color=TRACK_COLORS[index % len(TRACK_COLORS)],
-                    effect_settings_placeholder={
-                        "track_effects_enabled": False,
-                        "note_effects_reserved": True,
-                    },
-                    performance_controls=controls[index] if index < len(controls) else [],
-                )
-            )
+        # A raw MIDI has no BDO master-effect layer. Starting from neutral
+        # values prevents the previously open score from leaking into it.
+        self._reset_master_effects()
+        self.time_sig = imported.time_signature
+        self.time_sig_denominator = imported.time_signature_denominator
+        self.tempo_changes = imported.tempo_changes
+        self.lyric_events = list(imported.lyric_events)
+        self.tracks = list(imported.tracks)
+        self._set_conversion_settings(
+            imported.conversion_settings,
+            preserve_pitch_overrides=False,
+        )
         self._refresh_tracks()
         self._reset_timeline_position()
         self.status_label.setText(tr("MIDI 已载入"))
@@ -8081,21 +6900,132 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         self._restart_preview_after_timeline_change()
         self._autosave_project("track filter")
 
+    def _on_game_instrument_volume_committed(
+        self,
+        track: TrackState,
+        previous_volume: int,
+        next_volume: int,
+    ) -> None:
+        """Commit one game-instrument Volume edit as a shared project action."""
+
+        track.bdo_track_volume = int(previous_volume)
+        self._push_project_snapshot()
+        track.bdo_track_volume = int(next_volume)
+        try:
+            changed_ids = propagate_game_instrument_mix(
+                self.tracks,
+                track,
+                volume=True,
+                sends=False,
+            )
+        except (TypeError, ValueError) as exc:
+            track.bdo_track_volume = int(previous_volume)
+            self.timeline.update()
+            self.show_toast(
+                trf("无法同步游戏乐器音量：{error}", error=exc),
+                kind="error",
+            )
+            return
+        self._mark_conversion_check_dirty()
+        self._restart_preview_after_timeline_change()
+        self._autosave_project("game instrument volume")
+        if changed_ids:
+            self.show_toast(
+                trf(
+                    "已同步 {count} 条同乐器轨道的游戏音量",
+                    count=len(changed_ids),
+                ),
+                kind="success",
+            )
+
     def _on_preview_mapping_changed(self) -> None:
         self._restart_preview_after_timeline_change()
         self._autosave_project("track mapping")
 
-    def _on_track_instrument_changed(self, track: TrackState) -> None:
+    def _unify_game_instrument_mix(self, source: TrackState) -> None:
+        """Explicitly resolve legacy mixer conflicts using the chosen lane."""
+
+        try:
+            source_mix = (
+                int(source.bdo_track_volume),
+                raw_track_settings(source.bdo_track_settings),
+            )
+        except (TypeError, ValueError) as exc:
+            self.show_toast(
+                trf("所选轨道的游戏混音数据无效：{error}", error=exc),
+                kind="error",
+            )
+            return
+        del source_mix
+        self._push_project_snapshot()
+        try:
+            changed_ids = propagate_game_instrument_mix(
+                self.tracks,
+                source,
+                volume=True,
+                sends=True,
+            )
+        except (TypeError, ValueError) as exc:
+            self.show_toast(
+                trf("无法统一游戏乐器混音：{error}", error=exc),
+                kind="error",
+            )
+            return
+        if not changed_ids:
+            self.show_toast(tr("同乐器轨道已经一致"), kind="info")
+            return
+        self._mark_conversion_check_dirty()
+        self._restart_preview_after_timeline_change()
+        self._autosave_project("unify game instrument mixer", immediate=True)
+        self.show_toast(
+            trf(
+                "已按所选轨道统一 {count} 条同乐器轨道",
+                count=len(changed_ids),
+            ),
+            kind="success",
+        )
+
+    def _on_track_instrument_changed(
+        self,
+        track: TrackState,
+        previous_instrument_id: int,
+    ) -> None:
+        next_instrument_id = int(track.bdo_instrument_id)
+        previous_mode = str(track.marnian_synth_mode)
+        track.bdo_instrument_id = int(previous_instrument_id)
+        self._push_project_snapshot()
+        track.bdo_instrument_id = next_instrument_id
         if track.bdo_instrument_id not in BDO_ARTICULATIONS:
             track.articulation_type = None
         if track.bdo_instrument_id not in MARNIAN_SYNTH_INSTRUMENT_IDS:
             track.marnian_synth_mode = "basic"
+        try:
+            inherited_from = inherit_game_instrument_mix(self.tracks, track)
+        except (TypeError, ValueError) as exc:
+            track.bdo_instrument_id = int(previous_instrument_id)
+            track.marnian_synth_mode = previous_mode
+            self.timeline.update()
+            self.show_toast(
+                trf("目标游戏乐器存在混音冲突：{error}", error=exc),
+                kind="error",
+            )
+            return
         self._select_track(track)
         self._refresh_transcription_workspace()
+        self._mark_conversion_check_dirty()
         self._on_preview_mapping_changed()
+        if inherited_from is not None:
+            self.show_toast(
+                tr("已采用目标游戏乐器的共享音量和 FX"),
+                kind="success",
+            )
 
     def _show_new_track_menu(self) -> None:
-        if self.source_format != "project" and not getattr(self, "midi_path", None):
+        if (
+            not self.tracks
+            and self.source_format != "project"
+            and not getattr(self, "midi_path", None)
+        ):
             QMessageBox.information(
                 self,
                 tr("新建轨道"),
@@ -8129,7 +7059,6 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         return reserved
 
     def _create_track(self, instrument_id: int) -> None:
-        self._push_project_snapshot()
         self._stop_preview(reset_playhead=False)
         track_id = max(self._reserved_track_ids(), default=-1) + 1
         instrument_name = _ui_bdo_instrument_name(instrument_id)
@@ -8150,6 +7079,15 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
                 "note_effects_reserved": True,
             },
         )
+        try:
+            inherit_game_instrument_mix((*self.tracks, track), track)
+        except (TypeError, ValueError) as exc:
+            self.show_toast(
+                trf("无法新建同乐器轨道：{error}", error=exc),
+                kind="error",
+            )
+            return
+        self._push_project_snapshot()
         self.tracks.append(track)
         self.timeline.set_tracks(self.tracks)
         self._select_track(track)
@@ -8282,20 +7220,54 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             else "basic"
         )
         selected_settings = dialog.selected_track_settings()
+        changed_send_indices = dialog.changed_send_indices()
         if (
             selected_mode == track.marnian_synth_mode
             and selected_settings == tuple(track.bdo_track_settings)
         ):
             return
         self._push_project_snapshot()
+        previous_mode = str(track.marnian_synth_mode)
+        previous_volume = int(track.bdo_track_volume)
+        previous_settings = tuple(track.bdo_track_settings)
         track.marnian_synth_mode = selected_mode
-        track.bdo_track_settings = selected_settings
+        try:
+            inherited_from = (
+                inherit_game_instrument_mix(self.tracks, track)
+                if selected_mode != previous_mode
+                else None
+            )
+            if inherited_from is None:
+                base_settings = list(selected_settings)
+            else:
+                base_settings = list(raw_track_settings(track.bdo_track_settings))
+                for index in changed_send_indices:
+                    base_settings[index] = selected_settings[index]
+            track.bdo_track_settings = tuple(base_settings)
+            _changed_track_ids = propagate_game_instrument_mix(
+                self.tracks,
+                track,
+                volume=False,
+                sends=bool(changed_send_indices),
+                send_indices=changed_send_indices,
+            )
+        except (TypeError, ValueError) as exc:
+            track.marnian_synth_mode = previous_mode
+            track.bdo_track_volume = previous_volume
+            track.bdo_track_settings = previous_settings
+            self.timeline.update()
+            self.show_toast(
+                trf("无法同步游戏乐器 FX：{error}", error=exc),
+                kind="error",
+            )
+            return
+        committed_settings = tuple(track.bdo_track_settings)
         self.show_toast(
             (
                 f"{track.display_name} · FX "
-                f"R{selected_settings[TRACK_REVERB_SEND_INDEX]} "
-                f"D{selected_settings[TRACK_DELAY_SEND_INDEX]} "
-                f"C{selected_settings[TRACK_CHORUS_SEND_INDEX]}"
+                f"R{committed_settings[TRACK_REVERB_SEND_INDEX]} "
+                f"D{committed_settings[TRACK_DELAY_SEND_INDEX]} "
+                f"C{committed_settings[TRACK_CHORUS_SEND_INDEX]}"
             ),
             kind="success",
         )
@@ -8336,7 +7308,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         self.timeline.update()
 
     def _sync_preview_state(self) -> None:
-        tracks = selected_tracks(self.tracks)
+        tracks = list(preview_tracks(self.tracks))
         preview_blockers = self._realtime_preview_blockers(tracks)
         source_mode = preview_source_mode(self.audio_sources)
         has_reference = bool(self.reference_audio.audio_path)
@@ -8432,7 +7404,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             trf("试听音源已切换：{source}", source=tr(label)),
             kind="success",
         )
-        if was_playing and selected_tracks(self.tracks):
+        if was_playing and preview_tracks(self.tracks):
             QTimer.singleShot(
                 0, lambda position=retained_position:
                 self._start_preview_from(position)
@@ -8547,7 +7519,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
                             )
                         )
                         break
-                    velocity = max(1, min(127, round(note.vel * track.volume_scale)))
+                    velocity = max(0, min(127, round(note.vel)))
                     if not sample_map_supports_note(
                         BDO_SAMPLE_MAP_PATH,
                         track.bdo_instrument_id,
@@ -8617,7 +7589,7 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         ):
             start_ms = loop_range[0]
             self.timeline.set_playhead(start_ms)
-        source_tracks = selected_tracks(self.tracks)
+        source_tracks = list(preview_tracks(self.tracks))
         if not source_tracks:
             QMessageBox.warning(
                 self,
@@ -9039,8 +8011,51 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         self.show_toast(tr("全局主效果已更新"), kind="success")
         return True
 
+    def _materialize_game_velocity_settings(
+        self,
+        settings: ConversionSettings,
+        *,
+        record_undo: bool,
+    ) -> tuple[ConversionSettings, int]:
+        """Apply export-only velocity policies to the visible score model."""
+
+        def has_non_neutral_legacy_scale(track: TrackState) -> bool:
+            try:
+                scale = float(getattr(track, "volume_scale", 1.0))
+            except (TypeError, ValueError, OverflowError):
+                return True
+            return not math.isfinite(scale) or not math.isclose(
+                scale,
+                1.0,
+                abs_tol=1e-12,
+            )
+
+        has_legacy_scale = any(
+            has_non_neutral_legacy_scale(track) for track in self.tracks
+        )
+        needs_transform = (
+            settings.velocity_mode not in MATERIALIZED_VELOCITY_MODES
+        )
+        if not has_legacy_scale and not needs_transform:
+            return settings.with_updates(
+                velocity_mode=VELOCITY_MODE_PRESERVE
+            ), 0
+        if record_undo:
+            self._push_project_snapshot()
+        note_count = 0
+        for track in self.tracks:
+            track.notes = list(bake_game_velocity_transform(
+                track.notes,
+                settings,
+                legacy_scale=getattr(track, "volume_scale", 1.0),
+            ))
+            track.volume_scale = 1.0
+            note_count += len(track.notes)
+        return settings.with_updates(
+            velocity_mode=VELOCITY_MODE_PRESERVE
+        ), note_count
+
     def _open_settings(self, initial_page: int = 0) -> None:
-        old_parse_settings = (self.apply_sustain, self.flatten_tempo)
         old_effective_bpm = float(max(1, self.bpm_override or self.bpm))
         old_transpose = int(self.transpose)
         dialog = SettingsDialog(self)
@@ -9107,18 +8122,23 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
                 dialog.vel_step_base.value(),
                 dialog.vel_step.value(),
             )
-        self._set_conversion_settings(
-            ConversionSettings(
-                bpm_override=dialog.bpm_override.value() or None,
-                transpose=dialog.transpose.value(),
-                apply_sustain=dialog.apply_sustain.isChecked(),
-                flatten_tempo=dialog.flatten_tempo.isChecked(),
-                velocity_mode=selected_velocity_mode,
-                vel_range=selected_vel_range,
-                vel_floor=selected_vel_floor,
-                vel_step=selected_vel_step,
+        selected_conversion = ConversionSettings(
+            bpm_override=dialog.bpm_override.value() or None,
+            transpose=dialog.transpose.value(),
+            apply_sustain=dialog.apply_sustain.isChecked(),
+            flatten_tempo=dialog.flatten_tempo.isChecked(),
+            velocity_mode=selected_velocity_mode,
+            vel_range=selected_vel_range,
+            vel_floor=selected_vel_floor,
+            vel_step=selected_vel_step,
+        )
+        selected_conversion, materialized_velocity_count = (
+            self._materialize_game_velocity_settings(
+                selected_conversion,
+                record_undo=True,
             )
         )
+        self._set_conversion_settings(selected_conversion)
         effective_bpm_changed = not math.isclose(
             old_effective_bpm,
             float(max(1, self.bpm_override or self.bpm)),
@@ -9194,14 +8214,12 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         self._apply_responsive_density()
         self._refresh_home()
         self._sync_preview_state()
-        if effective_bpm_changed or transpose_changed:
-            self._on_track_changed()
         if (
-            self.source_format == "midi"
-            and getattr(self, "midi_path", None)
-            and old_parse_settings != (self.apply_sustain, self.flatten_tempo)
+            effective_bpm_changed
+            or transpose_changed
+            or materialized_velocity_count
         ):
-            self._load_midi_info(self.midi_path)
+            self._on_track_changed()
         if (
             self.transcription_result is not None
             and (
@@ -9216,7 +8234,8 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             "stepped": "阶梯",
             "rescale": "重映射",
             "floor": "抬底",
-            "off": "禁用",
+            "off": "保持原力度",
+            "preserve": "保持原力度",
         }.get(self.velocity_mode)
         velocity_label = (
             trv(velocity_source)
@@ -9241,21 +8260,22 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
 
     def _build_params(self) -> ExportRequest:
         midi_path = getattr(self, "midi_path", "")
-        if self.source_format != "project" and (not midi_path or not Path(midi_path).is_file()):
-            raise ValueError(tr("请选择有效的 MIDI 文件"))
-        active = selected_tracks(self.tracks)
-        if not active:
-            raise ValueError(tr("没有可导出的轨道，请取消静音或 Solo 至少一条轨道"))
-        export_tracks = freeze_export_tracks(active)
+        formal_tracks = formal_score_tracks(self.tracks)
+        if not formal_tracks:
+            raise ValueError(tr("当前工程没有可导出的轨道"))
         if not self.owner_id:
             raise ValueError(
                 tr("尚未读取有效 Owner ID。请在设置中选择一份游戏内保存的曲谱，否则导出文件无法在游戏内正常编辑。")
             )
-        denominator = (
-            4
-            if self.source_format in {"bdo", "project"}
-            else source_time_signature_denominator(midi_path)
-        )
+        denominator = self.time_sig_denominator
+        if denominator is None and midi_path and Path(midi_path).is_file():
+            denominator = source_time_signature_denominator(midi_path)
+        if denominator is None:
+            raise ValueError(
+                tr(
+                    "工程未保存原 MIDI 的拍号分母，且源文件已不可用；已阻止导出以避免静默写入错误拍号。"
+                )
+            )
         if denominator != 4:
             raise ValueError(
                 trf(
@@ -9270,65 +8290,32 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             raise ValueError(tr("曲谱名包含 Windows 文件名非法字符，请去掉 <>:\"/\\|?*"))
         out_path = out_dir / out_name
 
-        # The editor model is the single source of truth.  Re-reading the
-        # imported MIDI here would silently discard manual note edits and new
-        # tracks. Marnian source-mode serialization is centralized in the
-        # immutable export workflow.
-        vel_scales = {
-            idx: track.volume_scale
-            for idx, track in enumerate(export_tracks)
-            if not math.isclose(track.volume_scale, 1.0)
-        }
-        articulation_map = {
-            idx: track.articulation_type
-            for idx, track in enumerate(export_tracks)
-            if track.articulation_type is not None
-        }
-        track_volumes = {
-            idx: int(track.bdo_track_volume)
-            for idx, track in enumerate(export_tracks)
-        }
-        track_settings_map = {}
-        for idx, track in enumerate(export_tracks):
-            try:
-                settings = list(raw_track_settings(track.bdo_track_settings))
-            except ValueError:
-                settings = [0] * 8
-            settings[MASTER_REVERB_TIME_INDEX] = int(self.reverb)
-            settings[MASTER_DELAY_FEEDBACK_INDEX] = int(self.delay)
-            chorus = self.chorus or (0, 0, 0)
-            settings[MASTER_CHORUS_FEEDBACK_INDEX] = int(chorus[0])
-            settings[MASTER_CHORUS_LFO_DEPTH_INDEX] = int(chorus[1])
-            settings[MASTER_CHORUS_LFO_FREQUENCY_INDEX] = int(chorus[2])
-            track_settings_map[idx] = tuple(settings)
-        velocity_b_maps = {
-            idx: tuple(track.bdo_source_note_records)
-            for idx, track in enumerate(export_tracks)
-            if track.bdo_source_note_records
-        }
-        return ExportRequest(
-            direct_tracks=export_tracks,
-            bpm=int(self.bpm),
-            time_signature=int(self.time_sig),
-            out_path=out_path,
-            character_name=str(self.char_name),
-            owner_id=int(self.owner_id),
-            conversion=self._conversion_settings,
-            pitch_plan=self._pitch_transform_plan.with_global(self.transpose),
-            reverb=int(self.reverb),
-            delay=int(self.delay),
-            chorus=self.chorus,
-            game_dir=Path(self.game_music_dir_path),
-            source_path=str(midi_path),
-            velocity_scales=tuple(sorted(vel_scales.items())),
-            articulation_map=tuple(sorted(articulation_map.items())),
-            track_volumes=tuple(sorted(track_volumes.items())),
-            track_settings=tuple(sorted(track_settings_map.items())),
-            velocity_b_maps=tuple(sorted(velocity_b_maps.items())),
-            source_document=(
-                self.bdo_source_document
-                if self.source_format == "bdo"
-                else None
+        # Re-reading the MIDI here would discard editor changes. The Qt-free
+        # factory freezes every formal track and derives all game projections.
+        return build_export_request(
+            self.tracks,
+            ExportRequestSpec(
+                bpm=int(self.bpm),
+                time_signature=int(self.time_sig),
+                out_path=out_path,
+                character_name=str(self.char_name),
+                owner_id=int(self.owner_id),
+                conversion=self._conversion_settings,
+                pitch_plan=self._pitch_transform_plan.with_global(
+                    self.transpose
+                ),
+                master_effects=MasterEffects.from_legacy(
+                    self.reverb,
+                    self.delay,
+                    self.chorus,
+                ),
+                game_dir=Path(self.game_music_dir_path),
+                source_path=str(midi_path),
+                source_document=(
+                    self.bdo_source_document
+                    if self.source_format == "bdo"
+                    else None
+                ),
             ),
         )
 
@@ -9392,8 +8379,43 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
         self.status_label.setText(tr("转换完成"))
         summary = dict(summary)
         extra_parts: list[object] = []
+        verification = summary.get("verification_report")
+        verification_failed = not (
+            isinstance(verification, ExportVerificationReport)
+            and verification.matches
+            and verification.stage_matches("primary")
+        )
+        if verification_failed:
+            issue_count = (
+                verification.issue_count
+                if isinstance(verification, ExportVerificationReport)
+                else 1
+            )
+            extra_parts.append(trfv(
+                " · 一致性检查发现 {count} 项差异",
+                count=issue_count,
+            ))
+            diagnostic = (
+                format_export_verification_report(verification)
+                if isinstance(verification, ExportVerificationReport)
+                else "export verification report missing from worker result"
+            )
+            append_crash_log("Export consistency verification failed", diagnostic)
+            self.status_label.setText(tr("转换完成（数据一致性检查失败）"))
+        else:
+            extra_parts.append(trv(" · 编辑器→BDO v9 数据一致"))
+
         if installed:
-            extra_parts.append(trv(" · 已复制到游戏目录"))
+            game_copy_matches = (
+                isinstance(verification, ExportVerificationReport)
+                and verification.stage_matches("game_copy")
+            )
+            if game_copy_matches:
+                extra_parts.append(trv(" · 游戏目录副本一致"))
+            else:
+                extra_parts.append(trv(
+                    " · 主文件已保存，但游戏目录副本未通过一致性检查"
+                ))
         elif installation_error:
             extra_parts.append(
                 trfv(
@@ -9401,28 +8423,6 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
                     error=installation_error,
                 )
             )
-        roundtrip_failed = False
-        roundtrip_error: object | None = None
-        try:
-            snapshot = read_bdo_score(Path(out_path))
-            if snapshot.total_notes != int(summary["total_notes"]):
-                roundtrip_error = trfv(
-                    "回读音符数 {actual} 与导出摘要 {expected} 不一致",
-                    actual=snapshot.total_notes,
-                    expected=summary["total_notes"],
-                )
-        except Exception as exc:
-            roundtrip_error = exc
-            append_crash_log("Export round-trip verification failed", traceback.format_exc())
-        if roundtrip_error is None:
-            extra_parts.append(trv(" · BDO v9 结构回读通过"))
-        else:
-            roundtrip_failed = True
-            extra_parts.append(trfv(
-                " · 回读检查失败：{error}",
-                error=roundtrip_error,
-            ))
-            self.status_label.setText(tr("转换完成（回读检查失败）"))
         result_text = trf(
             "已保存 {file} · {bytes} bytes · {instruments} 乐器 · {tracks} 轨 · {notes} 音符{extra}",
             file=Path(out_path).name, bytes=byte_count, instruments=summary["instruments"],
@@ -9430,11 +8430,18 @@ class MidiToBdoWindow(MainWindowStyleMixin, QMainWindow):
             extra=tr_joinv(extra_parts, separator=""),
         )
         self.inspector_text.setText(result_text)
-        if installation_error:
+        self.inspector_text.setToolTip(tr(
+            "本次检查仅验证编辑器中的可导出字段、BDO v9 文件写入和已安装副本；不代表程序绝对无 Bug，也不证明游戏内音色、效果或响度已验证。"
+        ))
+        if installation_error and not verification_failed:
             self.status_label.setText(tr("转换完成（未复制到游戏目录）"))
         self.show_toast(
             result_text,
-            kind="warning" if roundtrip_failed or installation_error else "success",
+            kind=(
+                "warning"
+                if verification_failed or installation_error
+                else "success"
+            ),
             duration_ms=5200,
         )
         self._autosave_project("convert finished", immediate=True)
@@ -9534,11 +8541,13 @@ def main() -> int:
         try:
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "OpenAI.BDOMusicComposer.1"
+                WINDOWS_APP_USER_MODEL_ID
             )
         except (AttributeError, OSError):
             pass
     app = QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(APP_VERSION)
     install_localizer(app, str(load_config().get("language", "auto")))
     startup = StartupSplash()
     startup.show()

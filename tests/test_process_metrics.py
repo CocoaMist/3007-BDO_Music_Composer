@@ -7,7 +7,10 @@ import sys
 import textwrap
 import unittest
 
-from process_metrics import ProcessMetricsSampler, current_working_set_bytes
+from bdo_music_composer.app.process_metrics import (
+    ProcessMetricsSampler,
+    current_working_set_bytes,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -5,6 +5,7 @@ from pathlib import Path
 import unittest
 
 from bdo_instrument_samples import (
+    MARNIAN_SYNTH_MODES,
     ROW_VOLUME_DB_MAX,
     ROW_VOLUME_DB_MIN,
     WwiseContainerRotation,
@@ -19,6 +20,7 @@ from bdo_instrument_samples import (
     select_zone_row,
     select_zone_variants,
 )
+from bdo_midi import MARNIAN_SYNTH_MODE_OFFSETS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +51,12 @@ def _row(
 
 
 class InstrumentSampleSelectionTests(unittest.TestCase):
+    def test_marnian_sample_modes_follow_the_wire_mapping(self) -> None:
+        self.assertEqual(
+            MARNIAN_SYNTH_MODES,
+            tuple(MARNIAN_SYNTH_MODE_OFFSETS),
+        )
+
     def test_neutral_percussion_notes_route_to_game_event_99(self) -> None:
         for instrument_id in (0x04, 0x05, 0x0D, 0x13):
             self.assertEqual(

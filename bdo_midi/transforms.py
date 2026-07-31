@@ -43,7 +43,13 @@ def map_drum_notes(notes: Iterable[Note]) -> list[Note]:
         already_canonical = note.ntype == DRUM_NOTE_TYPE and 48 <= note.pitch <= 64
         pitch = note.pitch if already_canonical else _GM_TO_BDO_DRUM.get(note.pitch, 48)
         duration = note.dur if pitch in DRUM_ROLL_PITCHES else min(note.dur, DRUM_NOTE_MAX_DURATION_MS)
-        result.append(Note(pitch, note.vel, note.start, max(1.0, duration), DRUM_NOTE_TYPE))
+        # Preserve adapter-owned fields such as BDO velocity B while keeping
+        # the public five-field ``Note`` wire shape unchanged.
+        result.append(note._replace(
+            pitch=pitch,
+            dur=max(1.0, duration),
+            ntype=DRUM_NOTE_TYPE,
+        ))
     return result
 
 

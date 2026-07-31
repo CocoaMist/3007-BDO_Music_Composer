@@ -94,6 +94,28 @@ class MasterEffects:
     chorus_lfo_frequency: int = 0
 
     @classmethod
+    def raw(
+        cls,
+        reverb_time: object = 0,
+        delay_feedback: object = 0,
+        chorus_feedback: object = 0,
+        chorus_lfo_depth: object = 0,
+        chorus_lfo_frequency: object = 0,
+    ) -> "MasterEffects":
+        """Validate losslessly imported wire bytes without authoring clamps."""
+
+        return cls(
+            _raw_byte(reverb_time, "master reverb time"),
+            _raw_byte(delay_feedback, "master delay feedback"),
+            _raw_byte(chorus_feedback, "master chorus feedback"),
+            _raw_byte(chorus_lfo_depth, "master chorus LFO depth"),
+            _raw_byte(
+                chorus_lfo_frequency,
+                "master chorus LFO frequency",
+            ),
+        )
+
+    @classmethod
     def authored(
         cls,
         reverb_time: object = 0,
@@ -125,7 +147,7 @@ class MasterEffects:
         values = tuple(chorus or (0, 0, 0))
         if len(values) != 3:
             raise ValueError("chorus must contain feedback, depth, and frequency")
-        constructor = cls.authored if authored else cls
+        constructor = cls.authored if authored else cls.raw
         return constructor(reverb, delay, *values)
 
     def legacy_values(self) -> tuple[int, int, tuple[int, int, int] | None]:
@@ -166,8 +188,13 @@ def encode_track_effects(
     *,
     sends: TrackEffectSends | None = None,
     master: MasterEffects | None = None,
+    master_authored: bool = True,
 ) -> tuple[int, ...]:
-    """Replace only the requested layer and preserve all other raw bytes."""
+    """Replace only the requested layer and preserve all other raw bytes.
+
+    ``master_authored=False`` is reserved for lossless projection of imported
+    wire values. Interactive edits keep the default game-authoring range.
+    """
 
     settings = list(raw_track_settings(base))
     if sends is not None:
@@ -181,13 +208,22 @@ def encode_track_effects(
             sends.chorus, "track chorus send"
         )
     if master is not None:
-        normalized = MasterEffects.authored(
-            master.reverb_time,
-            master.delay_feedback,
-            master.chorus_feedback,
-            master.chorus_lfo_depth,
-            master.chorus_lfo_frequency,
-        )
+        if master_authored:
+            normalized = MasterEffects.authored(
+                master.reverb_time,
+                master.delay_feedback,
+                master.chorus_feedback,
+                master.chorus_lfo_depth,
+                master.chorus_lfo_frequency,
+            )
+        else:
+            normalized = MasterEffects.raw(
+                master.reverb_time,
+                master.delay_feedback,
+                master.chorus_feedback,
+                master.chorus_lfo_depth,
+                master.chorus_lfo_frequency,
+            )
         settings[MASTER_REVERB_TIME_INDEX] = normalized.reverb_time
         settings[MASTER_DELAY_FEEDBACK_INDEX] = normalized.delay_feedback
         settings[MASTER_CHORUS_FEEDBACK_INDEX] = normalized.chorus_feedback

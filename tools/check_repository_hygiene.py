@@ -1,0 +1,678 @@
+#!/usr/bin/env python3
+"""Validate repository layout without deleting or rewriting user files.
+
+The check has three deliberately narrow responsibilities:
+
+* reject generated, private, or retired files from the versioned source tree;
+* require every root Python module to have a production importer or an
+  explicitly documented standalone role;
+* require top-level documentation, scripts, and developer tools to appear in
+  their directory index.
+
+Ignored local data is outside this check. In particular, this command never
+touches exports, autosaves, sample caches, local settings, or build outputs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+from collections.abc import Iterable
+from pathlib import Path, PurePosixPath
+import re
+import subprocess
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PROJECT_STRUCTURE_PATH = PurePosixPath("docs/PROJECT_STRUCTURE.md")
+
+PRODUCTION_DIRECTORIES = frozenset(
+    {
+        "bdo_music_composer",
+        "bdo_codec",
+        "bdo_export",
+        "bdo_midi",
+        "optimization",
+        "scripts",
+        "tools",
+    }
+)
+ROOT_MODULE_BUDGET = 52
+EXPECTED_ROOT_MODULES = frozenset(
+    {
+        "atomic_io.py",
+        "bdo_articulation_profiles.py",
+        "bdo_audio_lifecycle.py",
+        "bdo_audio_mixing.py",
+        "bdo_audio_research.py",
+        "bdo_experiments.py",
+        "bdo_instrument_adaptation.py",
+        "bdo_instrument_lane_art_qt.py",
+        "bdo_instrument_samples.py",
+        "bdo_lyrics.py",
+        "bdo_midi_optimizer.py",
+        "bdo_music_theory.py",
+        "bdo_preview_effects.py",
+        "bdo_profile.py",
+        "bdo_realtime_audio.py",
+        "bdo_sample_pack.py",
+        "bdo_sample_renderer.py",
+        "bdo_score.py",
+        "bdo_spectrogram.py",
+        "bdo_spectrogram_qt.py",
+        "bdo_techniques.py",
+        "bdo_track_effects.py",
+        "bdo_transcription.py",
+        "bdo_transcription_assist.py",
+        "bdo_transcription_evidence_qt.py",
+        "bdo_transcription_harmony.py",
+        "bdo_transcription_instruments.py",
+        "bdo_transcription_melody_lines.py",
+        "bdo_transcription_policy.py",
+        "bdo_transcription_postprocess.py",
+        "bdo_transcription_session.py",
+        "bdo_transcription_timbre.py",
+        "bdo_validation.py",
+        "conversion_settings.py",
+        "editor_articulation_data.py",
+        "export_verification.py",
+        "export_workflow.py",
+        "game_score_model.py",
+        "gm_program_translations.py",
+        "home_catalog.py",
+        "i18n.py",
+        "main.py",
+        "pitch_transform.py",
+        "project_paths.py",
+        "pyside_bdo_gui.py",
+        "reference_audio_controller.py",
+        "third_party_credits.py",
+        "transcription_commit_plan.py",
+        "transcription_editor_qt.py",
+        "transcription_workers.py",
+        "transcription_workspace_qt.py",
+        "wpf_sidecar.py",
+    }
+)
+
+# These modules are entered externally or preserve a documented import path.
+# A new exception must state a concrete public/research role and be documented
+# in docs/PROJECT_STRUCTURE.md.
+STANDALONE_ROOT_MODULES = {
+    "main.py": "desktop and command-line entry point",
+    "bdo_experiments.py": "privacy-safe local A/B evidence metadata owner",
+    "bdo_midi_optimizer.py": "historical optimizer import facade",
+    "transcription_workspace_qt.py": "historical transcription-widget facade",
+    "wpf_sidecar.py": "external NDJSON sidecar entry point",
+}
+
+LOCAL_ONLY_TOP_LEVEL_DIRECTORIES = frozenset(
+    {
+        ".idea",
+        ".venv",
+        "auto_save",
+        "build",
+        "dist",
+        "game_art_cache",
+        "htmlcov",
+        "out",
+        "sample_cache",
+        "transcription_cache",
+    }
+)
+LOCAL_ONLY_DIRECTORY_NAMES = frozenset(
+    {
+        "__pycache__",
+        ".hypothesis",
+        ".mypy_cache",
+        ".nox",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+    }
+)
+LOCAL_ONLY_PREFIXES = (
+    ("tools", ".midi-to-bdo-git-backup"),
+    ("tools", "midi-to-bdo"),
+)
+LOCAL_ONLY_FILENAMES = frozenset(
+    {
+        ".coverage",
+        ".DS_Store",
+        ".pyside_bdo_gui.json",
+        "coverage.xml",
+        "desktop.ini",
+        "Thumbs.db",
+    }
+)
+PRIVATE_OR_GENERATED_SUFFIXES = frozenset(
+    {
+        ".7z",
+        ".bak",
+        ".bdo",
+        ".bdoopt",
+        ".bdosamples",
+        ".bnk",
+        ".dll",
+        ".exe",
+        ".log",
+        ".mid",
+        ".midi",
+        ".orig",
+        ".paz",
+        ".pyc",
+        ".pyd",
+        ".pyo",
+        ".rar",
+        ".rej",
+        ".tmp",
+        ".wav",
+        ".wem",
+        ".zip",
+    }
+)
+RETIRED_ROOT_FILES = {
+    "TO_AGENT.md": "use AGENTS.md and docs/AI_CONTEXT.md",
+    "run_with_log.bat": "use main.py and the privacy-preserving crash logger",
+    "application_config.py": "use bdo_music_composer.app.application_config",
+    "audio_source_settings.py": "use bdo_music_composer.app.audio_source_settings",
+    "conversion_validation_controller.py": (
+        "use bdo_music_composer.app.conversion_validation_controller"
+    ),
+    "crash_logging.py": "use bdo_music_composer.app.crash_logging",
+    "game_profile_provider.py": (
+        "use bdo_music_composer.app.game_profile_provider"
+    ),
+    "process_metrics.py": "use bdo_music_composer.app.process_metrics",
+    "version.py": (
+        "use bdo_music_composer.app.application_metadata"
+    ),
+    "preview_transport_controller.py": (
+        "use bdo_music_composer.audio.preview_transport_controller"
+    ),
+    "model_revision.py": "use bdo_music_composer.editor.model_revision",
+    "project_document.py": (
+        "use bdo_music_composer.project.project_document"
+    ),
+    "project_lifecycle_controller.py": (
+        "use bdo_music_composer.project.project_lifecycle_controller"
+    ),
+    "project_persistence.py": (
+        "use bdo_music_composer.project.project_persistence"
+    ),
+    "project_schema.py": "use bdo_music_composer.project.project_schema",
+    "transcription_workspace_controller.py": (
+        "use bdo_music_composer.transcription."
+        "transcription_workspace_controller"
+    ),
+    "editor_shortcut_hud.py": (
+        "use bdo_music_composer.ui.editor.editor_shortcut_hud"
+    ),
+    "editor_ui_helpers.py": (
+        "use bdo_music_composer.ui.editor.editor_ui_helpers"
+    ),
+    "midi_note_editor.py": (
+        "use bdo_music_composer.ui.editor.midi_note_editor"
+    ),
+    "piano_roll_canvas.py": (
+        "use bdo_music_composer.ui.editor.piano_roll_canvas"
+    ),
+    "timeline_canvas.py": (
+        "use bdo_music_composer.ui.editor.timeline_canvas"
+    ),
+    "home_widgets.py": "use bdo_music_composer.ui.home_widgets",
+    "startup_widgets.py": "use bdo_music_composer.ui.startup_widgets",
+    "transcription_ui_helpers.py": (
+        "use bdo_music_composer.ui.transcription_ui_helpers"
+    ),
+    "ui_controls.py": "use bdo_music_composer.ui.ui_controls",
+    "ui_notifications.py": "use bdo_music_composer.ui.ui_notifications",
+    "editor_commands.py": (
+        "use bdo_music_composer.editor.editor_commands"
+    ),
+    "editor_models.py": "use bdo_music_composer.editor.editor_models",
+    "editor_import.py": "use bdo_music_composer.editor.editor_import",
+    "interval_index.py": "use bdo_music_composer.editor.interval_index",
+    "preview_midi_writer.py": (
+        "use bdo_music_composer.editor.preview_midi_writer"
+    ),
+    "velocity_curve.py": "use bdo_music_composer.editor.velocity_curve",
+    "acknowledgements_dialog.py": (
+        "use bdo_music_composer.ui.dialogs.acknowledgements_dialog"
+    ),
+    "application_settings_dialog.py": (
+        "use bdo_music_composer.ui.dialogs.application_settings_dialog"
+    ),
+    "conversion_check_dialog.py": (
+        "use bdo_music_composer.ui.dialogs.conversion_check_dialog"
+    ),
+    "optimizer_dialog.py": (
+        "use bdo_music_composer.ui.dialogs.optimizer_dialog"
+    ),
+    "track_settings_dialogs.py": (
+        "use bdo_music_composer.ui.dialogs.track_settings_dialogs"
+    ),
+    "fluent_theme.py": (
+        "use bdo_music_composer.ui.theme.fluent_theme"
+    ),
+    "main_window_style.py": (
+        "use bdo_music_composer.ui.theme.main_window_style"
+    ),
+}
+RETIRED_ROOT_MODULES = frozenset(
+    Path(filename).stem
+    for filename in RETIRED_ROOT_FILES
+    if filename.endswith(".py")
+)
+
+INDEX_CONTRACTS = {
+    PurePosixPath("docs/README.md"): ("docs", frozenset({".md"})),
+    PurePosixPath("scripts/README.md"): ("scripts", None),
+    PurePosixPath("tools/README.md"): ("tools", None),
+}
+MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+
+
+def _disk_path(root: Path, path: PurePosixPath) -> Path:
+    return root.joinpath(*path.parts)
+
+
+def repository_paths(root: Path = ROOT) -> tuple[PurePosixPath, ...]:
+    """Return existing tracked and prospective untracked source files."""
+
+    result = subprocess.run(
+        (
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ),
+        cwd=root,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"git ls-files failed: {detail or result.returncode}")
+
+    paths: set[PurePosixPath] = set()
+    for raw_path in result.stdout.split(b"\0"):
+        if not raw_path:
+            continue
+        decoded = raw_path.decode("utf-8", errors="surrogateescape")
+        path = PurePosixPath(decoded.replace("\\", "/"))
+        if _disk_path(root, path).is_file():
+            paths.add(path)
+    return tuple(sorted(paths, key=str))
+
+
+def _forbidden_reason(path: PurePosixPath) -> str | None:
+    parts = path.parts
+    lower_parts = tuple(part.lower() for part in parts)
+    if path.as_posix() in RETIRED_ROOT_FILES:
+        return RETIRED_ROOT_FILES[path.as_posix()]
+    if lower_parts[0] in LOCAL_ONLY_TOP_LEVEL_DIRECTORIES:
+        return "local/generated top-level directory"
+    if any(part in LOCAL_ONLY_DIRECTORY_NAMES for part in lower_parts):
+        return "cache directory"
+    if any(part.endswith(".egg-info") for part in lower_parts):
+        return "generated package metadata"
+    if any(lower_parts[: len(prefix)] == prefix for prefix in LOCAL_ONLY_PREFIXES):
+        return "ignored local third-party workspace"
+    if path.name in LOCAL_ONLY_FILENAMES:
+        return "machine-local/generated file"
+    if path.suffix.lower() in PRIVATE_OR_GENERATED_SUFFIXES:
+        return "private input or generated binary/output"
+    return None
+
+
+def forbidden_path_errors(
+    paths: Iterable[PurePosixPath],
+) -> list[str]:
+    errors: list[str] = []
+    for path in paths:
+        reason = _forbidden_reason(path)
+        if reason:
+            errors.append(f"{path.as_posix()}: {reason}")
+    return errors
+
+
+def retired_reference_errors(
+    root: Path,
+    paths: Iterable[PurePosixPath],
+) -> list[str]:
+    """Reject executable references to retired root module identities."""
+
+    errors: list[str] = []
+    checker_path = PurePosixPath("tools/check_repository_hygiene.py")
+    for source in paths:
+        if source.suffix.lower() != ".py":
+            continue
+        disk_source = _disk_path(root, source)
+        try:
+            tree = ast.parse(
+                disk_source.read_text(encoding="utf-8-sig"),
+                filename=str(disk_source),
+            )
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            errors.append(
+                f"{source.as_posix()}: cannot inspect retired imports: {exc}"
+            )
+            continue
+
+        references: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                references.update(
+                    alias.name.split(".", 1)[0]
+                    for alias in node.names
+                    if alias.name.split(".", 1)[0] in RETIRED_ROOT_MODULES
+                )
+            elif (
+                isinstance(node, ast.ImportFrom)
+                and node.level == 0
+                and node.module
+            ):
+                root_module = node.module.split(".", 1)[0]
+                if root_module in RETIRED_ROOT_MODULES:
+                    references.add(root_module)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                value = node.value.strip().replace("\\", "/")
+                references.update(
+                    module
+                    for module in RETIRED_ROOT_MODULES
+                    if module != "version"
+                    and value.startswith(f"{module}.")
+                    and value != f"{module}.py"
+                )
+                if source != checker_path:
+                    references.update(
+                        Path(filename).stem
+                        for filename in RETIRED_ROOT_FILES
+                        if filename.endswith(".py") and value == filename
+                    )
+            elif isinstance(node, ast.Call) and node.args:
+                function_name = (
+                    node.func.id
+                    if isinstance(node.func, ast.Name)
+                    else node.func.attr
+                    if isinstance(node.func, ast.Attribute)
+                    else ""
+                )
+                argument = node.args[0]
+                if (
+                    function_name in {"__import__", "import_module"}
+                    and isinstance(argument, ast.Constant)
+                    and isinstance(argument.value, str)
+                ):
+                    root_module = argument.value.split(".", 1)[0]
+                    if root_module in RETIRED_ROOT_MODULES:
+                        references.add(root_module)
+        if references:
+            errors.append(
+                f"{source.as_posix()}: references retired root modules: "
+                + ", ".join(sorted(references))
+            )
+    return errors
+
+
+def retired_document_reference_errors(
+    root: Path,
+    paths: Iterable[PurePosixPath],
+) -> list[str]:
+    """Keep current contributor docs on canonical package paths."""
+
+    errors: list[str] = []
+    retired_python_files = tuple(
+        filename
+        for filename in RETIRED_ROOT_FILES
+        if filename.endswith(".py")
+    )
+    for source in paths:
+        if source.suffix.lower() != ".md":
+            continue
+        if source == PurePosixPath("CHANGELOG.md"):
+            continue
+        if source.parts[:2] in {
+            ("docs", "history"),
+            ("docs", "releases"),
+        }:
+            continue
+        text = _disk_path(root, source).read_text(encoding="utf-8-sig")
+        stale = sorted(
+            filename
+            for filename in retired_python_files
+            if re.search(
+                rf"(?<![A-Za-z0-9_/\\]){re.escape(filename)}",
+                text,
+            )
+        )
+        if stale:
+            errors.append(
+                f"{source.as_posix()}: documents retired root paths: "
+                + ", ".join(stale)
+            )
+    return errors
+
+
+def _direct_top_level_imports(path: Path) -> frozenset[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module
+        ):
+            imports.add(node.module.split(".", 1)[0])
+    return frozenset(imports)
+
+
+def root_module_errors(
+    root: Path,
+    paths: Iterable[PurePosixPath],
+) -> list[str]:
+    """Find root modules that have no production owner or documented role."""
+
+    available_paths = tuple(paths)
+    root_modules = {
+        path.stem: path
+        for path in available_paths
+        if len(path.parts) == 1 and path.suffix.lower() == ".py"
+    }
+    errors: list[str] = []
+    if len(root_modules) > ROOT_MODULE_BUDGET:
+        errors.append(
+            f"root Python module count {len(root_modules)} exceeds "
+            f"the {ROOT_MODULE_BUDGET}-file budget; place the new owner "
+            "inside the appropriate bdo_music_composer subpackage"
+        )
+    actual_root_files = {path.name for path in root_modules.values()}
+    unexpected = sorted(actual_root_files - EXPECTED_ROOT_MODULES)
+    missing = sorted(EXPECTED_ROOT_MODULES - actual_root_files)
+    if unexpected:
+        errors.append(
+            "unexpected root Python modules: " + ", ".join(unexpected)
+        )
+    if missing:
+        errors.append(
+            "expected root Python modules are missing: " + ", ".join(missing)
+        )
+    inbound = {module: set() for module in root_modules}
+
+    production_paths = (
+        path
+        for path in available_paths
+        if path.suffix.lower() == ".py"
+        and (
+            len(path.parts) == 1
+            or path.parts[0] in PRODUCTION_DIRECTORIES
+        )
+    )
+    for source in production_paths:
+        try:
+            imported_modules = _direct_top_level_imports(
+                _disk_path(root, source)
+            )
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            errors.append(
+                f"{source.as_posix()}: cannot build import graph: {exc}"
+            )
+            continue
+        for module in imported_modules.intersection(root_modules):
+            if source != root_modules[module]:
+                inbound[module].add(source)
+
+    standalone_names = {
+        PurePosixPath(filename).stem
+        for filename in STANDALONE_ROOT_MODULES
+    }
+    for module, importers in sorted(inbound.items()):
+        if not importers and module not in standalone_names:
+            errors.append(
+                f"{root_modules[module].as_posix()}: root module has no "
+                "production importer; connect it to its owner, move it to "
+                "scripts/tools, or document a real standalone contract"
+            )
+
+    structure_path = _disk_path(root, PROJECT_STRUCTURE_PATH)
+    structure_text = (
+        structure_path.read_text(encoding="utf-8")
+        if structure_path.is_file()
+        else ""
+    )
+    for filename, role in STANDALONE_ROOT_MODULES.items():
+        path = PurePosixPath(filename)
+        if path.stem not in root_modules:
+            errors.append(
+                f"{filename}: stale standalone-module exception ({role})"
+            )
+        if f"`{filename}`" not in structure_text:
+            errors.append(
+                f"{PROJECT_STRUCTURE_PATH.as_posix()}: missing standalone "
+                f"module {filename} ({role})"
+            )
+    return errors
+
+
+def _indexed_members(
+    paths: Iterable[PurePosixPath],
+    directory: str,
+    suffixes: frozenset[str] | None,
+    index_path: PurePosixPath,
+) -> tuple[PurePosixPath, ...]:
+    return tuple(
+        path
+        for path in paths
+        if path.parent == PurePosixPath(directory)
+        and path != index_path
+        and (suffixes is None or path.suffix.lower() in suffixes)
+    )
+
+
+def index_errors(
+    root: Path,
+    paths: Iterable[PurePosixPath],
+) -> list[str]:
+    """Require discoverable top-level directory members."""
+
+    available_paths = tuple(paths)
+    errors: list[str] = []
+    for index_path, (directory, suffixes) in INDEX_CONTRACTS.items():
+        disk_index = _disk_path(root, index_path)
+        if not disk_index.is_file():
+            errors.append(f"{index_path.as_posix()}: missing directory index")
+            continue
+        text = disk_index.read_text(encoding="utf-8")
+        for member in _indexed_members(
+            available_paths,
+            directory,
+            suffixes,
+            index_path,
+        ):
+            if member.name not in text:
+                errors.append(
+                    f"{index_path.as_posix()}: missing {member.name}"
+                )
+    return errors
+
+
+def markdown_link_errors(
+    root: Path,
+    paths: Iterable[PurePosixPath],
+) -> list[str]:
+    """Find broken or repository-escaping local links in source Markdown."""
+
+    repository_root = root.resolve()
+    errors: list[str] = []
+    for source in paths:
+        if source.suffix.lower() != ".md":
+            continue
+        disk_source = _disk_path(root, source)
+        text = disk_source.read_text(encoding="utf-8-sig")
+        for raw_target in MARKDOWN_LINK.findall(text):
+            target = raw_target.strip().strip("<>").split("#", 1)[0]
+            if (
+                not target
+                or "://" in target
+                or target.startswith("mailto:")
+            ):
+                continue
+            resolved = (disk_source.parent / target).resolve()
+            try:
+                resolved.relative_to(repository_root)
+            except ValueError:
+                errors.append(
+                    f"{source.as_posix()}: link escapes repository: "
+                    f"{raw_target}"
+                )
+                continue
+            if not resolved.exists():
+                errors.append(
+                    f"{source.as_posix()}: broken link {raw_target}"
+                )
+    return errors
+
+
+def validate_repository(root: Path = ROOT) -> list[str]:
+    """Return deterministic, human-readable repository hygiene errors."""
+
+    paths = repository_paths(root)
+    errors = forbidden_path_errors(paths)
+    errors.extend(retired_reference_errors(root, paths))
+    errors.extend(retired_document_reference_errors(root, paths))
+    errors.extend(root_module_errors(root, paths))
+    errors.extend(index_errors(root, paths))
+    errors.extend(markdown_link_errors(root, paths))
+    return sorted(errors)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=ROOT,
+        help="repository root (defaults to the parent of this script)",
+    )
+    args = parser.parse_args()
+    try:
+        errors = validate_repository(args.root.resolve())
+    except RuntimeError as exc:
+        print(exc)
+        return 2
+    if errors:
+        for error in errors:
+            print(error)
+        return 1
+    print("Repository hygiene check passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

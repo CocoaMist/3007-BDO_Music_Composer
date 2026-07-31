@@ -32,6 +32,54 @@ class WpfSidecarTests(unittest.TestCase):
             self.assertTrue(out_path.is_file())
             self.assertGreater(out_path.stat().st_size, 4)
 
+    def test_mute_solo_never_remove_formal_export_tracks(self) -> None:
+        project = self.project()
+        project["tracks"][0].update({"muted": True, "solo": False})
+        issues = wpf_sidecar.dispatch(
+            "validate_project", {"project": project}
+        )["issues"]
+        self.assertFalse(any(item["code"] == "track.excluded" for item in issues))
+        with tempfile.TemporaryDirectory() as directory:
+            out_path = Path(directory) / "muted-score"
+            result = wpf_sidecar.dispatch(
+                "export_bdo",
+                {"project": project, "out_path": str(out_path)},
+            )
+            self.assertTrue(result["exported"])
+            self.assertEqual(read_bdo_score(out_path).total_notes, 1)
+
+    def test_unmaterialized_velocity_policy_is_blocked(self) -> None:
+        project = self.project()
+        project["conversion_settings"]["velocity_mode"] = "layered"
+        result = wpf_sidecar.dispatch(
+            "export_bdo", {"project": project, "out_path": "ignored"}
+        )
+        self.assertFalse(result["exported"])
+        self.assertTrue(any(
+            item["code"] == "game_model.velocity_unmaterialized"
+            for item in result["issues"]
+        ))
+
+    def test_marnian_mode_offset_is_the_exported_instrument_id(self) -> None:
+        project = self.project()
+        project["tracks"][0].update({
+            "bdo_instrument_id": 20,
+            "marnian_synth_mode": "stereo",
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            out_path = Path(directory) / "marnian-score"
+            result = wpf_sidecar.dispatch(
+                "export_bdo",
+                {"project": project, "out_path": str(out_path)},
+            )
+            self.assertTrue(result["exported"])
+            active = next(
+                track
+                for track in read_bdo_score(out_path).tracks
+                if track.notes
+            )
+            self.assertEqual(active.instrument_id, 21)
+
     def test_export_and_validation_share_track_pitch_plan(self) -> None:
         project = self.project()
         project["pitch_transform"] = {

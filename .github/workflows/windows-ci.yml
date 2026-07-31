@@ -37,6 +37,10 @@ jobs:
             requirements-pyside.txt
             requirements-transcription.txt
 
+      - name: Check repository hygiene
+        shell: pwsh
+        run: python tools\check_repository_hygiene.py
+
       - name: Create virtual environment
         shell: pwsh
         run: python -m venv .venv
@@ -47,7 +51,9 @@ jobs:
 
       - name: Compile primary entry points
         shell: pwsh
-        run: .\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
+        run: |
+          .\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
+          .\.venv\Scripts\python.exe -m compileall -q bdo_music_composer
 
       - name: Run headless lifecycle gate
         shell: pwsh

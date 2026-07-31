@@ -6,11 +6,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bdo_midi import Note
+from bdo_music_composer.editor.editor_models import TrackState
 from home_catalog import IncrementalHomeScan, scan_local_projects
-from project_persistence import (
+from bdo_music_composer.project.project_persistence import (
     AutosaveRequest,
     PROJECT_INDEX_NAME,
-    ProjectTrackSnapshot,
+    ProjectMetadataSnapshot,
+    freeze_project_tracks,
     rename_project,
     write_autosave,
 )
@@ -20,33 +22,23 @@ class ProjectPersistenceTests(unittest.TestCase):
     def test_autosave_writes_compact_project_and_safe_index(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             project_dir = Path(temp) / "demo"
+            track = TrackState(
+                track_id=1,
+                notes=[Note(60, 90, 0.0, 250.0, 0)],
+                gm_program=0,
+                is_percussion=False,
+                display_name="Lead",
+                bdo_instrument_id=0x0B,
+            )
             request = AutosaveRequest(
                 project_dir=project_dir,
-                metadata={"schema_version": 5, "output_name": "Demo"},
-                tracks=(ProjectTrackSnapshot(
-                    values={
-                        "track_id": 1,
-                        "gm_program": 0,
-                        "is_percussion": False,
-                        "display_name": "Lead",
-                        "bdo_instrument_id": 0x0B,
-                        "muted": False,
-                        "solo": False,
-                        "volume_scale": 1.0,
-                        "duration_scale": 1.0,
-                        "bdo_track_volume": 70,
-                        "bdo_track_settings": (0,) * 8,
-                        "bdo_source_group_index": None,
-                        "bdo_source_note_records": (),
-                        "articulation_type": None,
-                        "marnian_synth_mode": "basic",
-                        "notes_optimized": False,
-                        "performance_controls": (),
-                    },
-                    notes=(Note(60, 90, 0.0, 250.0, 0),),
-                ),),
-                saved_at="2026-07-27 12:00:00",
-                reason="test",
+                metadata=ProjectMetadataSnapshot.capture(
+                    schema_version=5,
+                    output_name="Demo",
+                    saved_at="2026-07-27 12:00:00",
+                    reason="test",
+                ),
+                tracks=freeze_project_tracks((track,)),
             )
             write_autosave(request)
 
@@ -62,6 +54,75 @@ class ProjectPersistenceTests(unittest.TestCase):
                 write_autosave(request).read_text("utf-8")
             )["project_id"]
             self.assertEqual(second_id, payload["project_id"])
+
+    def test_metadata_snapshot_recursively_detaches_mutable_ui_values(
+        self,
+    ) -> None:
+        lyrics = [{"time": 1.0, "text": "before"}]
+        research = {
+            "profile_id": "profile",
+            "ab_experiments": [{"id": "before"}],
+        }
+        snapshot = ProjectMetadataSnapshot.capture(
+            schema_version=11,
+            saved_at="2026-07-30 12:00:00",
+            reason="test",
+            lyric_events=lyrics,
+            research=research,
+        )
+
+        lyrics[0]["text"] = "after"
+        research["ab_experiments"][0]["id"] = "after"
+        payload = snapshot.to_payload()
+
+        self.assertEqual(payload["lyric_events"][0]["text"], "before")
+        self.assertEqual(
+            payload["research"]["ab_experiments"][0]["id"],
+            "before",
+        )
+        self.assertEqual(payload["original_midi_path"], "")
+        self.assertEqual(payload["reference_audio_path"], "")
+
+    def test_metadata_snapshot_rejects_nonportable_source_reference(self) -> None:
+        for reference in ("../source.mid", str(Path.cwd().resolve())):
+            with self.subTest(reference=reference):
+                with self.assertRaisesRegex(ValueError, "project-relative"):
+                    ProjectMetadataSnapshot.capture(
+                        schema_version=11,
+                        source_reference=reference,
+                    )
+
+    def test_track_snapshot_recursively_detaches_mutable_editor_values(
+        self,
+    ) -> None:
+        track = TrackState(
+            track_id=4,
+            notes=[Note(64, 95, 100.0, 300.0, 7)],
+            gm_program=12,
+            is_percussion=False,
+            display_name="Before",
+            bdo_instrument_id=0x0B,
+            performance_controls=[{
+                "kind": "cc",
+                "value": 64,
+                "metadata": {"label": "before"},
+            }],
+        )
+        snapshot = freeze_project_tracks((track,))[0]
+
+        track.display_name = "After"
+        track.notes.append(Note(67, 80, 500.0, 100.0, 0))
+        track.performance_controls[0]["value"] = 0
+        track.performance_controls[0]["metadata"]["label"] = "after"
+        payload = snapshot.to_payload()
+
+        self.assertEqual(payload["display_name"], "Before")
+        self.assertEqual(payload["notes"], [[64, 95, 100.0, 300.0, 7]])
+        self.assertEqual(payload["performance_controls"][0]["value"], 64)
+        self.assertEqual(
+            payload["performance_controls"][0]["metadata"]["label"],
+            "before",
+        )
 
     def test_project_rename_preserves_identity_and_rewrites_safe_index(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

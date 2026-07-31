@@ -120,18 +120,39 @@ flowchart LR
 주요 경계:
 
 - `pyside_bdo_gui.py`: main window orchestration, Qt lifecycle, 호환 export.
-- `model_revision.py` 및 각 `*_controller.py`: 검증, 채보 worker/review history, project loading, preview transport command의 Qt-free 상태.
-- `editor_models.py`, `bdo_midi/`: 공유 트랙 상태, 불변 음표, 순수 transform.
-- `timeline_canvas.py`, `piano_roll_canvas.py`, `midi_note_editor.py`: visible-range-indexed 편집 화면.
-- 독립 dialog: `application_settings_dialog.py`, `conversion_check_dialog.py`, `optimizer_dialog.py`, `track_settings_dialogs.py`, `acknowledgements_dialog.py`.
+- `bdo_music_composer/editor/model_revision.py`,
+  `bdo_music_composer/app/conversion_validation_controller.py`,
+  `bdo_music_composer/transcription/transcription_workspace_controller.py`,
+  `bdo_music_composer/project/project_lifecycle_controller.py`,
+  `bdo_music_composer/audio/preview_transport_controller.py`: 검증, 채보
+  worker/review history, project loading, preview transport command의 Qt-free 상태.
+- `bdo_music_composer/editor/editor_models.py`,
+  `bdo_music_composer/editor/editor_import.py`,
+  `bdo_music_composer/editor/editor_commands.py`,
+  `bdo_music_composer/editor/interval_index.py`,
+  `bdo_music_composer/editor/velocity_curve.py`,
+  `bdo_music_composer/editor/preview_midi_writer.py`: Qt-free 공유 상태,
+  transaction import, command, visible-range query, velocity curve, 표준 MIDI projection.
+- `bdo_music_composer/ui/editor/`: visible-range-indexed timeline, piano-roll, note-editor 화면.
+- `bdo_music_composer/app/application_metadata.py`: version/repository identity.
+- focused dialog는 `bdo_music_composer/ui/dialogs/`, semantic application
+  theme는 inert한 `bdo_music_composer/ui/theme/` subpackage에 있습니다.
 - `optimization/`: production pipeline, registry, 신뢰 로컬 알고리즘 경계.
 - `bdo_realtime_audio.py`, `bdo_sample_renderer.py`: 실시간/오프라인 샘플 미리듣기.
 - `export_workflow.py`, `bdo_export/`, `bdo_codec/`: 불변 request, adapter, binary I/O, atomic publication.
-- `project_persistence.py`, `project_schema.py`, `home_catalog.py`: autosave, migration, bounded home discovery.
+- `bdo_music_composer/project/project_persistence.py`,
+  `bdo_music_composer/project/project_schema.py`, `home_catalog.py`: autosave,
+  migration, bounded home discovery.
 - `bdo_transcription*.py`, `transcription_workers.py`: Qt-free 분석, 안정적인 candidate-range index 및 background worker.
 - `i18n.py`, `project_paths.py`: 번역 catalog와 source/frozen path 경계.
 
 자세한 문서: [Architecture](docs/ARCHITECTURE.md), [AI Context](docs/AI_CONTEXT.md), [Project Structure](docs/PROJECT_STRUCTURE.md), [Conversion Settings](docs/CONVERSION_SETTINGS.md), [BDO v9 codec](docs/BDO_V9_CODEC.md).
+
+no-shim package migration은 앞선 89→69 이후 root Python file을 69→56으로
+줄였습니다. 이어 5개의 Qt editor owner를 `bdo_music_composer/ui/editor/`로
+모으고 version/repository identity를
+`bdo_music_composer/app/application_metadata.py`에 통합해 현재 기준을 52로
+낮췄습니다. 7～10 file root는 장기 방향이며 현재 완료 상태가 아닙니다.
 
 <!-- section:invariants -->
 ## 정확성 및 성능 불변 조건

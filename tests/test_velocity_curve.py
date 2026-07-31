@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from collections import namedtuple
 
-from velocity_curve import (
+from bdo_music_composer.editor.velocity_curve import (
     apply_velocity_curve,
     apply_weighted_velocity_delta,
     velocity_curve_progress,
@@ -73,6 +73,23 @@ class VelocityCurveTests(unittest.TestCase):
         self.assertEqual(changed[3].vel, 60)
         self.assertEqual(velocity_neighbor_weight(0.0, 1000.0), 1.0)
         self.assertEqual(velocity_neighbor_weight(1000.0, 1000.0), 0.0)
+
+    def test_zero_velocity_is_preserved_and_is_the_lower_clamp(self) -> None:
+        notes = [
+            Note(60, 0, 0.0, 100.0, 0),
+            Note(62, 3, 500.0, 100.0, 0),
+        ]
+
+        curved = apply_velocity_curve(notes, {0}, 100, 100, "linear")
+        lowered = apply_weighted_velocity_delta(
+            notes,
+            center_ms=500.0,
+            delta=-20.0,
+            radius_ms=100.0,
+        )
+
+        self.assertEqual(curved[0].vel, 0)
+        self.assertEqual(lowered[1].vel, 0)
 
 
 if __name__ == "__main__":

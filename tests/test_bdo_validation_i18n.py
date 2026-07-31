@@ -69,8 +69,9 @@ ENGLISH = {
         "Export will transpose every note on this track by {transpose:+d} semitones.",
     "导出会将此轨道音符时值乘以 {duration_scale:.3g}。":
         "Export will multiply note durations on this track by {duration_scale:.3g}.",
-    "导出会将此轨道力度乘以 {volume_scale:.3g}。":
-        "Export will multiply note velocities on this track by {volume_scale:.3g}.",
+    "此轨道仍含旧版隐藏力度倍率 {volume_scale:.3g}；请先将它写入音符力度。":
+        "This track still contains the legacy hidden velocity multiplier "
+        "{volume_scale:.3g}; write it into note velocities first.",
     "FX type {articulation} 不属于当前乐器。":
         "FX type {articulation} is not available for this instrument.",
     "导出会把此轨道全部音符设为 FX type {articulation}。":

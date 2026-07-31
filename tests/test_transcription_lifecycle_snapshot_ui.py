@@ -132,7 +132,7 @@ class TranscriptionLifecycleSnapshotUiTests(unittest.TestCase):
                 ManualVoiceGroupReview,
                 TranscriptionAssistReviewState,
             )
-            from editor_commands import ProjectSnapshot
+            from bdo_music_composer.editor.editor_commands import ProjectSnapshot
             from pyside_bdo_gui import MidiToBdoWindow, TrackState
 
             app = QApplication([])

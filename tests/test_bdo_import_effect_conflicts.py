@@ -3,7 +3,23 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 
-from pyside_bdo_gui import track_states_from_bdo_score
+from bdo_music_composer.editor.editor_import import (
+    TrackImportPresentation,
+    tracks_from_bdo_snapshot,
+)
+
+
+PRESENTATION = TrackImportPresentation(
+    colors=("#123456",),
+    bdo_instrument_name=lambda instrument_id: f"BDO {instrument_id}",
+    gm_program_name=lambda program: f"GM {program}",
+    drum_track_name=lambda: "Drums",
+    new_track_name=lambda track_id: f"Track {track_id}",
+)
+
+
+def track_states_from_bdo_score(snapshot: object) -> list[object]:
+    return list(tracks_from_bdo_snapshot(snapshot, PRESENTATION))
 
 
 def physical_track(

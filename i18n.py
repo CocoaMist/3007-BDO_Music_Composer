@@ -528,8 +528,8 @@ EN.update({
     "导出规则、MIDI 解析、力度策略与游戏效果。设置只在下次导出时生效。": "Export rules, MIDI parsing, velocity strategy, and in-game effects. Changes apply to the next export.",
     "角色名会写入乐谱；BPM 与移调会在导出时应用。": "The character name is stored in the score; BPM and transpose are applied during export.",
     "选择一份游戏内保存的曲谱，读取角色名和 Owner ID。": "Choose a score saved in game to read its character name and Score Owner ID.",
-    "这两项会影响 MIDI 读入方式；修改后会重新载入当前文件。": "These options affect MIDI parsing; changing them reloads the current file.",
-    "选择一种输出力度策略；下方仅显示当前策略需要的参数。": "Choose an output velocity strategy; only its relevant parameters are shown.",
+    "这两项仅用于下一次 MIDI 导入；不会重新解析或覆盖当前工程。": "These options apply only to the next MIDI import; they never reparse or overwrite the current project.",
+    "选择后会写入当前音符力度；导出阶段不会再做隐藏处理。": "Choosing a mode writes it into current note velocities; export applies no hidden processing.",
     "数值范围为 0–100；设为 0 即不写入对应效果。": "Values range from 0–100; zero disables the corresponding effect.",
     "轨道 FX 设置每轨发送；此页设置共享主效果。": "Track FX sets per-track sends; this page configures the shared master effects.",
     "选择轨道查看详情。右键可修复和优化轨道或更换乐器；FX 可设置支持乐器的 BDO 奏法。": "Select a track for details. Right-click to optimize or change its instrument; AuxSend configures supported BDO Musical Techniques.",
@@ -608,8 +608,8 @@ JA.update({
     "导出规则、MIDI 解析、力度策略与游戏效果。设置只在下次导出时生效。": "書き出し規則、MIDI解析、ベロシティ処理、ゲーム内エフェクトを設定します。次回の書き出しから反映されます。",
     "角色名会写入乐谱；BPM 与移调会在导出时应用。": "キャラクター名を楽譜に保存し、BPMとトランスポーズを書き出し時に適用します。",
     "选择一份游戏内保存的曲谱，读取角色名和 Owner ID。": "ゲーム内で保存した楽譜からキャラクター名と楽譜所有者IDを読み込みます。",
-    "这两项会影响 MIDI 读入方式；修改后会重新载入当前文件。": "MIDIの読み込み方法に影響します。変更すると現在のファイルを再読み込みします。",
-    "选择一种输出力度策略；下方仅显示当前策略需要的参数。": "ベロシティの出力方式を選択します。必要な設定だけが表示されます。",
+    "这两项仅用于下一次 MIDI 导入；不会重新解析或覆盖当前工程。": "この2項目は次回のMIDI読み込みにのみ適用され、現在のプロジェクトを再解析または上書きしません。",
+    "选择后会写入当前音符力度；导出阶段不会再做隐藏处理。": "選択した処理は現在の音符ベロシティに書き込まれ、書き出し時に隠れた処理は行いません。",
     "数值范围为 0–100；设为 0 即不写入对应效果。": "値は0～100です。0にすると対応するエフェクトを書き込みません。",
     "轨道 FX 设置每轨发送；此页设置共享主效果。": "トラックFXはトラックごとの送信量を設定し、このページでは共有マスターエフェクトを設定します。",
     "选择轨道查看详情。右键可修复和优化轨道或更换乐器；FX 可设置支持乐器的 BDO 奏法。": "トラックを選択すると詳細を表示します。右クリックで最適化や楽器変更、FXで奏法を設定できます。",
@@ -688,8 +688,8 @@ KO.update({
     "导出规则、MIDI 解析、力度策略与游戏效果。设置只在下次导出时生效。": "내보내기 규칙, MIDI 분석, 벨로시티 전략과 게임 효과를 설정합니다. 다음 내보내기부터 적용됩니다.",
     "角色名会写入乐谱；BPM 与移调会在导出时应用。": "캐릭터 이름은 악보에 저장되고 BPM과 조옮김은 내보낼 때 적용됩니다.",
     "选择一份游戏内保存的曲谱，读取角色名和 Owner ID。": "게임에서 저장한 악보를 선택해 캐릭터 이름과 악보 소유자 ID를 읽습니다.",
-    "这两项会影响 MIDI 读入方式；修改后会重新载入当前文件。": "MIDI 읽기 방식에 영향을 주며 변경하면 현재 파일을 다시 불러옵니다.",
-    "选择一种输出力度策略；下方仅显示当前策略需要的参数。": "벨로시티 출력 전략을 선택합니다. 필요한 설정만 아래에 표시됩니다.",
+    "这两项仅用于下一次 MIDI 导入；不会重新解析或覆盖当前工程。": "이 두 옵션은 다음 MIDI 가져오기에만 적용되며 현재 프로젝트를 다시 분석하거나 덮어쓰지 않습니다.",
+    "选择后会写入当前音符力度；导出阶段不会再做隐藏处理。": "선택한 처리는 현재 음표 벨로시티에 기록되며 내보낼 때 숨겨진 처리를 하지 않습니다.",
     "数值范围为 0–100；设为 0 即不写入对应效果。": "값 범위는 0–100이며 0이면 해당 효과를 기록하지 않습니다.",
     "轨道 FX 设置每轨发送；此页设置共享主效果。": "트랙 FX에서 트랙별 전송량을 설정하고 이 페이지에서 공유 마스터 이펙트를 설정합니다.",
     "选择轨道查看详情。右键可修复和优化轨道或更换乐器；FX 可设置支持乐器的 BDO 奏法。": "트랙을 선택하면 세부 정보를 봅니다. 우클릭으로 최적화하거나 악기를 바꾸고 FX에서 주법을 설정합니다.",
@@ -1130,6 +1130,57 @@ KO.update({
 })
 
 TRANSLATIONS = {"en_US": EN, "ja_JP": JA, "ko_KR": KO}
+EN.update({
+    "以此轨统一同乐器音量和 FX": "Use this track to unify same-instrument Volume and FX",
+    "无法同步游戏乐器音量：{error}": "Cannot sync game-instrument Volume: {error}",
+    "已同步 {count} 条同乐器轨道的游戏音量": "Synced game Volume to {count} same-instrument tracks",
+    "所选轨道的游戏混音数据无效：{error}": "The selected track has invalid game mixer data: {error}",
+    "无法统一游戏乐器混音：{error}": "Cannot unify the game-instrument mixer: {error}",
+    "同乐器轨道已经一致": "Same-instrument tracks are already consistent",
+    "已按所选轨道统一 {count} 条同乐器轨道": "Unified {count} same-instrument tracks from the selected track",
+    "目标游戏乐器存在混音冲突：{error}": "The target game instrument has mixer conflicts: {error}",
+    "已采用目标游戏乐器的共享音量和 FX": "Adopted the target game instrument's shared Volume and FX",
+    "无法新建同乐器轨道：{error}": "Cannot create a same-instrument track: {error}",
+    "无法同步游戏乐器 FX：{error}": "Cannot sync game-instrument FX: {error}",
+    "当前工程没有可导出的轨道": "The current project has no exportable tracks",
+    "保持原力度": "Preserve original velocity",
+    "工程轨道数据无效：{error}": "The project track data is invalid: {error}",
+    "工程未保存原 MIDI 的拍号分母，且源文件已不可用；已阻止导出以避免静默写入错误拍号。": "The project did not save the original MIDI meter denominator and the source is unavailable; export was blocked to prevent writing an incorrect meter.",
+})
+JA.update({
+    "以此轨统一同乐器音量和 FX": "このトラックで同一楽器の音量とFXを統一",
+    "无法同步游戏乐器音量：{error}": "ゲーム楽器の音量を同期できません：{error}",
+    "已同步 {count} 条同乐器轨道的游戏音量": "同一楽器の{count}トラックにゲーム音量を同期しました",
+    "所选轨道的游戏混音数据无效：{error}": "選択トラックのゲームミキサーデータが無効です：{error}",
+    "无法统一游戏乐器混音：{error}": "ゲーム楽器のミキサーを統一できません：{error}",
+    "同乐器轨道已经一致": "同一楽器のトラックはすでに一致しています",
+    "已按所选轨道统一 {count} 条同乐器轨道": "選択トラックを基準に同一楽器の{count}トラックを統一しました",
+    "目标游戏乐器存在混音冲突：{error}": "対象ゲーム楽器のミキサーに競合があります：{error}",
+    "已采用目标游戏乐器的共享音量和 FX": "対象ゲーム楽器の共有音量とFXを適用しました",
+    "无法新建同乐器轨道：{error}": "同一楽器のトラックを作成できません：{error}",
+    "无法同步游戏乐器 FX：{error}": "ゲーム楽器のFXを同期できません：{error}",
+    "当前工程没有可导出的轨道": "現在のプロジェクトには書き出せるトラックがありません",
+    "保持原力度": "元のベロシティを保持",
+    "工程轨道数据无效：{error}": "プロジェクトのトラックデータが無効です：{error}",
+    "工程未保存原 MIDI 的拍号分母，且源文件已不可用；已阻止导出以避免静默写入错误拍号。": "元のMIDIの拍子分母が保存されておらず、ソースも利用できないため、誤った拍子の書き込みを防ぐため書き出しを停止しました。",
+})
+KO.update({
+    "以此轨统一同乐器音量和 FX": "이 트랙 기준으로 같은 악기의 음량과 FX 통일",
+    "无法同步游戏乐器音量：{error}": "게임 악기 음량을 동기화할 수 없음: {error}",
+    "已同步 {count} 条同乐器轨道的游戏音量": "같은 악기 {count}개 트랙에 게임 음량을 동기화함",
+    "所选轨道的游戏混音数据无效：{error}": "선택한 트랙의 게임 믹서 데이터가 잘못됨: {error}",
+    "无法统一游戏乐器混音：{error}": "게임 악기 믹서를 통일할 수 없음: {error}",
+    "同乐器轨道已经一致": "같은 악기 트랙이 이미 일치함",
+    "已按所选轨道统一 {count} 条同乐器轨道": "선택한 트랙 기준으로 같은 악기 {count}개 트랙을 통일함",
+    "目标游戏乐器存在混音冲突：{error}": "대상 게임 악기에 믹서 충돌이 있음: {error}",
+    "已采用目标游戏乐器的共享音量和 FX": "대상 게임 악기의 공유 음량과 FX를 적용함",
+    "无法新建同乐器轨道：{error}": "같은 악기 트랙을 만들 수 없음: {error}",
+    "无法同步游戏乐器 FX：{error}": "게임 악기 FX를 동기화할 수 없음: {error}",
+    "当前工程没有可导出的轨道": "현재 프로젝트에 내보낼 트랙이 없음",
+    "保持原力度": "원래 벨로시티 유지",
+    "工程轨道数据无效：{error}": "프로젝트 트랙 데이터가 잘못됨: {error}",
+    "工程未保存原 MIDI 的拍号分母，且源文件已不可用；已阻止导出以避免静默写入错误拍号。": "프로젝트에 원본 MIDI 박자표 분모가 저장되지 않았고 소스도 사용할 수 없어 잘못된 박자표 기록을 막기 위해 내보내기를 중단했습니다.",
+})
 EN.update({
     "感谢以下项目、作者与社区。": "Thanks to the following projects, authors, and communities.",
     "项目、作者与社区": "Projects, Authors, and Communities",
@@ -3231,8 +3282,9 @@ EN.update({
     "导出会将此轨道音符时值乘以 {duration_scale:.3g}。": (
         "Export will multiply note durations on this track by {duration_scale:.3g}."
     ),
-    "导出会将此轨道力度乘以 {volume_scale:.3g}。": (
-        "Export will multiply note velocities on this track by {volume_scale:.3g}."
+    "此轨道仍含旧版隐藏力度倍率 {volume_scale:.3g}；请先将它写入音符力度。": (
+        "This track still contains the legacy hidden velocity multiplier "
+        "{volume_scale:.3g}; write it into note velocities first."
     ),
     "FX type {articulation} 不属于当前乐器。": (
         "FX type {articulation} is not available for this instrument."
@@ -3355,8 +3407,9 @@ JA.update({
     "导出会将此轨道音符时值乘以 {duration_scale:.3g}。": (
         "書き出し時にこのトラックのノート長を{duration_scale:.3g}倍します。"
     ),
-    "导出会将此轨道力度乘以 {volume_scale:.3g}。": (
-        "書き出し時にこのトラックのベロシティを{volume_scale:.3g}倍します。"
+    "此轨道仍含旧版隐藏力度倍率 {volume_scale:.3g}；请先将它写入音符力度。": (
+        "このトラックには旧版の隠れたベロシティ倍率{volume_scale:.3g}が残っています。"
+        "先にノートのベロシティへ書き込んでください。"
     ),
     "FX type {articulation} 不属于当前乐器。": (
         "FX type {articulation}はこの楽器では使用できません。"
@@ -3479,8 +3532,9 @@ KO.update({
     "导出会将此轨道音符时值乘以 {duration_scale:.3g}。": (
         "내보낼 때 이 트랙의 노트 길이에 {duration_scale:.3g}을(를) 곱합니다."
     ),
-    "导出会将此轨道力度乘以 {volume_scale:.3g}。": (
-        "내보낼 때 이 트랙의 벨로시티에 {volume_scale:.3g}을(를) 곱합니다."
+    "此轨道仍含旧版隐藏力度倍率 {volume_scale:.3g}；请先将它写入音符力度。": (
+        "이 트랙에 이전 버전의 숨겨진 벨로시티 배율 {volume_scale:.3g}이(가) "
+        "남아 있습니다. 먼저 음표 벨로시티에 기록하세요."
     ),
     "FX type {articulation} 不属于当前乐器。": (
         "FX type {articulation}은(는) 이 악기에서 사용할 수 없습니다."
@@ -4479,6 +4533,34 @@ KO.update({
     "正在准备通用 MIDI 预览…": "일반 MIDI 미리듣기 준비 중…",
     "分别设置导出保存位置和游戏曲谱安装位置。": "내보내기 저장 폴더와 게임 악보 설치 폴더를 각각 설정합니다.",
     " · 未复制到游戏目录：{error}": " · 게임 폴더 복사 실패: {error}",
+})
+
+
+# Export consistency diagnostics intentionally distinguish serialized fields
+# from unverified in-game DSP/audio behavior.
+EN.update({
+    " · 编辑器→BDO v9 数据一致": " · Editor → BDO v9 data consistent",
+    " · 游戏目录副本一致": " · Game-folder copy consistent",
+    " · 一致性检查发现 {count} 项差异": " · Consistency check found {count} difference(s)",
+    " · 主文件已保存，但游戏目录副本未通过一致性检查": " · Primary file saved, but the game-folder copy failed consistency verification",
+    "转换完成（数据一致性检查失败）": "Conversion completed (data consistency check failed)",
+    "本次检查仅验证编辑器中的可导出字段、BDO v9 文件写入和已安装副本；不代表程序绝对无 Bug，也不证明游戏内音色、效果或响度已验证。": "This check only verifies exportable editor fields, BDO v9 file writing, and any installed copy; it does not mean the program has no bugs or prove in-game timbre, effects, or loudness.",
+})
+JA.update({
+    " · 编辑器→BDO v9 数据一致": " · エディター→BDO v9 データ一致",
+    " · 游戏目录副本一致": " · ゲームフォルダーのコピーも一致",
+    " · 一致性检查发现 {count} 项差异": " · 整合性チェックで {count} 件の差異を検出",
+    " · 主文件已保存，但游戏目录副本未通过一致性检查": " · メインファイルは保存されましたが、ゲームフォルダーのコピーは整合性チェックに失敗しました",
+    "转换完成（数据一致性检查失败）": "変換完了（データ整合性チェック失敗）",
+    "本次检查仅验证编辑器中的可导出字段、BDO v9 文件写入和已安装副本；不代表程序绝对无 Bug，也不证明游戏内音色、效果或响度已验证。": "このチェックで検証するのは、エディター内の書き出し可能な項目、BDO v9 ファイルの書き込み、インストール済みコピーだけです。プログラムにバグがないことや、ゲーム内の音色・エフェクト・音量感が検証済みであることを意味しません。",
+})
+KO.update({
+    " · 编辑器→BDO v9 数据一致": " · 편집기→BDO v9 데이터 일치",
+    " · 游戏目录副本一致": " · 게임 폴더 사본 일치",
+    " · 一致性检查发现 {count} 项差异": " · 일관성 검사에서 차이 {count}건 발견",
+    " · 主文件已保存，但游戏目录副本未通过一致性检查": " · 기본 파일은 저장했지만 게임 폴더 사본이 일관성 검사를 통과하지 못했습니다",
+    "转换完成（数据一致性检查失败）": "변환 완료(데이터 일관성 검사 실패)",
+    "本次检查仅验证编辑器中的可导出字段、BDO v9 文件写入和已安装副本；不代表程序绝对无 Bug，也不证明游戏内音色、效果或响度已验证。": "이 검사는 편집기에서 내보낼 수 있는 필드, BDO v9 파일 기록, 설치된 사본만 검증합니다. 프로그램에 버그가 전혀 없거나 게임 내 음색·효과·체감 음량이 검증되었다는 뜻은 아닙니다.",
 })
 
 
@@ -5588,6 +5670,125 @@ for _source, (_english, _japanese, _korean) in _HOME_LIBRARY_TRANSLATIONS.items(
 del _source, _english, _japanese, _korean
 
 
+_RELEASE_UPDATE_TRANSLATIONS = {
+    "更新日志 · v{version}": (
+        "Release notes · v{version}",
+        "リリースノート · v{version}",
+        "릴리스 노트 · v{version}",
+    ),
+    "更新日志": (
+        "Release notes",
+        "リリースノート",
+        "릴리스 노트",
+    ),
+    "检查更新": (
+        "Check",
+        "更新確認",
+        "업데이트 확인",
+    ),
+    "查看版本": (
+        "View release",
+        "リリースを見る",
+        "릴리스 보기",
+    ),
+    "尚未检查更新": (
+        "Not checked",
+        "未確認",
+        "확인 전",
+    ),
+    "正在检查…": (
+        "Checking…",
+        "確認中…",
+        "확인 중…",
+    ),
+    "新版本 {version}": (
+        "New version {version}",
+        "新しいバージョン {version}",
+        "새 버전 {version}",
+    ),
+    "已是最新版": (
+        "Up to date",
+        "最新版です",
+        "최신 버전",
+    ),
+    "开发版本": (
+        "Development build",
+        "開発版",
+        "개발 버전",
+    ),
+    "GitHub 请求受限": (
+        "GitHub request limited",
+        "GitHub のリクエスト制限",
+        "GitHub 요청 제한",
+    ),
+    "暂无稳定版": (
+        "No stable release",
+        "安定版なし",
+        "안정 버전 없음",
+    ),
+    "检查服务不可用": (
+        "Check unavailable",
+        "確認サービスを利用できません",
+        "확인 서비스 사용 불가",
+    ),
+    "检查超时": (
+        "Check timed out",
+        "確認がタイムアウトしました",
+        "확인 시간 초과",
+    ),
+    "安全连接失败": (
+        "Secure connection failed",
+        "安全な接続に失敗",
+        "보안 연결 실패",
+    ),
+    "无法连接 GitHub": (
+        "Can't reach GitHub",
+        "GitHub に接続できません",
+        "GitHub에 연결할 수 없음",
+    ),
+    "已取消": (
+        "Cancelled",
+        "キャンセル済み",
+        "취소됨",
+    ),
+    "自检期间不联网": (
+        "Offline during self-test",
+        "セルフテスト中はオフライン",
+        "자체 검사 중 오프라인",
+    ),
+    "版本信息无效": (
+        "Invalid version data",
+        "バージョン情報が無効",
+        "버전 정보가 올바르지 않음",
+    ),
+    "检查失败": (
+        "Check failed",
+        "確認に失敗",
+        "확인 실패",
+    ),
+    "开发中": ("In development", "開発中", "개발 중"),
+    "稳定版": ("Stable", "安定版", "안정 버전"),
+    "预发行版": ("Pre-release", "プレリリース", "사전 릴리스"),
+    "更新日志暂不可用": (
+        "Release notes are unavailable",
+        "リリースノートを利用できません",
+        "릴리스 노트를 사용할 수 없습니다",
+    ),
+    "此版本暂无详细说明。": (
+        "No details are available for this version.",
+        "このバージョンの詳細はありません。",
+        "이 버전에 대한 자세한 설명이 없습니다.",
+    ),
+}
+
+for _source, (_english, _japanese, _korean) in _RELEASE_UPDATE_TRANSLATIONS.items():
+    EN.setdefault(_source, _english)
+    JA.setdefault(_source, _japanese)
+    KO.setdefault(_source, _korean)
+
+del _source, _english, _japanese, _korean
+
+
 _ACCESSIBILITY_TRANSLATIONS = {
     "高级": ("Advanced", "詳細", "고급"),
     "高级扒谱选项": (
@@ -5938,6 +6139,100 @@ KO.update({
     ),
     "{track} · 轨道八度 {track_transpose:+d} · 最终移调 {effective:+d} 半音": (
         "{track} · 트랙 옥타브 {track_transpose:+d} · 최종 조옮김 {effective:+d} 반음"
+    ),
+})
+
+
+EN.update({
+    "工程源文件路径无效（{path}）：{error}": (
+        "The project source path is invalid ({path}): {error}"
+    ),
+    "工程轨道数据无效（{path}）：{error}": (
+        "The project track data is invalid ({path}): {error}"
+    ),
+    "无法读取工程文件（{path}）：{error}": (
+        "Unable to read the project file ({path}): {error}"
+    ),
+})
+
+JA.update({
+    "工程源文件路径无效（{path}）：{error}": (
+        "プロジェクトのソースパスが無効です（{path}）：{error}"
+    ),
+    "工程轨道数据无效（{path}）：{error}": (
+        "プロジェクトのトラックデータが無効です（{path}）：{error}"
+    ),
+    "无法读取工程文件（{path}）：{error}": (
+        "プロジェクトファイルを読み取れません（{path}）：{error}"
+    ),
+})
+
+KO.update({
+    "工程源文件路径无效（{path}）：{error}": (
+        "프로젝트 소스 경로가 잘못됨({path}): {error}"
+    ),
+    "工程轨道数据无效（{path}）：{error}": (
+        "프로젝트 트랙 데이터가 잘못됨({path}): {error}"
+    ),
+    "无法读取工程文件（{path}）：{error}": (
+        "프로젝트 파일을 읽을 수 없음({path}): {error}"
+    ),
+})
+
+EN.update({
+    "导出保存目录": "Export folder",
+    "乐器图像": "Instrument images",
+    "音符编辑器快捷键提示": "Note editor shortcut hints",
+    "快捷键": "Shortcuts",
+    "选择模式": "Select",
+    "已选音符": "Selected",
+    "绘制模式": "Draw",
+    "双击 新建 · B 绘制 · Ctrl+拖动 复制 · Space 播放": (
+        "Dbl-click · B Draw · Ctrl-drag Copy · Space"
+    ),
+    "方向键 移动 · Shift+←→ 时值 · Ctrl+↑↓ 力度 · Del 删除": (
+        "Arrows · Shift+←→ Size · Ctrl+↑↓ Vel · Del"
+    ),
+    "拖动 长度/力度 · Alt 取消吸附 · B/Esc 退出": (
+        "Drag Size/Vel · Alt No snap · B/Esc Exit"
+    ),
+})
+
+JA.update({
+    "导出保存目录": "書き出し先",
+    "乐器图像": "楽器画像",
+    "音符编辑器快捷键提示": "ノートエディターのショートカット",
+    "快捷键": "ショートカット",
+    "选择模式": "選択モード",
+    "已选音符": "選択中のノート",
+    "绘制模式": "描画モード",
+    "双击 新建 · B 绘制 · Ctrl+拖动 复制 · Space 播放": (
+        "ダブルクリック 追加・B 描画・Ctrl+ドラッグ 複製・Space 再生"
+    ),
+    "方向键 移动 · Shift+←→ 时值 · Ctrl+↑↓ 力度 · Del 删除": (
+        "方向キー 移動・Shift+←→ 長さ・Ctrl+↑↓ 強さ・Del 削除"
+    ),
+    "拖动 长度/力度 · Alt 取消吸附 · B/Esc 退出": (
+        "ドラッグ 長さ/強さ・Alt スナップ解除・B/Esc 終了"
+    ),
+})
+
+KO.update({
+    "导出保存目录": "내보내기 폴더",
+    "乐器图像": "악기 이미지",
+    "音符编辑器快捷键提示": "음표 편집기 단축키 안내",
+    "快捷键": "단축키",
+    "选择模式": "선택 모드",
+    "已选音符": "선택한 음표",
+    "绘制模式": "그리기 모드",
+    "双击 新建 · B 绘制 · Ctrl+拖动 复制 · Space 播放": (
+        "더블클릭 추가 · B 그리기 · Ctrl+드래그 복제 · Space 재생"
+    ),
+    "方向键 移动 · Shift+←→ 时值 · Ctrl+↑↓ 力度 · Del 删除": (
+        "방향키 이동 · Shift+←→ 길이 · Ctrl+↑↓ 세기 · Del 삭제"
+    ),
+    "拖动 长度/力度 · Alt 取消吸附 · B/Esc 退出": (
+        "드래그 길이/세기 · Alt 스냅 해제 · B/Esc 종료"
     ),
 })
 

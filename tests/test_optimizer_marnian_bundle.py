@@ -9,7 +9,10 @@ from unittest.mock import patch
 from optimization import OptimizerConfig
 from optimization.plugin_api import OptimizationIntensity
 from optimization.plugin_host import analyse_with_algorithm, discover_host_algorithms
-from pyside_bdo_gui import BDO_ARTICULATIONS, Note, TrackState, channel_groups_to_bdo
+from bdo_export import channel_groups_to_bdo
+from bdo_midi import Note
+from editor_articulation_data import BDO_ARTICULATIONS
+from bdo_music_composer.editor.editor_models import TrackState
 
 try:
     from marnian_muse.plugin_bundle import build_plugin_bundle

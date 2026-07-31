@@ -28,7 +28,7 @@ class PitchTransformUiTests(unittest.TestCase):
             window._create_new_project("Pitch Plan")
             track = window.tracks[0]
             track.notes = [gui.Note(60, 90, 0.0, 250.0, 0)]
-            assert window.transpose == -8
+            assert window.transpose == 0
 
             def accept_dialog():
                 dialog = app.activeModalWidget()
@@ -40,9 +40,9 @@ class PitchTransformUiTests(unittest.TestCase):
 
             QTimer.singleShot(0, accept_dialog)
             window._show_track_pitch_dialog(track)
-            assert window._effective_track_transpose(track) == 4
+            assert window._effective_track_transpose(track) == 12
             projected = window._project_tracks_for_preview([track])
-            assert projected[0].notes[0].pitch == 64
+            assert projected[0].notes[0].pitch == 72
             assert track.notes[0].pitch == 60
             assert window.timeline.pitch_transform_plan == window._pitch_transform_plan
             assert window._wait_for_autosave_idle()
@@ -50,7 +50,7 @@ class PitchTransformUiTests(unittest.TestCase):
             project_path = window.autosave_project_dir / "project.json"
             payload = json.loads(project_path.read_text(encoding="utf-8"))
             assert payload["schema_version"] == gui.CURRENT_PROJECT_SCHEMA
-            assert payload["pitch_transform"]["global_semitones"] == -8
+            assert payload["pitch_transform"]["global_semitones"] == 0
             assert payload["pitch_transform"]["track_overrides"] == [{
                 "track_id": track.track_id,
                 "semitones": 12,
@@ -62,7 +62,7 @@ class PitchTransformUiTests(unittest.TestCase):
             assert snapshot is not None
             window._restore_project_snapshot(snapshot, "project undo")
             restored = window.tracks[0]
-            assert window._effective_track_transpose(restored) == -8
+            assert window._effective_track_transpose(restored) == 0
             assert window._pitch_transform_plan.override_for(restored.track_id) is None
 
             # A melodic MIDI source can be remapped to the BDO drum-set target.

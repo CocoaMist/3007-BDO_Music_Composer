@@ -4,7 +4,10 @@ from dataclasses import dataclass
 import unittest
 
 from conversion_settings import ConversionSettings
-from editor_commands import ProjectCommandStack, ProjectSnapshot
+from bdo_music_composer.editor.editor_commands import (
+    ProjectCommandStack,
+    ProjectSnapshot,
+)
 from pitch_transform import PitchTransformPlan
 
 

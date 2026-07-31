@@ -10,7 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
-from bdo_midi import _GM_TO_BDO_DRUM as GM_TO_BDO_DRUM
+from bdo_midi import (
+    MARNIAN_SYNTH_MODE_OFFSETS,
+    _GM_TO_BDO_DRUM as GM_TO_BDO_DRUM,
+)
 
 
 ROW_VOLUME_DB_MIN = -96.0
@@ -51,7 +54,7 @@ MARNIAN_SYNTH_WAVEFORM_BY_ID = {
     0x1C: "square",
     0x20: "triangle",
 }
-MARNIAN_SYNTH_MODES = ("basic", "stereo", "super", "superoct")
+MARNIAN_SYNTH_MODES = tuple(MARNIAN_SYNTH_MODE_OFFSETS)
 PERCUSSION_EVENT_INSTRUMENT_IDS = frozenset({0x04, 0x05, 0x0D, 0x13})
 
 

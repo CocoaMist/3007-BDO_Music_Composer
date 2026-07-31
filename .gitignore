@@ -3,12 +3,21 @@
 __pycache__/
 **/__pycache__/
 *.py[cod]
+.hypothesis/
+.mypy_cache/
+.nox/
+.ruff_cache/
+.tox/
 
 # Per-user editor state and recovery copies
 .pyside_bdo_gui.json
 .idea/
+.vscode/
 auto_save/
 temp/
+
+# Optional internal release history; keep it local and out of public Git history.
+/data/releases/release_notes.json
 
 # Generated exports, probes, screenshots, logs, and audit reports
 out/
@@ -17,13 +26,37 @@ dist/
 *.bdosamples
 sample_cache/
 transcription_cache/
-*.spec.bak
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
 *.zip
+*.7z
+*.rar
 *.bdoopt
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 *.egg-info/
+
+# Private game/music inputs and extracted runtime binaries
+*.bdo
+*.mid
+*.midi
+*.wav
+*.wem
+*.bnk
+*.paz
+*.exe
+*.dll
+*.pyd
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+desktop.ini
 
 # Downloaded/extracted third-party tooling
 _tools/
