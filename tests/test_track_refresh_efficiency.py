@@ -19,6 +19,7 @@ class TrackRefreshEfficiencyTests(unittest.TestCase):
 
             from PySide6.QtWidgets import QApplication
 
+            import bdo_music_composer.editor.editor_import as editor_import
             import pyside_bdo_gui as gui
 
 
@@ -34,9 +35,13 @@ class TrackRefreshEfficiencyTests(unittest.TestCase):
                 original(tracks)
 
             with patch.object(window.timeline, "set_tracks", side_effect=counted), patch.object(
-                gui,
+                editor_import,
                 "parse_midi",
                 return_value=(120, 4, [([note], 0, False)], 1, [[]], []),
+            ), patch.object(
+                editor_import,
+                "read_midi_time_signature_denominator",
+                return_value=4,
             ), tempfile.TemporaryDirectory() as temp:
                 assert window._load_midi_info(str(Path(temp) / "source.mid"))
 

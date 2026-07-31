@@ -101,6 +101,36 @@ class ProceduralPreviewTests(unittest.TestCase):
         self.assertFalse(next(iter(cache.values())).pcm.flags.writeable)
         self.assertTrue(any("generic MIDI fallback" in item for item in unverified))
 
+    def test_zero_velocity_produces_a_silent_event(self) -> None:
+        engine = BdoRealtimeAudioEngine(None, {})
+        events, *_rest = engine._prepare_procedural_project(
+            [track_with([Note(60, 0, 0.0, 100.0, 0)])],
+            0.0,
+            0,
+            0,
+            None,
+        )
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].gain, 0.0)
+
+    def test_retired_hidden_velocity_scale_does_not_change_preview(self) -> None:
+        engine = BdoRealtimeAudioEngine(None, {})
+        track = track_with([Note(60, 100, 0.0, 100.0, 0)])
+        track.volume_scale = 0.1
+        track.bdo_track_volume = 100
+
+        events, *_rest = engine._prepare_procedural_project(
+            [track],
+            0.0,
+            0,
+            0,
+            None,
+        )
+
+        self.assertEqual(len(events), 1)
+        self.assertAlmostEqual(events[0].gain, 100 / 127.0)
+
     def test_generic_percussion_is_bounded_non_looping_noise(self) -> None:
         engine = BdoRealtimeAudioEngine(None, {})
         events, cache, cache_bytes, _unverified, _duration = (

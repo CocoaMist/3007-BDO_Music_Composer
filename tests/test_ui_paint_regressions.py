@@ -22,9 +22,13 @@ class UiPaintRegressionTests(unittest.TestCase):
             from PySide6.QtGui import QColor, QImage, QPainter
             from PySide6.QtWidgets import QApplication
 
+            from bdo_midi import Note
             from i18n import install_localizer, tr
             import pyside_bdo_gui as gui
-            from pyside_bdo_gui import MidiToBdoWindow, PianoRollCanvas
+            from pyside_bdo_gui import (
+                MidiNoteEditorDialog, MidiToBdoWindow, PianoRollCanvas,
+                TrackState,
+            )
 
             app = QApplication([])
 
@@ -55,6 +59,51 @@ class UiPaintRegressionTests(unittest.TestCase):
             width = window.timeline._volume_label_width(metrics, label)
             assert width >= metrics.horizontalAdvance(label) + 8
             assert width > 25
+
+            # Exercise the actual paint order, not only the geometry helper:
+            # a selected minimum-positive velocity retains one bright physical
+            # pixel beside a dark 4-DIP rail and clear of both resize handles.
+            track = TrackState(
+                7, [Note(60, 1, 0.0, 100.0, 0)], 0, False, "rail", 0x0B
+            )
+            editor = MidiNoteEditorDialog(window, track, 120, 4)
+            editor.resize(1000, 700)
+            editor.show()
+            app.processEvents()
+            editor.pitch_scroll.setValue(editor.canvas.MAX_PITCH - 76)
+            painted_note = Note(
+                60,
+                1,
+                0.0,
+                20.0 / editor.canvas.px_per_ms,
+                0,
+            )
+            editor.canvas.set_notes([painted_note])
+            editor.canvas.selected = {0}
+            editor.canvas.update()
+            app.processEvents()
+            note_rect = editor.canvas.note_rect(painted_note)
+            assert note_rect.width() == 20.0
+            rail, fill = editor.canvas.note_velocity_bar_rects(
+                note_rect, 1, editor.canvas.devicePixelRatioF()
+            )
+            pixmap = editor.canvas.grab()
+            ratio = pixmap.devicePixelRatio()
+            image = pixmap.toImage()
+            sample_y = round((rail.center().y()) * ratio)
+            active = image.pixelColor(
+                int(fill.left() * ratio),
+                sample_y,
+            )
+            inactive = image.pixelColor(
+                round((rail.right() - 1.0 / ratio) * ratio),
+                sample_y,
+            )
+            assert rail.height() * ratio == round(4.0 * ratio)
+            assert active.lightness() > inactive.lightness() + 45, (
+                active.getRgb(), inactive.getRgb()
+            )
+            editor.close()
 
             window.close()
             app.processEvents()

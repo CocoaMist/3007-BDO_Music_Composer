@@ -38,11 +38,15 @@ class BdoAudioResearchTests(unittest.TestCase):
             mapping.write_text(json.dumps({"banks": {
                 "midi_instrument_11_proflute": [{
                     "wav_exists": True, "key_min": 60, "key_max": 60,
-                    "velocity_min": 1, "velocity_max": 127, "root_note": 60,
+                    "velocity_min": 80, "velocity_max": 80, "root_note": 60,
                     "source_id": 1, "wav_path": "unused.wav",
                 }]
             }}), encoding="utf-8")
-            track = Track(11, [Note(60, 80, 0, 100, 0), Note(61, 80, 100, 100, 0)])
+            track = Track(
+                11,
+                [Note(60, 80, 0, 100, 0), Note(61, 80, 100, 100, 0)],
+                volume_scale=0.1,
+            )
             coverage = sample_coverage_for_tracks([track], mapping)[0]
             self.assertEqual(coverage.covered_notes, 1)
             self.assertEqual(coverage.missing_note_indices, (1,))

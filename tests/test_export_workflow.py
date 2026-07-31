@@ -1,14 +1,19 @@
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from bdo_codec import decode_score
+from bdo_export import channel_groups_to_bdo
 from bdo_midi import Note
 from bdo_score import read_bdo_score
+from bdo_track_effects import MasterEffects
 from conversion_settings import ConversionSettings
 from export_workflow import (
     ExportRequest,
+    ExportRequestSpec,
+    build_export_request,
     execute_export,
     freeze_export_tracks,
     prepare_export,
@@ -31,9 +36,141 @@ class MutableTrack:
     bdo_track_settings: tuple[int, ...] = (0,) * 8
     bdo_source_group_index: int | None = None
     bdo_source_note_records: tuple[tuple, ...] = ()
+    muted: bool = False
+    solo: bool = False
 
 
 class ExportWorkflowTests(unittest.TestCase):
+    def test_request_factory_derives_one_lossless_game_projection(self) -> None:
+        source_record = (60, 91, 72, 11, 0.0, 250.0)
+        first_settings = (11, 201, 22, 202, 33, 203, 204, 205)
+        second_settings = (44, 91, 55, 92, 66, 93, 94, 95)
+        tracks = [
+            MutableTrack(
+                [Note(60, 91, 0.0, 250.0, 11)],
+                articulation_type=11,
+                bdo_track_volume=83,
+                bdo_track_settings=first_settings,
+                bdo_source_note_records=(source_record,),
+                muted=True,
+            ),
+            MutableTrack(
+                [Note(64, 80, 250.0, 250.0, 0)],
+                bdo_track_volume=64,
+                bdo_track_settings=second_settings,
+                solo=True,
+            ),
+        ]
+        source_document = object()
+        conversion = ConversionSettings().with_updates(transpose=5)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            request = build_export_request(
+                tracks,
+                ExportRequestSpec(
+                    bpm=120,
+                    time_signature=4,
+                    out_path=root / "score.bdo",
+                    character_name="Name",
+                    owner_id=123,
+                    conversion=conversion,
+                    pitch_plan=PitchTransformPlan(-12),
+                    master_effects=MasterEffects(151, 152, 153, 154, 155),
+                    game_dir=root / "game",
+                    source_path="source.bdo",
+                    source_document=source_document,
+                ),
+            )
+
+        self.assertEqual(len(request.direct_tracks), 2)
+        self.assertEqual(request.pitch_plan.global_semitones, 5)
+        self.assertEqual(request.articulation_map, ((0, 11),))
+        self.assertEqual(request.track_volumes, ((0, 83), (1, 64)))
+        self.assertEqual(
+            request.track_settings,
+            (
+                (0, (11, 151, 22, 152, 33, 153, 154, 155)),
+                (1, (44, 151, 55, 152, 66, 153, 154, 155)),
+            ),
+        )
+        self.assertEqual(request.velocity_b_maps, ((0, (source_record,)),))
+        self.assertEqual(
+            (request.reverb, request.delay, request.chorus),
+            (151, 152, (153, 154, 155)),
+        )
+        self.assertIs(request.source_document, source_document)
+        self.assertEqual(tracks[0].bdo_track_settings, first_settings)
+        self.assertEqual(tracks[1].bdo_track_settings, second_settings)
+
+    def test_request_factory_rejects_malformed_settings_without_mutation(
+        self,
+    ) -> None:
+        track = MutableTrack(
+            [Note(60, 90, 0.0, 250.0, 0)],
+            bdo_track_settings=(1, 2),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            spec = ExportRequestSpec(
+                bpm=120,
+                time_signature=4,
+                out_path=root / "score.bdo",
+                character_name="Name",
+                owner_id=123,
+                conversion=ConversionSettings(),
+                pitch_plan=PitchTransformPlan(0),
+                master_effects=MasterEffects(),
+                game_dir=root / "game",
+            )
+            with self.assertRaisesRegex(ValueError, "exactly eight bytes"):
+                build_export_request([track], spec)
+
+        self.assertEqual(track.bdo_track_settings, (1, 2))
+
+    def test_lossless_reuse_and_canonical_export_share_one_summary_contract(
+        self,
+    ) -> None:
+        note = Note(60, 91, 1.25, 300.5, 11)
+        source_data, canonical_summary = channel_groups_to_bdo(
+            120,
+            4,
+            [([note], 0, False)],
+            char_name="Name",
+            owner_id=123,
+            instrument_map={0: 0x0B},
+            preserve_note_types=True,
+            track_volumes={0: 70},
+            track_settings_map={0: (0,) * 8},
+        )
+        snapshots = freeze_export_tracks([
+            MutableTrack(
+                [note],
+                bdo_source_group_index=0,
+            )
+        ])
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            prepared = prepare_export(ExportRequest(
+                direct_tracks=snapshots,
+                bpm=120,
+                time_signature=4,
+                out_path=root / "score.bdo",
+                character_name="Name",
+                owner_id=123,
+                conversion=ConversionSettings(),
+                pitch_plan=PitchTransformPlan(0),
+                reverb=0,
+                delay=0,
+                chorus=None,
+                game_dir=root / "game",
+                track_volumes=((0, 70),),
+                track_settings=((0, (0,) * 8),),
+                source_document=decode_score(source_data),
+            ))
+
+        self.assertEqual(prepared.data, source_data)
+        self.assertEqual(prepared.summary, canonical_summary)
+
     def test_snapshot_is_detached_from_editor_note_container(self) -> None:
         original = Note(60, 90, 0.0, 250.0, 0)
         track = MutableTrack([original])
@@ -44,6 +181,70 @@ class ExportWorkflowTests(unittest.TestCase):
 
         self.assertEqual(snapshot[0].notes, (original,))
         self.assertEqual(snapshot[0].duration_scale, 1.0)
+
+    def test_all_export_entry_points_reject_retired_hidden_velocity_scale(
+        self,
+    ) -> None:
+        track = MutableTrack(
+            [Note(60, 90, 0.0, 250.0, 0)],
+            volume_scale=0.5,
+        )
+        with self.assertRaisesRegex(ValueError, "must be baked"):
+            freeze_export_tracks([track])
+
+        neutral_snapshot = freeze_export_tracks([
+            MutableTrack([Note(60, 90, 0.0, 250.0, 0)])
+        ])[0]
+        bad_snapshot = replace(neutral_snapshot, volume_scale=0.5)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with self.assertRaisesRegex(ValueError, "must be baked"):
+                ExportRequest(
+                    direct_tracks=(bad_snapshot,),
+                    bpm=120,
+                    time_signature=4,
+                    out_path=root / "score.bdo",
+                    character_name="MIDI",
+                    owner_id=123,
+                    conversion=ConversionSettings(),
+                    pitch_plan=PitchTransformPlan(0),
+                    reverb=0,
+                    delay=0,
+                    chorus=None,
+                    game_dir=root / "game",
+                )
+
+            with self.assertRaisesRegex(ValueError, "must be baked"):
+                ExportRequest.from_parameters({
+                    "direct_tracks": [track],
+                    "bpm_for_temp": 120,
+                    "time_sig_for_temp": 4,
+                    "conversion_settings": {"velocity_mode": "preserve"},
+                    "char_name": "MIDI",
+                    "owner_id": 123,
+                    "out_path": str(root / "compat.bdo"),
+                    "game_dir": str(root / "game"),
+                })
+
+    def test_compat_export_parses_nested_velocity_policy_and_blocks_it(
+        self,
+    ) -> None:
+        snapshot = freeze_export_tracks([
+            MutableTrack([Note(60, 90, 0.0, 250.0, 0)])
+        ])
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with self.assertRaisesRegex(ValueError, "materialized"):
+                ExportRequest.from_parameters({
+                    "direct_tracks": snapshot,
+                    "bpm_for_temp": 120,
+                    "time_sig_for_temp": 4,
+                    "conversion_settings": {"velocity_mode": "layered"},
+                    "char_name": "MIDI",
+                    "owner_id": 123,
+                    "out_path": str(root / "compat.bdo"),
+                    "game_dir": str(root / "game"),
+                })
 
     def test_execute_export_publishes_verified_output_and_game_copy(self) -> None:
         snapshot = freeze_export_tracks([
@@ -195,6 +396,77 @@ class ExportWorkflowTests(unittest.TestCase):
                     chorus=None,
                     game_dir=root / "game",
                 )
+
+    def test_typed_request_rejects_hidden_velocity_processing(self) -> None:
+        snapshot = freeze_export_tracks(
+            [MutableTrack([Note(60, 90, 0.0, 250.0, 0)])]
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            common = dict(
+                direct_tracks=snapshot,
+                bpm=120,
+                time_signature=4,
+                out_path=root / "score.bdo",
+                character_name="MIDI",
+                owner_id=123,
+                pitch_plan=PitchTransformPlan(0),
+                reverb=0,
+                delay=0,
+                chorus=None,
+                game_dir=root / "game",
+            )
+            with self.assertRaisesRegex(ValueError, "materialized"):
+                ExportRequest(
+                    **common,
+                    conversion=ConversionSettings(velocity_mode="layered"),
+                )
+            with self.assertRaisesRegex(ValueError, "not game fields"):
+                ExportRequest(
+                    **common,
+                    conversion=ConversionSettings(),
+                    velocity_scales=((0, 0.8),),
+                )
+
+    def test_mixer_only_export_preserves_imported_dual_velocity(self) -> None:
+        source_record = (60, 91, 1.25, 300.5, 11, 72)
+        snapshot = freeze_export_tracks([
+            MutableTrack(
+                [Note(60, 91, 1.25, 300.5, 11)],
+                bdo_track_volume=83,
+                bdo_track_settings=(10, 1, 20, 2, 30, 3, 4, 5),
+                bdo_source_note_records=(source_record,),
+            )
+        ])
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "dual-velocity.bdo"
+            request = ExportRequest(
+                direct_tracks=snapshot,
+                bpm=120,
+                time_signature=4,
+                out_path=output,
+                character_name="MIDI",
+                owner_id=123,
+                conversion=ConversionSettings(),
+                pitch_plan=PitchTransformPlan(0),
+                reverb=1,
+                delay=2,
+                chorus=(3, 4, 5),
+                game_dir=root / "game",
+                track_volumes=((0, 83),),
+                track_settings=((0, (10, 1, 20, 2, 30, 3, 4, 5)),),
+                velocity_b_maps=((0, (source_record,)),),
+            )
+            output.write_bytes(prepare_export(request).data)
+            score = read_bdo_score(output)
+        active_track = next(track for track in score.tracks if track.notes)
+        self.assertEqual(active_track.volume, 83)
+        self.assertEqual(active_track.settings, (10, 1, 20, 2, 30, 3, 4, 5))
+        self.assertEqual(
+            (active_track.notes[0].velocity_a, active_track.notes[0].velocity_b),
+            (91, 72),
+        )
 
     def test_bdo_drum_target_never_uses_melodic_transpose_or_serialization(self) -> None:
         snapshots = freeze_export_tracks([

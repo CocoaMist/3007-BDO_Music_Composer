@@ -56,7 +56,7 @@ from bdo_transcription_timbre import (
     load_or_build_timbre_profile_index,
     remap_group_timbre_profiles,
 )
-from crash_logging import append_crash_log
+from bdo_music_composer.app.crash_logging import append_crash_log
 from i18n import tr
 
 

@@ -365,6 +365,61 @@ class BdoSampleRendererTests(unittest.TestCase):
             expected = 0.25 * 0.40 * (10.0 ** (-6.0 / 20.0))
             self.assertAlmostEqual(peak, expected, delta=0.002)
 
+    def test_renderer_preserves_zero_velocity_as_silence(self) -> None:
+        bank = BDO_BANK_BY_ID[0x01]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample_path = root / "sample.wav"
+            self.write_constant_wav(
+                sample_path,
+                seconds=0.05,
+                amplitude=0.25,
+            )
+            row = _row(bank, 1, 60, 60)
+            row.update({"root_note": 60, "wav_path": str(sample_path)})
+            mapping = root / "map.json"
+            mapping.write_text(
+                json.dumps({"banks": {bank: [row]}}),
+                encoding="utf-8",
+            )
+            output = root / "preview.wav"
+            track = self.preview_track(0x01)
+            track.notes[0].vel = 0
+
+            result = render_preview([track], mapping, output)
+
+            self.assertEqual(result.notes_rendered, 1)
+            self.assertEqual(float(np.max(np.abs(self.read_output(output)))), 0.0)
+
+    def test_renderer_ignores_retired_hidden_velocity_scale(self) -> None:
+        bank = BDO_BANK_BY_ID[0x01]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample_path = root / "sample.wav"
+            self.write_constant_wav(
+                sample_path,
+                seconds=0.05,
+                amplitude=0.25,
+            )
+            row = _row(bank, 1, 60, 60)
+            row.update({"root_note": 60, "wav_path": str(sample_path)})
+            mapping = root / "map.json"
+            mapping.write_text(
+                json.dumps({"banks": {bank: [row]}}),
+                encoding="utf-8",
+            )
+            output = root / "preview.wav"
+            track = self.preview_track(0x01)
+            track.notes[0].vel = 127
+            track.notes[0].dur = 20.0
+            track.volume_scale = 0.01
+            track.bdo_track_volume = 100
+
+            render_preview([track], mapping, output)
+
+            peak = float(np.max(np.abs(self.read_output(output))))
+            self.assertAlmostEqual(peak, 0.25, delta=0.002)
+
     def test_renderer_rotates_containers_in_global_time_order(self) -> None:
         bank = BDO_BANK_BY_ID[0x01]
         with tempfile.TemporaryDirectory() as directory:

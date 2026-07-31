@@ -62,11 +62,17 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
 
             selected = []
             state_changes = []
+            volume_changes = []
             effects = []
             editors = []
             canvas.selected.connect(lambda track: selected.append(track.track_id))
             canvas.track_state_changed.connect(
                 lambda: state_changes.append(True)
+            )
+            canvas.game_volume_committed.connect(
+                lambda track, previous, current: volume_changes.append(
+                    (track.track_id, previous, current)
+                )
             )
             canvas.effects_requested.connect(
                 lambda track: effects.append(track.track_id)
@@ -95,7 +101,12 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
             assert tracks[1].bdo_track_volume == 76
             QTest.keyClick(canvas, Qt.Key_Left, Qt.ShiftModifier)
             assert tracks[1].bdo_track_volume == 71
-            assert len(state_changes) == 5
+            assert len(state_changes) == 2
+            assert volume_changes == [
+                (1, 70, 71),
+                (1, 71, 76),
+                (1, 76, 71),
+            ]
             assert "音量 71" in canvas.accessibleDescription()
 
             QTest.keyClick(canvas, Qt.Key_End)

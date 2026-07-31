@@ -93,7 +93,7 @@ VALIDATION_SOURCES = {
     "{count} 个音符不在当前乐器的已知游戏音域内。",
     "导出会将此轨道全部音符移调 {transpose:+d} 半音。",
     "导出会将此轨道音符时值乘以 {duration_scale:.3g}。",
-    "导出会将此轨道力度乘以 {volume_scale:.3g}。",
+    "此轨道仍含旧版隐藏力度倍率 {volume_scale:.3g}；请先将它写入音符力度。",
     "FX type {articulation} 不属于当前乐器。",
     "导出会把此轨道全部音符设为 FX type {articulation}。",
     "该乐器当前只有样本键位证据，完整音域仍待游戏验证。",
@@ -549,16 +549,19 @@ class TranslationCatalogTests(unittest.TestCase):
         failures: list[str] = []
         for filename in (
             "pyside_bdo_gui.py",
-            "application_settings_dialog.py",
-            "conversion_check_dialog.py",
-            "midi_note_editor.py",
-            "optimizer_dialog.py",
-            "piano_roll_canvas.py",
+            "bdo_music_composer/ui/dialogs/application_settings_dialog.py",
+            "bdo_music_composer/ui/dialogs/conversion_check_dialog.py",
+            "bdo_music_composer/ui/dialogs/release_notes_dialog.py",
+            "bdo_music_composer/ui/editor/editor_shortcut_hud.py",
+            "bdo_music_composer/ui/home_widgets.py",
+            "bdo_music_composer/ui/editor/midi_note_editor.py",
+            "bdo_music_composer/ui/dialogs/optimizer_dialog.py",
+            "bdo_music_composer/ui/editor/piano_roll_canvas.py",
             "reference_audio_controller.py",
-            "timeline_canvas.py",
-            "track_settings_dialogs.py",
+            "bdo_music_composer/ui/editor/timeline_canvas.py",
+            "bdo_music_composer/ui/dialogs/track_settings_dialogs.py",
             "transcription_editor_qt.py",
-            "ui_notifications.py",
+            "bdo_music_composer/ui/ui_notifications.py",
         ):
             path = Path(__file__).resolve().parents[1] / filename
             tree = ast.parse(path.read_text(encoding="utf-8-sig"))

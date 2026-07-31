@@ -120,18 +120,44 @@ flowchart LR
 Primary boundaries:
 
 - `pyside_bdo_gui.py`: main-window orchestration, Qt lifecycle, and compatibility exports.
-- `model_revision.py` and the focused `*_controller.py` modules: Qt-free state for validation, transcription workers/review history, project loading, and preview transport commands.
-- `editor_models.py`, `bdo_midi/`: shared track state, immutable notes, and pure transforms.
-- `timeline_canvas.py`, `piano_roll_canvas.py`, `midi_note_editor.py`: visible-range-indexed editing surfaces.
-- Focused dialogs: `application_settings_dialog.py`, `conversion_check_dialog.py`, `optimizer_dialog.py`, `track_settings_dialogs.py`, `acknowledgements_dialog.py`.
+- `bdo_music_composer/editor/model_revision.py`,
+  `bdo_music_composer/app/conversion_validation_controller.py`,
+  `bdo_music_composer/transcription/transcription_workspace_controller.py`,
+  `bdo_music_composer/project/project_lifecycle_controller.py`, and
+  `bdo_music_composer/audio/preview_transport_controller.py`: Qt-free state
+  for validation, transcription workers/review history, project loading, and
+  preview transport commands.
+- `bdo_music_composer/editor/editor_models.py`,
+  `bdo_music_composer/editor/editor_import.py`,
+  `bdo_music_composer/editor/editor_commands.py`,
+  `bdo_music_composer/editor/interval_index.py`,
+  `bdo_music_composer/editor/velocity_curve.py`, and
+  `bdo_music_composer/editor/preview_midi_writer.py`: Qt-free shared editor
+  state, transactional imports, commands, visible-range queries, velocity
+  curves, and deterministic standard-MIDI projection.
+- `bdo_music_composer/ui/editor/`: visible-range-indexed timeline, piano-roll, and note-editor surfaces.
+- `bdo_music_composer/app/application_metadata.py`: canonical
+  version/repository identity.
+- Focused dialogs live under `bdo_music_composer/ui/dialogs/`; the semantic
+  application theme lives under the inert
+  `bdo_music_composer/ui/theme/` subpackage.
 - `optimization/`: production pipeline, registry, and trusted local algorithm boundary.
 - `bdo_realtime_audio.py`, `bdo_sample_renderer.py`: real-time and offline sample preview.
 - `export_workflow.py`, `bdo_export/`, `bdo_codec/`: immutable requests, adaptation, binary I/O, and atomic publication.
-- `project_persistence.py`, `project_schema.py`, `home_catalog.py`: autosave, migrations, and bounded home discovery.
+- `bdo_music_composer/project/project_persistence.py`,
+  `bdo_music_composer/project/project_schema.py`, and `home_catalog.py`:
+  autosave, migrations, and bounded home discovery.
 - `bdo_transcription*.py`, `transcription_workers.py`: Qt-free analysis, stable candidate-range indexes, and background workers.
 - `i18n.py`, `project_paths.py`: runtime catalogs and source/frozen path boundaries.
 
 See [Architecture](docs/ARCHITECTURE.md), [AI Context](docs/AI_CONTEXT.md), [Project Structure](docs/PROJECT_STRUCTURE.md), [Conversion Settings](docs/CONVERSION_SETTINGS.md), and [BDO v9 codec](docs/BDO_V9_CODEC.md).
+
+The no-shim package migration reduced root Python files from 69 to 56 after
+the earlier 89-to-69 slice. Colocating five Qt editor owners under
+`bdo_music_composer/ui/editor/` and centralizing version/repository identity in
+`bdo_music_composer/app/application_metadata.py` lowered the current ratchet to
+52. A 7-to-10-file root is a long-term direction, not the current repository
+state.
 
 <!-- section:invariants -->
 ## Correctness and performance invariants

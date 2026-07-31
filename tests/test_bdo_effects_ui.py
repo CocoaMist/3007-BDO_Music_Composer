@@ -157,6 +157,7 @@ class BdoEffectsUiTests(unittest.TestCase):
                 dialog.selected_track_settings.return_value = (
                     41, 21, 42, 23, 43, 24, 25, 26
                 )
+                dialog.changed_send_indices.return_value = (0, 2, 4)
                 window._show_effects_placeholder(track)
 
             assert track.bdo_track_settings == (
@@ -164,6 +165,66 @@ class BdoEffectsUiTests(unittest.TestCase):
             )
             assert dirty_calls == [True]
             assert preview_calls == [True]
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+
+    def test_track_fx_commit_patches_only_dirty_aux_on_same_instrument(self) -> None:
+        self._run_offscreen(
+            """
+            from unittest.mock import patch
+
+            from PySide6.QtWidgets import QApplication, QDialog
+
+            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            source = TrackState(
+                1, [], 0, False, "source", 0x0B,
+                bdo_track_settings=(10, 11, 20, 13, 30, 15, 16, 17),
+            )
+            peer = TrackState(
+                2, [], 0, False, "peer", 0x0B,
+                bdo_track_settings=(10, 91, 20, 93, 30, 95, 96, 97),
+            )
+            other = TrackState(
+                3, [], 0, False, "other", 0x0C,
+                bdo_track_settings=(40, 41, 42, 43, 44, 45, 46, 47),
+            )
+            window.tracks = [source, peer, other]
+            window._on_preview_mapping_changed = lambda: None
+            window._autosave_project = lambda *args, **kwargs: None
+
+            with patch("pyside_bdo_gui.TrackFxDialog") as dialog_type:
+                dialog = dialog_type.return_value
+                dialog.exec.return_value = QDialog.Accepted
+                dialog.selected_marnian_synth_mode.return_value = "basic"
+                dialog.selected_track_settings.return_value = (
+                    10, 11, 44, 13, 30, 15, 16, 17
+                )
+                dialog.changed_send_indices.return_value = (2,)
+                window._show_effects_placeholder(source)
+
+            assert source.bdo_track_settings == (
+                10, 11, 44, 13, 30, 15, 16, 17
+            )
+            assert peer.bdo_track_settings == (
+                10, 91, 44, 93, 30, 95, 96, 97
+            )
+            assert other.bdo_track_settings == (
+                40, 41, 42, 43, 44, 45, 46, 47
+            )
+
+            window._undo_project()
+            assert window.tracks[0].bdo_track_settings == (
+                10, 11, 20, 13, 30, 15, 16, 17
+            )
+            assert window.tracks[1].bdo_track_settings == (
+                10, 91, 20, 93, 30, 95, 96, 97
+            )
             window.close()
             app.processEvents()
             app.quit()

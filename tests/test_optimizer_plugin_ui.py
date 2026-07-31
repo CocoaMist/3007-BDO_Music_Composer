@@ -47,7 +47,7 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
             assert dialog.scope == "global"
             assert dialog.target_track_id is None
             assert "可调整全局效果" in dialog.scope_summary_label.text()
-            import optimizer_dialog as optimizer_dialog_module
+            import bdo_music_composer.ui.dialogs.optimizer_dialog as optimizer_dialog_module
             original_discovery = optimizer_dialog_module.discover_host_algorithms
             optimizer_dialog_module.discover_host_algorithms = lambda: (_ for _ in ()).throw(
                 AssertionError("scope changes must not rescan algorithm packages")

@@ -13,11 +13,16 @@ for item in (ROOT,):
     if str(item) not in sys.path:
         sys.path.insert(0, str(item))
 
-from bdo_midi import Note  # noqa: E402
+from bdo_midi import (  # noqa: E402
+    BDO_INSTRUMENT_NAMES,
+    MARNIAN_SYNTH_INSTRUMENT_IDS,
+    MARNIAN_SYNTH_MODE_OFFSETS,
+    Note,
+)
 from bdo_export import channel_groups_to_bdo, extract_owner_id  # noqa: E402
-from pyside_bdo_gui import (  # noqa: E402
-    BDO_ARTICULATIONS, BDO_EDITOR_PITCH_RANGES, BDO_INSTRUMENT_NAMES,
-    MARNIAN_SYNTH_INSTRUMENT_IDS, MARNIAN_SYNTH_MODE_OFFSETS,
+from editor_articulation_data import BDO_ARTICULATIONS  # noqa: E402
+from bdo_music_composer.editor.editor_models import (  # noqa: E402
+    BDO_EDITOR_PITCH_RANGES,
 )
 
 

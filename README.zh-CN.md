@@ -24,7 +24,7 @@ v1.0.0 是首个公开稳定大版本。编辑、自动保存、优化、预览�
 
 - 导入 MIDI，解析速度、时值、控制器、歌词、延音和速度变化。
 - 从空白工程创建轨道；创建、删除、移动、缩放、选择和批量编辑音符。
-- 多轨时间轴、单轨钢琴卷帘、力度通道、量化网格、奏法和无损 `ntype=0` 编辑。
+- 多轨时间轴、单轨钢琴卷帘、力度通道、量化网格、奏法和无损 `ntype=0` 编辑；卷帘内的上下文 HUD 会提示当前真实可用的快捷操作。
 - 打开 BDO v9 曲谱后保留双力度、轨道音量/设置、奏法和物理分块；未修改文档可字节级往返。
 - 工程撤销/重做、后台自动保存、版本列表和安全首页索引。
 
@@ -76,9 +76,14 @@ powershell -ExecutionPolicy Bypass -File scripts\install_transcription.ps1
 4. 可选：载入参考音频，运行本地扒谱，人工审阅候选、和声和声部分组。
 5. 可选：运行优化分析，预览后应用到全曲或目标轨。
 6. 运行“转换检查”，修复音域、无效 FX、打击乐映射和乐器合并问题。
-7. 试听当前编辑器模型并导出；成功后使用结构化回读验证结果。
+7. 试听当前编辑器模型并导出；导出会依次核对内存结果、主文件和游戏目录副本的
+   可表示字段与字节一致性。
 
 导出始终以当前 `TrackState` / `Note` 模型为事实源，不会偷偷重新读取原始 MIDI。
+导入 BDO 后的第二力度值会先绑定到具体音符，再随移调、时值、奏法和鼓映射一起
+投影；调整音量、第二力度或打击乐语义也会关闭不再适用的原文件复用路径。
+一致性通过只说明本次编辑器→BDO v9 写入链路匹配，不代表程序绝对无 Bug，也不
+等于游戏内音色、效果或体感响度已经完成 A/B 验证。
 
 <!-- section:local-assets -->
 ## 本地音源与游戏图像
@@ -120,18 +125,51 @@ flowchart LR
 主要边界：
 
 - `pyside_bdo_gui.py`：主窗口、Qt 生命周期和工作流编排；兼容导出旧公开类。
-- `model_revision.py` 与各 `*_controller.py`：转换校验、扒谱 worker/审阅历史、工程载入和预览传输命令的 Qt-free 状态。
-- `editor_models.py`、`bdo_midi/`：共享轨道状态、不可变音符和纯变换。
-- `timeline_canvas.py`、`piano_roll_canvas.py`、`midi_note_editor.py`：可见区索引编辑界面。
-- 聚焦对话框：`application_settings_dialog.py`、`conversion_check_dialog.py`、`optimizer_dialog.py`、`track_settings_dialogs.py`、`acknowledgements_dialog.py`。
+- `bdo_music_composer/editor/editor_import.py`：事务式 MIDI、BDO、工程轨道导入；通过类型化错误整体失败，
+  不在损坏输入上恢复半份谱面。
+- `game_score_model.py`：正式谱面/试听范围、最终游戏乐器 ID、力度迁移和同乐器
+  Volume/Aux 规则。
+- `bdo_music_composer/editor/model_revision.py`、
+  `bdo_music_composer/app/conversion_validation_controller.py`、
+  `bdo_music_composer/transcription/transcription_workspace_controller.py`、
+  `bdo_music_composer/project/project_lifecycle_controller.py` 与
+  `bdo_music_composer/audio/preview_transport_controller.py`：转换校验、扒谱
+  worker/审阅历史、工程载入和预览传输命令的 Qt-free 状态。
+- `bdo_music_composer/editor/editor_models.py`、
+  `bdo_music_composer/editor/editor_commands.py`、
+  `bdo_music_composer/editor/interval_index.py`、
+  `bdo_music_composer/editor/velocity_curve.py`、
+  `bdo_music_composer/editor/preview_midi_writer.py` 与 `bdo_midi/`：Qt-free
+  共享轨道状态、命令、区间查询、力度曲线、标准 MIDI 投影、不可变音符和纯变换。
+- `bdo_music_composer/ui/editor/`：可见区索引的时间轴、钢琴卷帘和音符编辑界面。
+- `bdo_music_composer/app/application_config.py`、
+  `bdo_music_composer/app/game_profile_provider.py`、
+  `bdo_music_composer/app/application_metadata.py`：原子配置读写、按需缓存的
+  游戏规则 profile，以及统一版本/公开仓库元数据，不在导入期发起网络请求。
+- `home_catalog.py`、`bdo_music_composer/ui/home_widgets.py`、
+  `bdo_music_composer/ui/startup_widgets.py`：有界首页数据发现与 Qt 展示分离。
+- 聚焦对话框位于 `bdo_music_composer/ui/dialogs/`，应用级语义主题位于
+  inert 的 `bdo_music_composer/ui/theme/` 子包。
 - `optimization/`：生产优化管线、registry 和可信本地算法边界。
-- `bdo_realtime_audio.py`、`bdo_sample_renderer.py`：实时与离线采样试听。
-- `export_workflow.py`、`bdo_export/`、`bdo_codec/`：不可变请求、适配、二进制读写和原子发布。
-- `project_persistence.py`、`project_schema.py`、`home_catalog.py`：自动保存、迁移和有界首页发现。
-- `bdo_transcription*.py`、`transcription_workers.py`：Qt-free 分析、稳定候选区间索引和后台 worker。
+- `bdo_realtime_audio.py`、`bdo_sample_renderer.py`：实时与离线采样试听；
+  `bdo_music_composer/editor/preview_midi_writer.py` 单独拥有标准 MIDI
+  确定性投影，不参与 BDO v9 导出。
+- `export_workflow.py`、`export_verification.py`、`bdo_export/`、`bdo_codec/`：不可变请求、字段级导出自检、原文档复用、适配、二进制读写和分阶段原子发布；Codec 不依赖编辑器。
+- `bdo_music_composer/project/project_document.py`、
+  `bdo_music_composer/project/project_persistence.py`、
+  `bdo_music_composer/project/project_schema.py`：提交前完整 `ProjectLoadPlan`、
+  递归深冻结的 `ProjectMetadataSnapshot`、原子自动保存和只执行一次的历史迁移。
+- `bdo_transcription*.py`、`transcription_commit_plan.py`、
+  `transcription_workers.py`：Qt-free 分析、稳定候选区间索引、正式提交纯计划和后台 worker。
 - `i18n.py`、`project_paths.py`：运行时目录和源码/冻结资源边界。
 
-深入阅读：[架构](docs/ARCHITECTURE.md)、[AI 路由](docs/AI_CONTEXT.md)、[工程结构](docs/PROJECT_STRUCTURE.md)、[转换设置边界](docs/CONVERSION_SETTINGS.md)、[BDO v9 codec](docs/BDO_V9_CODEC.md)。
+深入阅读：[架构](docs/ARCHITECTURE.md)、[AI 路由](docs/AI_CONTEXT.md)、[AI 编辑与结构演进指南](docs/AI_EDITING_GUIDE.md)、[工程结构](docs/PROJECT_STRUCTURE.md)、[转换设置边界](docs/CONVERSION_SETTINGS.md)、[BDO v9 codec](docs/BDO_V9_CODEC.md)。
+
+无 shim 的包迁移在此前根 Python 文件 89→69 的基础上，先迁移 6 个 Qt-free
+editor owner，再迁移 7 个 dialogs/theme owner，随后把 5 个编辑器 Qt owner
+收拢到 `bdo_music_composer/ui/editor/`，并将版本/公开仓库元数据集中到
+`bdo_music_composer/app/application_metadata.py`，将根目录收敛到 52 个文件。
+7～10 个根文件仍是长期方向，并非当前已完成状态。
 
 <!-- section:invariants -->
 ## 正确性和性能约束
@@ -139,7 +177,8 @@ flowchart LR
 - `Note` 形状保持 `Note(pitch, vel, start, dur, ntype)`。
 - game-safe 优化不意外改变音符数、音高多重集、乐器映射和无关轨。
 - BDO v9 字段小端，音符为 20 字节 `<BBBBdd>`，加密明文 8 字节对齐。
-- 自动保存、导出 worker 只接收 GUI 线程冻结的不可变数据。
+- 自动保存、导出 worker 只接收 GUI 线程冻结的不可变数据；工程 metadata 的嵌套
+  mapping/list 也必须递归脱离。
 - 音频回调禁止文件读取、JSON/WAV 解码和无界分配。
 - 时间轴、卷帘和证据绘制使用可见区索引、批处理和有界缓存。
 - 同一确定性输入必须产生相同优化和导出结果。
@@ -151,6 +190,7 @@ flowchart LR
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -q
+.\.venv\Scripts\python.exe -m unittest tests.test_architecture_dependencies tests.test_gui_module_boundaries -q
 .\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
 git diff --check
 ```
@@ -188,7 +228,7 @@ git grep -n -I -E "(C:\\Users\\|OPENAI_API_KEY|api[_-]?key|password)"
 ## 文档与协作
 
 - [Agent 接手与协作手册](docs/AGENT_HANDOFF.md)
-- [架构](docs/ARCHITECTURE.md) / [AI 任务路由](docs/AI_CONTEXT.md)
+- [架构](docs/ARCHITECTURE.md) / [AI 任务路由](docs/AI_CONTEXT.md) / [AI 编辑与结构演进指南](docs/AI_EDITING_GUIDE.md)
 - [解耦、性能与扩展路线图](docs/OPTIMIZATION_EXTENSION_ROADMAP.md)
 - [本地化与地区术语](docs/LOCALIZATION.md)
 - [Windows 打包](docs/WINDOWS_PACKAGING.md) / [BDO v9 codec](docs/BDO_V9_CODEC.md)

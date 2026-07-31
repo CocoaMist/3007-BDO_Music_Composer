@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import heapq
 import json
 import os
 from pathlib import Path
 import re
 import time
-from typing import Iterator
+from typing import Callable, Iterator
 
 from bdo_codec import score_instrument_ids
 from bdo_midi import BDO_ENSEMBLE_PLAYER_LIMIT, unique_performance_instrument_ids
-from project_persistence import PROJECT_INDEX_NAME, normalize_project_id
+from bdo_music_composer.project.project_persistence import (
+    PROJECT_INDEX_NAME,
+    normalize_project_id,
+)
 
 
 PROJECT_LABEL_PREFIX_BYTES = 256 * 1024
@@ -89,6 +92,112 @@ def game_score_instrument_ids(path: Path) -> tuple[int, ...]:
 
 def home_timestamp(timestamp: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(timestamp))
+
+
+def scan_example_projects(
+    directory: Path,
+    limit: int = 8,
+    *,
+    unknown_source: str = "Unknown source",
+    format_detail: Callable[[str], str] | None = None,
+) -> list[HomeEntry]:
+    """Read bounded local-example manifests without loading full projects."""
+
+    if not directory.is_dir() or limit <= 0:
+        return []
+    detail_formatter = format_detail or (
+        lambda source: f"Example · source: {source}"
+    )
+    entries: list[HomeEntry] = []
+    for manifest_path in directory.glob("*/example.json"):
+        try:
+            if manifest_path.stat().st_size > 64 * 1024:
+                continue
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            project_name = str(manifest.get("project") or "project.json")
+            if (
+                Path(project_name).is_absolute()
+                or Path(project_name).name != project_name
+            ):
+                continue
+            project_path = manifest_path.parent / project_name
+            stat = project_path.stat()
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+        if not project_path.is_file():
+            continue
+        title = str(
+            manifest.get("title") or manifest_path.parent.name
+        ).strip()
+        manifest_source = str(manifest.get("source") or "").strip()
+        source = manifest_source if manifest_source else unknown_source
+        entries.append(HomeEntry(
+            "example",
+            title,
+            project_path,
+            detail_formatter(source),
+            stat.st_mtime,
+        ))
+    entries.sort(
+        key=lambda item: (item.label.casefold(), str(item.path).casefold())
+    )
+    return entries[:limit]
+
+
+def merge_home_project_entries(
+    entries: list[HomeEntry],
+    limit: int = 80,
+    *,
+    timestamp: Callable[[float], str] = home_timestamp,
+    format_version: Callable[[str, int, int], str] | None = None,
+) -> list[HomeEntry]:
+    """Deduplicate paths and annotate only explicit project-ID versions."""
+
+    if limit <= 0:
+        return []
+    version_formatter = format_version or (
+        lambda value, index, count: f"{value} · version {index}/{count}"
+    )
+    by_path: dict[str, HomeEntry] = {}
+    for entry in entries:
+        try:
+            path_key = str(entry.path.resolve()).casefold()
+        except OSError:
+            path_key = str(entry.path).casefold()
+        existing = by_path.get(path_key)
+        if existing is None or entry.modified_at >= existing.modified_at:
+            by_path[path_key] = entry
+
+    groups: dict[str, list[HomeEntry]] = {}
+    for entry in by_path.values():
+        key = (
+            f"project:{entry.project_id}"
+            if entry.kind == "project" and entry.project_id
+            else f"path:{str(entry.path).casefold()}"
+        )
+        groups.setdefault(key, []).append(entry)
+
+    merged: list[HomeEntry] = []
+    for members in groups.values():
+        members.sort(key=lambda item: item.modified_at, reverse=True)
+        version_count = len(members)
+        for offset, member in enumerate(members):
+            version_index = version_count - offset
+            detail = timestamp(member.modified_at)
+            if version_count > 1:
+                detail = version_formatter(
+                    detail,
+                    version_index,
+                    version_count,
+                )
+            merged.append(replace(
+                member,
+                detail=detail,
+                version_count=version_count,
+                version_index=version_index,
+            ))
+    merged.sort(key=lambda item: item.modified_at, reverse=True)
+    return merged[:limit]
 
 
 def scan_game_scores(directory: Path, limit: int = 80) -> list[HomeEntry]:
@@ -376,6 +485,8 @@ __all__ = [
     "IncrementalHomeScan",
     "game_score_instrument_ids",
     "home_timestamp",
+    "merge_home_project_entries",
+    "scan_example_projects",
     "scan_game_scores",
     "scan_local_projects",
 ]

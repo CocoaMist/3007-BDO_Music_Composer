@@ -38,7 +38,9 @@ def sample_coverage_for_tracks(tracks: list[object], map_path: Path) -> tuple[In
         instrument_id = int(track.bdo_instrument_id)
         bank = bank_for_instrument(instrument_id, str(getattr(track, "marnian_synth_mode", "basic")))
         for index, note in enumerate(track.notes):
-            velocity = max(1, min(127, round(note.vel * float(getattr(track, "volume_scale", 1.0)))))
+            # Coverage follows the velocity byte visible in the editor.  The
+            # retired ``volume_scale`` field is only an input-migration aid.
+            velocity = max(0, min(127, round(note.vel)))
             pitch = resolve_bdo_pitch(
                 instrument_id, int(note.pitch), int(note.ntype)
             )

@@ -9,15 +9,19 @@ from bdo_transcription_session import (
     TranscriptionSession,
 )
 from bdo_validation import ValidationContext, ValidationIssue
-from conversion_validation_controller import ConversionValidationController
-from model_revision import ModelRevision
+from bdo_music_composer.app.conversion_validation_controller import (
+    ConversionValidationController,
+)
+from bdo_music_composer.editor.model_revision import ModelRevision
 from pitch_transform import PitchTransformPlan
-from preview_transport_controller import (
+from bdo_music_composer.audio.preview_transport_controller import (
     PreviewPlayAction,
     PreviewTransportCoordinator,
 )
-from project_lifecycle_controller import ProjectLifecycleController
-from transcription_workspace_controller import (
+from bdo_music_composer.project.project_lifecycle_controller import (
+    ProjectLifecycleController,
+)
+from bdo_music_composer.transcription.transcription_workspace_controller import (
     TranscriptionAnalysisCoordinator,
     TranscriptionReviewController,
 )

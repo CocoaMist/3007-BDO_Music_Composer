@@ -2,6 +2,102 @@
 
 ## Unreleased
 
+- Move the first low-coupling application slice from the repository root into
+  `bdo_music_composer/{app,audio,editor,project,transcription,ui}` without
+  compatibility shims, reducing the root Python count from 89 to 69.
+- Complete the second no-shim structure migration in two validated stages:
+  first move six Qt-free editor owners into `bdo_music_composer/editor/`, then
+  move five focused dialogs and the two theme owners into the inert
+  `bdo_music_composer/ui/{dialogs,theme}` subpackages. Update production,
+  tests, tools, architecture guards, documentation, and CI compilation, and
+  ratchet the root Python budget from 69 to 56. A 7-to-10-file root remains a
+  long-term direction rather than a completed state.
+- Colocate the five timeline/piano-roll UI owners under the inert
+  `bdo_music_composer/ui/editor/` package, then move root `version.py` without
+  a shim to `bdo_music_composer/app/application_metadata.py`. Canonical imports
+  and repository guards now ratchet the root Python budget from 56 to 52.
+- Prototype a compact release-history surface backed by an optional local,
+  Git-ignored `data/releases/release_notes.json`. A Qt-free bounded parser
+  rejects oversized or malformed internal records and tolerates their absence.
+- Add an internal latest-stable GitHub check to the release-notes dialog. The
+  QtNetwork transport is asynchronous, bounded, unauthenticated, and pinned to
+  API version `2026-03-10`; explicit internal tests may invoke it, it never
+  sends Owner IDs, tokens, or local paths, and it never downloads or executes
+  an update. Network/API failure is shown as failure rather than being
+  misreported as “current”, and the startup self-test remains network-free.
+- Reduce the internal release-notes prototype to one compact version selector,
+  one status row, and at most three local highlights. Remove the embedded remote body,
+  duplicate version titles, permanent GitHub action, and explanatory chrome;
+  the validated update lifecycle and safe release link remain unchanged.
+- Keep the release-notes and GitHub update-check implementation as dormant
+  internal infrastructure. Remove its current-version/history entry from the
+  production home page, keep `data/releases/release_notes.json` optional,
+  machine-local, and Git-ignored, exclude it from public history and packages,
+  and allow only explicit internal tests to construct or invoke the feature.
+- Move reusable transient reminders to the bottom centre of each top-level
+  window with footer avoidance. Redesign piano-roll notes as neutral game-style
+  blocks with a four-DIP, DPI-aligned `0–127` velocity rail, separate technique
+  marker, and non-overlapping compact-note move/resize hit regions.
+- Replace the note-count-only export read-back with a Qt-free consistency gate.
+  It compares editor-representable header, instrument, Volume/effect, note,
+  dual-velocity, timing, canonical split, lossless-source, primary-file, and
+  game-copy data; primary mismatches are blocked before game installation and
+  private identity values are redacted from bounded diagnostics. Bind imported
+  velocity B before identity-changing transforms, and close byte reuse when
+  Volume, velocity B, percussion semantics, or duration scaling has changed.
+- Make the editor's game score authoritative end to end. Mute/Solo now affects
+  preview only; formal validation/export always includes every lane. Invalid
+  MIDI/BDO/project opens are transactional, and recovered project tracks remain
+  usable when their provenance file is missing.
+- Replace hidden export-time loudness processing with game-native data. Schema
+  v11 materializes legacy velocity policies and `volume_scale` into visible
+  `Note.vel`, defaults new work to neutral `0` transpose/preserved velocity,
+  supports the game's full velocity range `0–127`, and rejects any deferred
+  velocity transform at formal export boundaries.
+- Treat Volume and Aux sends as one shared mixer per final serialized game
+  instrument (including Marnian mode offsets). Volume and dirty Aux edits now
+  propagate atomically, new/remapped lanes inherit only consistent groups, and
+  legacy conflicts require an explicit unify action. Optimizer rebuilds retain
+  all game mixer and dual-velocity source metadata.
+- Fix a P0 Windows 11 dark-theme conflict where native popup menus could draw
+  enabled commands as black text on a dark surface. All `QMenu` instances now
+  use one application-level semantic popup theme with distinct readable
+  enabled, selected, disabled, submenu, separator, and checked states; palette
+  contrast and rendered popup output are regression gated.
+- Unify the global and single-track optimization entries in one scoped MIDI
+  Optimization workbench.  Scope changes now invalidate stale previews and
+  preserve the host's cross-track/global-effect permission boundary.
+- Continue the main-window decoupling work with focused editor, timeline,
+  settings, validation, preview-transport, transcription-review, and project
+  lifecycle modules while retaining compatibility exports.
+- Establish executable module ownership for AI-assisted maintenance: move
+  transactional imports, config/profile loading, home/startup presentation,
+  interval queries, source-document reuse, and ordered validation stages into
+  focused owners; keep the wire codec editor-agnostic and gate dependency
+  direction plus focused-function size in tests.
+- Move production export-request assembly into one Qt-free factory. It now
+  derives formal-track articulation, Volume, dual-velocity and Aux/Master data
+  from one immutable snapshot, preserves imported raw effect bytes, and rejects
+  malformed eight-byte settings instead of silently resetting them.
+- Move conversion defaults and global/per-track pitch projection into typed,
+  source-aware snapshots. Fix BDO drum-set pitch semantics so canonical
+  pitches 48–64 remain exempt from melodic octave transforms across preview,
+  validation, WPF sidecars, and export.
+- Add a Qt-free `ProjectLoadPlan` boundary that completely decodes, migrates,
+  validates, and prepares project tracks plus metadata before one UI commit.
+  `ProjectOpenRequest` remains its source-routing value, while recursively
+  frozen `ProjectMetadataSnapshot` values detach nested GUI data before autosave.
+- Add a pure `TranscriptionCommitPlan` for deterministic draft/route/formal-note
+  decisions. Its UI executor now restores tracks, sidecar, and undo/review
+  histories on model-stage failure, while view-refresh failures remain
+  compensable and cannot suppress autosave. Move deterministic standard-
+  MIDI projection into
+  `bdo_music_composer/editor/preview_midi_writer.py` with an identity-preserving
+  compatibility export from the main-window module.
+- Refresh the engineering and game-score-laboratory roadmaps so completed
+  waveform/A–B/editor work is no longer listed as future work. No frozen
+  executable or release artifact is produced by these source changes.
+
 ## 1.0.0 - 2026-07-29
 
 - Promote the complete editor, preview, persistence, validation, performance,

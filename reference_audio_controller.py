@@ -16,7 +16,7 @@ from PySide6.QtMultimedia import (
 from PySide6.QtWidgets import QFileDialog, QWidget
 
 from i18n import tr, trf
-from ui_notifications import show_global_toast
+from bdo_music_composer.ui.ui_notifications import show_global_toast
 
 
 class ReferenceAudioController(QObject):

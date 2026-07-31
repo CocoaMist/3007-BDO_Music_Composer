@@ -61,6 +61,67 @@ class PianoRollInteractionTests(unittest.TestCase):
             editor.pitch_scroll.setValue(editor.canvas.MAX_PITCH - 84)
             assert editor.canvas.pitch_top == 84
 
+            # Game-style note blocks keep a four-DIP velocity rail inside the
+            # body.  Its active width is monotonic, pixel-aligned at fractional
+            # DPI, and velocity zero never invents a visible value.
+            visual_rect = editor.canvas.note_rect(editor.canvas.notes[0])
+            zero_geometry = editor.canvas.note_velocity_bar_rects(
+                visual_rect, 0, 1.0
+            )
+            middle_geometry = editor.canvas.note_velocity_bar_rects(
+                visual_rect, 64, 1.0
+            )
+            full_geometry = editor.canvas.note_velocity_bar_rects(
+                visual_rect, 127, 1.0
+            )
+            assert zero_geometry is not None
+            assert middle_geometry is not None
+            assert full_geometry is not None
+            zero_rail, zero_fill = zero_geometry
+            middle_rail, middle_fill = middle_geometry
+            full_rail, full_fill = full_geometry
+            assert zero_rail.height() == editor.canvas.NOTE_VELOCITY_BAR_HEIGHT == 4.0
+            assert visual_rect.contains(zero_rail)
+            assert zero_fill.width() == 0.0
+            assert 0.49 < middle_fill.width() / middle_rail.width() < 0.52
+            assert full_fill.width() == full_rail.width()
+            scaled_rail, _scaled_fill = editor.canvas.note_velocity_bar_rects(
+                visual_rect, 100, 1.25
+            )
+            assert abs(scaled_rail.height() * 1.25 - round(scaled_rail.height() * 1.25)) < 1e-9
+
+            # A compact note has no truthful room for two resize handles.  Its
+            # centre must remain draggable; wider notes expose aligned edges.
+            compact = Note(60, 90, 0.0, 1.0, 0)
+            editor.canvas.set_notes([compact])
+            compact_rect = editor.canvas.note_rect(compact)
+            assert compact_rect.width() == 4.0
+            assert editor.canvas.note_at(compact_rect.center()) == (0, "move")
+            twelve_px = Note(
+                60,
+                90,
+                0.0,
+                editor.canvas.NOTE_RESIZE_VISUAL_MIN_WIDTH / editor.canvas.px_per_ms,
+                0,
+            )
+            editor.canvas.set_notes([twelve_px])
+            resize_rect = editor.canvas.note_rect(twelve_px)
+            assert editor.canvas.note_velocity_bar_rects(
+                resize_rect, 90, 1.0
+            ) is None
+            centre_y = resize_rect.center().y()
+            assert editor.canvas.note_at(
+                QPointF(resize_rect.left() + 1.0, centre_y)
+            ) == (0, "resize_left")
+            assert editor.canvas.note_at(resize_rect.center()) == (0, "move")
+            assert editor.canvas.note_at(
+                QPointF(resize_rect.right() - 1.0, centre_y)
+            ) == (0, "resize_right")
+            editor.canvas.set_notes([
+                Note(60, 91, 0.0, 250.0, 0),
+                Note(64, 82, 750.0, 250.0, 0),
+            ])
+
             # Content/zoom changes must clamp the canvas and the horizontal bar
             # together instead of leaving the roll stranded in blank space.
             initial_notes = list(editor.canvas.notes)
@@ -80,6 +141,17 @@ class PianoRollInteractionTests(unittest.TestCase):
             editor.editor_zoom.setValue(92)
             editor.canvas.set_notes(initial_notes)
             editor.update_scrollbars()
+
+            # Game velocity has a real zero value.  Numeric edits and the
+            # velocity lane must not silently lift it to one.
+            editor.canvas.selected = {0}
+            editor.apply_field("vel", "0")
+            assert editor.canvas.notes[0].vel == 0
+            lane_bottom = editor.velocity_lane.height() - 5.0
+            assert editor.velocity_lane._velocity_at(lane_bottom) == 0
+            assert abs(editor.velocity_lane._y_for_velocity(0) - lane_bottom) < 0.01
+            editor.undo()
+            assert editor.canvas.notes == initial_notes
 
             def grid_point(time_ms, pitch):
                 return QPoint(

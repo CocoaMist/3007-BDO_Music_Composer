@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections import namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import unittest
 
-from bdo_profile import load_bdo_profile
+from bdo_codec import MAX_NOTES_PER_TRACK
+from bdo_profile import Evidence, LimitPolicy, load_bdo_profile
 from bdo_validation import ValidationContext, validate_tracks
+from optimization.plugin_api import OptimizationLimits
 from project_paths import PROFILES_DIR
 from pitch_transform import PitchTransformPlan
 
@@ -46,6 +48,14 @@ class BdoProfileValidationTests(unittest.TestCase):
     def test_profile_loads_versioned_limits_and_evidence(self) -> None:
         self.assertEqual(self.profile.format_version, 9)
         self.assertEqual(self.profile.note_limit_per_track, 730)
+        self.assertEqual(
+            self.profile.note_limit_per_track,
+            MAX_NOTES_PER_TRACK,
+        )
+        self.assertEqual(
+            OptimizationLimits().export_track_note_limit,
+            MAX_NOTES_PER_TRACK,
+        )
         track_limit = self.profile.limit_policy("notes_per_track")
         instrument_limit = self.profile.limit_policy("notes_per_instrument")
         self.assertEqual("wire_hard", track_limit.kind)
@@ -246,6 +256,85 @@ class BdoProfileValidationTests(unittest.TestCase):
         self.assertIn("track.volume_legacy_range", codes)
         self.assertIn("track.effects_legacy_range", codes)
         self.assertIn("export.global_effects_legacy_range", codes)
+
+    def test_issue_codes_keep_track_group_and_score_order(self) -> None:
+        note = Note(60, 90, 0, 100, 0)
+        excluded = Track(1, [note], 0x11)
+        malformed = Track(
+            2,
+            [Note(0, 90, 0, 100, 0)],
+            0x99,
+            duration_scale=0.5,
+            volume_scale=0.75,
+            articulation_type=7,
+            bdo_track_volume="invalid",  # type: ignore[arg-type]
+            bdo_track_settings=(1, 2),
+        )
+        first = Track(
+            3,
+            [note],
+            0x11,
+            display_name="Lead A",
+            bdo_track_volume=60,
+            bdo_track_settings=(10, 0, 0, 0, 0, 0, 0, 0),
+        )
+        second = Track(
+            4,
+            [Note(64, 90, 100, 100, 0)],
+            0x11,
+            display_name="Lead B",
+            bdo_track_volume=70,
+            bdo_track_settings=(20, 0, 0, 0, 0, 0, 0, 0),
+        )
+        capacity_policy = LimitPolicy(
+            1,
+            "wire_hard",
+            Evidence("verified", "ordered fixture"),
+        )
+        profile = replace(
+            self.profile,
+            note_limit_per_instrument=1,
+            limit_policies={
+                **self.profile.limit_policies,
+                "notes_per_instrument": capacity_policy,
+            },
+        )
+        tracks = [excluded, malformed, first, second]
+        context = ValidationContext(
+            0,
+            frozenset({2, 3, 4}),
+            {},
+            {36: 48, 37: 49},
+            lambda track: track.bdo_instrument_id,
+            sample_only_percussion_ids=frozenset({0x99}),
+            velocity_mode="normalize",
+            effects=(101, 0, (0, 0, 0)),
+        )
+
+        issues = validate_tracks(tracks, profile, context)
+
+        self.assertEqual(
+            [
+                "track.excluded",
+                "track.volume_wire_range",
+                "track.effects_wire_shape",
+                "instrument.unknown",
+                "pitch.wire_clamp",
+                "pitch.range_unverified",
+                "export.duration_scale",
+                "export.velocity_scale",
+                "articulation.unsupported",
+                "percussion.sample_only",
+                "tracks.merge",
+                "tracks.volume_conflict",
+                "tracks.effects_conflict",
+                "capacity.instrument",
+                "export.velocity_mode",
+                "export.global_effects",
+                "export.global_effects_legacy_range",
+            ],
+            [issue.code for issue in issues],
+        )
 
 
 if __name__ == "__main__":

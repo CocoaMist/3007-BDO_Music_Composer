@@ -22,6 +22,7 @@ DOCS_DIR = RESOURCE_ROOT / "docs"
 ASSETS_DIR = RESOURCE_ROOT / "assets"
 WWISE_MIDI_MAP_PATH = MAPPINGS_DIR / "bdo_wwise_midi_map.json"
 INSTRUMENT_SAMPLE_MAP_PATH = MAPPINGS_DIR / "bdo_instrument_sample_map.json"
+RELEASE_NOTES_PATH = DATA_DIR / "releases" / "release_notes.json"
 
 
 def _user_data_dir() -> Path:

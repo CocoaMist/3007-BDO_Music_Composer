@@ -51,20 +51,29 @@ MIDI / BDO v9
 | 任务 | 首要模块 | 边界说明 |
 |---|---|---|
 | 主窗口信号和工作流编排 | `pyside_bdo_gui.py` | 只放 UI 编排；新领域逻辑优先进入聚焦模块 |
-| 模型 revision / 转换校验 | `model_revision.py`, `conversion_validation_controller.py` | 可变轨道必须经过显式 mutation boundary；快照只按 revision/语言复用 |
-| 轨道/音符共享模型 | `editor_models.py`, `bdo_midi/` | `Note(pitch, vel, start, dur, ntype)` 线形状不可随意改变 |
-| 时间轴/钢琴卷帘 | `timeline_canvas.py`, `piano_roll_canvas.py`, `midi_note_editor.py` | 绘制必须保持可见区索引和批处理 |
-| 设置、检查、优化、致谢 | `application_settings_dialog.py`, `conversion_check_dialog.py`, `optimizer_dialog.py`, `acknowledgements_dialog.py` | 对话框自主管布局和展示，主窗口只注入状态并应用结果 |
+| 模型 revision / 转换校验 | `bdo_music_composer/editor/model_revision.py`, `bdo_music_composer/app/conversion_validation_controller.py` | 可变轨道必须经过显式 mutation boundary；快照只按 revision/语言复用 |
+| 轨道/音符共享模型 | `bdo_music_composer/editor/editor_models.py`, `bdo_midi/` | `Note(pitch, vel, start, dur, ntype)` 线形状不可随意改变 |
+| 时间轴/钢琴卷帘 | `bdo_music_composer/ui/editor/timeline_canvas.py`, `bdo_music_composer/ui/editor/piano_roll_canvas.py`, `bdo_music_composer/ui/editor/midi_note_editor.py` | 绘制必须保持可见区索引和批处理 |
+| 设置、检查、优化、致谢 | `bdo_music_composer/ui/dialogs/application_settings_dialog.py`, `bdo_music_composer/ui/dialogs/conversion_check_dialog.py`, `bdo_music_composer/ui/dialogs/optimizer_dialog.py`, `bdo_music_composer/ui/dialogs/track_settings_dialogs.py`, `bdo_music_composer/ui/dialogs/acknowledgements_dialog.py` | 对话框自主管布局和展示，主窗口只注入状态并应用结果 |
 | 优化算法 | `optimization/` | `builtin.py` 是生产管线，`registry.py` / plugin API 是扩展边界 |
 | 实时预览 | `bdo_realtime_audio.py`, `bdo_sample_renderer.py` | 音频回调禁止磁盘 I/O、解码和无界分配 |
 | 扒谱 | `bdo_transcription*.py`, `transcription_workers.py` | 分析后台运行；正式音符只能经用户确认写回 |
-| 扒谱 worker/审阅编排 | `transcription_workspace_controller.py`, `bdo_transcription_session.py` | coordinator 输出范围/审阅 plan；session 拥有候选命令和稳定时间索引，陈旧结果不得写回 |
+| 扒谱 worker/审阅编排 | `bdo_music_composer/transcription/transcription_workspace_controller.py`, `bdo_transcription_session.py` | coordinator 输出范围/审阅 plan；session 拥有候选命令和稳定时间索引，陈旧结果不得写回 |
 | 导出 | `export_workflow.py`, `bdo_export/`, `bdo_codec/` | GUI 线程冻结快照；发布必须原子化 |
-| 工程与首页 | `project_persistence.py`, `project_schema.py`, `home_catalog.py` | 自动保存后台序列化；首页只读安全小索引 |
-| 工程载入 gate | `project_lifecycle_controller.py` | generation 防止陈旧完成事件解除新载入状态 |
-| 预览传输状态 | `preview_transport_controller.py` | coordinator 只选择命令并保存 session 状态，不做 I/O/DSP；设备与 callback 仍归音频引擎 |
+| 工程与首页 | `bdo_music_composer/project/project_persistence.py`, `bdo_music_composer/project/project_schema.py`, `home_catalog.py` | 自动保存后台序列化；首页只读安全小索引 |
+| 内部休眠的更新日志与检查更新 | `bdo_music_composer/app/application_metadata.py`, `bdo_music_composer/app/release_notes.py`, `bdo_music_composer/app/update_check.py`, `bdo_music_composer/ui/update_check_qt.py`, `bdo_music_composer/ui/dialogs/release_notes_dialog.py` | 日志 JSON 是可选、本机内部、Git 忽略的记录，可不存在且不得进入公开 Git 历史或安装包；生产首页、启动、菜单和导航均无入口，只有显式内部测试可构造并调用 |
+| 工程载入 gate | `bdo_music_composer/project/project_lifecycle_controller.py` | generation 防止陈旧完成事件解除新载入状态 |
+| 预览传输状态 | `bdo_music_composer/audio/preview_transport_controller.py` | coordinator 只选择命令并保存 session 状态，不做 I/O/DSP；设备与 callback 仍归音频引擎 |
 | 本地化 | `i18n.py` | 现有中文固定文本是 source key；动态音乐数据不翻译 |
 | 路径与打包 | `project_paths.py`, `BDOMusicComposer.spec`, `packaging/` | 冻结构建的可写数据不得进入 `sys._MEIPASS` |
+
+当前结构迁移先将 6 个 Qt-free editor owner 迁入
+`bdo_music_composer/editor/`，再将 5 个 dialog 与 2 个 theme owner 迁入
+inert 的 `bdo_music_composer/ui/{dialogs,theme}/` 子包；后续又把 5 个编辑器
+Qt 界面 owner 收拢到 inert 的 `bdo_music_composer/ui/editor/` 子包。所有阶段
+均未保留根 shim；版本/公开仓库元数据统一归
+`bdo_music_composer/app/application_metadata.py`，根 Python 文件预算已从
+69 降为 52。7～10 个根文件只是长期方向。
 
 更具体的路由见 [`AI_CONTEXT.md`](AI_CONTEXT.md)，当前重构候选和性能门槛见 [`OPTIMIZATION_EXTENSION_ROADMAP.md`](OPTIMIZATION_EXTENSION_ROADMAP.md)。
 
@@ -102,6 +111,13 @@ MIDI / BDO v9
 - 不得把游戏提取资产或 `.bdosamples` 放进构建和仓库。
 - 第三方许可仍归上游；根 `LICENSE` 只覆盖原创项目代码。
 - 新固定 UI 文本必须补齐英文、日文和韩文目录；曲名、轨名、文件名和音符名不翻译。
+- 内部休眠的更新日志与检查器不得接入生产首页、启动、菜单或普通导航，
+  可选的 `data/releases/release_notes.json` 必须保持本机内部与 Git 忽略，
+  可不存在且不得进入公开 Git 历史或安装包；只有显式内部测试可构造相关
+  弹窗并发起请求。
+- GitHub 更新检查不得读取或发送 token、Owner ID、工程内容或本机路径，
+  不得自动下载/执行发行物；超时、限流和其他失败必须显示为失败，不能据此
+  声称当前已是最新版。启动自检必须禁网。
 
 ## 6. 标准实施流程
 
@@ -127,6 +143,7 @@ MIDI / BDO v9
 | 音频引擎 | 实时音频测试、检查 callback 分配和 I/O |
 | 序列化/导出 | `test_bdo_codec.py`、`test_bdo_export_roundtrip.py`、二进制结构检查 |
 | 本地化/README | `test_i18n_catalog.py`、语言切换烟测、`test_readme_locales.py` |
+| 内部休眠更新日志/检查更新 | `test_release_notes.py`、`test_update_check.py`、`test_update_check_qt.py`、离屏弹窗烟测、可选/缺失记录降级、生产入口排除、Git 历史排除与公开包资源排除 |
 | 打包/资源 | 干净 PyInstaller 构建、转录自测、10 秒以上启动测试 |
 
 常用命令：

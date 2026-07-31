@@ -120,18 +120,40 @@ flowchart LR
 主要境界：
 
 - `pyside_bdo_gui.py`：メインウィンドウ編成、Qt lifecycle、互換 export。
-- `model_revision.py` と各 `*_controller.py`：検証、採譜 worker／レビュー履歴、project loading、preview transport command の Qt-free 状態。
-- `editor_models.py`、`bdo_midi/`：共有トラック状態、不変音符、純粋変換。
-- `timeline_canvas.py`、`piano_roll_canvas.py`、`midi_note_editor.py`：可視範囲索引付き編集画面。
-- 独立 dialog：`application_settings_dialog.py`、`conversion_check_dialog.py`、`optimizer_dialog.py`、`track_settings_dialogs.py`、`acknowledgements_dialog.py`。
+- `bdo_music_composer/editor/model_revision.py`、
+  `bdo_music_composer/app/conversion_validation_controller.py`、
+  `bdo_music_composer/transcription/transcription_workspace_controller.py`、
+  `bdo_music_composer/project/project_lifecycle_controller.py`、
+  `bdo_music_composer/audio/preview_transport_controller.py`：検証、採譜
+  worker／レビュー履歴、project loading、preview transport command の Qt-free 状態。
+- `bdo_music_composer/editor/editor_models.py`、
+  `bdo_music_composer/editor/editor_import.py`、
+  `bdo_music_composer/editor/editor_commands.py`、
+  `bdo_music_composer/editor/interval_index.py`、
+  `bdo_music_composer/editor/velocity_curve.py`、
+  `bdo_music_composer/editor/preview_midi_writer.py`：Qt-free の共有状態、
+  transaction import、command、可視範囲 query、velocity curve、標準 MIDI 投影。
+- `bdo_music_composer/ui/editor/`：可視範囲索引付き timeline、piano-roll、note-editor 画面。
+- `bdo_music_composer/app/application_metadata.py`：version/repository identity。
+- focused dialog は `bdo_music_composer/ui/dialogs/`、semantic application
+  theme は inert な `bdo_music_composer/ui/theme/` subpackage にあります。
 - `optimization/`：本番 pipeline、registry、信頼ローカルアルゴリズム境界。
 - `bdo_realtime_audio.py`、`bdo_sample_renderer.py`：リアルタイム/オフライン試聴。
 - `export_workflow.py`、`bdo_export/`、`bdo_codec/`：不変 request、変換、binary I/O、atomic publish。
-- `project_persistence.py`、`project_schema.py`、`home_catalog.py`：autosave、migration、有界 home discovery。
+- `bdo_music_composer/project/project_persistence.py`、
+  `bdo_music_composer/project/project_schema.py`、`home_catalog.py`：autosave、
+  migration、有界 home discovery。
 - `bdo_transcription*.py`、`transcription_workers.py`：Qt-free 分析、安定候補範囲 index、background worker。
 - `i18n.py`、`project_paths.py`：翻訳 catalog と source/frozen path 境界。
 
 詳細：[Architecture](docs/ARCHITECTURE.md)、[AI Context](docs/AI_CONTEXT.md)、[Project Structure](docs/PROJECT_STRUCTURE.md)、[Conversion Settings](docs/CONVERSION_SETTINGS.md)、[BDO v9 codec](docs/BDO_V9_CODEC.md)。
+
+no-shim package migration は以前の 89→69 に続いて root Python file を
+69→56 に削減しました。さらに 5 個の Qt editor owner を
+`bdo_music_composer/ui/editor/` に集約し、version/repository identity を
+`bdo_music_composer/app/application_metadata.py` に一元化して、現在の上限を
+52 にしました。7～10 file の root は将来の方向で、現在完了した状態では
+ありません。
 
 <!-- section:invariants -->
 ## 正確性と性能の不変条件

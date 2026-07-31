@@ -23,7 +23,6 @@ from bdo_codec import (
 )
 from bdo_codec.ice import encrypt as encrypt_ice
 from bdo_midi import (
-    BDO_INSTRUMENT_NAMES,
     BDO_INSTRUMENTS,
     DEFAULT_INSTRUMENT,
     Note,
@@ -43,6 +42,7 @@ from bdo_track_effects import (
     DEFAULT_TRACK_VOLUME,
     raw_track_settings,
 )
+from .source_reuse import score_summary
 
 
 MAX_NOTES_PER_INSTRUMENT = 10_000
@@ -58,6 +58,7 @@ class _EncodedNote(NamedTuple):
     dur: float
     ntype: int
     velocity_b: int
+    velocity_b_explicit: bool
 
 
 def split_notes(notes: Sequence, max_per_track: int = MAX_NOTES_PER_TRACK) -> list:
@@ -205,6 +206,50 @@ def _velocity_b_lookup(
     return lookup
 
 
+def bind_dual_velocities(
+    notes: Sequence[object],
+    records: Sequence[Sequence] | None = None,
+) -> tuple[_EncodedNote, ...]:
+    """Bind game velocity B before pitch, time, or articulation transforms."""
+
+    lookup = _velocity_b_lookup(records)
+    bound: list[_EncodedNote] = []
+    for note in notes:
+        pitch = int(getattr(note, "pitch"))
+        velocity_a = bounded_velocity(getattr(note, "vel"))
+        start = float(getattr(note, "start"))
+        duration = float(getattr(note, "dur"))
+        note_type = int(getattr(note, "ntype"))
+        if hasattr(note, "velocity_b"):
+            velocity_b = bounded_velocity(
+                getattr(note, "velocity_b"),
+                "velocity_b",
+            )
+            velocity_b_explicit = bool(
+                getattr(note, "velocity_b_explicit", True)
+            )
+        else:
+            candidates = lookup.get((
+                pitch,
+                velocity_a,
+                start,
+                duration,
+                note_type,
+            ))
+            velocity_b_explicit = bool(candidates)
+            velocity_b = candidates.pop(0) if candidates else velocity_a
+        bound.append(_EncodedNote(
+            pitch,
+            velocity_a,
+            start,
+            duration,
+            note_type,
+            velocity_b,
+            velocity_b_explicit,
+        ))
+    return tuple(bound)
+
+
 def channel_groups_to_bdo(
     bpm,
     time_sig_num,
@@ -252,7 +297,11 @@ def channel_groups_to_bdo(
             )
         instrument_id = bounded_int(instrument_id, 0, 0xFFFF, "instrument id")
         drum_track = bool(is_percussion or instrument_id == drum_id)
-        notes: list[Note] = list(source_notes)
+        velocity_b_records = (
+            velocity_b_maps.get(channel_index)
+            if velocity_b_maps else None
+        )
+        notes = list(bind_dual_velocities(source_notes, velocity_b_records))
         if drum_track:
             notes = map_drum_notes(notes)
         else:
@@ -311,16 +360,13 @@ def channel_groups_to_bdo(
                 )
             settings_by_instrument[instrument_id] = settings
 
-        second_velocities = _velocity_b_lookup(
-            velocity_b_maps.get(channel_index) if velocity_b_maps else None
-        )
-        for note in notes:
-            identity = (note.pitch, note.vel, float(note.start), float(note.dur), note.ntype)
-            candidates = second_velocities.get(identity)
-            velocity_b = candidates.pop(0) if candidates else note.vel
-            notes_by_instrument[instrument_id].append(_EncodedNote(
-                note.pitch, note.vel, note.start, note.dur, note.ntype, velocity_b
-            ))
+        if notes:
+            notes_by_instrument[instrument_id].extend(
+                note if note.velocity_b_explicit else note._replace(
+                    velocity_b=note.vel
+                )
+                for note in notes
+            )
 
     if drum_id in notes_by_instrument:
         notes_by_instrument[drum_id] = normalize_drum_note_timing(notes_by_instrument[drum_id])
@@ -341,26 +387,13 @@ def channel_groups_to_bdo(
 
     group_volumes: dict[int, int] = {}
     group_settings: dict[int, bytes] = {}
-    track_details: list[dict] = []
-    total_notes = 0
-    total_tracks = 0
-    for group_index, (instrument_id, physical_tracks) in enumerate(instrument_groups):
+    for group_index, (instrument_id, _physical_tracks) in enumerate(
+        instrument_groups
+    ):
         if instrument_id in volumes_by_instrument:
             group_volumes[group_index] = volumes_by_instrument[instrument_id]
         if instrument_id in settings_by_instrument:
             group_settings[group_index] = settings_by_instrument[instrument_id]
-        instrument_name = BDO_INSTRUMENT_NAMES.get(instrument_id, f"0x{instrument_id:02x}")
-        for track_notes in physical_tracks:
-            total_tracks += 1
-            total_notes += len(track_notes)
-            track_details.append({
-                "notes": len(track_notes),
-                "pitch_min": min((note.pitch for note in track_notes), default=0),
-                "pitch_max": max((note.pitch for note in track_notes), default=0),
-                "duration_ms": max((note.start + note.dur for note in track_notes), default=0),
-                "instrument": instrument_name,
-            })
-        total_tracks += 1
 
     document = build_score_document(
         output_bpm,
@@ -372,15 +405,8 @@ def channel_groups_to_bdo(
         track_volumes=group_volumes,
         track_settings_by_group=group_settings,
     )
-    summary = {
-        "bpm": output_bpm,
-        "time_sig": meter,
-        "tracks": total_tracks,
-        "total_notes": total_notes,
-        "instruments": len(instrument_groups),
-        "track_details": track_details,
-        "notes_dropped": notes_dropped,
-    }
+    summary = score_summary(document)
+    summary["notes_dropped"] = notes_dropped
     return encode_score(document, mode="canonical"), summary
 
 

@@ -16,12 +16,13 @@ import atomic_io
 from bdo_codec import (
     BDO_VERSION, HEADER_SIZE, BdoDocument, BdoHeader, BdoInstrumentGroup, BdoNote, BdoTrack,
     BdoTrackSettings, UnsafeOpaqueDataError, decode_score, document_from_dict,
-    document_matches_logical_tracks, document_to_dict, encode_score, validate_score,
+    document_to_dict, encode_score, validate_score,
     score_instrument_ids, write_score,
 )
 from bdo_codec.__main__ import main as codec_main
 from bdo_codec.ice import decrypt, encrypt
-from pyside_bdo_gui import Note, channel_groups_to_bdo
+from bdo_export import channel_groups_to_bdo, document_matches_logical_tracks
+from bdo_midi import Note
 
 
 def document_with(notes: tuple[BdoNote, ...], *, extra: bytes = b"") -> BdoDocument:

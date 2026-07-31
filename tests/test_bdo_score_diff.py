@@ -4,8 +4,9 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from bdo_export import channel_groups_to_bdo
+from bdo_midi import Note
 from bdo_score import compare_scores, read_bdo_score, snapshot_from_bytes
-from pyside_bdo_gui import Note, channel_groups_to_bdo
 
 
 def score(pitch: int, start: float = 0.0) -> bytes:

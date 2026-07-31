@@ -13,6 +13,7 @@ from typing import Callable, Iterable, Mapping
 from bdo_articulation_profiles import profile_for
 from bdo_lyrics import LyricContext, LyricExpressionMode, align_lyrics
 from bdo_music_theory import ContextClassifier, SongContext, TheoryContext, TrackRole, analyse_music, analyse_song, is_non_chord_tone
+from bdo_track_effects import DEFAULT_TRACK_VOLUME
 from bdo_techniques import EditOperation, RealizationKind, TECHNIQUE_PROFILES, TechniqueCandidate, instrument_family
 
 
@@ -849,6 +850,26 @@ def _replace_track(track, notes: list, notes_optimized: bool | None = None,
                    state_updates: dict | None = None):
     effect_state = dict(track.effect_settings_placeholder)
     effect_state.update(state_updates or {})
+    constructor_fields = getattr(track, "__dataclass_fields__", {})
+    game_state = {}
+    if "bdo_track_volume" in constructor_fields:
+        game_state["bdo_track_volume"] = int(
+            getattr(track, "bdo_track_volume", DEFAULT_TRACK_VOLUME)
+        )
+    if "bdo_track_settings" in constructor_fields:
+        game_state["bdo_track_settings"] = tuple(
+            int(value)
+            for value in getattr(track, "bdo_track_settings", (0,) * 8)
+        )
+    if "bdo_source_group_index" in constructor_fields:
+        game_state["bdo_source_group_index"] = getattr(
+            track, "bdo_source_group_index", None
+        )
+    if "bdo_source_note_records" in constructor_fields:
+        game_state["bdo_source_note_records"] = tuple(
+            tuple(record)
+            for record in getattr(track, "bdo_source_note_records", ())
+        )
     return track.__class__(
         track_id=track.track_id,
         notes=notes,
@@ -870,6 +891,7 @@ def _replace_track(track, notes: list, notes_optimized: bool | None = None,
             if notes_optimized is None
             else notes_optimized
         ),
+        **game_state,
     )
 
 

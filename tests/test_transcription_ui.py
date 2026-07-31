@@ -31,7 +31,9 @@ class TranscriptionUiTests(unittest.TestCase):
             from PySide6.QtWidgets import QApplication
 
             import pyside_bdo_gui as gui
-            from project_schema import normalize_reference_layer_settings
+            from bdo_music_composer.project.project_schema import (
+                normalize_reference_layer_settings,
+            )
 
             app = QApplication([])
             window = gui.MidiToBdoWindow()

@@ -12,7 +12,10 @@ from bdo_music_theory import TrackRole, analyse_music, analyse_song
 from bdo_midi_optimizer import OptimizationLevel, OptimizerConfig, optimize_tracks
 from bdo_lyrics import LyricExpressionMode, align_lyrics
 from bdo_techniques import TECHNIQUE_PROFILES, TechniqueMap, TriggerKind
-from pyside_bdo_gui import BDO_ARTICULATIONS, TrackState, build_filtered_midi, parse_midi
+from bdo_midi import parse_midi
+from editor_articulation_data import BDO_ARTICULATIONS
+from bdo_music_composer.editor.editor_models import TrackState
+from pyside_bdo_gui import build_filtered_midi
 
 
 Note = namedtuple("Note", "pitch vel start dur ntype", defaults=(0,))
@@ -169,6 +172,45 @@ class ScopedAndEnsembleOptimizationTests(unittest.TestCase):
         self.assertEqual(result.tracks[0].bdo_instrument_id, source.bdo_instrument_id)
         self.assertEqual(len(result.tracks[0].notes), len(source.notes))
         self.assertEqual(sorted(note.pitch for note in result.tracks[0].notes), sorted(note.pitch for note in source.notes))
+
+    def test_track_rebuild_preserves_lossless_bdo_mixer_and_source_state(self) -> None:
+        source = track(0x12, [
+            Note(60, 80, 0, 1200),
+            Note(64, 82, 500, 700),
+        ])
+        source.bdo_track_volume = 118
+        source.bdo_track_settings = (11, 201, 22, 202, 33, 203, 204, 205)
+        source.bdo_source_group_index = 7
+        source.bdo_source_note_records = (
+            (60, 80, 0.0, 1200.0, 0, 73),
+            (64, 82, 500.0, 700.0, 14, 79),
+        )
+
+        result = optimize_tracks(
+            [source],
+            120,
+            BDO_ARTICULATIONS,
+            OptimizerConfig(
+                game_safe_only=True,
+                optimize_blocks=False,
+                polish_velocity=False,
+                apply_articulations=False,
+                humanize=False,
+            ),
+        )
+
+        rebuilt = result.tracks[0]
+        self.assertIsNot(rebuilt, source)
+        self.assertEqual(rebuilt.bdo_track_volume, source.bdo_track_volume)
+        self.assertEqual(rebuilt.bdo_track_settings, source.bdo_track_settings)
+        self.assertEqual(
+            rebuilt.bdo_source_group_index,
+            source.bdo_source_group_index,
+        )
+        self.assertEqual(
+            rebuilt.bdo_source_note_records,
+            source.bdo_source_note_records,
+        )
 
     def test_game_safe_humanization_is_stable_and_keeps_chords_together(self) -> None:
         source = track(0x12, [
