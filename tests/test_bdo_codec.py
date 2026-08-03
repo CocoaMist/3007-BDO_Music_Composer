@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-import atomic_io
+import bdo_common.atomic_io as atomic_io
 from bdo_codec import (
     BDO_VERSION, HEADER_SIZE, BdoDocument, BdoHeader, BdoInstrumentGroup, BdoNote, BdoTrack,
     BdoTrackSettings, UnsafeOpaqueDataError, decode_score, document_from_dict,

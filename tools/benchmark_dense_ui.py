@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 import PySide6  # noqa: E402
 from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
-from pyside_bdo_gui import (  # noqa: E402
+from bdo_music_composer.ui.main_window import (  # noqa: E402
     MidiNoteEditorDialog,
     MidiToBdoWindow,
     Note,

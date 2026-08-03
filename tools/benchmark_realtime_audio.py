@@ -30,7 +30,7 @@ from PySide6.QtCore import QCoreApplication
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from bdo_realtime_audio import (  # noqa: E402
+from bdo_music_composer.audio.bdo_realtime_audio import (  # noqa: E402
     AUDIO_BUFFER_MS,
     AUDIO_MIN_RENDER_FRAMES,
     AUDIO_NOMINAL_QUEUE_MS,
@@ -45,7 +45,7 @@ from bdo_realtime_audio import (  # noqa: E402
     _Event,
     _Sample,
 )
-from project_paths import WWISE_MIDI_MAP_PATH  # noqa: E402
+from bdo_music_composer.core.project_paths import WWISE_MIDI_MAP_PATH  # noqa: E402
 
 
 Note = namedtuple("Note", "pitch vel start dur ntype")

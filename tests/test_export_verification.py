@@ -10,21 +10,21 @@ from bdo_codec import decode_score, encode_score
 from bdo_codec.ice import decrypt as decrypt_ice, encrypt as encrypt_ice
 from bdo_export import channel_groups_to_bdo
 from bdo_midi import Note
-from conversion_settings import ConversionSettings
-from export_verification import (
+from bdo_music_composer.core.conversion_settings import ConversionSettings
+from bdo_music_composer.export.export_verification import (
     ExportVerificationIssue,
     ExportVerificationReport,
     build_export_expectation,
     verify_export_bytes,
     verify_published_export,
 )
-from export_workflow import (
+from bdo_music_composer.export.export_workflow import (
     ExportRequest,
     execute_export,
     freeze_export_tracks,
     prepare_export,
 )
-from pitch_transform import PitchTransformPlan
+from bdo_music_composer.editor.pitch_transform import PitchTransformPlan
 
 
 @dataclass
@@ -661,7 +661,7 @@ class ExportVerificationTests(unittest.TestCase):
                 MutableTrack([Note(60, 90, 0.0, 250.0, 0)])
             ])
             with patch(
-                "export_workflow.verify_export_bytes",
+                "bdo_music_composer.export.export_workflow.verify_export_bytes",
                 return_value=failed_report,
             ):
                 with self.assertRaisesRegex(RuntimeError, "test.failure"):

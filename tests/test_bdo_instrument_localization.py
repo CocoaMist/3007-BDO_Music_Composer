@@ -10,8 +10,8 @@ from bdo_midi.instruments import (
     localized_bdo_instrument_names,
     localized_gm_program_name,
 )
-from i18n import TRANSLATIONS
-from gm_program_translations import GM_PROGRAM_TRANSLATIONS
+from bdo_music_composer.ui.i18n import TRANSLATIONS
+from bdo_music_composer.core.gm_program_translations import GM_PROGRAM_TRANSLATIONS
 
 
 class BdoInstrumentLocalizationTests(unittest.TestCase):

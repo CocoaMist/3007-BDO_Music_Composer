@@ -23,13 +23,13 @@ from bdo_midi import (
     gm_to_bdo_instrument,
     parse_midi,
 )
-from bdo_track_effects import DEFAULT_TRACK_VOLUME, raw_track_settings
-from conversion_settings import (
+from bdo_common.bdo_track_effects import DEFAULT_TRACK_VOLUME, raw_track_settings
+from bdo_music_composer.core.conversion_settings import (
     VELOCITY_MODE_PRESERVE,
     ConversionSettings,
 )
 from .editor_models import TrackState
-from game_score_model import (
+from bdo_music_composer.editor.game_score_model import (
     bake_game_velocity_transform,
     decode_serialized_game_instrument_id,
 )

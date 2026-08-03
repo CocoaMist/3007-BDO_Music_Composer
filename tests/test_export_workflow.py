@@ -7,10 +7,10 @@ from unittest.mock import patch
 from bdo_codec import decode_score
 from bdo_export import channel_groups_to_bdo
 from bdo_midi import Note
-from bdo_score import read_bdo_score
-from bdo_track_effects import MasterEffects
-from conversion_settings import ConversionSettings
-from export_workflow import (
+from bdo_music_composer.export.bdo_score import read_bdo_score
+from bdo_common.bdo_track_effects import MasterEffects
+from bdo_music_composer.core.conversion_settings import ConversionSettings
+from bdo_music_composer.export.export_workflow import (
     ExportRequest,
     ExportRequestSpec,
     build_export_request,
@@ -18,7 +18,7 @@ from export_workflow import (
     freeze_export_tracks,
     prepare_export,
 )
-from pitch_transform import PitchTransformPlan
+from bdo_music_composer.editor.pitch_transform import PitchTransformPlan
 
 
 @dataclass
@@ -311,7 +311,7 @@ class ExportWorkflowTests(unittest.TestCase):
             }
 
             with patch(
-                "export_workflow.install_export_to_game",
+                "bdo_music_composer.export.export_workflow.install_export_to_game",
                 side_effect=PermissionError("game directory is read-only"),
             ):
                 result = execute_export(params)

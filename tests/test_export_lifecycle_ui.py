@@ -17,7 +17,7 @@ class ExportLifecycleUiTests(unittest.TestCase):
             from PySide6.QtGui import QCloseEvent
             from PySide6.QtWidgets import QApplication
 
-            from pyside_bdo_gui import MidiToBdoWindow
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow
 
 
             class RunningExport:
@@ -65,7 +65,7 @@ class ExportLifecycleUiTests(unittest.TestCase):
             from PySide6.QtGui import QCloseEvent
             from PySide6.QtWidgets import QApplication
 
-            from pyside_bdo_gui import MidiToBdoWindow
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow
 
 
             class SlowAutosave:

@@ -156,6 +156,12 @@ class WwiseMidiMappingTests(unittest.TestCase):
         props = effective_props(sound, {1: root, 2: child, 3: sound})
 
         self.assertEqual(60, props["MidiTrackingRootNote"])
+        self.assertEqual(1, props["MidiTrackingRootNoteOwnerID"])
+        self.assertEqual(
+            2,
+            props["MidiTrackingRootNoteInheritanceDepth"],
+        )
+        self.assertEqual(0, props["MidiTrackingRootNoteInferred"])
         self.assertEqual((55, 70), (
             props["MidiKeyRangeMin"],
             props["MidiKeyRangeMax"],
@@ -164,6 +170,27 @@ class WwiseMidiMappingTests(unittest.TestCase):
             props["MidiVelocityRangeMin"],
             props["MidiVelocityRangeMax"],
         ))
+
+    def test_missing_root_records_midpoint_inference_provenance(self) -> None:
+        sound = Node(
+            3,
+            "CAkSound",
+            None,
+            4,
+            props={
+                "MidiKeyRangeMin": 55,
+                "MidiKeyRangeMax": 60,
+            },
+        )
+
+        props = effective_props(sound, {3: sound})
+
+        self.assertEqual(57, props["MidiTrackingRootNote"])
+        self.assertIsNone(props["MidiTrackingRootNoteOwnerID"])
+        self.assertIsNone(
+            props["MidiTrackingRootNoteInheritanceDepth"]
+        )
+        self.assertEqual(1, props["MidiTrackingRootNoteInferred"])
 
     def test_playlist_index_uses_authored_order_and_voice_settings(self) -> None:
         container = Node(
@@ -314,6 +341,22 @@ class WwiseMidiMappingTests(unittest.TestCase):
             250.0,
             lineage_release_ms((sound, container), nodes),
         )
+
+    def test_parser_preserves_unmodeled_pitch_rtpc_identity(self) -> None:
+        section = """
+                   obj  CAkSound[0]
+00000000              sid  ulID = 20
+00000001              tid  sourceID = 200
+00000002              tid  DirectParentID = 0
+                               obj  RTPC[0]
+00000003                         tid  RTPCID = 701
+00000004                         u8   rtpcType = 0x00 [GameParameter]
+00000005                         var  ParamID = 0x02 [Pitch]
+"""
+
+        sound = parse_nodes(section)[20]
+
+        self.assertEqual((701,), sound.pitch_rtpc_ids)
 
     def test_release_is_none_without_unambiguous_dump_evidence(self) -> None:
         sound = Node(1, "CAkSound", None, 2)

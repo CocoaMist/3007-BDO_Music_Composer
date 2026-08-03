@@ -23,8 +23,8 @@ from PySide6.QtWidgets import (
 )
 
 from bdo_music_composer.app.application_metadata import GITHUB_REPOSITORY_URL
-from i18n import tr
-from third_party_credits import (
+from bdo_music_composer.ui.i18n import tr
+from bdo_music_composer.core.third_party_credits import (
     BASIC_PITCH_LICENSE_URL,
     BASIC_PITCH_MODEL_URL,
     BASIC_PITCH_NOTICE_URL,

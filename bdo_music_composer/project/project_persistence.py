@@ -9,8 +9,8 @@ import json
 import math
 import uuid
 
-from atomic_io import atomic_copy_file, atomic_write_json
-from bdo_track_effects import DEFAULT_TRACK_VOLUME
+from bdo_common.atomic_io import atomic_copy_file, atomic_write_json
+from bdo_common.bdo_track_effects import DEFAULT_TRACK_VOLUME
 
 
 PROJECT_INDEX_NAME = "project.index.json"

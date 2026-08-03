@@ -37,7 +37,13 @@ class BdoGameMusicEvidenceTests(unittest.TestCase):
             settings["inferred_layout"],
         )
         authoring = payload["authoring_ui"]
-        self.assertEqual(757, authoring["meta_version"])
+        self.assertEqual(782, authoring["meta_version"])
+        self.assertEqual(8363, authoring["archive_count"])
+        self.assertEqual(757, authoring["previous_compatible_meta_version"])
+        self.assertEqual(
+            "ab149341b97aadf8855c82bc7a3f52492e9115ce201559c9d7b66d7ea67499e8",
+            authoring["meta_sha256"],
+        )
         self.assertEqual([0] * 8, authoring["effect_defaults"])
         serialized = json.dumps(authoring, ensure_ascii=True).lower()
         self.assertNotIn("f:\\", serialized)

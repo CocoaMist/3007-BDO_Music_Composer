@@ -11,8 +11,8 @@ from bisect import bisect_left
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-from bdo_instrument_adaptation import instrument_editor_display_adaptations
-from bdo_track_effects import DEFAULT_TRACK_VOLUME
+from bdo_music_composer.editor.bdo_instrument_adaptation import instrument_editor_display_adaptations
+from bdo_common.bdo_track_effects import DEFAULT_TRACK_VOLUME
 
 
 BDO_DRUM_PITCH_NAMES = {

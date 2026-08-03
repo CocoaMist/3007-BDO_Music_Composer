@@ -5,8 +5,8 @@ from dataclasses import dataclass, replace
 import re
 import unittest
 
-from bdo_profile import Evidence, LimitPolicy, load_bdo_profile
-from bdo_validation import (
+from bdo_music_composer.core.bdo_profile import Evidence, LimitPolicy, load_bdo_profile
+from bdo_music_composer.export.bdo_validation import (
     ValidationContext,
     ValidationIssue,
     evidence_status_source,
@@ -15,7 +15,7 @@ from bdo_validation import (
     localized_validation_message,
     validate_tracks,
 )
-from project_paths import PROFILES_DIR
+from bdo_music_composer.core.project_paths import PROFILES_DIR
 
 
 Note = namedtuple("Note", "pitch vel start dur ntype")
@@ -74,6 +74,9 @@ ENGLISH = {
         "{volume_scale:.3g}; write it into note velocities first.",
     "FX type {articulation} 不属于当前乐器。":
         "FX type {articulation} is not available for this instrument.",
+    "FX type {articulation} 在当前乐器的 {count} 个音高上没有游戏路由。":
+        "FX type {articulation} has no game route for {count} pitches on this "
+        "instrument.",
     "导出会把此轨道全部音符设为 FX type {articulation}。":
         "Export will set every note on this track to FX type {articulation}.",
     "该乐器当前只有样本键位证据，完整音域仍待游戏验证。":
@@ -329,6 +332,45 @@ class ValidationLocalizationTests(unittest.TestCase):
         )
         self.assertEqual((1, 2), issue.note_indices)
         self.assertIn("type 255", issue.message)
+
+    def test_partial_game_routes_block_only_the_unrouted_pitches(self) -> None:
+        guitar_rule = replace(
+            self.profile.instruments[0x24],
+            articulations=self.profile.instruments[0x24].articulations | {25},
+        )
+        profile = replace(
+            self.profile,
+            instruments={**self.profile.instruments, 0x24: guitar_rule},
+        )
+        per_note = Track(
+            1,
+            [
+                Note(43, 90, 0, 100, 25),
+                Note(44, 90, 100, 100, 25),
+                Note(60, 90, 200, 100, 0),
+            ],
+            0x24,
+        )
+        issue = next(
+            item
+            for item in validate_tracks(
+                [per_note], profile, self._context([per_note])
+            )
+            if item.code == "articulation.pitch_unsupported"
+        )
+        self.assertEqual((1,), issue.note_indices)
+        self.assertEqual("error", issue.severity)
+
+        track_wide = replace(per_note, articulation_type=25)
+        issue = next(
+            item
+            for item in validate_tracks(
+                [track_wide], profile, self._context([track_wide])
+            )
+            if item.code == "articulation.pitch_unsupported"
+        )
+        self.assertEqual((1, 2), issue.note_indices)
+        self.assertEqual("clear_track_articulation", issue.fix_id)
 
     def test_placeholder_mismatch_falls_back_without_losing_values(self) -> None:
         track = Track(1, [Note(60, 90, 0, 100, 0)], 0x11, bdo_track_volume=118)

@@ -39,8 +39,11 @@ from tools.list_bdo_paz_audio import (
 
 IMPORT_FORMAT = 1
 IMPORT_VERSION = "bdo-local-instrument-art-v1"
-SUPPORTED_META_VERSIONS = frozenset({757})
-KNOWN_UI_ARCHIVES: Mapping[int, tuple[int, ...]] = {757: (6445,)}
+SUPPORTED_META_VERSIONS = frozenset({757, 782})
+KNOWN_UI_ARCHIVES: Mapping[int, tuple[int, ...]] = {
+    757: (6445,),
+    782: (6445,),
+}
 
 COMPOSITION_CSS_PATH = "ui_data/ui_html/contents/css/musiccomposition.css"
 INSTRUMENT_SPRITE_PATH = "ui_data/ui_html/contents/img/spr_instrument.png"

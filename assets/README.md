@@ -3,6 +3,38 @@
 The files below are original, application-owned visual aids. They do not come
 from Black Desert Online or any other game archive.
 
+## `ui/home/home_aristocratic_salon_v2.png`
+
+- Generated on 2026-08-01 with the built-in OpenAI ImageGen tool in
+  identity-preserving edit mode.
+- A maintainer-supplied character render was used as the identity, costume,
+  palette, hairstyle, bow, and black-gold wing-ornament reference.
+- Direction: the referenced white-haired yellow-and-white fantasy musician
+  actively composes with quill and keyboard in a medieval fantasy game-world
+  atelier. The production revision scales and anchors her on the right while
+  retaining natural low-detail stone architecture on the left; application
+  code supplies the readability gradient instead of baking in a black void.
+- Palette: charcoal stone, black walnut, warm gold, yellow and ivory, with
+  restrained blue magical notation accents under sunset and lantern light.
+- Constraints included no text, logo, watermark, readable score, official
+  insignia, modern objects, or copied characters.
+
+## `ui/loading_noble_maestra_v2.png`
+
+- Retained as an unused visual concept and intentionally excluded from the
+  packaged application. Startup now reveals the prepared home surface in place
+  instead of crossfading between unrelated character artwork.
+- Generated on 2026-08-01 with OpenAI ImageGen in `stylized-concept` mode.
+- A maintainer-supplied pink-haired elf render was used as the identity,
+  costume, flower accessory, and gray-guitar reference.
+- Direction: a full-bleed portrait view of the referenced musician playing her
+  guitar in a vaulted fantasy atelier. The production crop carries the
+  character, instrument, embroidered dress, music desk, and candlelit workshop
+  continuously through the complete startup canvas; loading text sits directly
+  over the natural lower scene without a footer box or empty panel.
+- Constraints included no text, logo, watermark, readable score, official
+  insignia, modern objects, or copied characters.
+
 ## `ui/home/home_mountain_workshop_v1.jpg`
 
 - Generated on 2026-07-29 with OpenAI ImageGen from a character image supplied

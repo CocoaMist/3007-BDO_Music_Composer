@@ -6,8 +6,8 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-import atomic_io
-import pyside_bdo_gui as gui
+import bdo_common.atomic_io as atomic_io
+import bdo_music_composer.ui.main_window as gui
 
 
 class ConfigAndMeterSafetyTests(unittest.TestCase):

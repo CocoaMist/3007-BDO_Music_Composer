@@ -12,7 +12,7 @@ from optimization.plugin_host import (
     analyse_with_algorithm,
     discover_host_algorithms,
 )
-from pyside_bdo_gui import BDO_ARTICULATIONS, TrackState
+from bdo_music_composer.ui.main_window import BDO_ARTICULATIONS, TrackState
 
 
 Note = namedtuple("Note", "pitch vel start dur ntype", defaults=(0,))

@@ -9,6 +9,8 @@ result.
 
 - [`bdo_convert.py`](bdo_convert.py) — MIDI-to-BDO command-line conversion.
 - [`inspect_bdo.py`](inspect_bdo.py) — privacy-conscious BDO score inspection.
+- [`scripts/wpf_sidecar.py`](./wpf_sidecar.py) — Qt-free NDJSON bridge for external WPF
+  hosts.
 - [`install_transcription.ps1`](install_transcription.ps1) — pinned optional
   transcription environment setup.
 

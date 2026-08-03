@@ -11,8 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
-from bdo_profile import BdoProfile
-from bdo_validation import ValidationContext, ValidationIssue
+from bdo_music_composer.core.bdo_profile import BdoProfile
+from bdo_music_composer.export.bdo_validation import ValidationContext, ValidationIssue
 
 
 Validator = Callable[

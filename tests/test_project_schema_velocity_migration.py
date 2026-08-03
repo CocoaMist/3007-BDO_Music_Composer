@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from bdo_export import channel_groups_to_bdo
 from bdo_midi import Note
-from conversion_settings import ConversionSettings
+from bdo_music_composer.core.conversion_settings import ConversionSettings
 from bdo_music_composer.project.project_schema import (
     CURRENT_PROJECT_SCHEMA,
     migrate_project,

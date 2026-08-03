@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 import unittest
 
-from conversion_settings import (
+from bdo_music_composer.core.conversion_settings import (
     ConversionSettings,
     DEFAULT_CONVERSION_TRANSPOSE,
     LEGACY_CONVERSION_TRANSPOSE,

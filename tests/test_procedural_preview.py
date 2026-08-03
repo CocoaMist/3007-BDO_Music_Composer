@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 
 from bdo_midi import BDO_INSTRUMENTS, Note
-from bdo_realtime_audio import BdoRealtimeAudioEngine
+from bdo_music_composer.audio.bdo_realtime_audio import BdoRealtimeAudioEngine
 
 
 def track_with(notes: list[Note], *, percussion: bool = False) -> SimpleNamespace:

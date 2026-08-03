@@ -4,16 +4,16 @@ from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 
-from bdo_transcription_session import (
+from bdo_music_composer.transcription.bdo_transcription_session import (
     CandidateAnnotation,
     TranscriptionSession,
 )
-from bdo_validation import ValidationContext, ValidationIssue
+from bdo_music_composer.export.bdo_validation import ValidationContext, ValidationIssue
 from bdo_music_composer.app.conversion_validation_controller import (
     ConversionValidationController,
 )
 from bdo_music_composer.editor.model_revision import ModelRevision
-from pitch_transform import PitchTransformPlan
+from bdo_music_composer.editor.pitch_transform import PitchTransformPlan
 from bdo_music_composer.audio.preview_transport_controller import (
     PreviewPlayAction,
     PreviewTransportCoordinator,

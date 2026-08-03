@@ -20,10 +20,11 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QMenu, QWidget
 
 from bdo_midi import Note
-from bdo_spectrogram_qt import SpectrogramTileController
-from bdo_transcription import TranscriptionCandidate
-from bdo_transcription_evidence_qt import EvidenceTileController
-from bdo_transcription_melody_lines import (
+from bdo_music_composer.ui.transcription.bdo_spectrogram_qt import SpectrogramTileController
+from bdo_music_composer.audio.reference_audio_format import ReferenceAudioFormatError
+from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+from bdo_music_composer.ui.transcription.bdo_transcription_evidence_qt import EvidenceTileController
+from bdo_music_composer.transcription.bdo_transcription_melody_lines import (
     BASS_ROLE as MELODY_LINE_BASS_ROLE,
     CHORD_SPAN_KIND as MELODY_LINE_CHORD_SPAN_KIND,
     CONFIDENCE_BUCKETS as MELODY_LINE_CONFIDENCE_BUCKETS,
@@ -39,16 +40,17 @@ from bdo_transcription_melody_lines import (
     melody_line_lod,
     melody_line_width,
 )
-from bdo_transcription_policy import CANDIDATE_NOTE_POLICY
+from bdo_music_composer.transcription.bdo_transcription_policy import CANDIDATE_NOTE_POLICY
 from bdo_music_composer.editor.editor_models import GhostNoteProjection, note_name
 from .editor_ui_helpers import (
     TRACK_COLORS,
     articulation_color,
 )
-from i18n import tr, trf, trv
-from transcription_editor_qt import voice_role_label, voice_role_source_label
+from .editor_shortcuts import resolve_editor_key_command
+from bdo_music_composer.ui.i18n import tr, trf, trv
+from bdo_music_composer.ui.transcription.transcription_editor_qt import voice_role_label, voice_role_source_label
 from bdo_music_composer.editor.velocity_curve import (
-    apply_weighted_velocity_delta,
+    velocity_neighbor_weight,
     velocity_time_points,
 )
 
@@ -74,11 +76,20 @@ class PianoRollCanvas(QWidget):
     CHORD_H = 26
     RULER_H = TIME_RULER_H + CHORD_H
     ROW_H = 24
+    MIN_ROW_H = 10.0
+    MAX_ROW_H = 72.0
+    MIN_PX_PER_BEAT = 8.0
+    MAX_PX_PER_BEAT = 1600.0
     NOTE_RESIZE_VISUAL_MIN_WIDTH = 12.0
     NOTE_VELOCITY_MIN_WIDTH = 16.0
     NOTE_VELOCITY_SIDE_INSET = 5.0
     NOTE_VELOCITY_BOTTOM_INSET = 2.0
     NOTE_VELOCITY_BAR_HEIGHT = 4.0
+    NOTE_TEXT_MIN_HEIGHT = 13.0
+    NOTE_VELOCITY_MIN_HEIGHT = 15.0
+    NOTE_RESIZE_HANDLE_MIN_HEIGHT = 15.0
+    NOTE_TECHNIQUE_BADGE_MIN_HEIGHT = 18.0
+    PIANO_FULL_LABEL_MIN_ROW_HEIGHT = 15.0
     MIN_PITCH = 0
     MAX_PITCH = 127
     CANDIDATE_QUERY_BLOCK_SIZE = 128
@@ -93,6 +104,8 @@ class PianoRollCanvas(QWidget):
         self._ghost_opacity = 0.24
         self.transcription_candidates: list[TranscriptionCandidate] = []
         self.transcription_candidates_visible = False
+        self._transcription_candidate_layer_visible = True
+        self._transcription_candidate_opacity = 0.52
         self._transcription_candidate_ids: list[str] = []
         self._transcription_candidate_id_to_index: dict[str, int] = {}
         self._folded_candidate_primary: dict[str, str] = {}
@@ -110,8 +123,13 @@ class PianoRollCanvas(QWidget):
         self._confidence_floor = 0.30
         self._show_rejected_only = False
         self._audio_offset_ms = 0.0
+        self._candidate_visual_revision = 0
+        self._contour_clip_cache_key: tuple[object, ...] | None = None
+        self._contour_clip_cache = QPainterPath()
+        self._contour_clip_build_count = 0
         self._evidence_descriptor = None
         self._show_contour_evidence = False
+        self._contour_denoise_profile = "standard"
         # Clean review is the default.  Dense posterior layers remain
         # available as explicit diagnostic evidence instead of competing with
         # editable semantic note blocks.
@@ -124,9 +142,9 @@ class PianoRollCanvas(QWidget):
         self._spectrogram_audio_path = ""
         self._spectrogram = SpectrogramTileController(self)
         self._spectrogram.tile_ready.connect(self._evidence_tile_ready)
-        self._show_melody_lines = True
+        self._show_melody_lines = False
         self._melody_line_roles_visible = frozenset(
-            MELODY_LINE_GUIDE_ROLES
+            {MELODY_LINE_PRIMARY_ROLE}
         )
         self._melody_line_segments: tuple[MelodyLineSegment, ...] = ()
         self._melody_line_starts: list[float] = []
@@ -140,12 +158,6 @@ class PianoRollCanvas(QWidget):
         self._voice_groups: tuple[object, ...] = ()
         self._assist_candidate_source_object: object | None = None
         self._assist_group_color_key: tuple[tuple[str, str], ...] = ()
-        self._voice_group_outlines: tuple[
-            tuple[str, float, float, int, int, str, str, float, int],
-            ...,
-        ] = ()
-        self._voice_group_outline_starts: list[float] = []
-        self._max_voice_group_duration = 0.0
         self._harmony_analysis: object | None = None
         self._harmony_segment_starts: list[float] = []
         self._max_harmony_segment_duration = 0.0
@@ -160,6 +172,9 @@ class PianoRollCanvas(QWidget):
         self.selected: set[int] = set()
         self.anchor_index: int | None = None
         self.px_per_beat = 92.0
+        # Instance-owned so Alt+wheel can resize pitch lanes without changing
+        # the default shared by other editor instances.
+        self.ROW_H = float(type(self).ROW_H)
         self.scroll_ms = 0.0
         self.pitch_top = 84
         self.drag_mode = ""
@@ -510,55 +525,6 @@ class PianoRollCanvas(QWidget):
             self._candidate_group_colors,
             self._candidate_chord_roles,
         ) = projection
-        candidates_by_id = {
-            candidate_id: candidate
-            for candidate_id, candidate in zip(
-                self._transcription_candidate_ids,
-                self.transcription_candidates,
-            )
-        }
-        outlines = []
-        for group in groups:
-            group_id = str(getattr(group, "group_id", "") or "")
-            member_ids = tuple(
-                str(candidate_id)
-                for candidate_id in (
-                    getattr(group, "candidate_ids", ()) or ()
-                )
-            )
-            members = [
-                candidates_by_id[candidate_id]
-                for candidate_id in member_ids
-                if candidate_id in candidates_by_id
-            ]
-            if not members:
-                continue
-            outlines.append(
-                (
-                    group_id,
-                    float(getattr(group, "start_audio_ms", 0.0)),
-                    float(getattr(group, "end_audio_ms", 0.0)),
-                    min(int(candidate.pitch) for candidate in members),
-                    max(int(candidate.pitch) for candidate in members),
-                    str(getattr(group, "role", "") or ""),
-                    candidate_colors.get(
-                        member_ids[0],
-                        self._group_palette_color(group_id),
-                    ),
-                    float(getattr(group, "confidence", 0.0)),
-                    len(members),
-                )
-            )
-        self._voice_group_outlines = tuple(
-            sorted(outlines, key=lambda item: (item[1], item[2], item[0]))
-        )
-        self._voice_group_outline_starts = [
-            item[1] for item in self._voice_group_outlines
-        ]
-        self._max_voice_group_duration = max(
-            (item[2] - item[1] for item in self._voice_group_outlines),
-            default=0.0,
-        )
         self._harmony_segment_starts = [
             float(getattr(segment, "start_audio_ms", 0.0))
             for segment in segments
@@ -835,6 +801,8 @@ class PianoRollCanvas(QWidget):
         self._fold_alternative_counts = alternative_counts
         self._fold_alternative_rank = alternative_rank
         self._candidate_source_object = None
+        self._candidate_visual_revision += 1
+        self._contour_clip_cache_key = None
         self._candidate_starts = [
             float(candidate.start_ms)
             for candidate in self.transcription_candidates
@@ -953,6 +921,8 @@ class PianoRollCanvas(QWidget):
         self._show_rejected_only = bool(show_rejected_only)
         self._audio_offset_ms = normalized_offset
         self.transcription_candidates_visible = bool(visible)
+        self._candidate_visual_revision += 1
+        self._contour_clip_cache_key = None
         self._recalculate_content_end()
         self.update()
 
@@ -964,6 +934,7 @@ class PianoRollCanvas(QWidget):
         self._evidence.close()
         self._evidence_descriptor = descriptor
         self._audio_offset_ms = float(audio_offset_ms)
+        self._contour_clip_cache_key = None
         if descriptor is not None:
             self._evidence.begin_source(descriptor)
         self.update()
@@ -988,6 +959,15 @@ class PianoRollCanvas(QWidget):
             self._show_onset_evidence,
             self._show_contour_evidence,
         ) = normalized
+        self.update()
+
+    def set_contour_denoise_profile(self, value: str) -> None:
+        normalized = str(value)
+        if normalized not in {"low", "standard", "high"}:
+            normalized = "standard"
+        if normalized == self._contour_denoise_profile:
+            return
+        self._contour_denoise_profile = normalized
         self.update()
 
     def set_spectrogram_source(
@@ -1033,7 +1013,7 @@ class PianoRollCanvas(QWidget):
                 candidate,
                 duration_ms=duration_ms,
             )
-        except OSError:
+        except (OSError, ReferenceAudioFormatError):
             return
         self._spectrogram_audio_path = str(candidate)
         self.update()
@@ -1106,6 +1086,36 @@ class PianoRollCanvas(QWidget):
             return
         self.transcription_candidates_visible = normalized
         self._recalculate_content_end()
+        self.update()
+
+    def set_transcription_candidate_layer_visible(self, visible: bool) -> None:
+        """Show provisional analysis blocks without affecting evidence layers."""
+
+        normalized = bool(visible)
+        if normalized == self._transcription_candidate_layer_visible:
+            return
+        self._transcription_candidate_layer_visible = normalized
+        if not normalized:
+            self._hovered_candidate_id = ""
+        self.update()
+
+    def set_transcription_candidate_opacity(self, opacity: float) -> None:
+        """Set one global opacity multiplier for every analysis candidate."""
+
+        try:
+            normalized = float(opacity)
+        except (TypeError, ValueError, OverflowError):
+            normalized = 0.52
+        if not math.isfinite(normalized):
+            normalized = 0.52
+        normalized = max(0.0, min(1.0, normalized))
+        if math.isclose(
+            normalized,
+            self._transcription_candidate_opacity,
+            abs_tol=0.001,
+        ):
+            return
+        self._transcription_candidate_opacity = normalized
         self.update()
 
     def set_preload_progress(self, progress: float, state: str = "loading") -> None:
@@ -1213,6 +1223,8 @@ class PianoRollCanvas(QWidget):
         return values
 
     def visible_transcription_candidates(self) -> list[TranscriptionCandidate]:
+        if not self._transcription_candidate_layer_visible:
+            return []
         return [candidate for _candidate_id, candidate in self._visible_candidate_pairs()]
 
     def visible_melody_line_segments(
@@ -1429,11 +1441,15 @@ class PianoRollCanvas(QWidget):
             )
         )
         y = self.RULER_H + (self.pitch_top - int(candidate.pitch)) * self.ROW_H
+        # Recognition results are guides, not a second set of editable notes.
+        # Keep them visibly slimmer than formal notes so overlapping material
+        # does not turn the roll into a solid wall of colour.
+        vertical_inset = max(2.0, min(5.0, self.ROW_H * 0.22))
         return QRectF(
             x,
-            y + 1,
+            y + vertical_inset,
             max(4.0, float(candidate.duration_ms) * self.px_per_ms),
-            self.ROW_H - 2,
+            max(3.0, self.ROW_H - vertical_inset * 2.0),
         )
 
     def _expanded_fold_primaries(self) -> set[str]:
@@ -1489,7 +1505,12 @@ class PianoRollCanvas(QWidget):
         )
 
     def candidate_at(self, pos: QPointF) -> str | None:
-        if pos.x() < self.KEY_W or pos.y() < self.RULER_H:
+        if (
+            not self._transcription_candidate_layer_visible
+            or self._transcription_candidate_opacity <= 0.0
+            or pos.x() < self.KEY_W
+            or pos.y() < self.RULER_H
+        ):
             return None
         left_ms = self.time_at(pos.x() - 3.0)
         right_ms = self.time_at(pos.x() + 3.0)
@@ -1677,7 +1698,10 @@ class PianoRollCanvas(QWidget):
     ) -> tuple[QRectF, QRectF] | None:
         """Return a pixel-aligned game-style velocity rail and active fill."""
 
-        if note_rect.width() < cls.NOTE_VELOCITY_MIN_WIDTH:
+        if (
+            note_rect.width() < cls.NOTE_VELOCITY_MIN_WIDTH
+            or note_rect.height() < cls.NOTE_VELOCITY_MIN_HEIGHT
+        ):
             return None
         ratio = max(1.0, float(device_pixel_ratio))
         left = cls._snap_to_device_pixel(
@@ -1759,6 +1783,7 @@ class PianoRollCanvas(QWidget):
             self.width(),
             self.height(),
             int(self.pitch_top),
+            round(float(self.ROW_H), 3),
             self.piano_pressed_pitch,
             self.piano_hover_pitch,
             canonical_drum_lanes,
@@ -1781,18 +1806,9 @@ class PianoRollCanvas(QWidget):
         background.setDevicePixelRatio(dpr)
         painter = QPainter(background)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        backdrop = QLinearGradient(0, 0, 0, self.height())
-        backdrop.setColorAt(0.0, QColor("#242427"))
-        backdrop.setColorAt(1.0, QColor("#1c1c1e"))
-        painter.fillRect(self.rect(), backdrop)
+        painter.fillRect(self.rect(), QColor("#1c1d20"))
         grid = self.grid_rect()
-        grid_backdrop = QLinearGradient(
-            grid.topLeft(),
-            grid.bottomLeft(),
-        )
-        grid_backdrop.setColorAt(0.0, QColor("#202023"))
-        grid_backdrop.setColorAt(1.0, QColor("#1c1c1e"))
-        painter.fillRect(grid, grid_backdrop)
+        painter.fillRect(grid, QColor("#202125"))
         visible_rows = math.ceil(grid.height() / self.ROW_H)
         for row in range(visible_rows + 1):
             pitch = self.pitch_top - row
@@ -1812,6 +1828,11 @@ class PianoRollCanvas(QWidget):
             )
             pressed = pitch == self.piano_pressed_pitch
             hovered = pitch == self.piano_hover_pitch
+            lane_color = QColor(
+                "#191a1d"
+                if black
+                else ("#24231f" if pitch % 12 == 0 else "#202125")
+            )
             painter.fillRect(
                 QRectF(
                     self.KEY_W,
@@ -1819,18 +1840,8 @@ class PianoRollCanvas(QWidget):
                     grid.width(),
                     self.ROW_H,
                 ),
-                QColor(0, 0, 0, 9 if black else 0),
+                lane_color,
             )
-            if pitch % 12 == 0:
-                painter.fillRect(
-                    QRectF(
-                        self.KEY_W,
-                        y,
-                        grid.width(),
-                        self.ROW_H,
-                    ),
-                    QColor(100, 80, 42, 7),
-                )
             painter.save()
             key_rect = QRectF(0, y, self.KEY_W, self.ROW_H)
             natural_gradient = QLinearGradient(
@@ -1868,17 +1879,27 @@ class PianoRollCanvas(QWidget):
             )
 
             key_font = painter.font()
-            key_font.setPointSize(
-                max(7, key_font.pointSize() - 2)
-            )
+            if self.ROW_H < self.PIANO_FULL_LABEL_MIN_ROW_HEIGHT:
+                key_font.setPixelSize(
+                    max(7, min(9, round(self.ROW_H - 2)))
+                )
+            else:
+                key_font.setPointSize(
+                    max(7, key_font.pointSize() - 2)
+                )
             key_font.setBold(black or drum_label is not None)
             painter.setFont(key_font)
             if black:
+                black_key_inset = (
+                    1.0
+                    if self.ROW_H < self.PIANO_FULL_LABEL_MIN_ROW_HEIGHT
+                    else 3.0
+                )
                 black_rect = QRectF(
                     self.BLACK_KEY_X,
-                    y + 3,
+                    y + black_key_inset,
                     self.BLACK_KEY_W,
-                    self.ROW_H - 6,
+                    max(2.0, self.ROW_H - black_key_inset * 2.0),
                 )
                 black_gradient = QLinearGradient(
                     black_rect.topLeft(),
@@ -1926,16 +1947,17 @@ class PianoRollCanvas(QWidget):
                 painter.fillRect(black_rect, black_gradient)
                 painter.setPen(QColor("#050605"))
                 painter.drawRect(black_rect)
-                painter.setPen(
-                    QColor(
-                        "#fff0ca" if pressed else "#d5d0c7"
+                if self.ROW_H >= self.PIANO_FULL_LABEL_MIN_ROW_HEIGHT:
+                    painter.setPen(
+                        QColor(
+                            "#fff0ca" if pressed else "#d5d0c7"
+                        )
                     )
-                )
-                painter.drawText(
-                    black_rect.adjusted(4, 0, -4, 0),
-                    Qt.AlignRight | Qt.AlignVCenter,
-                    drum_label or note_name(pitch),
-                )
+                    painter.drawText(
+                        black_rect.adjusted(4, 0, -4, 0),
+                        Qt.AlignRight | Qt.AlignVCenter,
+                        drum_label or note_name(pitch),
+                    )
             else:
                 painter.setPen(
                     QColor(
@@ -1948,11 +1970,19 @@ class PianoRollCanvas(QWidget):
                         )
                     )
                 )
-                painter.drawText(
-                    key_rect.adjusted(4, 0, -6, 0),
-                    Qt.AlignRight | Qt.AlignVCenter,
-                    drum_label or note_name(pitch),
+                show_natural_label = (
+                    drum_label is not None
+                    or self.ROW_H >= self.PIANO_FULL_LABEL_MIN_ROW_HEIGHT
+                    or pitch % 12 == 0
+                    or pressed
+                    or hovered
                 )
+                if show_natural_label:
+                    painter.drawText(
+                        key_rect.adjusted(4, 0, -6, 0),
+                        Qt.AlignRight | Qt.AlignVCenter,
+                        drum_label or note_name(pitch),
+                    )
             painter.restore()
             painter.setPen(
                 QColor("#17181a" if black else "#303135")
@@ -2070,6 +2100,7 @@ class PianoRollCanvas(QWidget):
             pixels_per_ms=self.px_per_ms,
             layers=layers,
             include_contour=self._show_contour_evidence,
+            contour_denoise=self._contour_denoise_profile,
             update_viewport=(
                 project_end - project_start
                 >= (
@@ -2081,11 +2112,75 @@ class PianoRollCanvas(QWidget):
         painter.save()
         painter.setClipRect(grid)
         painter.setOpacity(self._reference_background_opacity)
+        contour_clip = (
+            self._transcription_contour_clip_path(
+                grid,
+                self.scroll_ms,
+                self.time_at(self.width()),
+            )
+            if self._show_contour_evidence
+            else QPainterPath()
+        )
         for tile in tiles:
             target = self._evidence_tile_rect(tile)
             if target.intersects(grid):
+                if tile.layer == "contour" and contour_clip.isEmpty():
+                    continue
+                painter.save()
+                if tile.layer == "contour":
+                    painter.setClipPath(
+                        contour_clip,
+                        Qt.ClipOperation.IntersectClip,
+                    )
+                painter.setRenderHint(
+                    QPainter.RenderHint.SmoothPixmapTransform,
+                    tile.layer == "contour",
+                )
                 painter.drawImage(target, tile.image)
+                painter.restore()
         painter.restore()
+
+    def _transcription_contour_clip_path(
+        self,
+        grid: QRectF,
+        paint_left_ms: float,
+        paint_right_ms: float,
+    ) -> QPainterPath:
+        """Cache the candidate-shaped contour clip across playhead repaints."""
+
+        key = (
+            self._candidate_visual_revision,
+            round(float(paint_left_ms), 3),
+            round(float(paint_right_ms), 3),
+            round(float(grid.left()), 2),
+            round(float(grid.top()), 2),
+            round(float(grid.width()), 2),
+            round(float(grid.height()), 2),
+            round(float(self.scroll_ms), 3),
+            round(float(self.px_per_beat), 4),
+            round(float(self.ROW_H), 3),
+            int(self.pitch_top),
+            round(float(self._audio_offset_ms), 3),
+        )
+        if key == self._contour_clip_cache_key:
+            return self._contour_clip_cache
+        path = QPainterPath()
+        for _candidate_id, candidate in self._visible_candidate_pairs(
+            paint_left_ms,
+            paint_right_ms,
+        ):
+            clipped = self.candidate_rect(candidate).adjusted(
+                -2.0,
+                -self.ROW_H * 2.0,
+                2.0,
+                self.ROW_H * 2.0,
+            ).intersected(grid)
+            if not clipped.isEmpty():
+                path.addRect(clipped)
+        self._contour_clip_cache_key = key
+        self._contour_clip_cache = path
+        self._contour_clip_build_count += 1
+        return path
 
     def _paint_spectrogram_background(
         self,
@@ -2165,7 +2260,6 @@ class PianoRollCanvas(QWidget):
         if not segments:
             return
         paths: dict[tuple[str, int, bool, str], QPainterPath] = {}
-        role_anchors: dict[str, tuple[QPointF, str]] = {}
         chord_labels: list[tuple[str, QPointF, float]] = []
         for segment in segments:
             confidence_bucket = melody_line_confidence_bucket(
@@ -2180,16 +2274,16 @@ class PianoRollCanvas(QWidget):
             path = paths.setdefault(key, QPainterPath())
             start, end = self._melody_line_points(segment)
             path.moveTo(start)
-            path.lineTo(max(start.x() + 0.5, end.x()), end.y())
-            if not segment.branch and (
-                segment.role not in role_anchors
-                or (
-                    segment.kind == MELODY_LINE_CONNECTOR_KIND
-                    and role_anchors[segment.role][1]
-                    != MELODY_LINE_CONNECTOR_KIND
+            end = QPointF(max(start.x() + 0.5, end.x()), end.y())
+            if segment.kind == MELODY_LINE_CONNECTOR_KIND:
+                span = max(0.5, end.x() - start.x())
+                path.cubicTo(
+                    QPointF(start.x() + span * 0.35, start.y()),
+                    QPointF(start.x() + span * 0.65, end.y()),
+                    end,
                 )
-            ):
-                role_anchors[segment.role] = (start, segment.kind)
+            else:
+                path.lineTo(end)
             if (
                 segment.kind == MELODY_LINE_CHORD_SPAN_KIND
                 and segment.label
@@ -2227,17 +2321,17 @@ class PianoRollCanvas(QWidget):
             )
             color = QColor(colors.get(role, QColor("#a9a49c")))
             if kind == MELODY_LINE_CHORD_SPAN_KIND:
-                color.setAlpha(max(34, min(105, 40 + round(confidence * 65))))
-                width = max(3.0, melody_line_width(confidence) * 1.55)
+                color.setAlpha(max(24, min(70, 28 + round(confidence * 42))))
+                width = max(1.2, melody_line_width(confidence))
             else:
                 color.setAlpha(
                     max(
-                        45,
+                        32,
                         min(
-                            220,
-                            70
-                            + round(confidence * 150)
-                            - (18 if branch else 0),
+                            118,
+                            38
+                            + round(confidence * 80)
+                            - (12 if branch else 0),
                         ),
                     )
                 )
@@ -2252,29 +2346,6 @@ class PianoRollCanvas(QWidget):
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(path)
-
-        # Compact M/B/H badges make the three semantic layers identifiable
-        # without adding another explanatory tile or permanent legend.
-        badge_text = {
-            MELODY_LINE_PRIMARY_ROLE: "M",
-            MELODY_LINE_BASS_ROLE: "B",
-            MELODY_LINE_HARMONY_ROLE: "H",
-        }
-        for role, (anchor, _kind) in sorted(role_anchors.items()):
-            if not grid.top() <= anchor.y() <= grid.bottom():
-                continue
-            left = max(
-                grid.left() + 3.0,
-                min(grid.right() - 18.0, anchor.x() + 3.0),
-            )
-            rect = QRectF(left, anchor.y() - 8.0, 16.0, 16.0)
-            color = QColor(colors.get(role, QColor("#a9a49c")))
-            color.setAlpha(205)
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(color)
-            painter.drawRoundedRect(rect, 3.0, 3.0)
-            painter.setPen(QColor("#171716"))
-            painter.drawText(rect, Qt.AlignCenter, badge_text.get(role, "V"))
 
         if melody_line_lod(self.px_per_beat) <= 1:
             painter.setPen(QColor(224, 214, 239, 165))
@@ -2524,13 +2595,13 @@ class PianoRollCanvas(QWidget):
     ) -> None:
         """Paint clean semantic blocks using orthogonal visual channels."""
 
-        if self.px_per_beat < 40.0:
-            self._paint_voice_group_outlines(
-                painter,
-                grid,
-                paint_left_ms,
-                paint_right_ms,
-            )
+        if (
+            not self._transcription_candidate_layer_visible
+            or self._transcription_candidate_opacity <= 0.0
+        ):
+            return
+        painter.save()
+        painter.setOpacity(self._transcription_candidate_opacity)
 
         groups: dict[
             tuple[bool, str, int, str, int, float, object],
@@ -2539,12 +2610,19 @@ class PianoRollCanvas(QWidget):
         invalid_lines: list[tuple[QPointF, QPointF]] = []
         rejected_lines: list[tuple[QPointF, QPointF]] = []
         onset_caps: list[QRectF] = []
+        confidence_rails: dict[
+            bool,
+            list[tuple[QPointF, QPointF]],
+        ] = defaultdict(list)
         pending_markers: list[QRectF] = []
         fragment_markers: list[QRectF] = []
         role_markers: dict[str, list[QRectF]] = defaultdict(list)
         labels: list[tuple[QRectF, int, float, str]] = []
         beat_width = float(self.px_per_beat)
-        show_detail = beat_width > 160.0
+        show_detail = (
+            beat_width > 160.0
+            and self.ROW_H >= self.NOTE_TEXT_MIN_HEIGHT
+        )
         show_onsets = show_detail
         expanded_fold_primaries = self._expanded_fold_primaries()
         for candidate_id, candidate in self._visible_candidate_pairs(
@@ -2601,16 +2679,23 @@ class PianoRollCanvas(QWidget):
                 self._confidence_floor
                 + opacity_confidence * (1.0 - self._confidence_floor)
             )
-            fill_alpha = 34 + round(visible_confidence * 138)
+            # Normal suggestions are deliberately outline-led.  Confidence
+            # gets its own short lower rail instead of making strong results
+            # look like opaque, already-committed notes.
+            fill_alpha = 12 + round(visible_confidence * 54)
             if rejected:
-                fill_alpha = min(fill_alpha, 54)
+                fill_alpha = min(fill_alpha, 24)
             elif suppressed:
-                fill_alpha = min(fill_alpha, 42)
+                fill_alpha = min(fill_alpha, 18)
             elif beat_width < 40.0:
-                fill_alpha = min(fill_alpha, 104)
+                fill_alpha = min(fill_alpha, 38)
 
             if selected:
                 outline_name = "#fff1c8"
+                fill_alpha = max(fill_alpha, 82)
+            elif hovered:
+                outline_name = "#9edbff"
+                fill_alpha = max(fill_alpha, 50)
             elif invalid:
                 outline_name = "#e88479"
             elif duplicate:
@@ -2621,8 +2706,8 @@ class PianoRollCanvas(QWidget):
                 outline_name = "#e0a341"
             else:
                 outline_name = color_name
-            outline_alpha = 255 if selected else 118 + round(
-                opacity_confidence * 108
+            outline_alpha = 255 if selected else 104 + round(
+                opacity_confidence * 92
             )
             line_style = (
                 Qt.DashLine
@@ -2640,6 +2725,23 @@ class PianoRollCanvas(QWidget):
                     line_style,
                 )
             ].append(rect)
+            if (
+                not rejected
+                and not suppressed
+                and rect.width() >= 8.0
+                and rect.height() >= 5.0
+            ):
+                left = rect.left() + 2.0
+                usable_width = max(1.0, rect.width() - 4.0)
+                confidence_rails[selected].append(
+                    (
+                        QPointF(left, rect.bottom() - 1.5),
+                        QPointF(
+                            left + usable_width * confidence,
+                            rect.bottom() - 1.5,
+                        ),
+                    )
+                )
             if invalid:
                 invalid_lines.append(
                     (rect.topLeft(), rect.bottomRight())
@@ -2690,7 +2792,8 @@ class PianoRollCanvas(QWidget):
                 )
             if (
                 rect.width() >= 42
-                and (show_detail or selected or hovered)
+                and rect.height() >= self.NOTE_TEXT_MIN_HEIGHT
+                and (selected or hovered)
             ):
                 labels.append(
                     (rect, int(candidate.pitch), confidence, candidate_id)
@@ -2718,6 +2821,15 @@ class PianoRollCanvas(QWidget):
             painter.setBrush(fill)
             painter.setPen(QPen(outline, width, line_style))
             painter.drawRects(rects)
+
+        # A two-pixel confidence rail is easier to compare than many labels
+        # and remains readable without increasing the block's visual weight.
+        for selected, lines in confidence_rails.items():
+            rail_color = QColor("#f5d08a" if selected else "#7fc7e8")
+            rail_color.setAlpha(205)
+            painter.setPen(QPen(rail_color, 2.0, Qt.SolidLine, Qt.RoundCap))
+            for start, end in lines:
+                painter.drawLine(start, end)
 
         if onset_caps:
             painter.setPen(Qt.NoPen)
@@ -2760,101 +2872,7 @@ class PianoRollCanvas(QWidget):
                     + (f" · +{alternatives}" if alternatives else "")
                 ),
             )
-
-    def _paint_voice_group_outlines(
-        self,
-        painter: QPainter,
-        grid: QRectF,
-        project_start_ms: float,
-        project_end_ms: float,
-    ) -> None:
-        if not self._voice_group_outlines:
-            return
-        audio_start = float(project_start_ms) - self._audio_offset_ms
-        audio_end = float(project_end_ms) - self._audio_offset_ms
-        first = max(
-            0,
-            bisect_left(
-                self._voice_group_outline_starts,
-                audio_start - self._max_voice_group_duration,
-            ),
-        )
-        last = bisect_right(
-            self._voice_group_outline_starts, audio_end
-        )
-        selected_group_ids = {
-            group_id
-            for candidate_id in self._selected_candidate_ids
-            if (
-                group_id := self._candidate_group_ids.get(candidate_id)
-            )
-        }
-        for (
-            group_id,
-            start_audio_ms,
-            end_audio_ms,
-            pitch_min,
-            pitch_max,
-            role,
-            color_name,
-            confidence,
-            note_count,
-        ) in self._voice_group_outlines[first:last]:
-            if end_audio_ms <= audio_start or start_audio_ms >= audio_end:
-                continue
-            left = self.x_at_time(
-                start_audio_ms + self._audio_offset_ms
-            )
-            right = self.x_at_time(
-                end_audio_ms + self._audio_offset_ms
-            )
-            top = (
-                self.RULER_H
-                + (self.pitch_top - pitch_max) * self.ROW_H
-                + 3
-            )
-            bottom = (
-                self.RULER_H
-                + (self.pitch_top - pitch_min + 1) * self.ROW_H
-                - 3
-            )
-            rect = QRectF(
-                left,
-                top,
-                max(2.0, right - left),
-                max(4.0, bottom - top),
-            ).intersected(grid)
-            if rect.isEmpty():
-                continue
-            color = QColor(color_name)
-            span_beats = max(
-                0.25,
-                (end_audio_ms - start_audio_ms)
-                / max(1.0, self.beat_ms),
-            )
-            density = min(1.0, note_count / (span_beats * 4.0))
-            color.setAlpha(
-                30 + round(55 * max(0.0, min(1.0, confidence)))
-                + round(28 * density)
-            )
-            painter.fillRect(rect, color)
-            group_selected = group_id in selected_group_ids
-            outline = QColor("#fff1c8" if group_selected else color_name)
-            outline.setAlpha(235 if group_selected else 155)
-            painter.setPen(QPen(outline, 2.0 if group_selected else 1.0))
-            painter.setBrush(Qt.NoBrush)
-            painter.drawRect(rect)
-            if rect.width() >= 54:
-                painter.setPen(QColor("#d4cdc1"))
-                painter.drawText(
-                    rect.adjusted(5, 1, -4, -1),
-                    Qt.AlignLeft | Qt.AlignTop,
-                    trf(
-                        "{role} · {count} 音",
-                        role=trv(voice_role_source_label(role)),
-                        count=note_count,
-                    ),
-                )
+        painter.restore()
 
     @staticmethod
     def _paint_marquee_overlay(painter: QPainter, rect: QRectF) -> None:
@@ -2934,23 +2952,8 @@ class PianoRollCanvas(QWidget):
             self.KEY_W, 0, max(0.0, self.width() - self.KEY_W), self.height()
         ))
         step_ms = self.editor.quantize_ms()
-        measure_ms = self.beat_ms * max(1, self.editor.time_sig)
         beat_origin = float(getattr(self.editor, "beat_origin_ms", 0.0))
-        measure = beat_origin + math.floor(
-            (self.scroll_ms - beat_origin) / measure_ms
-        ) * measure_ms
-        measure_index = math.floor((measure - beat_origin) / measure_ms)
         right_ms = self.time_at(self.width())
-        while measure <= right_ms + measure_ms:
-            if measure_index % 2:
-                left = self.x_at_time(measure)
-                right = self.x_at_time(measure + measure_ms)
-                painter.fillRect(
-                    QRectF(left, self.RULER_H, right - left, grid.height()),
-                    QColor(100, 80, 42, 10),
-                )
-            measure += measure_ms
-            measure_index += 1
         first = beat_origin + math.floor(
             (self.scroll_ms - beat_origin) / step_ms
         ) * step_ms
@@ -3059,13 +3062,27 @@ class PianoRollCanvas(QWidget):
                 rect = self.note_rect(ghost)
                 if not rect.intersects(grid):
                     continue
-                fill = QColor(str(ghost.color))
-                fill.setAlpha(30)
-                outline = QColor(str(ghost.color))
-                outline.setAlpha(62)
-                painter.setBrush(fill)
-                painter.setPen(QPen(outline, 1))
-                painter.drawRect(rect)
+                reference_color = QColor(str(ghost.color))
+                reference_color.setAlpha(220)
+                center_y = rect.center().y()
+                painter.setBrush(reference_color)
+                painter.setPen(
+                    QPen(
+                        reference_color,
+                        max(1.25, min(2.5, rect.height() * 0.10)),
+                        Qt.SolidLine,
+                        Qt.RoundCap,
+                    )
+                )
+                painter.drawLine(
+                    QPointF(rect.left() + 2.0, center_y),
+                    QPointF(rect.right() - 1.0, center_y),
+                )
+                painter.drawEllipse(
+                    QPointF(rect.left() + 2.0, center_y),
+                    2.2,
+                    2.2,
+                )
             painter.restore()
         self._paint_transcription_candidates(
             painter,
@@ -3095,31 +3112,23 @@ class PianoRollCanvas(QWidget):
             fill = self._note_fill_color(note)
             if invalid := self.editor.note_invalid(note.pitch):
                 fill = QColor("#624442")
-            body_rect = rect.adjusted(0.75, 0.75, -0.75, -0.75)
+            compact_height = rect.height() < self.NOTE_TEXT_MIN_HEIGHT
+            body_inset = 0.5 if compact_height else 0.75
+            body_rect = rect.adjusted(
+                body_inset,
+                body_inset,
+                -body_inset,
+                -body_inset,
+            )
             corner_radius = min(
-                2.5,
-                max(1.0, body_rect.height() * 0.14),
-                max(1.0, body_rect.width() * 0.25),
+                1.25 if compact_height else 2.5,
+                max(0.75, body_rect.height() * 0.14),
+                max(0.75, body_rect.width() * 0.25),
             )
-            note_gradient = QLinearGradient(
-                body_rect.topLeft(), body_rect.bottomLeft()
-            )
-            top_color = self._bounded_note_color(
-                fill.lighter(105),
-                maximum_value=164,
-            )
-            bottom_color = fill.darker(112)
-            note_gradient.setColorAt(0.0, top_color)
-            note_gradient.setColorAt(1.0, bottom_color)
-            painter.setBrush(note_gradient)
-            # A dark outer keyline gives compact notes physical weight without
-            # making them larger or reducing the visible row spacing.
-            painter.setPen(QPen(QColor(8, 9, 9, 185), 2.0))
-            painter.drawRoundedRect(
-                body_rect,
-                corner_radius,
-                corner_radius,
-            )
+            # Flat blocks keep pitch, duration and selection legible without
+            # a second decorative layer. Velocity is already encoded in the
+            # fill value and repeated as one direct proportional bar below.
+            painter.setBrush(fill)
             normal_outline = self._bounded_note_color(
                 track_color.lighter(112),
                 maximum_value=168,
@@ -3133,7 +3142,11 @@ class PianoRollCanvas(QWidget):
                         if index in self.selected
                         else (technique_color or normal_outline)
                     ),
-                    2.0 if index in self.selected or invalid else 1.25,
+                    (
+                        1.5
+                        if compact_height and (index in self.selected or invalid)
+                        else (2.0 if index in self.selected or invalid else 1.0)
+                    ),
                 )
             )
             painter.drawRoundedRect(
@@ -3141,38 +3154,26 @@ class PianoRollCanvas(QWidget):
                 corner_radius,
                 corner_radius,
             )
-            if body_rect.width() >= 10:
-                highlight = top_color.lighter(104)
-                highlight.setAlpha(72)
-                painter.setPen(QPen(highlight, 1.0))
-                painter.drawLine(
-                    QPointF(
-                        body_rect.left() + corner_radius,
-                        body_rect.top() + 1.25,
-                    ),
-                    QPointF(
-                        body_rect.right() - corner_radius,
-                        body_rect.top() + 1.25,
-                    ),
-                )
-            velocity_geometry = self.note_velocity_bar_rects(
+            velocity_rects = self.note_velocity_bar_rects(
                 rect,
                 velocity,
                 self.devicePixelRatioF(),
             )
-            if velocity_geometry is not None:
-                velocity_rail, velocity_fill = velocity_geometry
-                painter.fillRect(velocity_rail, QColor(12, 13, 14, 150))
-                if not velocity_fill.isEmpty():
-                    painter.fillRect(
-                        velocity_fill,
-                        QColor(
-                            "#d8c7a3"
-                            if index not in self.selected
-                            else "#ffe0a3"
-                        ),
-                    )
-            if rect.width() >= 28:
+            if velocity_rects is not None:
+                velocity_rail, velocity_fill = velocity_rects
+                painter.fillRect(velocity_rail, QColor(10, 11, 12, 155))
+                painter.fillRect(
+                    velocity_fill,
+                    QColor(
+                        "#ffe0a3"
+                        if index in self.selected
+                        else "#d8c7a3"
+                    ),
+                )
+            if (
+                rect.width() >= 28
+                and rect.height() >= self.NOTE_TEXT_MIN_HEIGHT
+            ):
                 painter.save()
                 painter.setClipRect(rect.adjusted(2, 1, -2, -1))
                 label_font = painter.font()
@@ -3195,6 +3196,7 @@ class PianoRollCanvas(QWidget):
             if (
                 index in self.selected
                 and rect.width() >= self.NOTE_RESIZE_VISUAL_MIN_WIDTH
+                and rect.height() >= self.NOTE_RESIZE_HANDLE_MIN_HEIGHT
             ):
                 handle = QColor("#b7a177")
                 painter.fillRect(QRectF(rect.left() + 1, rect.top() + 3, 3, max(4, rect.height() - 6)), handle)
@@ -3208,11 +3210,14 @@ class PianoRollCanvas(QWidget):
                         rect.left() + 1,
                         rect.top() + 1,
                         max(1.0, min(22.0, rect.width() - 2.0)),
-                        3.0,
+                        1.0 if compact_height else 3.0,
                     ),
                     technique_color,
                 )
-                if rect.width() >= 52:
+                if (
+                    rect.width() >= 52
+                    and rect.height() >= self.NOTE_TECHNIQUE_BADGE_MIN_HEIGHT
+                ):
                     painter.save()
                     badge_rect = QRectF(
                         rect.right() - 23,
@@ -3288,11 +3293,13 @@ class PianoRollCanvas(QWidget):
             painter.setBrush(QColor(245, 165, 36, 95))
             painter.setPen(QPen(QColor("#ffd27b"), 1, Qt.DashLine))
             painter.drawRect(preview_rect)
-            painter.setPen(QColor("#fff4d6"))
-            painter.drawText(
-                preview_rect.adjusted(5, 0, -3, 0), Qt.AlignVCenter | Qt.AlignLeft,
-                f"{note_name(self.creation_preview.pitch)} · v{self.creation_preview.vel}",
-            )
+            if preview_rect.height() >= self.NOTE_TEXT_MIN_HEIGHT:
+                painter.setPen(QColor("#fff4d6"))
+                painter.drawText(
+                    preview_rect.adjusted(5, 0, -3, 0),
+                    Qt.AlignVCenter | Qt.AlignLeft,
+                    f"{note_name(self.creation_preview.pitch)} · v{self.creation_preview.vel}",
+                )
         if (
             not self.notes
             and not self.visible_transcription_candidates()
@@ -3629,6 +3636,11 @@ class PianoRollCanvas(QWidget):
             return
         dx, dy = pos.x() - self.press_pos.x(), pos.y() - self.press_pos.y()
         if self.drag_mode in {"candidate_marquee_pending", "candidate_marquee"}:
+            if not self._transcription_candidate_layer_visible:
+                self.drag_mode = None
+                self.marquee = None
+                self.update()
+                return
             if (
                 self._candidate_marquee_origin is not None
                 and math.hypot(dx, dy) > 4
@@ -3845,10 +3857,13 @@ class PianoRollCanvas(QWidget):
         if (
             self.editor.transcription_mode_enabled
             and event.button() == Qt.LeftButton
-            and self.candidate_at(event.position()) is not None
+            and not self.editor.draw_mode_button.isChecked()
         ):
-            event.accept()
-            return
+            candidate_id = self.candidate_at(event.position())
+            if candidate_id is not None:
+                self.editor.promote_transcription_candidate(candidate_id)
+                event.accept()
+                return
         if (
             event.button() == Qt.LeftButton
             and not self.editor.draw_mode_button.isChecked()
@@ -3883,15 +3898,29 @@ class PianoRollCanvas(QWidget):
         super().mouseDoubleClickEvent(event)
 
     def wheelEvent(self, event) -> None:
-        delta = event.angleDelta().y()
-        if delta == 0:
+        angle_delta = event.angleDelta()
+        raw_delta = angle_delta.y() or angle_delta.x()
+        if raw_delta:
+            wheel_steps = float(raw_delta) / 120.0
+        else:
+            pixel_delta = event.pixelDelta()
+            raw_delta = pixel_delta.y() or pixel_delta.x()
+            # Smooth touchpads report pixels instead of the conventional
+            # 120-unit wheel notch. Fifty pixels is a restrained one-notch
+            # equivalent and keeps high-frequency updates continuous.
+            wheel_steps = float(raw_delta) / 50.0 if raw_delta else 0.0
+        if math.isclose(wheel_steps, 0.0, abs_tol=1e-9):
             return super().wheelEvent(event)
+        wheel_steps = max(-8.0, min(8.0, wheel_steps))
         if event.modifiers() & Qt.ControlModifier:
             anchor_x = max(self.KEY_W, min(self.width(), event.position().x()))
             anchor_time = self.time_at(anchor_x)
             new_zoom = max(
-                30.0,
-                min(320.0, self.px_per_beat * (1.12 if delta > 0 else 1 / 1.12)),
+                self.MIN_PX_PER_BEAT,
+                min(
+                    self.MAX_PX_PER_BEAT,
+                    self.px_per_beat * (1.15 ** wheel_steps),
+                ),
             )
             self.px_per_beat = new_zoom
             self.scroll_ms = max(
@@ -3901,13 +3930,41 @@ class PianoRollCanvas(QWidget):
             self.editor.editor_zoom.blockSignals(True)
             self.editor.editor_zoom.setValue(round(new_zoom))
             self.editor.editor_zoom.blockSignals(False)
+        elif event.modifiers() & Qt.AltModifier:
+            anchor_y = max(
+                float(self.RULER_H),
+                min(float(self.height()), float(event.position().y())),
+            )
+            old_row_height = float(self.ROW_H)
+            anchor_pitch = self.pitch_top - (
+                anchor_y - self.RULER_H
+            ) / old_row_height
+            self.ROW_H = max(
+                self.MIN_ROW_H,
+                min(
+                    self.MAX_ROW_H,
+                    old_row_height * (1.12 ** wheel_steps),
+                ),
+            )
+            self.pitch_top = round(
+                anchor_pitch + (anchor_y - self.RULER_H) / self.ROW_H
+            )
+            self.editor.status.setText(
+                trf("音块高度：{height}px", height=round(self.ROW_H))
+            )
         elif event.modifiers() & Qt.ShiftModifier:
-            self.scroll_ms = max(0.0, self.scroll_ms - delta / 120 * self.beat_ms)
+            self.scroll_ms = max(
+                0.0,
+                self.scroll_ms - wheel_steps * self.beat_ms,
+            )
         else:
             pitch_min, pitch_max = self.editor.pitch_top_bounds()
             self.pitch_top = max(
                 pitch_min,
-                min(pitch_max, self.pitch_top + (3 if delta > 0 else -3)),
+                min(
+                    pitch_max,
+                    self.pitch_top + (3 if wheel_steps > 0 else -3),
+                ),
             )
         self.update()
         self.editor.update_scrollbars()
@@ -3921,39 +3978,59 @@ class PianoRollCanvas(QWidget):
             self.update()
             event.accept()
             return
-        if key == Qt.Key_B and not (mods & (Qt.ControlModifier | Qt.AltModifier | Qt.ShiftModifier)):
+        command = resolve_editor_key_command(
+            key,
+            mods,
+            has_selection=bool(self.selected),
+        )
+        if command is None:
+            return super().keyPressEvent(event)
+        if command == "toggle_draw":
             self.editor.draw_mode_button.toggle()
-            return
-        if key == Qt.Key_Escape and self.editor.draw_mode_button.isChecked():
+        elif command == "play_pause":
+            if not event.isAutoRepeat():
+                self.editor.toggle_draft_playback()
+        elif command == "exit_draw":
+            if not self.editor.draw_mode_button.isChecked():
+                return super().keyPressEvent(event)
             self.editor.draw_mode_button.setChecked(False)
-            return
-        if mods & Qt.ControlModifier and key == Qt.Key_D and self.selected:
+        elif command == "duplicate":
             self.editor.duplicate_selected()
-            return
-        if mods & Qt.ControlModifier and key in (Qt.Key_Up, Qt.Key_Down) and self.selected:
+        elif command in {"adjust_velocity", "adjust_velocity_coarse"}:
             self.editor.push_snapshot()
-            step = 8 if mods & Qt.ShiftModifier else 1
+            step = 8 if command == "adjust_velocity_coarse" else 1
             delta = step if key == Qt.Key_Up else -step
             for index in self.selected:
                 note = self.notes[index]
                 self.notes[index] = note._replace(vel=max(0, min(127, note.vel + delta)))
             self.notes_changed.emit()
             self.selection_changed.emit()
-            return
-        if not (mods & Qt.ControlModifier) and key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down) and self.selected:
+        elif command in {
+            "nudge_pitch",
+            "transpose_octave",
+            "nudge_time",
+            "nudge_time_fine",
+            "resize_duration",
+            "resize_duration_fine",
+        }:
             self.editor.push_snapshot()
             changed = list(self.notes)
-            if key in (Qt.Key_Up, Qt.Key_Down):
-                step = 12 if mods & Qt.ShiftModifier else 1
+            if command in {"nudge_pitch", "transpose_octave"}:
+                step = 12 if command == "transpose_octave" else 1
                 delta = step if key == Qt.Key_Up else -step
                 for index in self.selected:
                     changed[index] = changed[index]._replace(
                         pitch=max(0, min(127, changed[index].pitch + delta))
                     )
             else:
-                step = max(1.0, self.editor.quantize_ms() / 8.0) if mods & Qt.AltModifier else self.editor.quantize_ms()
+                fine = command in {"nudge_time_fine", "resize_duration_fine"}
+                step = (
+                    max(1.0, self.editor.quantize_ms() / 8.0)
+                    if fine
+                    else self.editor.quantize_ms()
+                )
                 delta = step if key == Qt.Key_Right else -step
-                if mods & Qt.ShiftModifier:
+                if command in {"resize_duration", "resize_duration_fine"}:
                     for index in self.selected:
                         changed[index] = changed[index]._replace(
                             dur=max(self.editor.minimum_duration_ms(), changed[index].dur + delta)
@@ -3965,29 +4042,27 @@ class PianoRollCanvas(QWidget):
             self.notes = changed
             self.notes_changed.emit()
             self.selection_changed.emit()
-            return
-        if mods & Qt.ControlModifier and key == Qt.Key_A:
+        elif command == "select_all":
             self.editor.select_all_notes()
-            event.accept()
-            return
-        if (mods & Qt.ControlModifier and key == Qt.Key_Y) or (mods & Qt.ControlModifier and mods & Qt.ShiftModifier and key == Qt.Key_Z):
-            self.editor.redo(); return
-        if mods & Qt.ControlModifier and key == Qt.Key_Z:
-            self.editor.undo(); return
-        if mods & Qt.ControlModifier and key == Qt.Key_C:
-            self.editor.copy_selected(); return
-        if mods & Qt.ControlModifier and key == Qt.Key_X:
-            self.editor.copy_selected(); self.editor.delete_selected(); return
-        if mods & Qt.ControlModifier and key == Qt.Key_V:
-            self.editor.paste_notes(); return
-        if key in (Qt.Key_Delete, Qt.Key_Backspace):
-            self.editor.delete_selected(); return
-        super().keyPressEvent(event)
+        elif command == "redo":
+            self.editor.redo()
+        elif command == "undo":
+            self.editor.undo()
+        elif command == "copy":
+            self.editor.copy_selected()
+        elif command == "cut":
+            self.editor.copy_selected()
+            self.editor.delete_selected()
+        elif command == "paste":
+            self.editor.paste_notes()
+        elif command == "delete":
+            self.editor.delete_selected()
+        event.accept()
 
 
 
 class VelocityLaneCanvas(QWidget):
-    """Point-based velocity curve with time-distance neighbour weighting."""
+    """Discrete note-velocity lane with an explicit weighted brush."""
 
     def __init__(self, editor) -> None:
         super().__init__(editor)
@@ -3996,15 +4071,44 @@ class VelocityLaneCanvas(QWidget):
         self.before_selected: set[int] = set()
         self.active_point_time: float | None = None
         self.active_point_velocity = 0.0
+        self.active_indices: tuple[int, ...] = ()
+        self.active_weights: dict[int, float] = {}
         self.hover_velocity: int | None = None
         self.influence_beats = 2.0
+        self.edit_mode = "brush"
+        self.scope_mode = "track"
+        self.game_velocity_boundaries: tuple[int, ...] = ()
+        self.game_velocity_status = ""
         self.setMouseTracking(True)
         self.setCursor(Qt.SizeVerCursor)
         self.setMinimumHeight(104)
         self.setMaximumHeight(144)
         self.setToolTip(
-            tr("拖动曲线点调整力度；越近的时间点影响越大。滚轮调整影响范围。")
+            tr("拖动力度杆；柔化刷按时间距离衰减，滚轮可调整影响范围。")
         )
+
+    def set_edit_mode(self, mode: str) -> None:
+        self.edit_mode = "point" if mode == "point" else "brush"
+        self.update()
+
+    def set_scope_mode(self, mode: str) -> None:
+        self.scope_mode = "selection" if mode == "selection" else "track"
+        self.update()
+
+    def set_influence_beats(self, beats: float) -> None:
+        self.influence_beats = max(0.5, min(8.0, float(beats)))
+        self.update()
+
+    def set_game_velocity_boundaries(
+        self,
+        boundaries: Iterable[int],
+        status: str = "",
+    ) -> None:
+        self.game_velocity_boundaries = tuple(sorted({
+            int(value) for value in boundaries if 0 < int(value) < 128
+        }))
+        self.game_velocity_status = str(status)
+        self.update()
 
     @property
     def influence_radius_ms(self) -> float:
@@ -4071,11 +4175,8 @@ class VelocityLaneCanvas(QWidget):
             )
 
         painter.setPen(QColor("#9d8a67"))
-        painter.drawText(
-            QRectF(4, self.height() - 22, self.editor.canvas.KEY_W - 8, 18),
-            Qt.AlignCenter,
-            trf("影响 {beats:.1f} 拍", beats=self.influence_beats),
-        )
+        painter.drawText(QRectF(4, self.height() - 22, self.editor.canvas.KEY_W - 8, 18),
+                         Qt.AlignCenter, tr("音符力度"))
         curve_rect = QRectF(
             self.editor.canvas.KEY_W,
             0,
@@ -4092,10 +4193,20 @@ class VelocityLaneCanvas(QWidget):
             right = self.editor.canvas.x_at_time(
                 self.active_point_time + self.influence_radius_ms
             )
-            painter.fillRect(
-                QRectF(left, 0, max(1.0, right - left), self.height()),
-                QColor(213, 163, 78, 22),
-            )
+            gradient = QLinearGradient(left, 0, right, 0)
+            gradient.setColorAt(0.0, QColor(213, 163, 78, 0))
+            gradient.setColorAt(0.5, QColor(213, 163, 78, 45))
+            gradient.setColorAt(1.0, QColor(213, 163, 78, 0))
+            painter.fillRect(QRectF(left, 0, max(1.0, right - left), self.height()), gradient)
+
+        for boundary in self.game_velocity_boundaries:
+            y = self._y_for_velocity(boundary)
+            pen = QPen(QColor(87, 158, 205, 120), 1.0, Qt.DashLine)
+            painter.setPen(pen)
+            painter.drawLine(QPointF(self.editor.canvas.KEY_W, y), QPointF(self.width(), y))
+            painter.setPen(QColor(119, 184, 224, 185))
+            painter.drawText(QRectF(self.editor.canvas.KEY_W + 5, y - 15, 72, 14),
+                             Qt.AlignLeft | Qt.AlignVCenter, trf("游戏层 {value}", value=boundary))
 
         points = self._visible_points()
         if points:
@@ -4107,22 +4218,59 @@ class VelocityLaneCanvas(QWidget):
                     path.moveTo(x, y)
                 else:
                     path.lineTo(x, y)
-            painter.setPen(QPen(QColor("#c79a50"), 1.6))
+            painter.setPen(QPen(QColor(199, 154, 80, 45), 0.8))
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(path)
 
             for onset, indices, velocity in points:
                 x = self.editor.canvas.x_at_time(onset)
-                y = self._y_for_velocity(velocity)
-                selected = any(index in self.editor.canvas.selected for index in indices)
+                values = [float(self.editor.canvas.notes[index].vel) for index in indices]
+                low_y = self._y_for_velocity(min(values))
+                high_y = self._y_for_velocity(max(values))
+                selected_indices = [
+                    index for index in indices if index in self.editor.canvas.selected
+                ]
+                selected = bool(selected_indices)
+                marker_velocity = (
+                    float(self.editor.canvas.notes[selected_indices[0]].vel)
+                    if len(selected_indices) == 1
+                    else velocity
+                )
+                y = self._y_for_velocity(marker_velocity)
                 active = self.active_point_time is not None and math.isclose(
                     onset, self.active_point_time, abs_tol=0.001,
                 )
-                painter.setPen(QPen(QColor("#ffe1a3" if selected or active else "#9c8f7b"), 1))
-                painter.setBrush(QColor("#e0aa50" if selected or active else "#66686d"))
-                size = 10.0 if selected or active else 8.0
+                weight = max((self.active_weights.get(index, 0.0) for index in indices), default=0.0)
+                stem = QColor("#e0aa50" if selected or active else "#777980")
+                if weight > 0.0:
+                    stem = QColor(224, 170, 80, 105 + round(150 * weight))
+                painter.setPen(QPen(stem, 2.0 if selected or weight > 0.0 else 1.2))
+                painter.drawLine(QPointF(x, self._y_for_velocity(0)), QPointF(x, y))
+                if len(indices) > 1 and not math.isclose(low_y, high_y):
+                    painter.setPen(QPen(QColor("#b9a277"), 2.0))
+                    painter.drawLine(QPointF(x, high_y), QPointF(x, low_y))
+                    painter.drawLine(QPointF(x - 3, high_y), QPointF(x + 3, high_y))
+                    painter.drawLine(QPointF(x - 3, low_y), QPointF(x + 3, low_y))
+                    for item_index, note_index in enumerate(indices):
+                        note_y = self._y_for_velocity(self.editor.canvas.notes[note_index].vel)
+                        offset = -5.0 + 10.0 * item_index / max(1, len(indices) - 1)
+                        tick_color = QColor(
+                            "#ffe1a3" if note_index in self.editor.canvas.selected else "#9e927e"
+                        )
+                        painter.setPen(QPen(tick_color, 1.2))
+                        painter.drawLine(QPointF(x + offset - 2, note_y),
+                                         QPointF(x + offset + 2, note_y))
+                painter.setPen(QPen(QColor("#ffe1a3" if selected or active else "#a4a5a9"), 1))
+                painter.setBrush(QColor("#e0aa50" if selected or active else "#73757a"))
+                size = 10.0 if selected or active else 7.0 + 3.0 * weight
                 painter.drawEllipse(QRectF(x - size / 2, y - size / 2, size, size))
         painter.restore()
+
+        if self.game_velocity_status:
+            painter.setPen(QColor("#7f9eaf"))
+            painter.drawText(QRectF(self.editor.canvas.KEY_W + 8, 3,
+                                    max(0, self.width() - self.editor.canvas.KEY_W - 12), 18),
+                             Qt.AlignRight | Qt.AlignVCenter, self.game_velocity_status)
 
         if self.hover_velocity is not None:
             y = self._y_for_velocity(self.hover_velocity)
@@ -4142,14 +4290,44 @@ class VelocityLaneCanvas(QWidget):
         if self.active_point_time is None or not self.before_notes:
             return
         delta = float(target_velocity) - self.active_point_velocity
-        self.editor.canvas.notes = apply_weighted_velocity_delta(
-            self.before_notes,
-            self.active_point_time,
-            delta,
-            self.influence_radius_ms,
-        )
+        for index, weight in self.active_weights.items():
+            source = self.before_notes[index]
+            velocity = max(0, min(127, round(float(source.vel) + delta * weight)))
+            self.editor.canvas.notes[index] = source._replace(vel=velocity)
         self.editor.canvas.update()
         self.update()
+
+    def _prepare_drag(self, point: tuple[float, tuple[int, ...], float]) -> None:
+        onset, point_indices, average_velocity = point
+        selected_here = tuple(index for index in point_indices if index in self.before_selected)
+        anchor_indices = selected_here if len(selected_here) == 1 else point_indices
+        if self.edit_mode == "point":
+            candidate_indices = anchor_indices
+        else:
+            candidate_indices = tuple(self.editor.canvas.visible_note_indices(
+                onset - self.influence_radius_ms,
+                onset + self.influence_radius_ms,
+            ))
+            if self.scope_mode == "selection" and self.before_selected:
+                candidate_indices = tuple(index for index in candidate_indices
+                                          if index in self.before_selected)
+            if not candidate_indices:
+                candidate_indices = anchor_indices
+        self.active_indices = tuple(sorted(set(candidate_indices)))
+        self.active_weights = {}
+        for index in self.active_indices:
+            weight = (1.0 if self.edit_mode == "point" else velocity_neighbor_weight(
+                float(self.before_notes[index].start) - onset,
+                self.influence_radius_ms,
+            ))
+            if weight > 0.0:
+                self.active_weights[index] = weight
+        self.active_point_velocity = (
+            float(self.before_notes[anchor_indices[0]].vel)
+            if len(anchor_indices) == 1
+            else average_velocity
+        )
+        self.editor.canvas.selected = set(anchor_indices)
 
     def mousePressEvent(self, event) -> None:
         if event.button() != Qt.LeftButton:
@@ -4161,9 +4339,8 @@ class VelocityLaneCanvas(QWidget):
         self.before_notes = list(self.editor.canvas.notes)
         self.before_selected = set(self.editor.canvas.selected)
         self.active_point_time = onset
-        self.active_point_velocity = velocity
+        self._prepare_drag(point)
         self.hover_velocity = self._velocity_at(event.position().y())
-        self.editor.canvas.selected = set(indices)
         self.editor.canvas.selection_changed.emit()
         self._apply_drag(self.hover_velocity)
 
@@ -4185,6 +4362,8 @@ class VelocityLaneCanvas(QWidget):
         self.before_notes = []
         self.before_selected = set()
         self.active_point_time = None
+        self.active_indices = ()
+        self.active_weights = {}
         self.update()
 
     def wheelEvent(self, event) -> None:
@@ -4192,10 +4371,10 @@ class VelocityLaneCanvas(QWidget):
         if not delta:
             event.ignore()
             return
-        self.influence_beats = max(
-            0.5,
-            min(8.0, self.influence_beats + (0.5 if delta > 0 else -0.5)),
-        )
+        self.set_influence_beats(self.influence_beats + (0.5 if delta > 0 else -0.5))
+        callback = getattr(self.editor, "_sync_velocity_radius_control", None)
+        if callable(callback):
+            callback()
         self.editor.status.setText(
             trf("力度曲线影响范围：前后 {beats:.1f} 拍", beats=self.influence_beats)
         )

@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import unittest
 
-from bdo_articulation_profiles import PROFILES, profile_for
-from bdo_instrument_adaptation import (
+from bdo_music_composer.editor.bdo_articulation_profiles import PROFILES, profile_for
+from bdo_music_composer.editor.bdo_instrument_adaptation import (
     ArrangementRole,
     GameInstrumentFamily,
     RouteEvidence,
+    assess_game_draft,
     articulation_pairs_by_instrument,
+    articulation_supports_pitch,
+    articulation_trigger_pitches,
     instrument_editor_display_adaptation,
     instrument_editor_display_adaptations,
     load_instrument_editor_adaptations,
 )
-from bdo_midi import BDO_INSTRUMENT_NAMES, BDO_NOTE_MAX, BDO_NOTE_MIN
+from bdo_midi import BDO_INSTRUMENT_NAMES, BDO_NOTE_MAX, BDO_NOTE_MIN, Note
 
 
 class InstrumentEditorAdaptationTests(unittest.TestCase):
@@ -34,6 +37,32 @@ class InstrumentEditorAdaptationTests(unittest.TestCase):
                 self.assertTrue(adaptation.visual_key)
                 self.assertNotIn("/", adaptation.visual_key)
                 self.assertNotIn("\\", adaptation.visual_key)
+
+    def test_game_draft_check_is_read_only_and_reports_chunking(self) -> None:
+        notes = tuple(
+            Note(60, 96, index * 100.0, 80.0, 0)
+            for index in range(731)
+        )
+        report = assess_game_draft(0x10, notes)
+        self.assertTrue(report.ready)
+        self.assertEqual(731, report.note_count)
+        self.assertEqual(730, report.track_chunk_limit)
+        self.assertEqual(2, report.track_chunk_count)
+        self.assertTrue(report.pitch_evidence_known)
+        self.assertEqual(60, notes[0].pitch)
+
+    def test_game_draft_check_reports_without_rewriting_invalid_notes(self) -> None:
+        notes = (
+            Note(11, 140, -1.0, 0.0, 99),
+            Note(60, 96, 0.0, 100.0, 0),
+        )
+        report = assess_game_draft(0x10, notes)
+        self.assertFalse(report.ready)
+        self.assertEqual((0,), report.invalid_pitch_indices)
+        self.assertEqual((0,), report.unsupported_articulation_indices)
+        self.assertEqual((0,), report.invalid_timing_indices)
+        self.assertEqual((0,), report.invalid_velocity_indices)
+        self.assertEqual(11, notes[0].pitch)
 
     def test_game_id_39_is_clarinet_not_recorder(self) -> None:
         # Game CSS calls instrument_39 클라리넷 and its SoundBank is named
@@ -140,6 +169,36 @@ class InstrumentEditorAdaptationTests(unittest.TestCase):
         )
         self.assertEqual(RouteEvidence.PARTIAL, horn_slide.route_evidence)
         self.assertEqual(frozenset(range(24, 73)), horn_slide.native_route_pitches)
+
+    def test_native_partial_routes_are_shared_authoring_constraints(self) -> None:
+        for instrument_id in (0x24, 0x25, 0x26):
+            with self.subTest(instrument_id=instrument_id):
+                self.assertEqual(
+                    frozenset(range(36, 44)),
+                    articulation_trigger_pitches(instrument_id, 25),
+                )
+                self.assertTrue(
+                    articulation_supports_pitch(instrument_id, 25, 36)
+                )
+                self.assertFalse(
+                    articulation_supports_pitch(instrument_id, 25, 44)
+                )
+        self.assertTrue(articulation_supports_pitch(0x28, 3, 72))
+        self.assertFalse(articulation_supports_pitch(0x28, 3, 73))
+        self.assertTrue(articulation_supports_pitch(0x28, 0, 95))
+
+    def test_game_draft_check_rejects_silent_partial_route_combinations(self) -> None:
+        guitar = assess_game_draft(
+            0x24,
+            (Note(43, 96, 0.0, 100.0, 25), Note(44, 96, 100.0, 100.0, 25)),
+        )
+        self.assertEqual((1,), guitar.unsupported_articulation_indices)
+
+        horn = assess_game_draft(
+            0x28,
+            (Note(72, 96, 0.0, 100.0, 3), Note(73, 96, 100.0, 100.0, 3)),
+        )
+        self.assertEqual((1,), horn.unsupported_articulation_indices)
 
     def test_wwise_route_does_not_claim_audible_game_ab_validation(self) -> None:
         route_count = 0

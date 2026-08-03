@@ -16,7 +16,7 @@ class TimelineIntervalIndexUiTests(unittest.TestCase):
         script = textwrap.dedent(
             """
             from PySide6.QtWidgets import QApplication
-            from pyside_bdo_gui import Note, TimelineCanvas, TrackState
+            from bdo_music_composer.ui.main_window import Note, TimelineCanvas, TrackState
 
             app = QApplication([])
             notes = [
@@ -80,7 +80,7 @@ class TimelineIntervalIndexUiTests(unittest.TestCase):
             # early short note for a late viewport; ghost notes follow the
             # same rule.
             from PySide6.QtWidgets import QWidget
-            from pyside_bdo_gui import PianoRollCanvas
+            from bdo_music_composer.ui.main_window import PianoRollCanvas
 
             class Editor(QWidget):
                 bpm = 120

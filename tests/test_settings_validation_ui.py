@@ -19,7 +19,7 @@ class SettingsValidationUiTests(unittest.TestCase):
 
             from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
-            from pyside_bdo_gui import MidiToBdoWindow, SettingsDialog
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, SettingsDialog
 
 
             app = QApplication.instance() or QApplication([])

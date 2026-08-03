@@ -32,8 +32,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from project_paths import USER_DATA_DIR  # noqa: E402
-from bdo_transcription import (  # noqa: E402
+from bdo_music_composer.core.project_paths import USER_DATA_DIR  # noqa: E402
+from bdo_music_composer.transcription.bdo_transcription import (  # noqa: E402
     HPSS_BLOCK_SECONDS,
     HPSS_HOP_LENGTH,
     HPSS_KERNEL_SIZE,
@@ -65,7 +65,7 @@ from bdo_transcription import (  # noqa: E402
     transcription_audio_fingerprint,
     transcription_cache_key,
 )
-from bdo_transcription_postprocess import (  # noqa: E402
+from bdo_music_composer.transcription.bdo_transcription_postprocess import (  # noqa: E402
     BALANCED_CLEANUP_PROFILE,
     CLEAN_CLEANUP_PROFILE,
     FragmentCleanupParams,

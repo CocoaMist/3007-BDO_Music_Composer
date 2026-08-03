@@ -38,7 +38,7 @@ from bdo_midi import (
     transpose_notes,
 )
 from bdo_midi.transforms import bounded_int, bounded_velocity
-from bdo_track_effects import (
+from bdo_common.bdo_track_effects import (
     DEFAULT_TRACK_VOLUME,
     raw_track_settings,
 )

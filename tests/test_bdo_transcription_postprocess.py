@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from bdo_transcription_postprocess import (
+from bdo_music_composer.transcription.bdo_transcription_postprocess import (
     FrameNoteEvent,
     POSTPROCESS_VERSION,
     postprocess_frame_events,

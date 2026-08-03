@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from typing import Any, NoReturn
 
-from project_paths import RELEASE_NOTES_PATH
+from bdo_music_composer.core.project_paths import RELEASE_NOTES_PATH
 
 
 RELEASE_NOTES_SCHEMA_VERSION = 1

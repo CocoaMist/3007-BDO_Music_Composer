@@ -24,14 +24,17 @@ from PySide6.QtWidgets import (
 )
 
 from bdo_midi import BDO_INSTRUMENT_NAMES
+from bdo_music_composer.audio.bdo_audio_validation import (
+    verified_instrument_articulations,
+)
 from bdo_music_composer.app.crash_logging import append_crash_log
-from editor_articulation_data import BDO_ARTICULATIONS
+from bdo_music_composer.ui.editor.editor_articulation_data import BDO_ARTICULATIONS
 from bdo_music_composer.editor.editor_models import (
     BDO_EDITOR_PITCH_RANGES,
     TrackState,
     game_supported_pitches,
 )
-from i18n import tr, tr_joinv, trf, trfv, trv
+from bdo_music_composer.ui.i18n import tr, tr_joinv, trf, trfv, trv
 from optimization import OptimizerConfig
 from optimization.plugin_api import InvalidOptimizationPreview, OptimizationIntensity
 from optimization.plugin_host import (
@@ -41,7 +44,10 @@ from optimization.plugin_host import (
     discover_host_algorithms,
     optimizer_plugin_dir,
 )
-from project_paths import USER_DATA_DIR
+from bdo_music_composer.core.project_paths import (
+    USER_DATA_DIR,
+    WWISE_MIDI_MAP_PATH,
+)
 
 
 AUDIO_VALIDATION_PATH = USER_DATA_DIR / "out" / "bdo" / "bdo_audio_validation_matrix.json"
@@ -671,13 +677,21 @@ class MidiOptimizeDialog(QDialog):
             if (pitches := game_supported_pitches(instrument_id))
         }
         verified_articulations = set()
-        if AUDIO_VALIDATION_PATH.is_file():
+        if (
+            AUDIO_VALIDATION_PATH.is_file()
+            and WWISE_MIDI_MAP_PATH.is_file()
+        ):
             try:
                 payload = json.loads(AUDIO_VALIDATION_PATH.read_text(encoding="utf-8"))
-                verified_articulations = {
-                    (int(cell["instrument_id"]), int(cell.get("ntype", 0)))
-                    for cell in payload.get("cells", []) if cell.get("verification") == "verified"
-                }
+                mapping = json.loads(
+                    WWISE_MIDI_MAP_PATH.read_text(encoding="utf-8")
+                )
+                verified_articulations = set(
+                    verified_instrument_articulations(
+                        payload,
+                        mapping.get("evidence_sha256"),
+                    )
+                )
             except (OSError, ValueError, TypeError, KeyError):
                 verified_articulations = set()
         return OptimizerConfig(

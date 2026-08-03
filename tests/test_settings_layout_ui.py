@@ -18,8 +18,8 @@ class SettingsLayoutUiTests(unittest.TestCase):
             from PySide6.QtCore import QPoint
             from PySide6.QtWidgets import QApplication, QScrollArea
 
-            from i18n import install_localizer
-            from pyside_bdo_gui import MidiToBdoWindow, SettingsDialog
+            from bdo_music_composer.ui.i18n import install_localizer
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, SettingsDialog
 
             app = QApplication([])
             translations = install_localizer(app, "zh_CN")
@@ -27,6 +27,15 @@ class SettingsLayoutUiTests(unittest.TestCase):
             dialog = SettingsDialog(window)
             dialog.show()
             app.processEvents()
+
+            assert dialog.settings_nav.width() == 184
+            assert dialog.settings_nav.uniformItemSizes()
+            nav_rects = [
+                dialog.settings_nav.visualItemRect(dialog.settings_nav.item(i))
+                for i in range(dialog.settings_nav.count())
+            ]
+            assert all(rect.height() == 48 for rect in nav_rects)
+            assert all(rect.left() == 0 for rect in nav_rects)
 
             general_scroll = dialog.findChild(QScrollArea, "SettingsScroll")
             assert general_scroll is not None

@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import sys
 
-from atomic_io import atomic_write_bytes
+from bdo_common.atomic_io import atomic_write_bytes
 
 from . import (
     compare_score_documents, decode_score, document_from_dict, document_to_dict,

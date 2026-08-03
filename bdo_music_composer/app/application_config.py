@@ -12,7 +12,7 @@ from pathlib import Path
 import time
 from typing import Any, Mapping
 
-from atomic_io import atomic_copy_file, atomic_write_bytes
+from bdo_common.atomic_io import atomic_copy_file, atomic_write_bytes
 
 
 def load_config(path: str | Path) -> dict[str, Any]:

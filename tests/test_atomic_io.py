@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import atomic_io
+import bdo_common.atomic_io as atomic_io
 
 
 class AtomicIoTests(unittest.TestCase):

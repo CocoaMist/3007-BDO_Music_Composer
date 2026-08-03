@@ -196,7 +196,7 @@ class PreviewMidiWriterTests(unittest.TestCase):
 
             builtins.__import__ = import_without_mido
             try:
-                import pyside_bdo_gui
+                import bdo_music_composer.ui.main_window as pyside_bdo_gui
             except SystemExit as exc:
                 assert "PySide6/mido is not installed." in str(exc), exc
             else:

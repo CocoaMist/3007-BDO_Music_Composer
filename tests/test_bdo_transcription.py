@@ -14,8 +14,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-import bdo_transcription
-from bdo_transcription import (
+import bdo_music_composer.transcription.bdo_transcription as bdo_transcription
+from bdo_music_composer.transcription.bdo_transcription import (
     BasicPitchTranscriptionBackend,
     EvidenceDescriptor,
     FRAME_THRESHOLD,
@@ -98,7 +98,7 @@ class BdoTranscriptionTests(unittest.TestCase):
 
     def test_missing_backend_has_source_and_frozen_specific_guidance(self) -> None:
         with patch(
-            "bdo_transcription.importlib.util.find_spec",
+            "bdo_music_composer.transcription.bdo_transcription.importlib.util.find_spec",
             return_value=None,
         ):
             available, source_message = transcription_backend_status()
@@ -106,7 +106,7 @@ class BdoTranscriptionTests(unittest.TestCase):
             self.assertIn("扒谱组件", source_message)
             self.assertNotIn("\ufffd", source_message)
             self.assertIn("install_transcription.ps1", source_message)
-            with patch("bdo_transcription.sys.frozen", True, create=True):
+            with patch("bdo_music_composer.transcription.bdo_transcription.sys.frozen", True, create=True):
                 frozen_message = transcription_backend_message()
             self.assertIn("本地扒谱引擎未能加载", frozen_message)
             self.assertNotIn("\ufffd", frozen_message)
@@ -116,11 +116,11 @@ class BdoTranscriptionTests(unittest.TestCase):
     def test_quick_backend_status_does_not_import_heavy_runtime(self) -> None:
         with (
             patch(
-                "bdo_transcription.importlib.util.find_spec",
+                "bdo_music_composer.transcription.bdo_transcription.importlib.util.find_spec",
                 return_value=SimpleNamespace(),
             ) as find_spec,
             patch(
-                "bdo_transcription._import_basic_pitch",
+                "bdo_music_composer.transcription.bdo_transcription._import_basic_pitch",
                 side_effect=AssertionError("quick probe must not import"),
             ),
         ):
@@ -145,14 +145,17 @@ class BdoTranscriptionTests(unittest.TestCase):
         )
         with (
             patch(
-                "bdo_transcription.importlib.util.find_spec",
+                "bdo_music_composer.transcription.bdo_transcription.importlib.util.find_spec",
                 return_value=SimpleNamespace(),
             ),
             patch(
-                "bdo_transcription._import_basic_pitch",
+                "bdo_music_composer.transcription.bdo_transcription._import_basic_pitch",
                 side_effect=failure,
             ),
-            self.assertLogs("bdo_transcription", level="WARNING") as logs,
+            self.assertLogs(
+                "bdo_music_composer.transcription.bdo_transcription",
+                level="WARNING",
+            ) as logs,
         ):
             available, message = transcription_backend_status()
         self.assertFalse(available)
@@ -183,11 +186,11 @@ class BdoTranscriptionTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "bdo_transcription.importlib.util.find_spec",
+                    "bdo_music_composer.transcription.bdo_transcription.importlib.util.find_spec",
                     return_value=SimpleNamespace(),
                 ),
                 patch(
-                    "bdo_transcription._import_basic_pitch",
+                    "bdo_music_composer.transcription.bdo_transcription._import_basic_pitch",
                     return_value=imported,
                 ) as import_backend,
             ):
@@ -275,8 +278,8 @@ class BdoTranscriptionTests(unittest.TestCase):
             audio.write_bytes(b"audio")
             first = transcription_cache_key(audio)
             with (
-                patch("bdo_transcription.ONSET_THRESHOLD", 0.99),
-                patch("bdo_transcription.FRAME_THRESHOLD", 0.01),
+                patch("bdo_music_composer.transcription.bdo_transcription.ONSET_THRESHOLD", 0.99),
+                patch("bdo_music_composer.transcription.bdo_transcription.FRAME_THRESHOLD", 0.01),
             ):
                 second = transcription_cache_key(audio)
             self.assertEqual(first, second)
@@ -1071,7 +1074,7 @@ class BdoTranscriptionTests(unittest.TestCase):
             times._mmap.close()
             del times
             with patch(
-                "bdo_transcription.transcription_backend_status",
+                "bdo_music_composer.transcription.bdo_transcription.transcription_backend_status",
                 return_value=(False, "backend unavailable"),
             ):
                 cache_only = transcribe_reference_audio(
@@ -1103,7 +1106,7 @@ class BdoTranscriptionTests(unittest.TestCase):
                 return cached
 
             with patch(
-                "bdo_transcription._read_valid_cache_entry",
+                "bdo_music_composer.transcription.bdo_transcription._read_valid_cache_entry",
                 side_effect=mutate_after_validation,
             ):
                 self.assertIsNone(
@@ -1136,7 +1139,7 @@ class BdoTranscriptionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "bdo_transcription._sha256_file",
+                    "bdo_music_composer.transcription.bdo_transcription._sha256_file",
                     side_effect=cancel_during_hash,
                 ),
                 self.assertRaises(TranscriptionCancelled),
@@ -1200,19 +1203,19 @@ class BdoTranscriptionTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "bdo_transcription.transcription_audio_fingerprint",
+                    "bdo_music_composer.transcription.bdo_transcription.transcription_audio_fingerprint",
                     side_effect=("1" * 64, "2" * 64),
                 ),
                 patch(
-                    "bdo_transcription._load_cached_result",
+                    "bdo_music_composer.transcription.bdo_transcription._load_cached_result",
                     return_value=None,
                 ),
                 patch(
-                    "bdo_transcription.transcription_backend_status",
+                    "bdo_music_composer.transcription.bdo_transcription.transcription_backend_status",
                     return_value=(True, ""),
                 ),
                 patch(
-                    "bdo_transcription._import_basic_pitch",
+                    "bdo_music_composer.transcription.bdo_transcription._import_basic_pitch",
                     return_value=(
                         SimpleNamespace(ONNX_PRESENT=True),
                         fake_inference,
@@ -1221,11 +1224,11 @@ class BdoTranscriptionTests(unittest.TestCase):
                     ),
                 ),
                 patch(
-                    "bdo_transcription._onnx_model",
+                    "bdo_music_composer.transcription.bdo_transcription._onnx_model",
                     return_value=fake_model,
                 ),
                 patch(
-                    "bdo_transcription._run_streamed_analysis",
+                    "bdo_music_composer.transcription.bdo_transcription._run_streamed_analysis",
                     return_value=(
                         {
                             "note": frame,
@@ -1236,7 +1239,7 @@ class BdoTranscriptionTests(unittest.TestCase):
                     ),
                 ),
                 patch(
-                    "bdo_transcription._write_cached_result"
+                    "bdo_music_composer.transcription.bdo_transcription._write_cached_result"
                 ) as cache_writer,
                 self.assertRaisesRegex(
                     bdo_transcription.TranscriptionError,
@@ -1324,19 +1327,19 @@ class BdoTranscriptionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "bdo_transcription.transcription_audio_fingerprint",
+                    "bdo_music_composer.transcription.bdo_transcription.transcription_audio_fingerprint",
                     return_value="1" * 64,
                 ),
                 patch(
-                    "bdo_transcription._load_cached_result",
+                    "bdo_music_composer.transcription.bdo_transcription._load_cached_result",
                     return_value=None,
                 ),
                 patch(
-                    "bdo_transcription.transcription_backend_status",
+                    "bdo_music_composer.transcription.bdo_transcription.transcription_backend_status",
                     return_value=(True, ""),
                 ),
                 patch(
-                    "bdo_transcription._import_basic_pitch",
+                    "bdo_music_composer.transcription.bdo_transcription._import_basic_pitch",
                     return_value=(
                         SimpleNamespace(ONNX_PRESENT=True),
                         fake_inference,
@@ -1345,11 +1348,11 @@ class BdoTranscriptionTests(unittest.TestCase):
                     ),
                 ),
                 patch(
-                    "bdo_transcription._onnx_model",
+                    "bdo_music_composer.transcription.bdo_transcription._onnx_model",
                     return_value=SimpleNamespace(predict=predict),
                 ),
                 patch(
-                    "bdo_transcription._run_streamed_analysis",
+                    "bdo_music_composer.transcription.bdo_transcription._run_streamed_analysis",
                     side_effect=run_streamed,
                 ),
             ):
@@ -1413,15 +1416,15 @@ class BdoTranscriptionTests(unittest.TestCase):
             fake_inference = SimpleNamespace(AUDIO_SAMPLE_RATE=8)
             with (
                 patch(
-                    "bdo_transcription._load_cached_result",
+                    "bdo_music_composer.transcription.bdo_transcription._load_cached_result",
                     return_value=None,
                 ),
                 patch(
-                    "bdo_transcription.transcription_backend_status",
+                    "bdo_music_composer.transcription.bdo_transcription.transcription_backend_status",
                     return_value=(True, ""),
                 ),
                 patch(
-                    "bdo_transcription._import_basic_pitch",
+                    "bdo_music_composer.transcription.bdo_transcription._import_basic_pitch",
                     return_value=(
                         SimpleNamespace(ONNX_PRESENT=True),
                         fake_inference,
@@ -1430,11 +1433,11 @@ class BdoTranscriptionTests(unittest.TestCase):
                     ),
                 ),
                 patch(
-                    "bdo_transcription._onnx_model",
+                    "bdo_music_composer.transcription.bdo_transcription._onnx_model",
                     return_value=SimpleNamespace(),
                 ),
                 patch(
-                    "bdo_transcription._run_streamed_analysis",
+                    "bdo_music_composer.transcription.bdo_transcription._run_streamed_analysis",
                     return_value=(
                         {
                             "note": frame,
@@ -1466,7 +1469,7 @@ class BdoTranscriptionTests(unittest.TestCase):
                 return []
 
             with patch(
-                "bdo_transcription._import_basic_pitch_note_creation",
+                "bdo_music_composer.transcription.bdo_transcription._import_basic_pitch_note_creation",
                 return_value=SimpleNamespace(
                     output_to_notes_polyphonic=(
                         output_to_notes_polyphonic
@@ -1516,11 +1519,11 @@ class BdoTranscriptionTests(unittest.TestCase):
 
         with (
             patch(
-                "bdo_transcription._candidate_from_frame_event",
+                "bdo_music_composer.transcription.bdo_transcription._candidate_from_frame_event",
                 wraps=project,
             ) as project_mock,
             patch(
-                "bdo_transcription.transcription_candidate_id",
+                "bdo_music_composer.transcription.bdo_transcription.transcription_candidate_id",
                 wraps=identify,
             ) as identify_mock,
         ):
@@ -1591,15 +1594,15 @@ class BdoTranscriptionTests(unittest.TestCase):
             fake_inference = SimpleNamespace(AUDIO_SAMPLE_RATE=1_000)
             with (
                 patch(
-                    "bdo_transcription._load_cached_result",
+                    "bdo_music_composer.transcription.bdo_transcription._load_cached_result",
                     return_value=None,
                 ),
                 patch(
-                    "bdo_transcription.transcription_backend_status",
+                    "bdo_music_composer.transcription.bdo_transcription.transcription_backend_status",
                     return_value=(True, ""),
                 ),
                 patch(
-                    "bdo_transcription._import_basic_pitch",
+                    "bdo_music_composer.transcription.bdo_transcription._import_basic_pitch",
                     return_value=(
                         SimpleNamespace(ONNX_PRESENT=True),
                         fake_inference,
@@ -1608,11 +1611,11 @@ class BdoTranscriptionTests(unittest.TestCase):
                     ),
                 ),
                 patch(
-                    "bdo_transcription._onnx_model",
+                    "bdo_music_composer.transcription.bdo_transcription._onnx_model",
                     return_value=SimpleNamespace(),
                 ),
                 patch(
-                    "bdo_transcription._run_streamed_analysis",
+                    "bdo_music_composer.transcription.bdo_transcription._run_streamed_analysis",
                     return_value=(
                         {
                             "note": frame,
@@ -1633,11 +1636,11 @@ class BdoTranscriptionTests(unittest.TestCase):
 
             with (
                 patch(
-                    "bdo_transcription._import_basic_pitch_note_creation",
+                    "bdo_music_composer.transcription.bdo_transcription._import_basic_pitch_note_creation",
                     return_value=fake_note_creation,
                 ),
                 patch(
-                    "bdo_transcription._onnx_model",
+                    "bdo_music_composer.transcription.bdo_transcription._onnx_model",
                     side_effect=AssertionError("ONNX must not run"),
                 ),
             ):
@@ -1705,11 +1708,11 @@ class BdoTranscriptionTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "bdo_transcription._import_basic_pitch_note_creation",
+                    "bdo_music_composer.transcription.bdo_transcription._import_basic_pitch_note_creation",
                     return_value=note_creation,
                 ),
                 patch(
-                    "bdo_transcription._onnx_model",
+                    "bdo_music_composer.transcription.bdo_transcription._onnx_model",
                     side_effect=AssertionError("ONNX must not run"),
                 ),
             ):
@@ -1769,7 +1772,7 @@ class BdoTranscriptionTests(unittest.TestCase):
                 bdo_transcription._VALIDATED_CACHE_ENTRIES.clear()
             original_validator = bdo_transcription._validate_evidence_files
             with patch(
-                "bdo_transcription._validate_evidence_files",
+                "bdo_music_composer.transcription.bdo_transcription._validate_evidence_files",
                 wraps=original_validator,
             ) as validator:
                 first = load_transcription_evidence(
@@ -2025,11 +2028,11 @@ class BdoTranscriptionTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "bdo_transcription._import_basic_pitch_note_creation",
+                    "bdo_music_composer.transcription.bdo_transcription._import_basic_pitch_note_creation",
                     return_value=fake_note_creation,
                 ),
                 patch(
-                    "bdo_transcription._onnx_model",
+                    "bdo_music_composer.transcription.bdo_transcription._onnx_model",
                     side_effect=AssertionError("ONNX must not run"),
                 ),
             ):

@@ -28,7 +28,7 @@ class InstrumentEditorUiTests(unittest.TestCase):
     def test_game_legality_uses_verified_profile_not_wwise_sample_span(self) -> None:
         completed = _run_offscreen(
             """
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.main_window import (
                 BDO_EDITOR_PITCH_RANGES,
                 game_supported_pitches,
             )
@@ -51,7 +51,7 @@ class InstrumentEditorUiTests(unittest.TestCase):
         completed = _run_offscreen(
             """
             from PySide6.QtWidgets import QApplication
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.main_window import (
                 Note, TimelineCanvas, TrackState,
                 track_uses_canonical_drum_lanes,
             )
@@ -89,7 +89,7 @@ class InstrumentEditorUiTests(unittest.TestCase):
         completed = _run_offscreen(
             """
             from PySide6.QtWidgets import QApplication
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState,
             )
 
@@ -188,12 +188,58 @@ class InstrumentEditorUiTests(unittest.TestCase):
             completed.stdout + completed.stderr,
         )
 
+    def test_note_editor_blocks_native_articulation_outside_trigger_range(self) -> None:
+        completed = _run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication
+            from bdo_music_composer.ui.main_window import (
+                MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState,
+            )
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            track = TrackState(
+                1,
+                [Note(44, 96, 0.0, 200.0, 0)],
+                0,
+                False,
+                "Electric guitar",
+                0x24,
+            )
+            window.tracks = [track]
+            editor = MidiNoteEditorDialog(window, track, 120, 4)
+            editor.canvas.selected = {0}
+            editor.refresh_fields()
+            editor._choose_articulation(25)
+            assert editor.canvas.notes[0].ntype == 0
+            assert editor.current_articulation() == 0
+            toast = getattr(editor, "_global_toast", None)
+            assert toast is not None
+            assert "C2–G2" in toast.message.text()
+
+            editor.canvas.notes[0] = editor.canvas.notes[0]._replace(pitch=36)
+            editor.refresh_fields()
+            editor._choose_articulation(25)
+            assert editor.canvas.notes[0].ntype == 25
+
+            editor.close()
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
     def test_note_editor_migrates_legacy_track_articulation_before_export(self) -> None:
         completed = _run_offscreen(
             """
             from PySide6.QtWidgets import QApplication
-            from export_workflow import freeze_export_tracks
-            from pyside_bdo_gui import (
+            from bdo_music_composer.export.export_workflow import freeze_export_tracks
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState,
             )
 
@@ -241,7 +287,7 @@ class InstrumentEditorUiTests(unittest.TestCase):
         completed = _run_offscreen(
             """
             from PySide6.QtWidgets import QApplication
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState,
             )
 
@@ -300,7 +346,7 @@ class InstrumentEditorUiTests(unittest.TestCase):
         completed = _run_offscreen(
             """
             from PySide6.QtWidgets import QApplication
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog, MidiToBdoWindow, TrackState,
             )
 

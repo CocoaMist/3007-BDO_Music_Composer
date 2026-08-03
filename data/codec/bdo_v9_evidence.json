@@ -41,7 +41,10 @@
     }
   },
   "authoring_ui": {
-    "meta_version": 757,
+    "meta_version": 782,
+    "meta_sha256": "ab149341b97aadf8855c82bc7a3f52492e9115ce201559c9d7b66d7ea67499e8",
+    "archive_count": 8363,
+    "previous_compatible_meta_version": 757,
     "musiccomposition_js_sha256": "714f2fa753997ae397a509b0010b2a892d79a2fb551e1513021fdd98b2038a23",
     "musiccomposition_html_sha256": "6e25e5876941eb57bcc0892a920022afd39ef44d7667410468bd6d6400e9fa1e",
     "effect_defaults": [0, 0, 0, 0, 0, 0, 0, 0],

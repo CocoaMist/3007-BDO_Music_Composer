@@ -7,15 +7,15 @@ import unittest
 
 import mido
 
-from bdo_articulation_profiles import profile_for
-from bdo_music_theory import TrackRole, analyse_music, analyse_song
-from bdo_midi_optimizer import OptimizationLevel, OptimizerConfig, optimize_tracks
-from bdo_lyrics import LyricExpressionMode, align_lyrics
-from bdo_techniques import TECHNIQUE_PROFILES, TechniqueMap, TriggerKind
+from bdo_music_composer.editor.bdo_articulation_profiles import profile_for
+from bdo_music_composer.editor.bdo_music_theory import TrackRole, analyse_music, analyse_song
+from optimization import OptimizationLevel, OptimizerConfig, optimize_tracks
+from bdo_music_composer.editor.bdo_lyrics import LyricExpressionMode, align_lyrics
+from bdo_music_composer.editor.bdo_techniques import TECHNIQUE_PROFILES, TechniqueMap, TriggerKind
 from bdo_midi import parse_midi
-from editor_articulation_data import BDO_ARTICULATIONS
+from bdo_music_composer.ui.editor.editor_articulation_data import BDO_ARTICULATIONS
 from bdo_music_composer.editor.editor_models import TrackState
-from pyside_bdo_gui import build_filtered_midi
+from bdo_music_composer.ui.main_window import build_filtered_midi
 
 
 Note = namedtuple("Note", "pitch vel start dur ntype", defaults=(0,))

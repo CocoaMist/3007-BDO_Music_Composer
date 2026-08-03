@@ -34,7 +34,7 @@ class BdoEffectsUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication, QSpinBox, QWidget
 
-            from pyside_bdo_gui import TrackFxDialog, TrackState
+            from bdo_music_composer.ui.main_window import TrackFxDialog, TrackState
 
             app = QApplication([])
             parent = QWidget()
@@ -96,7 +96,7 @@ class BdoEffectsUiTests(unittest.TestCase):
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication
 
-            from pyside_bdo_gui import TimelineCanvas, TrackState
+            from bdo_music_composer.ui.main_window import TimelineCanvas, TrackState
 
             app = QApplication([])
             timeline = TimelineCanvas()
@@ -131,7 +131,7 @@ class BdoEffectsUiTests(unittest.TestCase):
 
             from PySide6.QtWidgets import QApplication, QDialog
 
-            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -150,7 +150,7 @@ class BdoEffectsUiTests(unittest.TestCase):
             window._mark_conversion_check_dirty = lambda: dirty_calls.append(True)
             window._on_preview_mapping_changed = lambda: preview_calls.append(True)
 
-            with patch("pyside_bdo_gui.TrackFxDialog") as dialog_type:
+            with patch("bdo_music_composer.ui.main_window.TrackFxDialog") as dialog_type:
                 dialog = dialog_type.return_value
                 dialog.exec.return_value = QDialog.Accepted
                 dialog.selected_marnian_synth_mode.return_value = "basic"
@@ -178,7 +178,7 @@ class BdoEffectsUiTests(unittest.TestCase):
 
             from PySide6.QtWidgets import QApplication, QDialog
 
-            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -198,7 +198,7 @@ class BdoEffectsUiTests(unittest.TestCase):
             window._on_preview_mapping_changed = lambda: None
             window._autosave_project = lambda *args, **kwargs: None
 
-            with patch("pyside_bdo_gui.TrackFxDialog") as dialog_type:
+            with patch("bdo_music_composer.ui.main_window.TrackFxDialog") as dialog_type:
                 dialog = dialog_type.return_value
                 dialog.exec.return_value = QDialog.Accepted
                 dialog.selected_marnian_synth_mode.return_value = "basic"
@@ -236,8 +236,8 @@ class BdoEffectsUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication, QSpinBox
 
-            from bdo_track_effects import MasterEffects
-            from pyside_bdo_gui import (
+            from bdo_common.bdo_track_effects import MasterEffects
+            from bdo_music_composer.ui.main_window import (
                 MasterEffectsDialog,
                 MidiToBdoWindow,
                 SettingsDialog,
@@ -301,8 +301,8 @@ class BdoEffectsUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_track_effects import MasterEffects
-            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+            from bdo_common.bdo_track_effects import MasterEffects
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -364,8 +364,8 @@ class BdoEffectsUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_track_effects import MasterEffects
-            from pyside_bdo_gui import MidiToBdoWindow
+            from bdo_common.bdo_track_effects import MasterEffects
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -404,7 +404,7 @@ class BdoEffectsUiTests(unittest.TestCase):
 
             from PySide6.QtWidgets import QApplication
 
-            from pyside_bdo_gui import MidiToBdoWindow, Note, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, Note, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -463,7 +463,7 @@ class BdoEffectsUiTests(unittest.TestCase):
             import numpy as np
             from PySide6.QtCore import QCoreApplication
 
-            from bdo_realtime_audio import BdoRealtimeAudioEngine, _Sample
+            from bdo_music_composer.audio.bdo_realtime_audio import BdoRealtimeAudioEngine, _Sample
 
             app = QCoreApplication([])
             with tempfile.TemporaryDirectory() as folder:

@@ -38,13 +38,7 @@ class RepositoryHygieneTests(unittest.TestCase):
     def test_standalone_root_modules_have_explained_roles(self) -> None:
         self.assertEqual(
             set(STANDALONE_ROOT_MODULES),
-            {
-                "main.py",
-                "bdo_experiments.py",
-                "bdo_midi_optimizer.py",
-                "transcription_workspace_qt.py",
-                "wpf_sidecar.py",
-            },
+            {"main.py"},
         )
         self.assertTrue(all(STANDALONE_ROOT_MODULES.values()))
 
@@ -70,10 +64,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         actual_root_modules = {
             path.name for path in ROOT.glob("*.py")
         }
-        self.assertEqual(
-            len(actual_root_modules),
-            ROOT_MODULE_BUDGET,
-        )
+        self.assertLessEqual(len(actual_root_modules), ROOT_MODULE_BUDGET)
         self.assertEqual(actual_root_modules, EXPECTED_ROOT_MODULES)
 
     def test_root_budget_violation_is_reported_without_crashing(self) -> None:

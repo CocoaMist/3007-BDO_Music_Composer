@@ -4,7 +4,7 @@ from collections import namedtuple
 from types import SimpleNamespace
 import unittest
 
-from pitch_transform import (
+from bdo_music_composer.editor.pitch_transform import (
     PITCH_OVERRIDE_MODE_SEMITONE,
     PITCH_OVERRIDE_PROVENANCE_AUTO,
     PitchTransformPlan,

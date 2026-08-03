@@ -25,12 +25,66 @@ def _run_offscreen(script: str, timeout: int = 30) -> subprocess.CompletedProces
 
 
 class TranscriptionUiTests(unittest.TestCase):
+    def test_music_reference_reopens_same_evidence_background(self) -> None:
+        completed = _run_offscreen(
+            """
+            from types import SimpleNamespace
+            from PySide6.QtWidgets import QApplication
+
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionResult
+            from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionSession
+            from bdo_music_composer.ui.main_window import MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState
+
+            app = QApplication([])
+            track = TrackState(
+                1, [Note(60, 90, 0.0, 400.0, 0)],
+                0, False, "target", 0x0B,
+            )
+            window = MidiToBdoWindow()
+            window.tracks = [track]
+            descriptor = SimpleNamespace(cache_key="stable-evidence")
+            window.transcription_result = TranscriptionResult(
+                (), "stable-evidence", evidence_descriptor=descriptor,
+            )
+            window.transcription_session = TranscriptionSession(
+                (), cache_key="stable-evidence",
+            )
+            editor = MidiNoteEditorDialog(window, track, 120, 4)
+            opened = []
+
+            def record_descriptor(value, *, audio_offset_ms=0.0):
+                opened.append((value, float(audio_offset_ms)))
+                editor.canvas._evidence_descriptor = value
+
+            editor.canvas.set_evidence_descriptor = record_descriptor
+            assert editor.transcription_mode_toggle.text() == "音乐参考"
+            editor.transcription_mode_toggle.setChecked(True)
+            assert opened == [(descriptor, 0.0)]
+            assert editor.canvas._evidence_descriptor is descriptor
+
+            editor.transcription_mode_toggle.setChecked(False)
+            assert editor.canvas._evidence_descriptor is None
+            assert editor._canvas_evidence_cache_key is None
+
+            editor.transcription_mode_toggle.setChecked(True)
+            assert opened == [(descriptor, 0.0), (descriptor, 0.0)]
+            assert editor.canvas._evidence_descriptor is descriptor
+            assert editor.transcription_waveform.reference_audio is window.reference_audio
+
+            editor.close()
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
     def test_reference_layer_controls_restore_and_update_project_state(self) -> None:
         completed = _run_offscreen(
             """
             from PySide6.QtWidgets import QApplication
 
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
             from bdo_music_composer.project.project_schema import (
                 normalize_reference_layer_settings,
             )
@@ -50,7 +104,10 @@ class TranscriptionUiTests(unittest.TestCase):
             window.reference_layer_settings = normalize_reference_layer_settings({
                 "ghost_visible": False,
                 "ghost_opacity_percent": 32,
+                "candidate_visible": True,
+                "candidate_opacity_percent": 36,
                 "background_opacity_percent": 44,
+                "contour_denoise": "high",
                 "melody_lines_visible": False,
                 "frame_visible": True,
                 "onset_visible": False,
@@ -60,13 +117,19 @@ class TranscriptionUiTests(unittest.TestCase):
 
             editor = gui.MidiNoteEditorDialog(window, target, 120, 4)
             assert not editor.ghost_box.isChecked()
+            assert not editor.ghost_box.isHidden()
             assert not editor.ghost_opacity_slider.isEnabled()
             assert editor.ghost_opacity_slider.value() == 32
             assert editor.ghost_opacity_label.text() == "32%"
             assert editor.canvas.ghost_notes == []
             assert editor.canvas._ghost_opacity == 0.32
             assert editor.canvas._reference_background_opacity == 0.44
+            assert editor.canvas._transcription_candidate_opacity == 0.36
+            assert editor.transcription_panel.candidate_layer_visible
+            assert editor.transcription_panel.candidate_opacity == 0.36
             assert editor.transcription_panel.reference_background_opacity == 0.44
+            assert editor.transcription_panel.contour_denoise == "high"
+            assert editor.canvas._contour_denoise_profile == "high"
             assert editor.transcription_panel.visible_evidence_layers == frozenset(
                 {"frame", "contour"}
             )
@@ -80,6 +143,11 @@ class TranscriptionUiTests(unittest.TestCase):
             editor.transcription_panel.frame_checkbox.setChecked(False)
             editor.transcription_panel.melody_lines_button.setChecked(True)
             editor.transcription_panel.spectrogram_checkbox.setChecked(False)
+            editor.transcription_panel.candidate_opacity_slider.setValue(61)
+            editor.transcription_panel.candidate_layer_button.setChecked(False)
+            editor.transcription_panel.contour_denoise_combo.setCurrentIndex(
+                editor.transcription_panel.contour_denoise_combo.findData("low")
+            )
             assert len(editor.canvas.ghost_notes) == 1
             assert window.reference_layer_settings["ghost_visible"]
             assert window.reference_layer_settings["ghost_opacity_percent"] == 58
@@ -88,18 +156,90 @@ class TranscriptionUiTests(unittest.TestCase):
             assert window.reference_layer_settings["contour_visible"]
             assert window.reference_layer_settings["melody_lines_visible"]
             assert not window.reference_layer_settings["spectrogram_visible"]
+            assert not window.reference_layer_settings["candidate_visible"]
+            assert window.reference_layer_settings["candidate_opacity_percent"] == 61
+            assert window.reference_layer_settings["contour_denoise"] == "low"
 
             editor.close()
             restored = gui.MidiNoteEditorDialog(window, target, 120, 4)
             assert restored.ghost_box.isChecked()
             assert restored.ghost_opacity_slider.value() == 58
+            assert restored.ghost_opacity_label.text() == "58%"
             assert restored.transcription_panel.reference_opacity_slider.value() == 27
+            assert not restored.transcription_panel.candidate_layer_visible
+            assert restored.transcription_panel.candidate_opacity == 0.61
+            assert restored.canvas._transcription_candidate_opacity == 0.61
+            assert restored.transcription_panel.contour_denoise == "low"
+            assert restored.canvas._contour_denoise_profile == "low"
             assert restored.transcription_panel.visible_evidence_layers == frozenset(
                 {"contour"}
             )
             assert restored.transcription_panel.melody_lines_visible
             assert not restored.transcription_panel.spectrogram_visible
             restored.close()
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_practical_handoff_checks_game_fit_without_mutating_draft(self) -> None:
+        completed = _run_offscreen(
+            """
+            from unittest.mock import patch
+
+            from PySide6.QtWidgets import QApplication
+
+            import bdo_music_composer.ui.main_window as gui
+            import bdo_music_composer.ui.editor.midi_note_editor as editor_module
+
+            app = QApplication([])
+            window = gui.MidiToBdoWindow()
+            window._autosave_project = lambda *_args, **_kwargs: None
+            target = gui.TrackState(
+                1,
+                [gui.Note(60, 90, 0.0, 400.0, 0)],
+                0,
+                False,
+                "target",
+                0x10,
+            )
+            window.tracks = [target]
+            editor = gui.MidiNoteEditorDialog(window, target, 120, 4)
+            editor.show()
+            original = tuple(editor.edited_notes())
+            editor.transcription_mode_toggle.setChecked(True)
+            app.processEvents()
+            assert not hasattr(
+                editor.transcription_panel,
+                "game_adaptation_button",
+            )
+            assert not hasattr(
+                editor.transcription_panel,
+                "continue_creation_button",
+            )
+
+            with patch.object(
+                editor_module.QMessageBox,
+                "information",
+                return_value=editor_module.QMessageBox.Ok,
+            ) as information:
+                editor.show_game_adaptation_check()
+            assert information.call_count == 1
+            assert "不会移动、删除、量化或改写" in information.call_args.args[2]
+            assert tuple(editor.edited_notes()) == original
+
+            editor.continue_creation_from_transcription()
+            assert not editor.transcription_mode_toggle.isChecked()
+            assert tuple(editor.edited_notes()) == original
+            assert "草稿保持可编辑" in editor.status.text()
+
+            editor.close()
             window.close()
             app.processEvents()
             app.quit()
@@ -121,10 +261,10 @@ class TranscriptionUiTests(unittest.TestCase):
             from pathlib import Path
 
             from PySide6.QtWidgets import QApplication
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
 
             app = QApplication([])
-            import transcription_workers as workers
+            import bdo_music_composer.ui.transcription.transcription_workers as workers
             real_fingerprint = workers.transcription_audio_fingerprint
             with tempfile.TemporaryDirectory() as folder:
                 audio = Path(folder) / "reference.wav"
@@ -195,7 +335,7 @@ class TranscriptionUiTests(unittest.TestCase):
             from pathlib import Path
 
             from PySide6.QtWidgets import QApplication
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
 
             gui.transcription_backend_quick_status = lambda: (True, "")
             app = QApplication([])
@@ -247,9 +387,9 @@ class TranscriptionUiTests(unittest.TestCase):
         completed = _run_offscreen(
             """
             from PySide6.QtWidgets import QApplication
-            from bdo_transcription import TranscriptionCandidate, TranscriptionResult
-            from bdo_transcription_session import TranscriptionSession
-            from pyside_bdo_gui import MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate, TranscriptionResult
+            from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionSession
+            from bdo_music_composer.ui.main_window import MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState
 
             app = QApplication([])
             target = TrackState(
@@ -280,6 +420,7 @@ class TranscriptionUiTests(unittest.TestCase):
             )
 
             editor = MidiNoteEditorDialog(window, target, 120, 4)
+            editor.ghost_box.setChecked(True)
             window.active_transcription_editor = editor
             editor.transcription_mode_toggle.setChecked(True)
             initial_track_notes = list(target.notes)
@@ -303,6 +444,13 @@ class TranscriptionUiTests(unittest.TestCase):
             editor.ghost_box.setChecked(False)
             assert editor.canvas.ghost_notes == []
             assert tuple(editor.canvas.transcription_candidates) == candidates
+            assert len(editor.canvas.visible_transcription_candidates()) == 3
+            editor.transcription_panel.candidate_layer_button.setChecked(False)
+            assert tuple(editor.canvas.transcription_candidates) == candidates
+            assert editor.canvas.visible_transcription_candidates() == []
+            candidate_position = editor.canvas.candidate_rect(candidates[0]).center()
+            assert editor.canvas.candidate_at(candidate_position) is None
+            editor.transcription_panel.candidate_layer_button.setChecked(True)
             assert len(editor.canvas.visible_transcription_candidates()) == 3
             editor.ghost_box.setChecked(True)
             assert [item.note for item in editor.canvas.ghost_notes] == list(ghost.notes)
@@ -359,9 +507,9 @@ class TranscriptionUiTests(unittest.TestCase):
             """
             from types import SimpleNamespace
             from PySide6.QtWidgets import QApplication
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_session import TranscriptionSession
-            from pyside_bdo_gui import MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionSession
+            from bdo_music_composer.ui.main_window import MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState
 
             class FakePlayer:
                 def __init__(self):
@@ -607,7 +755,7 @@ class TranscriptionUiTests(unittest.TestCase):
             import time
             from pathlib import Path
             from PySide6.QtWidgets import QApplication
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
 
             started = threading.Event()
 
@@ -623,7 +771,7 @@ class TranscriptionUiTests(unittest.TestCase):
                 raise gui.TranscriptionCancelled("cancelled")
 
             gui.transcription_backend_quick_status = lambda: (True, "")
-            import transcription_workers as workers
+            import bdo_music_composer.ui.transcription.transcription_workers as workers
             workers.transcribe_reference_audio = cancellable_transcription
 
             app = QApplication([])
@@ -684,8 +832,8 @@ class TranscriptionUiTests(unittest.TestCase):
 
             from PySide6.QtWidgets import QApplication
 
-            import pyside_bdo_gui as gui
-            from bdo_transcription import TranscriptionCandidate, TranscriptionResult
+            import bdo_music_composer.ui.main_window as gui
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate, TranscriptionResult
 
             finished_in_worker = threading.Event()
             old_result = TranscriptionResult(
@@ -709,7 +857,7 @@ class TranscriptionUiTests(unittest.TestCase):
                 return old_result
 
             gui.transcription_backend_quick_status = lambda: (True, "")
-            import transcription_workers as workers
+            import bdo_music_composer.ui.transcription.transcription_workers as workers
             workers.transcribe_reference_audio = quick_transcription
 
             app = QApplication([])
@@ -763,8 +911,8 @@ class TranscriptionUiTests(unittest.TestCase):
 
             from PySide6.QtWidgets import QApplication
 
-            import pyside_bdo_gui as gui
-            from bdo_transcription import TranscriptionResult
+            import bdo_music_composer.ui.main_window as gui
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionResult
 
             app = QApplication([])
             observed = []
@@ -783,7 +931,7 @@ class TranscriptionUiTests(unittest.TestCase):
                 )
                 return TranscriptionResult((), "strict-cache")
 
-            import transcription_workers as workers
+            import bdo_music_composer.ui.transcription.transcription_workers as workers
             workers.transcribe_reference_audio = strict_transcription
             worker = workers.TranscriptionAnalysisWorker(
                 Path.cwd() / "README.md",
@@ -835,7 +983,7 @@ class TranscriptionUiTests(unittest.TestCase):
             import tempfile
             from unittest.mock import patch
 
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
 
             with tempfile.TemporaryDirectory() as folder_name:
                 config_path = (

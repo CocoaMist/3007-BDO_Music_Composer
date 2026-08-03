@@ -10,8 +10,8 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from bdo_instrument_samples import BDO_BANK_BY_ID
-from bdo_sample_renderer import BdoSampleMap
+from bdo_music_composer.audio.bdo_instrument_samples import BDO_BANK_BY_ID
+from bdo_music_composer.audio.bdo_sample_renderer import BdoSampleMap
 from tools import audit_game_playback_coverage as audit
 
 

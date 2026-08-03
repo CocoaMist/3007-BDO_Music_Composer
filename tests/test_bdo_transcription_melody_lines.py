@@ -3,8 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 
-from bdo_transcription import TranscriptionCandidate
-from bdo_transcription_melody_lines import (
+from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+from bdo_music_composer.transcription.bdo_transcription_melody_lines import (
     BASS_ROLE,
     CHORD_SPAN_KIND,
     CONNECTOR_KIND,
@@ -43,7 +43,7 @@ class MelodyLineProjectionTests(unittest.TestCase):
         self.assertEqual(melody_line_lod(30), OVERVIEW_LOD)
         self.assertEqual(melody_line_lod(92), PHRASE_LOD)
         self.assertEqual(melody_line_lod(180), DETAIL_LOD)
-        self.assertTrue(
+        self.assertFalse(
             melody_line_kind_visible(
                 CONTOUR_KIND,
                 branch=False,
@@ -71,6 +71,13 @@ class MelodyLineProjectionTests(unittest.TestCase):
                 lod=DETAIL_LOD,
             )
         )
+        self.assertFalse(
+            melody_line_kind_visible(
+                NOTE_KIND,
+                branch=False,
+                lod=DETAIL_LOD,
+            )
+        )
 
     def test_line_width_is_monotonic_confidence_encoding(self) -> None:
         widths = [
@@ -79,6 +86,35 @@ class MelodyLineProjectionTests(unittest.TestCase):
         ]
         self.assertEqual(widths, sorted(widths))
         self.assertLess(widths[0], widths[-1])
+        self.assertLessEqual(widths[-1], 1.6)
+
+    def test_voice_connectors_do_not_cross_large_gaps_or_pitch_jumps(self) -> None:
+        def connectors_for(second_start: float, second_pitch: int):
+            candidates = (
+                _candidate("first", 60, 0.0, 0.9),
+                _candidate("second", second_pitch, second_start, 0.9),
+            )
+            group = SimpleNamespace(
+                group_id="lead",
+                candidate_ids=("first", "second"),
+                role="primary_melody",
+                confidence=0.9,
+            )
+            return tuple(
+                item
+                for item in build_melody_line_segments(
+                    candidates,
+                    ("first", "second"),
+                    voice_groups=(group,),
+                    beat_ms=500.0,
+                )
+                if item.kind in {CONNECTOR_KIND, CONTOUR_KIND}
+                and item.start_pitch != item.end_pitch
+            )
+
+        self.assertTrue(connectors_for(300.0, 65))
+        self.assertFalse(connectors_for(300.0, 68))
+        self.assertFalse(connectors_for(500.0, 65))
 
     def test_voice_roles_create_lead_bass_and_harmony_paths(self) -> None:
         candidates = (

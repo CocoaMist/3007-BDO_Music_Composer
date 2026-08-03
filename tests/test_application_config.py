@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import atomic_io
+import bdo_common.atomic_io as atomic_io
 from bdo_music_composer.app.application_config import (
     load_config,
     safe_filename,

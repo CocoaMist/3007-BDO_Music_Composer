@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import io
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from bdo_instrument_samples import BDO_BANK_BY_ID
+from bdo_music_composer.audio.bdo_instrument_samples import BDO_BANK_BY_ID
 from tools import audit_bdo_sample_mapping as audit
 
 
@@ -35,6 +36,47 @@ def _row(
 
 
 class SampleMappingAuditTests(unittest.TestCase):
+    def test_checked_in_c4_root_corrections_are_complete(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        payload = json.loads(
+            (root / "data/mappings/bdo_wwise_midi_map.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        stdout = io.StringIO()
+
+        with redirect_stdout(stdout):
+            problems = audit.audit_root_note_corrections(payload["banks"])
+
+        self.assertEqual(problems, [])
+        self.assertIn("116/116 rows", stdout.getvalue())
+
+    def test_new_unapproved_low_root_c4_zone_fails_the_audit(self) -> None:
+        bank = BDO_BANK_BY_ID[0x00]
+        row = _row(
+            bank,
+            source_id=999,
+            key_min=57,
+            key_max=60,
+            route_ntypes=(0,),
+        )
+        row["root_note"] = 40
+
+        with (
+            patch.object(audit, "CONFIRMED_ROOT_NOTE_OVERRIDES", {}),
+            patch.object(
+                audit,
+                "EXPECTED_CONFIRMED_ROOT_NOTE_OVERRIDE_ROWS",
+                0,
+            ),
+            redirect_stdout(io.StringIO()),
+        ):
+            problems = audit.audit_root_note_corrections({bank: [row]})
+
+        self.assertTrue(
+            any("unapproved low-root C4 zones" in problem for problem in problems)
+        )
+
     def test_percussion_basic_uses_production_event_and_wwise_keys(self) -> None:
         instrument_id = 0x04
         bank = BDO_BANK_BY_ID[instrument_id]

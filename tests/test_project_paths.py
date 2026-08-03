@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import project_paths
+import bdo_music_composer.core.project_paths as project_paths
 
 
 class ProjectPathsTests(unittest.TestCase):

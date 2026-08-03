@@ -6,7 +6,7 @@ import unittest
 
 import numpy as np
 
-from bdo_transcription_harmony import (
+from bdo_music_composer.transcription.bdo_transcription_harmony import (
     ChordSegment,
     HarmonyAnalysisCancelled,
     HarmonyAnalysis,

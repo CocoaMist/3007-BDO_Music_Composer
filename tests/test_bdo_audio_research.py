@@ -10,7 +10,7 @@ import wave
 
 import numpy as np
 
-from bdo_audio_research import compare_audio, sample_coverage_for_tracks
+from bdo_music_composer.audio.bdo_audio_research import compare_audio, sample_coverage_for_tracks
 
 
 Note = namedtuple("Note", "pitch vel start dur ntype")

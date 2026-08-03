@@ -13,7 +13,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from bdo_score import read_bdo_score  # noqa: E402
+from bdo_music_composer.export.bdo_score import read_bdo_score  # noqa: E402
 from bdo_midi import BDO_INSTRUMENT_NAMES  # noqa: E402
 
 

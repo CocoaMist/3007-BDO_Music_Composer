@@ -28,6 +28,7 @@ PROJECT_STRUCTURE_PATH = PurePosixPath("docs/PROJECT_STRUCTURE.md")
 
 PRODUCTION_DIRECTORIES = frozenset(
     {
+        "bdo_common",
         "bdo_music_composer",
         "bdo_codec",
         "bdo_export",
@@ -37,73 +38,14 @@ PRODUCTION_DIRECTORIES = frozenset(
         "tools",
     }
 )
-ROOT_MODULE_BUDGET = 52
-EXPECTED_ROOT_MODULES = frozenset(
-    {
-        "atomic_io.py",
-        "bdo_articulation_profiles.py",
-        "bdo_audio_lifecycle.py",
-        "bdo_audio_mixing.py",
-        "bdo_audio_research.py",
-        "bdo_experiments.py",
-        "bdo_instrument_adaptation.py",
-        "bdo_instrument_lane_art_qt.py",
-        "bdo_instrument_samples.py",
-        "bdo_lyrics.py",
-        "bdo_midi_optimizer.py",
-        "bdo_music_theory.py",
-        "bdo_preview_effects.py",
-        "bdo_profile.py",
-        "bdo_realtime_audio.py",
-        "bdo_sample_pack.py",
-        "bdo_sample_renderer.py",
-        "bdo_score.py",
-        "bdo_spectrogram.py",
-        "bdo_spectrogram_qt.py",
-        "bdo_techniques.py",
-        "bdo_track_effects.py",
-        "bdo_transcription.py",
-        "bdo_transcription_assist.py",
-        "bdo_transcription_evidence_qt.py",
-        "bdo_transcription_harmony.py",
-        "bdo_transcription_instruments.py",
-        "bdo_transcription_melody_lines.py",
-        "bdo_transcription_policy.py",
-        "bdo_transcription_postprocess.py",
-        "bdo_transcription_session.py",
-        "bdo_transcription_timbre.py",
-        "bdo_validation.py",
-        "conversion_settings.py",
-        "editor_articulation_data.py",
-        "export_verification.py",
-        "export_workflow.py",
-        "game_score_model.py",
-        "gm_program_translations.py",
-        "home_catalog.py",
-        "i18n.py",
-        "main.py",
-        "pitch_transform.py",
-        "project_paths.py",
-        "pyside_bdo_gui.py",
-        "reference_audio_controller.py",
-        "third_party_credits.py",
-        "transcription_commit_plan.py",
-        "transcription_editor_qt.py",
-        "transcription_workers.py",
-        "transcription_workspace_qt.py",
-        "wpf_sidecar.py",
-    }
-)
+ROOT_MODULE_BUDGET = 1
+EXPECTED_ROOT_MODULES = frozenset({"main.py"})
 
 # These modules are entered externally or preserve a documented import path.
 # A new exception must state a concrete public/research role and be documented
 # in docs/PROJECT_STRUCTURE.md.
 STANDALONE_ROOT_MODULES = {
     "main.py": "desktop and command-line entry point",
-    "bdo_experiments.py": "privacy-safe local A/B evidence metadata owner",
-    "bdo_midi_optimizer.py": "historical optimizer import facade",
-    "transcription_workspace_qt.py": "historical transcription-widget facade",
-    "wpf_sidecar.py": "external NDJSON sidecar entry point",
 }
 
 LOCAL_ONLY_TOP_LEVEL_DIRECTORIES = frozenset(
@@ -192,7 +134,7 @@ RETIRED_ROOT_FILES = {
     ),
     "model_revision.py": "use bdo_music_composer.editor.model_revision",
     "project_document.py": (
-        "use bdo_music_composer.project.project_document"
+        "use bdo_music_composer.app.project_document"
     ),
     "project_lifecycle_controller.py": (
         "use bdo_music_composer.project.project_lifecycle_controller"
@@ -259,6 +201,61 @@ RETIRED_ROOT_FILES = {
         "use bdo_music_composer.ui.theme.main_window_style"
     ),
 }
+RETIRED_ROOT_FILES.update(
+    {
+        "atomic_io.py": "use bdo_common.atomic_io",
+        "bdo_articulation_profiles.py": "use bdo_music_composer.editor.bdo_articulation_profiles",
+        "bdo_audio_lifecycle.py": "use bdo_music_composer.audio.bdo_audio_lifecycle",
+        "bdo_audio_mixing.py": "use bdo_music_composer.audio.bdo_audio_mixing",
+        "bdo_audio_research.py": "use bdo_music_composer.audio.bdo_audio_research",
+        "bdo_experiments.py": "use bdo_music_composer.research.bdo_experiments",
+        "bdo_instrument_adaptation.py": "use bdo_music_composer.editor.bdo_instrument_adaptation",
+        "bdo_instrument_lane_art_qt.py": "use bdo_music_composer.ui.editor.bdo_instrument_lane_art_qt",
+        "bdo_instrument_samples.py": "use bdo_music_composer.audio.bdo_instrument_samples",
+        "bdo_lyrics.py": "use bdo_music_composer.editor.bdo_lyrics",
+        "bdo_midi_optimizer.py": "use optimization",
+        "bdo_music_theory.py": "use bdo_music_composer.editor.bdo_music_theory",
+        "bdo_preview_effects.py": "use bdo_music_composer.audio.bdo_preview_effects",
+        "bdo_profile.py": "use bdo_music_composer.core.bdo_profile",
+        "bdo_realtime_audio.py": "use bdo_music_composer.audio.bdo_realtime_audio",
+        "bdo_sample_pack.py": "use bdo_music_composer.audio.bdo_sample_pack",
+        "bdo_sample_renderer.py": "use bdo_music_composer.audio.bdo_sample_renderer",
+        "bdo_score.py": "use bdo_music_composer.export.bdo_score",
+        "bdo_spectrogram.py": "use bdo_music_composer.audio.bdo_spectrogram",
+        "bdo_spectrogram_qt.py": "use bdo_music_composer.ui.transcription.bdo_spectrogram_qt",
+        "bdo_techniques.py": "use bdo_music_composer.editor.bdo_techniques",
+        "bdo_track_effects.py": "use bdo_common.bdo_track_effects",
+        "bdo_transcription.py": "use bdo_music_composer.transcription.bdo_transcription",
+        "bdo_transcription_assist.py": "use bdo_music_composer.transcription.bdo_transcription_assist",
+        "bdo_transcription_evidence_qt.py": "use bdo_music_composer.ui.transcription.bdo_transcription_evidence_qt",
+        "bdo_transcription_harmony.py": "use bdo_music_composer.transcription.bdo_transcription_harmony",
+        "bdo_transcription_instruments.py": "use bdo_music_composer.transcription.bdo_transcription_instruments",
+        "bdo_transcription_melody_lines.py": "use bdo_music_composer.transcription.bdo_transcription_melody_lines",
+        "bdo_transcription_policy.py": "use bdo_music_composer.transcription.bdo_transcription_policy",
+        "bdo_transcription_postprocess.py": "use bdo_music_composer.transcription.bdo_transcription_postprocess",
+        "bdo_transcription_session.py": "use bdo_music_composer.transcription.bdo_transcription_session",
+        "bdo_transcription_timbre.py": "use bdo_music_composer.transcription.bdo_transcription_timbre",
+        "bdo_validation.py": "use bdo_music_composer.export.bdo_validation",
+        "conversion_settings.py": "use bdo_music_composer.core.conversion_settings",
+        "editor_articulation_data.py": "use bdo_music_composer.ui.editor.editor_articulation_data",
+        "export_verification.py": "use bdo_music_composer.export.export_verification",
+        "export_workflow.py": "use bdo_music_composer.export.export_workflow",
+        "game_score_model.py": "use bdo_music_composer.editor.game_score_model",
+        "gm_program_translations.py": "use bdo_music_composer.core.gm_program_translations",
+        "home_catalog.py": "use bdo_music_composer.app.home_catalog",
+        "i18n.py": "use bdo_music_composer.ui.i18n",
+        "pitch_transform.py": "use bdo_music_composer.editor.pitch_transform",
+        "project_paths.py": "use bdo_music_composer.core.project_paths",
+        "pyside_bdo_gui.py": "use bdo_music_composer.ui.main_window",
+        "reference_audio_controller.py": "use bdo_music_composer.audio.reference_audio_controller",
+        "third_party_credits.py": "use bdo_music_composer.core.third_party_credits",
+        "transcription_commit_plan.py": "use bdo_music_composer.transcription.transcription_commit_plan",
+        "transcription_editor_qt.py": "use bdo_music_composer.ui.transcription.transcription_editor_qt",
+        "transcription_workers.py": "use bdo_music_composer.ui.transcription.transcription_workers",
+        "transcription_workspace_qt.py": "use bdo_music_composer.ui.transcription.transcription_editor_qt",
+        "wpf_sidecar.py": "use scripts.wpf_sidecar",
+    }
+)
 RETIRED_ROOT_MODULES = frozenset(
     Path(filename).stem
     for filename in RETIRED_ROOT_FILES

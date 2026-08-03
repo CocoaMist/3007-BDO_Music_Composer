@@ -29,10 +29,10 @@ BDO Music Composer is an unofficial PySide6 MIDI editor and Black Desert music-s
 .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -q
 
 # Syntax check for primary entry points
-.\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
+.\.venv\Scripts\python.exe -m py_compile main.py bdo_music_composer/core/project_paths.py bdo_music_composer/ui/main_window.py bdo_music_composer/ui/i18n.py
 
 # Syntax check for packaged application owners
-.\.venv\Scripts\python.exe -m compileall -q bdo_music_composer
+.\.venv\Scripts\python.exe -m compileall -q bdo_common bdo_music_composer
 
 # Repository structure and private/generated artifact guard
 .\.venv\Scripts\python.exe tools\check_repository_hygiene.py
@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 
 ## Architectural boundaries
 
-- `pyside_bdo_gui.py`: UI widgets, mutable editor state, and Qt worker lifecycle. It is large; keep new domain logic out when a focused module exists.
+- `bdo_music_composer/ui/main_window.py`: UI widgets, mutable editor state, and Qt worker lifecycle. It is large; keep new domain logic out when a focused module exists.
 - `bdo_music_composer/`: packaged application owners split by
   `app/`, `audio/`, `editor/`, `project/`, `transcription/`, and `ui/`.
   Package initializers stay inert; import the concrete owner module directly.
@@ -66,19 +66,20 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 - `bdo_music_composer/ui/editor/`: timeline, piano-roll, velocity-lane, note
   editor, shortcut HUD, and focused presentation helpers. Its initializer stays
   inert and paint paths remain visible-range indexed.
-- `export_workflow.py`: immutable editor-export snapshots plus atomic output/game-directory publication.
-- `bdo_music_composer/project/project_persistence.py`: immutable autosave snapshots and background-safe serialization; `home_catalog.py` owns bounded home-page discovery and reads only its small safe index.
-- `atomic_io.py`: shared same-directory temporary-write/copy primitives. User-owned destinations must not be truncated in place.
+- `bdo_music_composer/export/export_workflow.py`: immutable editor-export snapshots plus atomic output/game-directory publication.
+- `bdo_music_composer/project/project_persistence.py`: immutable autosave snapshots and background-safe serialization; `bdo_music_composer/app/home_catalog.py` owns bounded home-page discovery and reads only its small safe index.
+- `bdo_common/atomic_io.py`: shared same-directory temporary-write/copy primitives. User-owned destinations must not be truncated in place.
 - `optimization/`: pure-ish, extensible optimization subsystem. `builtin.py` is the production pipeline and `registry.py` is the extension boundary. Game-safe mode must preserve structural invariants.
-- `bdo_midi_optimizer.py`: compatibility facade only; do not add new algorithm logic here.
-- `bdo_music_theory.py`, `bdo_techniques.py`, `bdo_articulation_profiles.py`, `bdo_lyrics.py`: analysis and semantic recommendations.
-- `bdo_realtime_audio.py`: real-time preview, sample caching, Qt audio-thread lifecycle. Do not add disk I/O to the callback path.
-- `bdo_sample_renderer.py`: offline sample-map selection and rendering helpers.
+- `bdo_common/`: inert shared package for Qt-free primitives required by the
+  independent codec/export packages. Keep it free of application and UI imports.
+- `bdo_music_composer/editor/bdo_music_theory.py`, `bdo_music_composer/editor/bdo_techniques.py`, `bdo_music_composer/editor/bdo_articulation_profiles.py`, `bdo_music_composer/editor/bdo_lyrics.py`: analysis and semantic recommendations.
+- `bdo_music_composer/audio/bdo_realtime_audio.py`: real-time preview, sample caching, Qt audio-thread lifecycle. Do not add disk I/O to the callback path.
+- `bdo_music_composer/audio/bdo_sample_renderer.py`: offline sample-map selection and rendering helpers.
 - `bdo_codec/`: independent BDO v9 model, reader/writer, ICE, validation, and CLI. Treat binary layout changes as high risk.
 - `bdo_midi/`: independent MIDI parser, immutable note model, GM/BDO mappings, and pure note transforms.
 - `bdo_export/`: editor/MIDI-to-document adapter; all binary output must delegate to `bdo_codec`.
-- `i18n.py`: exact-source runtime catalogs. Chinese UI literals are source keys; add translations for new fixed UI text.
-- `project_paths.py`: source vs. frozen-resource paths. In a one-file build, writable output must not target `sys._MEIPASS`.
+- `bdo_music_composer/ui/i18n.py`: exact-source runtime catalogs. Chinese UI literals are source keys; add translations for new fixed UI text.
+- `bdo_music_composer/core/project_paths.py`: source vs. frozen-resource paths. In a one-file build, writable output must not target `sys._MEIPASS`.
 
 ## Non-negotiable invariants
 
@@ -161,12 +162,12 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ## Style
 
 - Python 3.12; prefer type hints and small helpers.
-- New root modules need a production importer or a documented standalone role;
-  list new top-level docs, scripts, and tools in their directory `README.md`.
-- The current root-Python budget is 52 after the no-shim editor/UI and
-  application-metadata migrations. Canonical version/repository identity lives
-  in `bdo_music_composer/app/application_metadata.py`. A 7-to-10-file root is
-  a long-term direction, not current state.
+- `main.py` is the only root Python module. New owners belong in a focused
+  package; supported commands and developer tools belong in `scripts/` and
+  `tools/` and must be listed in their directory `README.md`.
+- Canonical version/repository identity lives in
+  `bdo_music_composer/app/application_metadata.py`; do not recreate root
+  compatibility shims.
 - Keep binary constants named and documented. Avoid unexplained magic offsets.
 - Use `pathlib.Path` for filesystem paths.
 - Use `apply_patch` for text changes and preserve UTF-8.

@@ -6,8 +6,8 @@ import re
 from types import SimpleNamespace
 import unittest
 
-from bdo_lyrics import LyricExpressionMode
-from bdo_techniques import RealizationKind, TechniqueCandidate
+from bdo_music_composer.editor.bdo_lyrics import LyricExpressionMode
+from bdo_music_composer.editor.bdo_techniques import RealizationKind, TechniqueCandidate
 from optimization import OptimizerConfig
 from optimization.builtin import (
     ArticulationSuggestion,
@@ -290,7 +290,7 @@ class OptimizerLocalizationTests(unittest.TestCase):
         self.assertIn("Track 1 (Harmony) transposed -12 semitones", details)
 
     def test_production_english_catalog_covers_rich_builtin_report(self) -> None:
-        from i18n import EN
+        from bdo_music_composer.ui.i18n import EN
 
         translate = lambda source: EN.get(source, source)
         format_translate = (

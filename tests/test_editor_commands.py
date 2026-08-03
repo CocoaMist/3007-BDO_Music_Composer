@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 import unittest
 
-from conversion_settings import ConversionSettings
+from bdo_music_composer.core.conversion_settings import ConversionSettings
 from bdo_music_composer.editor.editor_commands import (
     ProjectCommandStack,
     ProjectSnapshot,
+    next_non_overlapping_paste_origin,
 )
-from pitch_transform import PitchTransformPlan
+from bdo_midi import Note
+from bdo_music_composer.editor.pitch_transform import PitchTransformPlan
 
 
 @dataclass
@@ -18,6 +20,46 @@ class Track:
 
 
 class EditorCommandTests(unittest.TestCase):
+    def test_paste_origin_skips_same_pitch_collisions_as_one_group(self) -> None:
+        existing = (
+            Note(60, 90, 0.0, 250.0, 0),
+            Note(60, 90, 375.0, 250.0, 0),
+            Note(64, 90, 0.0, 2_000.0, 0),
+        )
+        clipboard = (
+            Note(60, 80, 0.0, 200.0, 0),
+            Note(67, 80, 125.0, 200.0, 0),
+        )
+
+        self.assertEqual(
+            next_non_overlapping_paste_origin(
+                existing,
+                clipboard,
+                0.0,
+                grid_step_ms=125.0,
+            ),
+            625.0,
+        )
+        # A different-pitch chord lane does not force a horizontal shift.
+        self.assertEqual(
+            next_non_overlapping_paste_origin(
+                existing,
+                (Note(72, 80, 0.0, 200.0, 0),),
+                0.0,
+                grid_step_ms=125.0,
+            ),
+            0.0,
+        )
+        self.assertEqual(
+            next_non_overlapping_paste_origin(
+                existing,
+                (Note(60, 80, 0.0, 200.0, 0),),
+                0.0,
+                grid_step_ms=None,
+            ),
+            625.0,
+        )
+
     def test_project_snapshots_are_isolated_and_support_undo_redo(self) -> None:
         tracks = [Track(1, ["a"])]
         transcription = {"pending_routes": [{"candidate_id": "a", "track_id": 1}]}

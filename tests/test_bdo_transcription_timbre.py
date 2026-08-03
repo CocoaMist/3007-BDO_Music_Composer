@@ -9,9 +9,9 @@ import unittest
 from unittest.mock import patch
 import wave
 
-import bdo_transcription_timbre as timbre
-from bdo_transcription import TranscriptionCandidate
-from bdo_transcription_instruments import TimbreFeatureProfile, VoiceGroup
+import bdo_music_composer.transcription.bdo_transcription_timbre as timbre
+from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+from bdo_music_composer.transcription.bdo_transcription_instruments import TimbreFeatureProfile, VoiceGroup
 
 
 def _feature_row(seed: float = 1.0) -> dict[str, float]:

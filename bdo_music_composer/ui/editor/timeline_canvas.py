@@ -12,8 +12,8 @@ from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QMenu, QScrollBar, QWidget
 
-from bdo_instrument_adaptation import instrument_editor_display_adaptations
-from bdo_instrument_lane_art_qt import (
+from bdo_music_composer.editor.bdo_instrument_adaptation import instrument_editor_display_adaptations
+from bdo_music_composer.ui.editor.bdo_instrument_lane_art_qt import (
     InstrumentLaneArtwork,
     instrument_header_background_rect,
     paint_instrument_header_background,
@@ -34,13 +34,13 @@ from .editor_ui_helpers import (
     add_instrument_submenus,
     articulation_color,
 )
-from i18n import tr, trf, trv
+from bdo_music_composer.ui.i18n import tr, trf, trv
 from bdo_music_composer.editor.interval_index import IntervalIndex
-from pitch_transform import (
+from bdo_music_composer.editor.pitch_transform import (
     PitchTransformPlan,
     track_uses_percussion_pitch_semantics,
 )
-from project_paths import ASSETS_DIR
+from bdo_music_composer.core.project_paths import ASSETS_DIR
 
 
 TIMELINE_BACKGROUND_IMAGE = ASSETS_DIR / "ui" / "timeline_background_v2.png"

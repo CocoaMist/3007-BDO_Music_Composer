@@ -4,17 +4,17 @@ from collections import namedtuple
 from dataclasses import dataclass, field
 import unittest
 
-from conversion_settings import ConversionSettings
+from bdo_music_composer.core.conversion_settings import ConversionSettings
 from bdo_midi import (
     MARNIAN_SYNTH_INSTRUMENT_IDS,
     MARNIAN_SYNTH_MODE_OFFSETS,
 )
-from bdo_track_effects import (
+from bdo_common.bdo_track_effects import (
     TRACK_CHORUS_SEND_INDEX,
     TRACK_DELAY_SEND_INDEX,
     TRACK_REVERB_SEND_INDEX,
 )
-from game_score_model import (
+from bdo_music_composer.editor.game_score_model import (
     GameInstrumentMix,
     bake_game_velocity_transform,
     bake_legacy_velocity_scale,

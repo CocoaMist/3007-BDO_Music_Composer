@@ -9,7 +9,7 @@ from dataclasses import replace
 import math
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,15 +22,23 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollBar,
     QSlider,
+    QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
-from bdo_instrument_adaptation import instrument_editor_display_adaptation
+from bdo_music_composer.editor.bdo_instrument_adaptation import (
+    assess_game_draft,
+    articulation_supports_pitch,
+    articulation_trigger_pitches,
+    instrument_editor_display_adaptation,
+)
 from bdo_midi import (
     BDO_INSTRUMENT_NAMES,
     BDO_NOTE_MAX,
@@ -39,27 +47,36 @@ from bdo_midi import (
     _GM_TO_BDO_DRUM,
 )
 from bdo_midi.instruments import localized_bdo_instrument_name
-from bdo_realtime_audio import AudioEngineError
-from bdo_transcription import (
+from bdo_music_composer.audio.bdo_realtime_audio import AudioEngineError
+from bdo_music_composer.audio.bdo_sample_renderer import (
+    sample_map_velocity_boundaries,
+)
+from bdo_music_composer.transcription.bdo_transcription import (
     TranscriptionCandidate,
     TranscriptionResult,
     transcription_backend_quick_status,
 )
-from bdo_transcription_assist import LockedChordReview
-from bdo_transcription_harmony import ChordSegment
-from bdo_transcription_melody_lines import GUIDE_ROLES as MELODY_LINE_GUIDE_ROLES
-from bdo_transcription_policy import CANDIDATE_NOTE_POLICY
-from bdo_transcription_session import (
+from bdo_music_composer.transcription.bdo_transcription_assist import LockedChordReview
+from bdo_music_composer.transcription.bdo_transcription_harmony import ChordSegment
+from bdo_music_composer.transcription.bdo_transcription_policy import CANDIDATE_NOTE_POLICY
+from bdo_music_composer.transcription.rhythm_alignment import (
+    RhythmAlignmentSidecar,
+)
+from bdo_music_composer.transcription.bdo_transcription_session import (
     CandidateRoute,
     TranscriptionEditorCommit,
     TranscriptionEditorCommitReport,
     TranscriptionSessionState,
 )
-from editor_articulation_data import (
+from bdo_music_composer.ui.editor.editor_articulation_data import (
     BDO_ARTICULATIONS,
     BDO_ARTICULATION_USAGE_HINTS,
 )
-from .editor_shortcut_hud import EditorShortcutHud
+from .editor_shortcut_hud import (
+    EditorShortcutHelpDialog,
+    EditorShortcutHud,
+)
+from .editor_shortcuts import editor_shortcut_spec
 from bdo_music_composer.editor.editor_models import (
     BDO_DRUM_MAX,
     BDO_DRUM_MIN,
@@ -70,23 +87,26 @@ from bdo_music_composer.editor.editor_models import (
     same_onset_articulation_indices,
     track_uses_canonical_drum_lanes,
 )
+from bdo_music_composer.editor.editor_commands import (
+    next_non_overlapping_paste_origin,
+)
 from bdo_music_composer.ui.theme.fluent_theme import (
     FluentSymbol,
     fluent_icon_size,
     set_fluent_symbol,
 )
-from i18n import tr, trf, trfv, trv
+from bdo_music_composer.ui.i18n import tr, trf, trfv, trv
 from .piano_roll_canvas import PianoRollCanvas, VelocityLaneCanvas
-from pitch_transform import (
+from bdo_music_composer.editor.pitch_transform import (
     PitchTransformPlan,
     track_uses_percussion_pitch_semantics,
     transpose_notes,
 )
-from project_paths import WWISE_MIDI_MAP_PATH
+from bdo_music_composer.core.project_paths import WWISE_MIDI_MAP_PATH
 from bdo_music_composer.project.project_schema import (
     normalize_reference_layer_settings,
 )
-from transcription_editor_qt import (
+from bdo_music_composer.ui.transcription.transcription_editor_qt import (
     TranscriptionEditorPanel,
     TranscriptionWaveformLane,
 )
@@ -98,7 +118,7 @@ from bdo_music_composer.ui.ui_notifications import show_global_toast
 
 
 BDO_SAMPLE_MAP_PATH = WWISE_MIDI_MAP_PATH
-EDITOR_VERBOSE_CONTROLS_MIN_WIDTH = 1660
+EDITOR_VERBOSE_CONTROLS_MIN_WIDTH = 1420
 
 
 def _ui_bdo_instrument_name(instrument_id: int) -> str:
@@ -108,6 +128,37 @@ def _ui_bdo_instrument_name(instrument_id: int) -> str:
 def _ui_bdo_instrument_source(instrument_id: int) -> str:
     numeric_id = int(instrument_id)
     return BDO_INSTRUMENT_NAMES.get(numeric_id, f"BDO 0x{numeric_id:02X}")
+
+
+class _VelocityMappingSignals(QObject):
+    finished = Signal(int, object, str)
+
+
+class _VelocityMappingTask(QRunnable):
+    def __init__(self, request_id: int, track: TrackState, note: Note) -> None:
+        super().__init__()
+        self.request_id = int(request_id)
+        self.instrument_id = int(track.bdo_instrument_id)
+        self.synth_mode = str(track.marnian_synth_mode)
+        self.pitch = int(note.pitch)
+        self.ntype = int(note.ntype)
+        self.signals = _VelocityMappingSignals()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            boundaries = sample_map_velocity_boundaries(
+                BDO_SAMPLE_MAP_PATH,
+                self.instrument_id,
+                self.pitch,
+                self.ntype,
+                self.synth_mode,
+            )
+            error = ""
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            boundaries = ()
+            error = str(exc)
+        self.signals.finished.emit(self.request_id, boundaries, error)
 
 
 class MidiNoteEditorDialog(QDialog):
@@ -125,6 +176,11 @@ class MidiNoteEditorDialog(QDialog):
         pitch_plan: PitchTransformPlan | None = None,
     ) -> None:
         super().__init__(parent)
+        self._velocity_mapping_pool = QThreadPool(self)
+        self._velocity_mapping_pool.setMaxThreadCount(1)
+        self._velocity_mapping_request = 0
+        self._velocity_mapping_key: tuple[int, int, int, str] | None = None
+        self._velocity_mapping_tasks: dict[int, _VelocityMappingTask] = {}
         self.setObjectName("MidiNoteEditorDialog")
         self.setWindowFlags(
             self.windowFlags()
@@ -215,10 +271,13 @@ class MidiNoteEditorDialog(QDialog):
         self.transcription_mode_enabled = False
         self.transcription_candidates: tuple[TranscriptionCandidate, ...] = ()
         self.transcription_result: TranscriptionResult | None = None
+        self.transcription_rhythm_alignment: RhythmAlignmentSidecar | None = None
+        self.transcription_rhythm_projection_enabled = True
         self.transcription_audition_source = "combined"
         self._spectrogram_reference_audio: object | None = None
         self._transcription_annotation_projection_cache = None
         self._transcription_display_projection_cache = None
+        self._transcription_rhythm_candidate_cache = None
         self._eligible_candidate_cache: tuple[
             tuple,
             tuple[str, ...],
@@ -296,12 +355,16 @@ class MidiNoteEditorDialog(QDialog):
         toolbar.addWidget(self.editor_transport_frame)
         toolbar.addStretch(1)
         self.editor_toolbar_action_buttons: dict[str, PillButton] = {}
-        for label, callback in (("撤销", self.undo), ("重做", self.redo), ("删除", self.delete_selected)):
-            icon = FluentSymbol.DELETE if label == "删除" else None
-            button = PillButton(tr(label), "ghost", icon)
+        for label, callback in (("撤销", self.undo), ("重做", self.redo)):
+            button = PillButton(tr(label), "ghost")
             button.clicked.connect(callback)
             toolbar.addWidget(button)
             self.editor_toolbar_action_buttons[label] = button
+        self.shortcut_help_button = PillButton(tr("快捷键"), "ghost")
+        self.shortcut_help_button.setToolTip(tr("查看完整快捷键（F1）"))
+        self.shortcut_help_button.setAccessibleName(tr("查看完整快捷键"))
+        self.shortcut_help_button.clicked.connect(self.show_shortcut_help)
+        toolbar.addWidget(self.shortcut_help_button)
         self.editor_optimize_button = PillButton(
             tr("优化此轨"),
             "secondary",
@@ -310,13 +373,14 @@ class MidiNoteEditorDialog(QDialog):
         self.editor_optimize_button.clicked.connect(self.optimize_draft)
         toolbar.addWidget(self.editor_optimize_button)
         toolbar.addSpacing(5)
-        self.apply_button = PillButton(tr("应用"), "secondary")
-        self.apply_button.clicked.connect(self.apply_notes)
-        toolbar.addWidget(self.apply_button)
-        self.cancel_button = PillButton(tr("取消"), "ghost")
+        self.cancel_button = PillButton(tr("放弃"), "ghost")
+        self.cancel_button.setToolTip(tr("取消"))
+        self.cancel_button.setAccessibleName(tr("取消"))
         self.cancel_button.clicked.connect(self.reject)
         toolbar.addWidget(self.cancel_button)
-        self.confirm_button = PillButton(tr("确定"), "convert")
+        self.confirm_button = PillButton(tr("完成"), "convert")
+        self.confirm_button.setToolTip(tr("应用并关闭"))
+        self.confirm_button.setAccessibleName(tr("应用并关闭"))
         self.confirm_button.clicked.connect(self.accept_with_apply)
         toolbar.addWidget(self.confirm_button)
         add_inset(toolbar_frame, "EditorToolbarInset")
@@ -335,28 +399,31 @@ class MidiNoteEditorDialog(QDialog):
             tr("绘制模式：拖动可同时设置音符长度与力度（B）")
         )
         self.draw_mode_button.toggled.connect(self._toggle_draw_mode)
-        inspector_layout.addWidget(self.draw_mode_button)
-        self.note_mode_button = PillButton(tr("音符属性"), "ghost")
+        inspector_layout.addWidget(self.draw_mode_button, 0, Qt.AlignVCenter)
+        self.note_mode_button = PillButton(tr("音符"), "ghost")
         self.note_mode_button.setObjectName("InspectorMode")
         self.note_mode_button.setFixedHeight(28)
         self.note_mode_button.setCheckable(True)
         self.note_mode_button.clicked.connect(lambda: self._set_top_inspector_mode("note"))
-        inspector_layout.addWidget(self.note_mode_button)
+        inspector_layout.addWidget(self.note_mode_button, 0, Qt.AlignVCenter)
         self.articulation_mode_button = PillButton(tr("奏法"), "ghost")
         self.articulation_mode_button.setObjectName("InspectorMode")
         self.articulation_mode_button.setFixedHeight(28)
         self.articulation_mode_button.setCheckable(True)
         self.articulation_mode_button.clicked.connect(lambda: self._set_top_inspector_mode("articulation"))
-        inspector_layout.addWidget(self.articulation_mode_button)
-        self.grid_mode_button = PillButton(tr("网格"), "ghost")
+        inspector_layout.addWidget(
+            self.articulation_mode_button, 0, Qt.AlignVCenter
+        )
+        self.grid_mode_button = PillButton(tr("显示"), "ghost")
         self.grid_mode_button.setObjectName("InspectorMode")
         self.grid_mode_button.setFixedHeight(28)
         self.grid_mode_button.setCheckable(True)
         self.grid_mode_button.clicked.connect(lambda: self._set_top_inspector_mode("grid"))
-        inspector_layout.addWidget(self.grid_mode_button)
+        inspector_layout.addWidget(self.grid_mode_button, 0, Qt.AlignVCenter)
 
         self.quantize_quick = QFrame()
         self.quantize_quick.setObjectName("EditorQuantizeQuick")
+        self.quantize_quick.setFixedHeight(28)
         quantize_quick_layout = QHBoxLayout(self.quantize_quick)
         quantize_quick_layout.setContentsMargins(5, 0, 3, 0)
         quantize_quick_layout.setSpacing(5)
@@ -375,25 +442,80 @@ class MidiNoteEditorDialog(QDialog):
             self.quantize_combo.addItem(label, divisor)
         self.quantize_combo.setCurrentIndex(0)
         self.quantize_combo.setFixedWidth(76)
+        self.quantize_combo.setFixedHeight(28)
         self.quantize_combo.setAccessibleName(tr("量化"))
         self.quantize_combo.setToolTip(tr("量化"))
         self.quantize_combo.currentIndexChanged.connect(
             self._quantize_grid_changed
         )
         quantize_quick_layout.addWidget(self.quantize_combo)
-        inspector_layout.addWidget(self.quantize_quick)
+        inspector_layout.addWidget(self.quantize_quick, 0, Qt.AlignVCenter)
 
         self.velocity_toggle = PillButton(tr("力度"), "ghost", FluentSymbol.CURVE)
         self.velocity_toggle.setObjectName("VelocityToggle")
         self.velocity_toggle.setCheckable(True)
         self.velocity_toggle.setFixedHeight(28)
-        self.velocity_toggle.setToolTip(
-            tr("显示力度曲线；拖动时间点会按距离影响周边点")
-        )
+        self.velocity_toggle.setToolTip(tr("显示音符力度；可点调或用柔化刷影响周边音符"))
         self.velocity_toggle.toggled.connect(self._toggle_velocity_lane)
-        inspector_layout.addWidget(self.velocity_toggle)
+        inspector_layout.addWidget(self.velocity_toggle, 0, Qt.AlignVCenter)
+
+        self.ghost_box = QToolButton()
+        self.ghost_box.setObjectName("TrackReferenceToggle")
+        self.ghost_box.setText(tr("其他轨"))
+        self.ghost_box.setAccessibleName(tr("其他轨道参考"))
+        self.ghost_box.setToolTip(
+            tr("点击开关其他轨参照；箭头可调整透明度")
+        )
+        self.ghost_box.setCheckable(True)
+        self.ghost_box.setChecked(False)
+        self.ghost_box.setFixedHeight(28)
+        self.ghost_box.setPopupMode(
+            QToolButton.ToolButtonPopupMode.MenuButtonPopup
+        )
+        self.ghost_box.toggled.connect(self._toggle_ghost_notes)
+        self.ghost_opacity_menu = QMenu(self.ghost_box)
+        self.ghost_opacity_popup = QWidget(self.ghost_opacity_menu)
+        ghost_opacity_layout = QHBoxLayout(self.ghost_opacity_popup)
+        ghost_opacity_layout.setContentsMargins(8, 5, 8, 5)
+        ghost_opacity_layout.setSpacing(6)
+        self.ghost_opacity_caption = QLabel(
+            tr("透明度"),
+            self.ghost_opacity_popup,
+        )
+        self.ghost_opacity_slider = QSlider(
+            Qt.Horizontal,
+            self.ghost_opacity_popup,
+        )
+        self.ghost_opacity_slider.setObjectName(
+            "TrackReferenceOpacitySlider"
+        )
+        self.ghost_opacity_slider.setRange(0, 100)
+        self.ghost_opacity_slider.setValue(30)
+        self.ghost_opacity_slider.setFixedWidth(120)
+        self.ghost_opacity_slider.setAccessibleName(
+            tr("其他轨道参照透明度")
+        )
+        self.ghost_opacity_slider.setToolTip(self.ghost_box.toolTip())
+        self.ghost_opacity_caption.setBuddy(self.ghost_opacity_slider)
+        self.ghost_opacity_slider.valueChanged.connect(
+            self._ghost_opacity_changed
+        )
+        self.ghost_opacity_label = QLabel(
+            "30%",
+            self.ghost_opacity_popup,
+        )
+        self.ghost_opacity_label.setFixedWidth(38)
+        ghost_opacity_layout.addWidget(self.ghost_opacity_caption)
+        ghost_opacity_layout.addWidget(self.ghost_opacity_slider)
+        ghost_opacity_layout.addWidget(self.ghost_opacity_label)
+        ghost_opacity_action = QWidgetAction(self.ghost_opacity_menu)
+        ghost_opacity_action.setDefaultWidget(self.ghost_opacity_popup)
+        self.ghost_opacity_menu.addAction(ghost_opacity_action)
+        self.ghost_box.setMenu(self.ghost_opacity_menu)
+        inspector_layout.addWidget(self.ghost_box, 0, Qt.AlignVCenter)
 
         self.note_controls = QWidget()
+        self.note_controls.setFixedHeight(28)
         note_layout = QHBoxLayout(self.note_controls)
         note_layout.setContentsMargins(3, 0, 0, 0)
         note_layout.setSpacing(7)
@@ -408,6 +530,7 @@ class MidiNoteEditorDialog(QDialog):
         self.duration_edit = QLineEdit()
         self.velocity_edit = QLineEdit()
         self.note_field_labels: list[QLabel] = []
+        self.note_field_groups: list[QWidget] = []
         for label, widget, field in (("音高", self.pitch_edit, "pitch"), ("开始 ms", self.start_edit, "start"), ("时值 ms", self.duration_edit, "dur"), ("力度", self.velocity_edit, "vel")):
             widget.editingFinished.connect(lambda f=field, w=widget: self.apply_field(f, w.text()))
             widget.setFixedWidth(64 if field in ("pitch", "vel") else 72)
@@ -420,6 +543,7 @@ class MidiNoteEditorDialog(QDialog):
             field_label.setBuddy(widget)
             widget.setAccessibleName(tr(label))
             self.note_field_labels.append(field_label)
+            self.note_field_groups.append(group)
             group_layout.addWidget(field_label)
             group_layout.addWidget(widget)
             note_layout.addWidget(group)
@@ -483,7 +607,9 @@ class MidiNoteEditorDialog(QDialog):
             self.articulation_combo.setCurrentIndex(default_index)
         self.articulation_combo.currentIndexChanged.connect(self.apply_articulation)
         note_layout.addStretch(1)
-        inspector_layout.addWidget(self.note_controls, 1)
+        inspector_layout.addWidget(
+            self.note_controls, 1, Qt.AlignVCenter
+        )
 
         self.articulation_controls = QWidget()
         articulation_layout = QHBoxLayout(self.articulation_controls)
@@ -561,7 +687,9 @@ class MidiNoteEditorDialog(QDialog):
             Qt.AlignVCenter,
         )
         articulation_layout.addStretch(1)
-        inspector_layout.addWidget(self.articulation_controls, 1)
+        inspector_layout.addWidget(
+            self.articulation_controls, 1, Qt.AlignVCenter
+        )
 
         self.grid_controls = QWidget()
         grid_layout = QHBoxLayout(self.grid_controls)
@@ -573,39 +701,28 @@ class MidiNoteEditorDialog(QDialog):
         self.note_preview_box = QCheckBox(tr("点击试听"))
         self.note_preview_box.setChecked(True)
         grid_layout.addWidget(self.note_preview_box)
-        self.ghost_box = QCheckBox(tr("幽灵"))
-        self.ghost_box.setAccessibleName(tr("其他轨道参考"))
-        self.ghost_box.setChecked(True)
-        self.ghost_box.toggled.connect(self._toggle_ghost_notes)
-        grid_layout.addWidget(self.ghost_box)
-        self.ghost_opacity_slider = QSlider(Qt.Horizontal)
-        self.ghost_opacity_slider.setObjectName("GhostNoteOpacitySlider")
-        self.ghost_opacity_slider.setRange(0, 100)
-        self.ghost_opacity_slider.setValue(24)
-        self.ghost_opacity_slider.setFixedWidth(72)
-        self.ghost_opacity_slider.setToolTip(tr("幽灵音块透明度"))
-        self.ghost_opacity_slider.setAccessibleName(
-            tr("幽灵音块透明度")
-        )
-        self.ghost_opacity_slider.valueChanged.connect(
-            self._ghost_opacity_changed
-        )
-        grid_layout.addWidget(self.ghost_opacity_slider)
-        self.ghost_opacity_label = QLabel("24%")
-        self.ghost_opacity_label.setFixedWidth(38)
-        grid_layout.addWidget(self.ghost_opacity_label)
         editor_zoom_label = QLabel(tr("水平缩放"))
         grid_layout.addWidget(editor_zoom_label)
         self.editor_zoom = QSlider(Qt.Horizontal)
-        self.editor_zoom.setRange(30, 320)
+        self.editor_zoom.setRange(
+            round(PianoRollCanvas.MIN_PX_PER_BEAT),
+            round(PianoRollCanvas.MAX_PX_PER_BEAT),
+        )
         self.editor_zoom.setValue(92)
         self.editor_zoom.setFixedWidth(150)
         self.editor_zoom.setAccessibleName(tr("水平缩放"))
+        zoom_hint = tr(
+            "Ctrl+滚轮：时间缩放；Alt+滚轮：音块高度"
+        )
+        editor_zoom_label.setToolTip(zoom_hint)
+        self.editor_zoom.setToolTip(zoom_hint)
         editor_zoom_label.setBuddy(self.editor_zoom)
         self.editor_zoom.valueChanged.connect(self.set_zoom)
         grid_layout.addWidget(self.editor_zoom)
         grid_layout.addStretch(1)
-        inspector_layout.addWidget(self.grid_controls, 1)
+        inspector_layout.addWidget(
+            self.grid_controls, 1, Qt.AlignVCenter
+        )
         add_inset(inspector, "EditorInspectorInset")
         self._set_top_inspector_mode("note")
 
@@ -646,6 +763,15 @@ class MidiNoteEditorDialog(QDialog):
         self.transcription_panel.confidence_changed.connect(
             lambda _value: self._sync_shared_transcription_projection()
         )
+        self.transcription_panel.candidate_visibility_changed.connect(
+            self._transcription_candidate_visibility_changed
+        )
+        self.transcription_panel.candidate_opacity_changed.connect(
+            self._transcription_candidate_opacity_changed
+        )
+        self.transcription_panel.contour_denoise_changed.connect(
+            self._transcription_contour_denoise_changed
+        )
         self.transcription_panel.show_rejected_changed.connect(
             lambda _value: self._sync_shared_transcription_projection()
         )
@@ -676,6 +802,12 @@ class MidiNoteEditorDialog(QDialog):
         self.transcription_panel.beat_origin_requested.connect(
             self._set_playhead_as_beat_origin
         )
+        self.transcription_panel.rhythm_diagnostic_requested.connect(
+            self._start_transcription_rhythm_diagnostic
+        )
+        self.transcription_panel.rhythm_projection_enabled_changed.connect(
+            self._transcription_rhythm_projection_changed
+        )
         self.transcription_panel.clear_range_requested.connect(
             self._clear_transcription_range
         )
@@ -699,54 +831,6 @@ class MidiNoteEditorDialog(QDialog):
         )
         self.transcription_panel.clear_staging_requested.connect(
             self._clear_transcription_staging
-        )
-        self.transcription_panel.diagnostic_evidence_expanded_changed.connect(
-            self._transcription_diagnostic_visibility_changed
-        )
-        self.transcription_panel.advanced_controls_expanded_changed.connect(
-            self._transcription_advanced_visibility_changed
-        )
-        self.transcription_panel.key_edit_requested.connect(
-            self._edit_transcription_key
-        )
-        self.transcription_panel.key_lock_requested.connect(
-            self._lock_transcription_key
-        )
-        self.transcription_panel.chord_edit_requested.connect(
-            self._edit_transcription_chord
-        )
-        self.transcription_panel.chord_lock_requested.connect(
-            self._lock_transcription_chord
-        )
-        self.transcription_panel.chord_split_requested.connect(
-            self._split_transcription_chord
-        )
-        self.transcription_panel.chord_merge_next_requested.connect(
-            self._merge_transcription_chord_with_next
-        )
-        self.transcription_panel.previous_phrase_requested.connect(
-            lambda: self._navigate_transcription_phrase(-1)
-        )
-        self.transcription_panel.next_phrase_requested.connect(
-            lambda: self._navigate_transcription_phrase(1)
-        )
-        self.transcription_panel.loop_phrase_requested.connect(
-            self._loop_transcription_phrase
-        )
-        self.transcription_panel.review_queue_requested.connect(
-            self._open_transcription_review_queue
-        )
-        self.transcription_panel.confirm_match_requested.connect(
-            self._confirm_transcription_instrument_match
-        )
-        self.transcription_panel.stage_existing_track_requested.connect(
-            self._stage_transcription_group_to_existing_track
-        )
-        self.transcription_panel.new_track_requested.connect(
-            self._stage_transcription_group_to_new_track
-        )
-        self.transcription_panel.audition_source_changed.connect(
-            self._set_transcription_audition_source
         )
         root.addWidget(self.transcription_panel)
         parent_config = getattr(parent, "config", {})
@@ -790,30 +874,29 @@ class MidiNoteEditorDialog(QDialog):
             int(reference_layer_settings["background_opacity_percent"])
             / 100.0
         )
+        self.transcription_panel.set_candidate_layer_visible(
+            bool(reference_layer_settings["candidate_visible"])
+        )
+        self.transcription_panel.set_candidate_opacity(
+            int(reference_layer_settings["candidate_opacity_percent"])
+            / 100.0
+        )
+        self.transcription_panel.set_contour_denoise(
+            str(reference_layer_settings["contour_denoise"])
+        )
         configured_guide_roles = transcription_ui_config.get(
             "melody_line_roles",
-            tuple(MELODY_LINE_GUIDE_ROLES),
+            ("primary_melody",),
         )
         if isinstance(configured_guide_roles, (list, tuple, set)):
             self.transcription_panel.set_melody_line_roles(
                 str(role) for role in configured_guide_roles
             )
-        self.transcription_panel.set_advanced_controls_expanded(
-            bool(
-                transcription_ui_config.get(
-                    "advanced_controls_expanded",
-                    False,
-                )
-            )
-        )
-        self.transcription_panel.set_diagnostic_evidence_expanded(
-            bool(
-                transcription_ui_config.get(
-                    "diagnostic_evidence_expanded",
-                    bool(configured_layers),
-                )
-            )
-        )
+        # Disclosure is ephemeral: every editor opens in the compact state.
+        # Layer visibility remains persisted independently, but old expanded
+        # panels must not turn the next session back into a wall of controls.
+        self.transcription_panel.set_advanced_controls_expanded(False)
+        self.transcription_panel.set_diagnostic_evidence_expanded(False)
 
         workspace = QFrame()
         workspace.setObjectName("EditorWorkspace")
@@ -824,10 +907,23 @@ class MidiNoteEditorDialog(QDialog):
         roll.setContentsMargins(0, 0, 0, 0)
         roll.setSpacing(0)
         self.canvas = PianoRollCanvas(self)
+        self.canvas.setToolTip(
+            tr("Ctrl+滚轮：时间缩放；Alt+滚轮：音块高度")
+        )
         self.canvas.set_ghost_opacity(ghost_opacity_percent / 100.0)
         self.canvas.set_reference_background_opacity(
             int(reference_layer_settings["background_opacity_percent"])
             / 100.0
+        )
+        self.canvas.set_transcription_candidate_layer_visible(
+            bool(reference_layer_settings["candidate_visible"])
+        )
+        self.canvas.set_transcription_candidate_opacity(
+            int(reference_layer_settings["candidate_opacity_percent"])
+            / 100.0
+        )
+        self.canvas.set_contour_denoise_profile(
+            str(reference_layer_settings["contour_denoise"])
         )
         self.canvas.set_melody_line_roles_visible(
             self.transcription_panel.melody_line_roles
@@ -875,9 +971,49 @@ class MidiNoteEditorDialog(QDialog):
         self.transcription_waveform.setVisible(False)
         self.transcription_waveform.seek_requested.connect(self.seek_draft)
         workspace_layout.addWidget(self.transcription_waveform)
+        self.velocity_panel = QFrame()
+        self.velocity_panel.setObjectName("VelocityPanel")
+        velocity_panel_layout = QVBoxLayout(self.velocity_panel)
+        velocity_panel_layout.setContentsMargins(0, 0, 0, 0)
+        velocity_panel_layout.setSpacing(0)
+        velocity_header = QFrame()
+        velocity_header.setObjectName("VelocityHeader")
+        velocity_header_layout = QHBoxLayout(velocity_header)
+        velocity_header_layout.setContentsMargins(self.canvas.KEY_W, 2, 8, 2)
+        velocity_header_layout.setSpacing(6)
+        velocity_title = QLabel(tr("音符力度 0–127（非轨道音量）"))
+        velocity_title.setObjectName("VelocityTitle")
+        velocity_header_layout.addWidget(velocity_title)
+        self.velocity_point_button = QPushButton(tr("点调"))
+        self.velocity_point_button.setObjectName("VelocityModeButton")
+        self.velocity_point_button.setCheckable(True)
+        self.velocity_point_button.clicked.connect(lambda: self._set_velocity_mode("point"))
+        velocity_header_layout.addWidget(self.velocity_point_button)
+        self.velocity_brush_button = QPushButton(tr("柔化刷"))
+        self.velocity_brush_button.setObjectName("VelocityModeButton")
+        self.velocity_brush_button.setCheckable(True)
+        self.velocity_brush_button.setChecked(True)
+        self.velocity_brush_button.clicked.connect(lambda: self._set_velocity_mode("brush"))
+        velocity_header_layout.addWidget(self.velocity_brush_button)
+        self.velocity_radius_combo = QComboBox()
+        self.velocity_radius_combo.setObjectName("VelocityRadiusCombo")
+        for beats in (0.5, 1.0, 2.0, 4.0, 8.0):
+            self.velocity_radius_combo.addItem(trf("影响 ±{beats:g} 拍", beats=beats), beats)
+        self.velocity_radius_combo.setCurrentIndex(2)
+        self.velocity_radius_combo.currentIndexChanged.connect(self._velocity_radius_changed)
+        velocity_header_layout.addWidget(self.velocity_radius_combo)
+        self.velocity_scope_combo = QComboBox()
+        self.velocity_scope_combo.setObjectName("VelocityScopeCombo")
+        self.velocity_scope_combo.addItem(tr("范围：全轨"), "track")
+        self.velocity_scope_combo.addItem(tr("范围：所选"), "selection")
+        self.velocity_scope_combo.currentIndexChanged.connect(self._velocity_scope_changed)
+        velocity_header_layout.addWidget(self.velocity_scope_combo)
+        velocity_header_layout.addStretch(1)
+        velocity_panel_layout.addWidget(velocity_header)
         self.velocity_lane = VelocityLaneCanvas(self)
-        self.velocity_lane.setVisible(False)
-        workspace_layout.addWidget(self.velocity_lane)
+        velocity_panel_layout.addWidget(self.velocity_lane)
+        self.velocity_panel.setVisible(False)
+        workspace_layout.addWidget(self.velocity_panel)
         scroll_row = QHBoxLayout()
         scroll_row.setContentsMargins(0, 0, 0, 0)
         scroll_row.setSpacing(0)
@@ -920,10 +1056,10 @@ class MidiNoteEditorDialog(QDialog):
         self.music_volume_value.setObjectName("Muted")
         self.music_volume_value.setFixedWidth(38)
         footer_layout.addWidget(self.music_volume_value)
-        self.transcription_mode_toggle = QCheckBox(tr("扒谱模式"))
+        self.transcription_mode_toggle = QCheckBox(tr("音乐参考"))
         self.transcription_mode_toggle.setObjectName("TranscriptionModeToggle")
         self.transcription_mode_toggle.setToolTip(
-            tr("在当前音符编辑器中显示分析证据、候选和参考波形")
+            tr("在当前音符编辑器中显示音乐参考、分析证据、候选和参考波形")
         )
         self.transcription_mode_toggle.toggled.connect(
             self._set_transcription_mode_enabled
@@ -932,22 +1068,15 @@ class MidiNoteEditorDialog(QDialog):
         add_inset(footer, "EditorFooterInset")
         self._toggle_ghost_notes(self.ghost_box.isChecked())
         self.finished.connect(lambda _result: self.stop_draft())
-        self.select_all_shortcut = QShortcut(QKeySequence.SelectAll, self)
-        self.select_all_shortcut.setContext(Qt.WindowShortcut)
-        self.select_all_shortcut.setAutoRepeat(False)
-        self.select_all_shortcut.activated.connect(self.select_all_notes)
-        self.space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
-        self.space_shortcut.setContext(Qt.WindowShortcut)
-        self.space_shortcut.setAutoRepeat(False)
-        self.space_shortcut.activated.connect(self.toggle_draft_playback)
-        self._editor_event_filter_installed = False
-        app = QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
-            self._editor_event_filter_installed = True
-        self.finished.connect(
-            lambda _result: self._remove_editor_event_filter()
+        self.shortcut_help_spec = editor_shortcut_spec("show_shortcuts")
+        self.shortcut_help_shortcut = QShortcut(
+            QKeySequence(self.shortcut_help_spec.key_source),
+            self,
         )
+        self.shortcut_help_shortcut.setContext(Qt.WindowShortcut)
+        self.shortcut_help_shortcut.setAutoRepeat(False)
+        self.shortcut_help_shortcut.activated.connect(self.show_shortcut_help)
+        self._shortcut_help_dialog: EditorShortcutHelpDialog | None = None
         self._recalculate_invalid_note_count()
         self._update_track_meta()
         self.refresh_fields()
@@ -974,7 +1103,11 @@ class MidiNoteEditorDialog(QDialog):
         button.setAccessibleName(full_text)
         if compact:
             button.setText(compact_text)
-            button.setFixedWidth(34)
+            compact_width = max(
+                34,
+                min(72, button.fontMetrics().horizontalAdvance(compact_text) + 18),
+            )
+            button.setFixedWidth(compact_width)
         else:
             button.setMinimumWidth(0)
             button.setMaximumWidth(16777215)
@@ -1011,7 +1144,6 @@ class MidiNoteEditorDialog(QDialog):
         for source, compact_text in (
             ("撤销", "↶"),
             ("重做", "↷"),
-            ("删除", ""),
         ):
             self._set_editor_compact_button(
                 self.editor_toolbar_action_buttons[source],
@@ -1020,36 +1152,36 @@ class MidiNoteEditorDialog(QDialog):
                 compact,
             )
         self._set_editor_compact_button(
+            self.shortcut_help_button,
+            "快捷键",
+            "?",
+            compact,
+        )
+        self._set_editor_compact_button(
             self.editor_optimize_button,
             "优化此轨",
             "",
             compact,
         )
         self._set_editor_compact_button(
-            self.apply_button,
-            "应用",
-            "↵",
-            compact,
-        )
-        self._set_editor_compact_button(
             self.cancel_button,
-            "取消",
-            "×",
+            "放弃",
+            tr("放弃"),
             compact,
         )
         self._set_editor_compact_button(
             self.confirm_button,
-            "确定",
-            "✓",
+            "完成",
+            tr("完成"),
             compact,
         )
 
         for button, source, compact_text in (
-            (self.draw_mode_button, "绘制 B", "B"),
-            (self.note_mode_button, "音符属性", "N"),
-            (self.articulation_mode_button, "奏法", "T"),
-            (self.grid_mode_button, "网格", "G"),
-            (self.velocity_toggle, "力度", ""),
+            (self.draw_mode_button, "绘制 B", tr("绘制")),
+            (self.note_mode_button, "音符", tr("音符")),
+            (self.articulation_mode_button, "奏法", tr("奏法")),
+            (self.grid_mode_button, "显示", tr("显示")),
+            (self.velocity_toggle, "力度", tr("力度")),
         ):
             self._set_editor_compact_button(
                 button,
@@ -1063,6 +1195,8 @@ class MidiNoteEditorDialog(QDialog):
         self.quantize_combo.setFixedWidth(64 if compact else 76)
         self.selection_summary.setMinimumWidth(70 if compact else 145)
         self.selection_summary.setMaximumWidth(120 if compact else 190)
+        self.ghost_box.setText(tr("参照") if compact else tr("其他轨"))
+        self.ghost_box.setFixedWidth(58 if compact else 88)
         self.editor_title_block.updateGeometry()
         self.editor_transport_frame.updateGeometry()
 
@@ -1085,35 +1219,19 @@ class MidiNoteEditorDialog(QDialog):
         self.canvas.selection_changed.emit()
         self.canvas.update()
 
-    def eventFilter(self, watched, event) -> bool:
-        if (
-            event.type() == QEvent.KeyPress
-            and self.isActiveWindow()
-            and event.modifiers() == Qt.ControlModifier
-            and event.key() == Qt.Key_A
-        ):
-            self.select_all_notes()
-            event.accept()
-            return True
-        if (
-            event.type() == QEvent.KeyPress
-            and self.isActiveWindow()
-            and event.modifiers() == Qt.NoModifier
-            and event.key() == Qt.Key_Space
-        ):
-            if not event.isAutoRepeat():
-                self.toggle_draft_playback()
-            event.accept()
-            return True
-        return super().eventFilter(watched, event)
+    def show_shortcut_help(self) -> None:
+        """Open a non-modal reference that can remain beside the editor."""
 
-    def _remove_editor_event_filter(self) -> None:
-        if not self._editor_event_filter_installed:
-            return
-        app = QApplication.instance()
-        if app is not None:
-            app.removeEventFilter(self)
-        self._editor_event_filter_installed = False
+        dialog = self._shortcut_help_dialog
+        if dialog is None:
+            dialog = EditorShortcutHelpDialog(self)
+            dialog.destroyed.connect(
+                lambda: setattr(self, "_shortcut_help_dialog", None)
+            )
+            self._shortcut_help_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _set_editor_music_volume(self, value: int) -> None:
         normalized = max(0, min(100, int(value)))
@@ -1132,10 +1250,14 @@ class MidiNoteEditorDialog(QDialog):
             # stops the Qt reference player before the mode is switched off.
             self.stop_draft()
         self.transcription_mode_enabled = bool(enabled)
+        self.transcription_panel.set_draft_note_count(len(self.canvas.notes))
         self.transcription_panel.setVisible(self.transcription_mode_enabled)
         self.transcription_waveform.setVisible(self.transcription_mode_enabled)
         self.canvas.set_transcription_candidates_visible(
             self.transcription_mode_enabled
+        )
+        self.canvas.set_transcription_candidate_layer_visible(
+            self.transcription_panel.candidate_layer_visible
         )
         if self.transcription_mode_enabled:
             self._velocity_visible_before_transcription = (
@@ -1146,8 +1268,7 @@ class MidiNoteEditorDialog(QDialog):
             self.velocity_toggle.setEnabled(False)
             self._sync_shared_transcription_projection()
         else:
-            self.canvas.release_transcription_evidence()
-            self.transcription_waveform.release_reference_audio()
+            self._release_transcription_visual_resources()
             self.velocity_toggle.setEnabled(True)
             if self._velocity_visible_before_transcription:
                 self.velocity_toggle.setChecked(True)
@@ -1222,7 +1343,15 @@ class MidiNoteEditorDialog(QDialog):
 
     def release_transcription_resources(self) -> None:
         self._bind_spectrogram_reference_audio(None)
+        self._release_transcription_visual_resources()
+
+    def _release_transcription_visual_resources(self) -> None:
+        """Release heavy tiles while keeping the projection reloadable."""
         self.canvas.release_transcription_evidence()
+        # The descriptor still belongs to ``transcription_result``. Reset the
+        # UI-side identity so a later Music Reference enable reopens it even
+        # when the cache key itself has not changed.
+        self._canvas_evidence_cache_key = None
         self.transcription_waveform.release_reference_audio()
 
     def _bind_spectrogram_reference_audio(self, controller: object | None) -> None:
@@ -1437,6 +1566,53 @@ class MidiNoteEditorDialog(QDialog):
         )
         return display_candidates, suppressed_ids
 
+    def set_transcription_rhythm_alignment(
+        self,
+        alignment: RhythmAlignmentSidecar | None,
+    ) -> None:
+        """Bind a disposable timing view without replacing session candidates."""
+
+        parent = self.parent()
+        session = getattr(parent, "transcription_session", None)
+        cache_key = str(
+            getattr(getattr(session, "state", None), "cache_key", "") or ""
+        )
+        candidates = tuple(getattr(session, "candidates", ()))
+        if alignment is not None and not alignment.is_current(
+            evidence_cache_key=cache_key,
+            candidates=candidates,
+        ):
+            alignment = None
+        if self.transcription_rhythm_alignment == alignment:
+            return
+        self.transcription_rhythm_alignment = alignment
+        self._transcription_display_projection_cache = None
+        self._transcription_rhythm_candidate_cache = None
+        self._transcription_candidate_flag_cache = None
+        self._eligible_candidate_cache = None
+        self._sync_shared_transcription_projection()
+
+    def _transcription_rhythm_projection_changed(self, enabled: bool) -> None:
+        self.transcription_rhythm_projection_enabled = bool(enabled)
+        self._transcription_display_projection_cache = None
+        self._transcription_rhythm_candidate_cache = None
+        self._transcription_candidate_flag_cache = None
+        self._sync_shared_transcription_projection()
+
+    def _effective_transcription_candidate(
+        self,
+        candidate: TranscriptionCandidate,
+    ) -> TranscriptionCandidate:
+        alignment = self.transcription_rhythm_alignment
+        if alignment is None or not self.transcription_rhythm_projection_enabled:
+            return candidate
+        projected = alignment.apply_to(candidate)
+        return (
+            projected
+            if isinstance(projected, TranscriptionCandidate)
+            else candidate
+        )
+
     def _sync_shared_transcription_projection(self) -> None:
         parent = self.parent()
         session = getattr(parent, "transcription_session", None)
@@ -1444,6 +1620,26 @@ class MidiNoteEditorDialog(QDialog):
             return
         offset_ms = float(getattr(parent, "reference_audio_offset_ms", 0.0))
         self.transcription_candidates = tuple(session.candidates)
+        alignment = self.transcription_rhythm_alignment
+        if alignment is None or not self.transcription_rhythm_projection_enabled:
+            effective_candidates = self.transcription_candidates
+        else:
+            rhythm_cache_key = (
+                id(self.transcription_candidates),
+                alignment.identity,
+            )
+            rhythm_cache = self._transcription_rhythm_candidate_cache
+            if rhythm_cache is not None and rhythm_cache[0] == rhythm_cache_key:
+                effective_candidates = rhythm_cache[1]
+            else:
+                effective_candidates = tuple(
+                    self._effective_transcription_candidate(candidate)
+                    for candidate in self.transcription_candidates
+                )
+                self._transcription_rhythm_candidate_cache = (
+                    rhythm_cache_key,
+                    effective_candidates,
+                )
         self.transcription_result = getattr(
             parent,
             "transcription_result",
@@ -1458,7 +1654,7 @@ class MidiNoteEditorDialog(QDialog):
             display_candidates,
             suppressed_ids,
         ) = self._transcription_display_projection(
-            self.transcription_candidates,
+            effective_candidates,
             postprocess_report,
             show_suppressed=(
                 self.transcription_panel.show_suppressed_checkbox.isChecked()
@@ -1480,6 +1676,12 @@ class MidiNoteEditorDialog(QDialog):
             int(self.track.bdo_instrument_id),
             int(self.transpose),
             round(tolerance, 6),
+            (
+                ""
+                if self.transcription_rhythm_alignment is None
+                else self.transcription_rhythm_alignment.identity
+            ),
+            self.transcription_rhythm_projection_enabled,
         )
         cached_flags = getattr(
             self,
@@ -1508,7 +1710,7 @@ class MidiNoteEditorDialog(QDialog):
                     [float(note.start) for note in ordered],
                     ordered,
                 )
-            for candidate in self.transcription_candidates:
+            for candidate in effective_candidates:
                 candidate_id = session.candidate_id(candidate)
                 if self._candidate_invalid_for_current_track(candidate):
                     invalid_values.add(candidate_id)
@@ -1565,6 +1767,12 @@ class MidiNoteEditorDialog(QDialog):
             ),
             audio_offset_ms=offset_ms,
             visible=self.transcription_mode_enabled,
+        )
+        self.canvas.set_transcription_candidate_layer_visible(
+            self.transcription_panel.candidate_layer_visible
+        )
+        self.canvas.set_transcription_candidate_opacity(
+            self.transcription_panel.candidate_opacity
         )
         descriptor = (
             self.transcription_result.evidence_descriptor
@@ -1911,35 +2119,21 @@ class MidiNoteEditorDialog(QDialog):
             staging_count=len(
                 set((*self.staged_primary_routes, *self.staged_copy_routes))
             ),
+            candidate_count=(
+                len(self.transcription_candidates)
+                + len(
+                    tuple(postprocess_report.suppressed_candidates)
+                    if postprocess_report is not None
+                    else ()
+                )
+            ),
+            draft_note_count=len(self.canvas.notes),
         )
         if self.transcription_candidates:
-            merged_count = (
-                postprocess_report.automatic_merge_count
-                if postprocess_report is not None
-                else 0
-            )
-            suppressed_count = (
-                postprocess_report.suppressed_count
-                if postprocess_report is not None
-                else 0
-            )
-            profile_label, profile_state = (
-                transcription_cleanup_ui_labels(
-                    state.cleanup_profile,
-                    postprocess_report,
-                )
-            )
             self.transcription_panel.set_status(
                 trf(
-                    "{profile} · {profile_state} · "
-                    "{count} 个候选 · 自动合并 {merged} · "
-                    "疑似碎音 {suspected} · 已隐藏 {suppressed}",
-                    profile=profile_label,
-                    profile_state=profile_state,
+                    "识别到 {count} 个参考音块 · 框选后采纳为草稿",
                     count=len(self.transcription_candidates),
-                    merged=merged_count,
-                    suspected=len(active_fragment_ids),
-                    suppressed=suppressed_count,
                 )
             )
         elif has_audio:
@@ -1947,7 +2141,7 @@ class MidiNoteEditorDialog(QDialog):
             self.transcription_panel.set_fragment_state()
         else:
             self.transcription_panel.set_status(
-                tr("载入参考音频后可开始整首分析")
+                tr("载入音频，然后开始扒谱")
             )
             self.transcription_panel.set_fragment_state()
         self.update_scrollbars()
@@ -2020,20 +2214,20 @@ class MidiNoteEditorDialog(QDialog):
             supported_pitches=supported,
         )
 
-    def accept_transcription_candidates(self) -> None:
-        if not self.transcription_candidates:
-            return
+    def _append_transcription_candidates(
+        self,
+        candidate_ids: Iterable[str],
+    ) -> tuple[int, int, int]:
+        """Promote candidates through the same validation and undo boundary."""
+
         parent = self.parent()
         shared_session = getattr(parent, "transcription_session", None)
         if shared_session is None:
-            return
-        eligible_ids = set(self._eligible_transcription_candidate_ids())
-        if not eligible_ids:
-            self.transcription_hint.setText(
-                tr("请先选择候选或设置 A–B 区间")
-            )
-            return
-        accepted: list = []
+            return 0, 0, 0
+        wanted_ids = {str(candidate_id) for candidate_id in candidate_ids}
+        if not wanted_ids:
+            return 0, 0, 0
+        accepted: list[Note] = []
         accepted_routes: set[CandidateRoute] = set()
         invalid = 0
         duplicates = 0
@@ -2052,12 +2246,13 @@ class MidiNoteEditorDialog(QDialog):
             for route in shared_session.state.applied_routes
         }
         offset_ms = float(getattr(parent, "reference_audio_offset_ms", 0.0))
-        for candidate in self.transcription_candidates:
-            candidate_id = shared_session.candidate_id(candidate)
-            if candidate_id not in eligible_ids:
+        for raw_candidate in self.transcription_candidates:
+            candidate_id = shared_session.candidate_id(raw_candidate)
+            if candidate_id not in wanted_ids:
                 continue
             if candidate_id in already_applied:
                 continue
+            candidate = self._effective_transcription_candidate(raw_candidate)
             if self._candidate_invalid_for_current_track(candidate):
                 invalid += 1
                 continue
@@ -2093,28 +2288,136 @@ class MidiNoteEditorDialog(QDialog):
                 CandidateRoute(candidate_id, int(self.track.track_id))
             )
         if not accepted:
+            return 0, invalid, duplicates
+        self.push_snapshot()
+        first_index = len(self.canvas.notes)
+        self.canvas.notes.extend(accepted)
+        self.staged_primary_routes.update(accepted_routes)
+        self._capture_staging_identity()
+        self.canvas.selected = set(
+            range(first_index, len(self.canvas.notes))
+        )
+        self.canvas.anchor_index = first_index
+        self._notes_changed()
+        self.refresh_fields()
+        self._sync_shared_transcription_projection()
+        return len(accepted), invalid, duplicates
+
+    def promote_transcription_candidate(self, candidate_id: str) -> bool:
+        """Create one editable note by double-clicking its visual candidate."""
+
+        accepted, invalid, duplicates = self._append_transcription_candidates(
+            (str(candidate_id),)
+        )
+        if accepted:
+            self.transcription_panel.set_status(tr("已创建当前轨音符"))
+            return True
+        if invalid:
+            self.transcription_panel.set_status(
+                tr("候选音高不适用于当前轨道")
+            )
+        elif duplicates:
+            self.transcription_panel.set_status(
+                tr("当前位置已有相同音符")
+            )
+        return False
+
+    def accept_transcription_candidates(self) -> None:
+        if not self.transcription_candidates:
+            return
+        eligible_ids = set(self._eligible_transcription_candidate_ids())
+        if not eligible_ids:
+            self.transcription_hint.setText(
+                tr("请先选择候选或设置 A–B 区间")
+            )
+            return
+        accepted, invalid, duplicates = self._append_transcription_candidates(
+            eligible_ids
+        )
+        if not accepted:
             self.transcription_hint.setText(trf(
                 "没有可写入候选 · 重复 {duplicates} · 越界 {invalid}",
                 duplicates=duplicates,
                 invalid=invalid,
             ))
             return
-        self.push_snapshot()
-        first = len(self.canvas.notes)
-        self.canvas.notes.extend(accepted)
-        self.staged_primary_routes.update(accepted_routes)
-        self._capture_staging_identity()
-        self.canvas.selected = set(range(first, len(self.canvas.notes)))
-        self.canvas.anchor_index = first
-        self._notes_changed()
-        self.refresh_fields()
         self.transcription_hint.setText(trf(
             "已写入草稿 {accepted} 个 · 跳过重复 {duplicates} · 越界 {invalid}",
-            accepted=len(accepted),
+            accepted=accepted,
             duplicates=duplicates,
             invalid=invalid,
         ))
-        self._sync_shared_transcription_projection()
+
+    def show_game_adaptation_check(self) -> None:
+        """Report game-fit facts without changing the current draft."""
+
+        report = assess_game_draft(
+            int(self.track.bdo_instrument_id),
+            self.edited_notes(),
+        )
+        if not report.note_count:
+            QMessageBox.information(
+                self,
+                tr("游戏适配检查"),
+                tr("当前草稿没有音符。请先采纳参考音块或手动创建音符。"),
+            )
+            return
+        pitch_evidence = (
+            tr("已使用游戏音域证据")
+            if report.pitch_evidence_known
+            else tr("缺少已验证乐器音域，仅检查全局音高范围")
+        )
+        body = trf(
+            "乐器：{instrument}\n"
+            "草稿：{notes} 个音符\n"
+            "发布分段：{chunks} 段（每段最多 {limit}，导出时自动拆分）\n"
+            "音域问题：{pitch}\n"
+            "奏法问题：{articulation}\n"
+            "时间问题：{timing}\n"
+            "力度问题：{velocity}\n"
+            "证据：{evidence}\n\n"
+            "此检查不会移动、删除、量化或改写任何音符。",
+            instrument=_ui_bdo_instrument_name(
+                int(self.track.bdo_instrument_id)
+            ),
+            notes=report.note_count,
+            chunks=report.track_chunk_count,
+            limit=report.track_chunk_limit,
+            pitch=len(report.invalid_pitch_indices),
+            articulation=len(report.unsupported_articulation_indices),
+            timing=len(report.invalid_timing_indices),
+            velocity=len(report.invalid_velocity_indices),
+            evidence=pitch_evidence,
+        )
+        if report.ready and report.pitch_evidence_known:
+            QMessageBox.information(
+                self,
+                tr("游戏适配检查通过"),
+                body,
+            )
+        elif report.ready:
+            QMessageBox.information(
+                self,
+                tr("游戏适配基础检查完成"),
+                body,
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                tr("游戏适配发现需要处理的问题"),
+                body,
+            )
+
+    def continue_creation_from_transcription(self) -> None:
+        """Keep the draft and leave the reference-review presentation."""
+
+        if not self.canvas.notes:
+            return
+        self.transcription_mode_toggle.setChecked(False)
+        self.status.setText(
+            tr("音乐参考已收起；草稿保持可编辑，点击“完成”后写回项目。")
+        )
+        self.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _stage_transcription_copy(
         self,
@@ -2489,6 +2792,41 @@ class MidiNoteEditorDialog(QDialog):
             background_opacity_percent=round(normalized * 100.0)
         )
 
+    def _transcription_candidate_visibility_changed(
+        self,
+        visible: bool,
+    ) -> None:
+        if hasattr(self, "canvas"):
+            self.canvas.set_transcription_candidate_layer_visible(
+                bool(visible)
+            )
+        self._update_reference_layer_settings(
+            candidate_visible=bool(visible)
+        )
+
+    def _transcription_candidate_opacity_changed(
+        self,
+        opacity: float,
+    ) -> None:
+        normalized = max(0.0, min(1.0, float(opacity)))
+        if hasattr(self, "canvas"):
+            self.canvas.set_transcription_candidate_opacity(normalized)
+        self._update_reference_layer_settings(
+            candidate_opacity_percent=round(normalized * 100.0)
+        )
+
+    def _transcription_contour_denoise_changed(self, value: str) -> None:
+        normalized = (
+            str(value)
+            if str(value) in {"low", "standard", "high"}
+            else "standard"
+        )
+        if hasattr(self, "canvas"):
+            self.canvas.set_contour_denoise_profile(normalized)
+        self._update_reference_layer_settings(
+            contour_denoise=normalized
+        )
+
     def _transcription_melody_line_roles_changed(
         self,
         roles: object,
@@ -2508,30 +2846,6 @@ class MidiNoteEditorDialog(QDialog):
             ui_config["melody_line_roles"] = sorted(
                 self.canvas.melody_line_roles_visible
             )
-            self._persist_parent_config()
-
-    def _transcription_diagnostic_visibility_changed(
-        self, expanded: bool
-    ) -> None:
-        parent = self.parent()
-        parent_config = getattr(parent, "config", None)
-        if not isinstance(parent_config, dict):
-            return
-        ui_config = parent_config.setdefault("transcription_ui", {})
-        if isinstance(ui_config, dict):
-            ui_config["diagnostic_evidence_expanded"] = bool(expanded)
-            self._persist_parent_config()
-
-    def _transcription_advanced_visibility_changed(
-        self, expanded: bool
-    ) -> None:
-        parent = self.parent()
-        parent_config = getattr(parent, "config", None)
-        if not isinstance(parent_config, dict):
-            return
-        ui_config = parent_config.setdefault("transcription_ui", {})
-        if isinstance(ui_config, dict):
-            ui_config["advanced_controls_expanded"] = bool(expanded)
             self._persist_parent_config()
 
     @staticmethod
@@ -3017,6 +3331,15 @@ class MidiNoteEditorDialog(QDialog):
         if callable(callback):
             callback(cleanup_profile)
 
+    def _start_transcription_rhythm_diagnostic(self) -> None:
+        callback = getattr(
+            self.parent(),
+            "_start_transcription_rhythm_diagnostic",
+            None,
+        )
+        if callable(callback):
+            callback()
+
     def _transcription_analysis_mode_changed(
         self, analysis_mode: str,
     ) -> None:
@@ -3095,7 +3418,9 @@ class MidiNoteEditorDialog(QDialog):
         )
 
     def _toggle_ghost_notes(self, enabled: bool) -> None:
+        self.ghost_opacity_caption.setEnabled(bool(enabled))
         self.ghost_opacity_slider.setEnabled(bool(enabled))
+        self.ghost_opacity_label.setEnabled(bool(enabled))
         self._update_reference_layer_settings(
             ghost_visible=bool(enabled)
         )
@@ -3164,8 +3489,81 @@ class MidiNoteEditorDialog(QDialog):
         self.shortcut_hud.set_context(context)
 
     def _toggle_velocity_lane(self, visible: bool) -> None:
-        self.velocity_lane.setVisible(visible)
+        self.velocity_panel.setVisible(visible)
+        if visible:
+            self._request_velocity_mapping_hint()
         QTimer.singleShot(0, self.update_scrollbars)
+
+    def _set_velocity_mode(self, mode: str) -> None:
+        point_mode = mode == "point"
+        self.velocity_point_button.setChecked(point_mode)
+        self.velocity_brush_button.setChecked(not point_mode)
+        self.velocity_lane.set_edit_mode("point" if point_mode else "brush")
+
+    def _velocity_radius_changed(self) -> None:
+        beats = self.velocity_radius_combo.currentData()
+        if beats is not None:
+            self.velocity_lane.set_influence_beats(float(beats))
+
+    def _sync_velocity_radius_control(self) -> None:
+        target = self.velocity_lane.influence_beats
+        best = min(
+            range(self.velocity_radius_combo.count()),
+            key=lambda index: abs(float(self.velocity_radius_combo.itemData(index)) - target),
+        )
+        self.velocity_radius_combo.blockSignals(True)
+        self.velocity_radius_combo.setCurrentIndex(best)
+        self.velocity_radius_combo.blockSignals(False)
+
+    def _velocity_scope_changed(self) -> None:
+        self.velocity_lane.set_scope_mode(
+            str(self.velocity_scope_combo.currentData() or "track")
+        )
+
+    def _request_velocity_mapping_hint(self) -> None:
+        if not self.velocity_panel.isVisible():
+            return
+        chosen_indices = sorted(self.canvas.selected)
+        if len(chosen_indices) != 1:
+            self._velocity_mapping_request += 1
+            self._velocity_mapping_key = None
+            self.velocity_lane.set_game_velocity_boundaries(
+                (), tr("选择一个音符可查看游戏采样层"),
+            )
+            return
+        note = self.canvas.notes[chosen_indices[0]]
+        key = (
+            int(self.track.bdo_instrument_id), int(note.pitch), int(note.ntype),
+            str(self.track.marnian_synth_mode),
+        )
+        if key == self._velocity_mapping_key:
+            return
+        self._velocity_mapping_key = key
+        self._velocity_mapping_request += 1
+        request_id = self._velocity_mapping_request
+        self.velocity_lane.set_game_velocity_boundaries(
+            (), tr("正在读取 Wwise 力度分层…"),
+        )
+        task = _VelocityMappingTask(request_id, self.track, note)
+        task.signals.finished.connect(self._velocity_mapping_ready)
+        self._velocity_mapping_tasks[request_id] = task
+        self._velocity_mapping_pool.start(task)
+
+    @Slot(int, object, str)
+    def _velocity_mapping_ready(
+        self, request_id: int, boundaries: object, error: str
+    ) -> None:
+        self._velocity_mapping_tasks.pop(request_id, None)
+        if request_id != self._velocity_mapping_request:
+            return
+        values = tuple(int(value) for value in boundaries)
+        if error:
+            status = tr("Wwise 映射暂不可用")
+        elif values:
+            status = tr("虚线为 Wwise 路由分层；不代表实测响度")
+        else:
+            status = tr("当前音符没有独立的 Wwise 力度分层")
+        self.velocity_lane.set_game_velocity_boundaries(values, status)
 
     def draft_duration_ms(self) -> float:
         end = (
@@ -3496,9 +3894,9 @@ class MidiNoteEditorDialog(QDialog):
             120.0, float(self.canvas.width() - self.canvas.KEY_W)
         )
         target_px_per_beat = max(
-            30,
+            round(self.canvas.MIN_PX_PER_BEAT),
             min(
-                320,
+                round(self.canvas.MAX_PX_PER_BEAT),
                 round(
                     viewport_width
                     * self.canvas.beat_ms
@@ -3523,7 +3921,12 @@ class MidiNoteEditorDialog(QDialog):
         visible_ms = max(1.0, (self.canvas.width() - self.canvas.KEY_W) / self.canvas.px_per_ms)
         content_end = self.canvas.content_end_ms + self.canvas.beat_ms * 4
         maximum = max(0, round(content_end - visible_ms))
-        scroll_ms = float(max(0, min(maximum, round(self.canvas.scroll_ms))))
+        # Keep the canvas' sub-millisecond cursor anchor during wheel zoom.
+        # The integer scrollbar mirrors the nearest position without forcing
+        # that presentation limitation back into the editor time domain.
+        scroll_ms = float(
+            max(0.0, min(float(maximum), float(self.canvas.scroll_ms)))
+        )
         time_changed = not math.isclose(scroll_ms, self.canvas.scroll_ms, abs_tol=1e-6)
         self.canvas.scroll_ms = scroll_ms
         self.time_scroll.blockSignals(True)
@@ -4066,9 +4469,9 @@ class MidiNoteEditorDialog(QDialog):
         self.audition_stop_timer.stop()
         self.audition_pending = False
         self.stop_draft()
-        self.canvas.release_transcription_evidence()
-        self.transcription_waveform.release_reference_audio()
-        self._remove_editor_event_filter()
+        self.release_transcription_resources()
+        self._velocity_mapping_request += 1
+        self._velocity_mapping_pool.clear()
         super().closeEvent(event)
 
     def reject(self) -> None:
@@ -4191,6 +4594,7 @@ class MidiNoteEditorDialog(QDialog):
         self.canvas.rebuild_note_index()
         self._recalculate_invalid_note_count()
         self._update_track_meta()
+        self.transcription_panel.set_draft_note_count(len(self.canvas.notes))
         self.canvas.update(); self.refresh_fields()
         self._sync_shared_transcription_projection()
 
@@ -4232,9 +4636,21 @@ class MidiNoteEditorDialog(QDialog):
             self.clipboard = [n._replace(start=n.start - origin) for n in chosen]
 
     def paste_notes(self) -> None:
-        if not self.clipboard: return
+        if not self.clipboard:
+            return
         self.push_snapshot()
-        origin = self.snap_time(self.canvas.edit_cursor_ms)
+        requested_origin = self.snap_time(self.canvas.edit_cursor_ms)
+        origin = next_non_overlapping_paste_origin(
+            self.canvas.notes,
+            self.clipboard,
+            requested_origin,
+            grid_step_ms=(
+                self.quantize_ms()
+                if self.snap_box.isChecked()
+                else None
+            ),
+            grid_origin_ms=self.beat_origin_ms,
+        )
         first = len(self.canvas.notes)
         self.canvas.notes.extend(n._replace(start=origin + n.start) for n in self.clipboard)
         self.canvas.selected = set(range(first, len(self.canvas.notes)))
@@ -4299,6 +4715,42 @@ class MidiNoteEditorDialog(QDialog):
             self.canvas.notes,
             self.canvas.selected,
         )
+        invalid_indices = [
+            index
+            for index in target_indices
+            if not articulation_supports_pitch(
+                self.track.bdo_instrument_id,
+                value,
+                self.canvas.notes[index].pitch,
+            )
+        ]
+        if invalid_indices:
+            trigger_pitches = articulation_trigger_pitches(
+                self.track.bdo_instrument_id,
+                value,
+            )
+            assert trigger_pitches
+            articulation_label = self.articulation_labels_by_type.get(
+                value,
+                f"type {value}",
+            )
+            show_global_toast(
+                self,
+                trf(
+                    "奏法 {articulation} 仅支持 {pitch_range}，"
+                    "未修改 {count} 个越界音符。",
+                    articulation=articulation_label,
+                    pitch_range=(
+                        f"{note_name(min(trigger_pitches))}–"
+                        f"{note_name(max(trigger_pitches))}"
+                    ),
+                    count=len(invalid_indices),
+                ),
+                kind="warning",
+            )
+            # Restore the selector/chip to the notes' actual unchanged state.
+            self.refresh_fields()
+            return
         if all(int(getattr(self.canvas.notes[i], "ntype", 0)) == value for i in target_indices): return
         self.push_snapshot()
         for i in target_indices: self.canvas.notes[i] = self.canvas.notes[i]._replace(ntype=value)
@@ -4309,6 +4761,9 @@ class MidiNoteEditorDialog(QDialog):
     def refresh_fields(self) -> None:
         self.updating_fields = True
         chosen = [self.canvas.notes[i] for i in sorted(self.canvas.selected)]
+        has_selection = bool(chosen)
+        for group in self.note_field_groups:
+            group.setVisible(has_selection)
         if not chosen:
             self.selection_summary.setText(tr("未选择音符"))
         elif len(chosen) == 1:
@@ -4364,6 +4819,8 @@ class MidiNoteEditorDialog(QDialog):
         self.articulation_overflow_button.setVisible(overflow_selected)
         self.articulation_preview_button.setEnabled(bool(chosen))
         self.updating_fields = False
+        self._request_velocity_mapping_hint()
+        self.note_controls.updateGeometry()
         self._update_shortcut_hud()
         self._update_status()
 

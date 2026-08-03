@@ -8,26 +8,38 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from bdo_midi import Note
-from bdo_track_effects import DEFAULT_TRACK_VOLUME
-from conversion_settings import (
+from bdo_common.bdo_track_effects import DEFAULT_TRACK_VOLUME
+from bdo_music_composer.core.conversion_settings import (
     MATERIALIZED_VELOCITY_MODES,
     VELOCITY_MODE_PRESERVE,
     ConversionSettings,
 )
-from game_score_model import bake_game_velocity_transform
-from pitch_transform import PitchTransformPlan
+from bdo_music_composer.editor.game_score_model import bake_game_velocity_transform
+from bdo_music_composer.editor.pitch_transform import PitchTransformPlan
 
 
 CURRENT_PROJECT_SCHEMA = 11
-REFERENCE_LAYER_SETTINGS_VERSION = 3
+REFERENCE_LAYER_SETTINGS_VERSION = 7
 
 
 DEFAULT_REFERENCE_LAYER_SETTINGS: dict[str, Any] = {
     "version": REFERENCE_LAYER_SETTINGS_VERSION,
-    "ghost_visible": True,
-    "ghost_opacity_percent": 24,
+    # Other-track notes are an optional harmonic reference, not part of the
+    # editable score. New projects start with that layer out of the way.
+    "ghost_visible": False,
+    "ghost_opacity_percent": 30,
+    # Analysis candidates are provisional note blocks.  Their presentation is
+    # independent from both editable notes and the other-track reference.
+    "candidate_visible": True,
+    "candidate_opacity_percent": 52,
     "background_opacity_percent": 45,
-    "melody_lines_visible": True,
+    # Display-only pitch-guide cleanup.  This never changes recognition
+    # candidates, editable notes or export data.
+    "contour_denoise": "standard",
+    # The derived melody connectors are optional context and can become noisy
+    # on dense full-song recognition.  Keep the raw pitch guide discoverable
+    # instead of covering new projects with inferred jumps.
+    "melody_lines_visible": False,
     "frame_visible": False,
     "onset_visible": False,
     "contour_visible": False,
@@ -64,6 +76,7 @@ def normalize_reference_layer_settings(
     result = dict(defaults)
     for key in (
         "ghost_visible",
+        "candidate_visible",
         "melody_lines_visible",
         "frame_visible",
         "onset_visible",
@@ -73,8 +86,14 @@ def normalize_reference_layer_settings(
         candidate = source.get(key)
         if isinstance(candidate, bool):
             result[key] = candidate
+    contour_denoise = str(
+        source.get("contour_denoise", defaults["contour_denoise"])
+    )
+    if contour_denoise in {"low", "standard", "high"}:
+        result["contour_denoise"] = contour_denoise
     for key in (
         "ghost_opacity_percent",
+        "candidate_opacity_percent",
         "background_opacity_percent",
     ):
         try:
@@ -83,11 +102,13 @@ def normalize_reference_layer_settings(
             continue
         if math.isfinite(candidate):
             result[key] = max(0, min(100, round(candidate)))
-    # Earlier versions shipped 70% and then 40% as their ghost defaults, plus
+    # Earlier versions shipped 70%, 40%, then 24% as their ghost defaults, plus
     # a 60% evidence-background default.  Migrate only those exact defaults;
     # deliberate custom values remain untouched.
     if not legacy_defaults and source_version < REFERENCE_LAYER_SETTINGS_VERSION:
         old_ghost_defaults = {40}
+        if source_version < 4:
+            old_ghost_defaults.add(24)
         if source_version < 2:
             old_ghost_defaults.add(70)
         if result["ghost_opacity_percent"] in old_ghost_defaults:

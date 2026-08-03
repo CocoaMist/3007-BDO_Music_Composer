@@ -16,8 +16,8 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
         script = textwrap.dedent(
             """
             from PySide6.QtWidgets import QApplication, QWidget
-            from i18n import install_localizer, trf
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.i18n import install_localizer, trf
+            from bdo_music_composer.ui.main_window import (
                 MidiOptimizeDialog,
                 MidiToBdoWindow,
                 Note,
@@ -177,9 +177,9 @@ class OptimizerPluginUiSmokeTests(unittest.TestCase):
             assert not locked.scope_combo.isEnabled()
             assert "范围锁定" in locked.scope_help_label.text()
             locked.close()
-            from pyside_bdo_gui import MidiNoteEditorDialog
+            from bdo_music_composer.ui.main_window import MidiNoteEditorDialog
             editor = MidiNoteEditorDialog(parent, track, 120, 4)
-            assert editor.ghost_box.isChecked()
+            assert not editor.ghost_box.isChecked()
             assert editor.loop_box is not None
             assert editor.velocity_lane.minimumHeight() >= 72
             editor.close()

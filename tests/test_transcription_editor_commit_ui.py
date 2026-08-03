@@ -33,13 +33,13 @@ class TranscriptionEditorCommitUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_session import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import (
                 CandidateRoute,
                 TranscriptionEditorCommit,
                 TranscriptionSession,
             )
-            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -113,13 +113,13 @@ class TranscriptionEditorCommitUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_session import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import (
                 CandidateRoute,
                 TranscriptionEditorCommit,
                 TranscriptionSession,
             )
-            from pyside_bdo_gui import MidiToBdoWindow, Note, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, Note, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -266,13 +266,13 @@ class TranscriptionEditorCommitUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_session import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import (
                 CandidateRoute,
                 TranscriptionEditorCommit,
                 TranscriptionSession,
             )
-            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, TrackState
 
             app = QApplication([])
             for offset_ms in (175.0, -125.0):
@@ -407,13 +407,13 @@ class TranscriptionEditorCommitUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_session import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import (
                 CandidateRoute,
                 TranscriptionEditorCommit,
                 TranscriptionSession,
             )
-            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -476,17 +476,17 @@ class TranscriptionEditorCommitUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_instruments import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_instruments import (
                 InstrumentMatchAnalysis,
                 VoiceGroup,
             )
-            from bdo_transcription_session import (
+            from bdo_music_composer.transcription.bdo_transcription_session import (
                 CandidateRoute,
                 TranscriptionEditorCommit,
                 TranscriptionSession,
             )
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog,
                 MidiToBdoWindow,
                 Note,
@@ -590,13 +590,13 @@ class TranscriptionEditorCommitUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_session import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import (
                 CandidateRoute,
                 TranscriptionEditorCommit,
                 TranscriptionSession,
             )
-            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -660,9 +660,9 @@ class TranscriptionEditorCommitUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication, QMessageBox
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_session import CandidateRoute, TranscriptionSession
-            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import CandidateRoute, TranscriptionSession
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, TrackState
 
             app = QApplication([])
             for history_kind in ("pending", "applied"):
@@ -726,12 +726,12 @@ class TranscriptionEditorCommitUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication, QMessageBox
 
-            from bdo_transcription_session import (
+            from bdo_music_composer.transcription.bdo_transcription_session import (
                 TranscriptionEditorCommit,
                 TranscriptionSession,
             )
-            from pyside_bdo_gui import MidiToBdoWindow, Note, TrackState
-            from transcription_commit_plan import (
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, Note, TrackState
+            from bdo_music_composer.transcription.transcription_commit_plan import (
                 CommitPlanError,
                 CommitPlanErrorCode,
             )
@@ -830,13 +830,13 @@ class TranscriptionEditorCommitUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication, QMessageBox
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_session import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import (
                 CandidateRoute,
                 TranscriptionEditorCommit,
                 TranscriptionSession,
             )
-            from pyside_bdo_gui import MidiToBdoWindow, Note, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, Note, TrackState
 
             app = QApplication([])
             warnings = []
@@ -964,8 +964,8 @@ class TranscriptionEditorCommitUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication, QMessageBox
 
-            from bdo_transcription_session import TranscriptionEditorCommit
-            from pyside_bdo_gui import MidiToBdoWindow, Note, TrackState
+            from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionEditorCommit
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, Note, TrackState
 
             class UnrelatedTrack:
                 track_id = 99

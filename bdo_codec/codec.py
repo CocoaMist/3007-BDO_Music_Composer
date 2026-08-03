@@ -9,7 +9,7 @@ from pathlib import Path
 import struct
 from typing import Iterable
 
-from atomic_io import atomic_write_bytes
+from bdo_common.atomic_io import atomic_write_bytes
 
 from . import ice
 from .model import (

@@ -5,9 +5,9 @@ from types import SimpleNamespace
 import unittest
 
 from bdo_midi import Note
-from bdo_transcription import TranscriptionCandidate
-from bdo_transcription_session import CandidateRoute
-from transcription_commit_plan import (
+from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+from bdo_music_composer.transcription.bdo_transcription_session import CandidateRoute
+from bdo_music_composer.transcription.transcription_commit_plan import (
     CommitCandidateRecord,
     CommitCandidateView,
     CommitPlanError,

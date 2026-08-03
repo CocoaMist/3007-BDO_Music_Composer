@@ -51,7 +51,7 @@ from scripts.benchmark_babyslakh_transcription import (
     summarize_fragment_cleanup_tracks,
     write_cleanup_holdout_report,
 )
-from bdo_transcription_postprocess import (
+from bdo_music_composer.transcription.bdo_transcription_postprocess import (
     FrameNoteEvent,
     V1_PARAMS,
     postprocess_frame_events,

@@ -23,7 +23,7 @@ def _self_test_transcription() -> int:
 
     import numpy as np
 
-    from bdo_transcription import _onnx_model, transcription_backend_status
+    from bdo_music_composer.transcription.bdo_transcription import _onnx_model, transcription_backend_status
 
     available, message = transcription_backend_status()
     if not available:
@@ -91,7 +91,7 @@ def _run_startup_self_test_gui() -> int:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
-    from pyside_bdo_gui import MidiToBdoWindow
+    from bdo_music_composer.ui.main_window import MidiToBdoWindow
 
     application = QApplication.instance() or QApplication([])
     application.setQuitOnLastWindowClosed(False)
@@ -165,7 +165,7 @@ def main() -> None:
         cli_main()
         return
 
-    from pyside_bdo_gui import main as gui_main
+    from bdo_music_composer.ui.main_window import main as gui_main
 
     raise SystemExit(gui_main())
 

@@ -24,18 +24,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-import i18n
-from bdo_articulation_profiles import EvidenceLevel, PROFILES as ARTICULATION_PROFILES
-from bdo_instrument_adaptation import articulation_pairs_by_instrument
+import bdo_music_composer.ui.i18n as i18n
+from bdo_music_composer.editor.bdo_articulation_profiles import EvidenceLevel, PROFILES as ARTICULATION_PROFILES
+from bdo_music_composer.editor.bdo_instrument_adaptation import articulation_pairs_by_instrument
 from bdo_midi.instruments import BDO_INSTRUMENT_NAMES
-from bdo_techniques import TECHNIQUE_PROFILES
-from bdo_transcription import (
+from bdo_music_composer.editor.bdo_techniques import TECHNIQUE_PROFILES
+from bdo_music_composer.transcription.bdo_transcription import (
     BACKEND_CHECK_FAILED_MESSAGE,
     BACKEND_MODULE_LOAD_FAILED_MESSAGE,
     FROZEN_BACKEND_UNAVAILABLE_MESSAGE,
     SOURCE_BACKEND_UNAVAILABLE_MESSAGE,
 )
-from i18n import (
+from bdo_music_composer.ui.i18n import (
     LANGUAGES,
     LANGUAGE_CHOICES,
     Localizer,
@@ -235,7 +235,10 @@ class TranslationCatalogTests(unittest.TestCase):
                     )
 
     def test_catalog_source_keys_are_not_redeclared(self):
-        source_path = Path(__file__).resolve().parents[1] / "i18n.py"
+        source_path = (
+            Path(__file__).resolve().parents[1]
+            / "bdo_music_composer/ui/i18n.py"
+        )
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         occurrences = {name: [] for name in ("EN", "JA", "KO")}
 
@@ -284,7 +287,7 @@ class TranslationCatalogTests(unittest.TestCase):
         }
         source_path = (
             Path(__file__).resolve().parents[1]
-            / "editor_articulation_data.py"
+            / "bdo_music_composer/ui/editor/editor_articulation_data.py"
         )
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         hints = set()
@@ -488,7 +491,8 @@ class TranslationCatalogTests(unittest.TestCase):
 
     def test_every_chinese_transcription_widget_literal_is_catalogued(self):
         source_path = (
-            Path(__file__).resolve().parents[1] / "transcription_editor_qt.py"
+            Path(__file__).resolve().parents[1]
+            / "bdo_music_composer/ui/transcription/transcription_editor_qt.py"
         )
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         source_literals = {
@@ -504,7 +508,10 @@ class TranslationCatalogTests(unittest.TestCase):
                 self.assertTrue(source_literals.issubset(catalog))
 
     def test_every_localized_piano_roll_literal_is_catalogued(self):
-        source_path = Path(__file__).resolve().parents[1] / "pyside_bdo_gui.py"
+        source_path = (
+            Path(__file__).resolve().parents[1]
+            / "bdo_music_composer/ui/main_window.py"
+        )
         tree = ast.parse(source_path.read_text(encoding="utf-8-sig"))
         source_literals = set()
         for node in ast.walk(tree):
@@ -548,7 +555,7 @@ class TranslationCatalogTests(unittest.TestCase):
         translation_names = {"_tr", "tr", "trf"}
         failures: list[str] = []
         for filename in (
-            "pyside_bdo_gui.py",
+            "bdo_music_composer/ui/main_window.py",
             "bdo_music_composer/ui/dialogs/application_settings_dialog.py",
             "bdo_music_composer/ui/dialogs/conversion_check_dialog.py",
             "bdo_music_composer/ui/dialogs/release_notes_dialog.py",
@@ -557,10 +564,10 @@ class TranslationCatalogTests(unittest.TestCase):
             "bdo_music_composer/ui/editor/midi_note_editor.py",
             "bdo_music_composer/ui/dialogs/optimizer_dialog.py",
             "bdo_music_composer/ui/editor/piano_roll_canvas.py",
-            "reference_audio_controller.py",
+            "bdo_music_composer/audio/reference_audio_controller.py",
             "bdo_music_composer/ui/editor/timeline_canvas.py",
             "bdo_music_composer/ui/dialogs/track_settings_dialogs.py",
-            "transcription_editor_qt.py",
+            "bdo_music_composer/ui/transcription/transcription_editor_qt.py",
             "bdo_music_composer/ui/ui_notifications.py",
         ):
             path = Path(__file__).resolve().parents[1] / filename

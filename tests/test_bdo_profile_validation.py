@@ -6,11 +6,11 @@ from pathlib import Path
 import unittest
 
 from bdo_codec import MAX_NOTES_PER_TRACK
-from bdo_profile import Evidence, LimitPolicy, load_bdo_profile
-from bdo_validation import ValidationContext, validate_tracks
+from bdo_music_composer.core.bdo_profile import Evidence, LimitPolicy, load_bdo_profile
+from bdo_music_composer.export.bdo_validation import ValidationContext, validate_tracks
 from optimization.plugin_api import OptimizationLimits
-from project_paths import PROFILES_DIR
-from pitch_transform import PitchTransformPlan
+from bdo_music_composer.core.project_paths import PROFILES_DIR
+from bdo_music_composer.editor.pitch_transform import PitchTransformPlan
 
 
 Note = namedtuple("Note", "pitch vel start dur ntype")

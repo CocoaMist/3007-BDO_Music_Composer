@@ -13,13 +13,14 @@ import numpy as np
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtGui import QColor, QImage
 
-from bdo_transcription_evidence_qt import (
+from bdo_music_composer.ui.transcription.bdo_transcription_evidence_qt import (
     DEFAULT_IMAGE_CACHE_BYTES,
     EvidenceImageCache,
     EvidenceTile,
     EvidenceTileController,
     EvidenceTileKey,
     TILE_DURATION_MS,
+    _rgba_image,
 )
 
 
@@ -145,10 +146,91 @@ class TranscriptionEvidenceQtTests(unittest.TestCase):
             )
             self.assertTrue(_wait_until(lambda: any(tile.layer == "contour" for tile in ready)))
             contour_tile = next(tile for tile in ready if tile.layer == "contour")
-            self.assertEqual(contour_tile.image.height(), 3)
+            self.assertEqual(contour_tile.image.height(), 12)
             self.assertEqual(contour_tile.bins_per_semitone, 3)
             controller.close()
             self.assertTrue(controller.thread_pool.waitForDone(2_000))
+
+    def test_contour_renders_sparse_blue_ridges_without_vertical_spikes(self) -> None:
+        contour = np.zeros((12, 30), dtype=np.float32)
+        for column in range(6):
+            contour[column, 5 + column] = 0.88
+            contour[column, 17] = 0.64
+        # A distant harmonic appears immediately.  It should begin a new
+        # ridge instead of drawing a misleading full-height connector.
+        contour[6:, 26] = 0.91
+        contour[4, 11] = 0.10  # stays below the visible guide threshold
+
+        image = _rgba_image(contour, "contour")
+
+        self.assertEqual((image.width(), image.height()), (24, 120))
+        opaque_pixels = []
+        for x in range(image.width()):
+            for y in range(image.height()):
+                color = image.pixelColor(x, y)
+                if color.alpha() > 0:
+                    opaque_pixels.append((x, y, color))
+        self.assertTrue(opaque_pixels)
+        self.assertLess(len(opaque_pixels), image.width() * image.height() // 2)
+        self.assertTrue(
+            all(color.blue() > color.red() for _x, _y, color in opaque_pixels)
+        )
+        # The jump from bin 10 to bin 26 remains disconnected: the centre of
+        # that pitch span must not become an old-style vertical spike.
+        midpoint_y = image.height() - 1 - round((18 + 0.5) * 4 - 0.5)
+        jump_x = round((6 + 0.5) * 2 - 0.5)
+        self.assertEqual(image.pixelColor(jump_x, midpoint_y).alpha(), 0)
+
+    def test_contour_denoise_profiles_remove_weak_ridges_without_hiding_signal(
+        self,
+    ) -> None:
+        contour = np.zeros((16, 24), dtype=np.float32)
+        contour[:, 7] = 0.82
+        contour[:, 16] = 0.14
+
+        low = _rgba_image(contour, "contour", contour_denoise="low")
+        standard = _rgba_image(
+            contour,
+            "contour",
+            contour_denoise="standard",
+        )
+        high = _rgba_image(contour, "contour", contour_denoise="high")
+
+        def opaque_count(image: QImage) -> int:
+            return sum(
+                image.pixelColor(x, y).alpha() > 0
+                for x in range(image.width())
+                for y in range(image.height())
+            )
+
+        self.assertGreater(opaque_count(low), opaque_count(standard))
+        self.assertEqual(opaque_count(standard), opaque_count(high))
+        # The persistent, high-confidence ridge remains visible at every
+        # level; only the weak secondary ridge is removed.
+        self.assertGreater(opaque_count(high), 0)
+
+    def test_contour_denoise_is_part_of_the_tile_cache_key(self) -> None:
+        base = EvidenceTileKey("source", "contour", 0, 48, 72, 80)
+        low = EvidenceTileKey(
+            "source",
+            "contour",
+            0,
+            48,
+            72,
+            80,
+            contour_denoise="low",
+        )
+        high = EvidenceTileKey(
+            "source",
+            "contour",
+            0,
+            48,
+            72,
+            80,
+            contour_denoise="high",
+        )
+        self.assertNotEqual(base, low)
+        self.assertNotEqual(low, high)
 
     def test_generation_and_cache_key_drop_stale_worker_results(self) -> None:
         old_started = threading.Event()
@@ -577,7 +659,7 @@ class TranscriptionEvidenceQtTests(unittest.TestCase):
         ready: list[EvidenceTile] = []
         controller.tile_ready.connect(ready.append)
         with patch(
-            "bdo_transcription.load_transcription_frame_times",
+            "bdo_music_composer.transcription.bdo_transcription.load_transcription_frame_times",
             side_effect=load_times,
         ):
             generation = controller.begin_source(descriptor)

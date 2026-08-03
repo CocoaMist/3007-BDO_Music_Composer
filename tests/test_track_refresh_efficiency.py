@@ -20,7 +20,7 @@ class TrackRefreshEfficiencyTests(unittest.TestCase):
             from PySide6.QtWidgets import QApplication
 
             import bdo_music_composer.editor.editor_import as editor_import
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
 
 
             app = QApplication.instance() or QApplication([])

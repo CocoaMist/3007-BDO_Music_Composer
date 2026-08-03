@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import atomic_io
-from bdo_score import read_bdo_score
-import wpf_sidecar
+import bdo_common.atomic_io as atomic_io
+from bdo_music_composer.export.bdo_score import read_bdo_score
+from scripts import wpf_sidecar
 
 
 class WpfSidecarTests(unittest.TestCase):

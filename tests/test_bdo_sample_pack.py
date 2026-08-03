@@ -8,7 +8,7 @@ import unittest
 import wave
 import zipfile
 
-from bdo_sample_pack import (
+from bdo_music_composer.audio.bdo_sample_pack import (
     SamplePackCancelled,
     SamplePackError,
     create_sample_pack,

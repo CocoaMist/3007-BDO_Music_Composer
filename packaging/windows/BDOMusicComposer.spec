@@ -60,9 +60,8 @@ non_onnx_backend_excludes = [
 datas = [
     (str(project_root / "assets" / "ui" / "timeline_background.png"), "assets/ui"),
     (str(project_root / "assets" / "ui" / "timeline_background_v2.png"), "assets/ui"),
-    (str(project_root / "assets" / "ui" / "home" / "home_mountain_workshop_v1.jpg"), "assets/ui/home"),
+    (str(project_root / "assets" / "ui" / "home" / "home_aristocratic_salon_v2.png"), "assets/ui/home"),
     (str(project_root / "assets" / "instruments" / "ai_v1"), "assets/instruments/ai_v1"),
-    (str(project_root / "assets" / "ui" / "loading_conductor_lineart.png"), "assets/ui"),
     (str(project_root / "assets" / "icons" / "app_icon.png"), "assets/icons"),
     (str(project_root / "assets" / "icons" / "shai_ensemble_mark.png"), "assets/icons"),
     (str(project_root / "data" / "mappings" / "bdo_wwise_midi_map.json"), "data/mappings"),

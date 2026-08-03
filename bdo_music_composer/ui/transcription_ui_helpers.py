@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from i18n import trv
+from bdo_music_composer.ui.i18n import trv
 
 
 def transcription_cleanup_ui_labels(

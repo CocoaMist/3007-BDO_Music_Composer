@@ -28,13 +28,13 @@ v1.0.0 is the first public stable major release. Automated regression covers the
 - Open BDO v9 scores while preserving dual velocities, track volume/settings, articulations, and physical chunks; unchanged documents round-trip byte for byte.
 - Project undo/redo, background autosave, version discovery, and a privacy-safe home index.
 
-### Transcription and analysis assistance
+### Practical transcription
 
-- Load local MP3/WAV, set reference offset and beat origin, and align it with the MIDI playhead.
-- Run local Basic Pitch ONNX/CPU analysis, range re-decode, evidence caching, and candidate review.
-- Edit key/chord segments, melody/voice groups, fragment cleanup, and explainable BDO instrument Top-3 matches.
-- Analysis remains in review sidecars until the user confirms Apply/OK.
-- Embedded editing intentionally excludes automatic percussion mapping and never treats analysis as permission to overwrite formal notes or track assignments.
+- Load a local WAV or standard MP3 and click Start Transcription to run local Basic Pitch ONNX/CPU analysis.
+- The production UI uses protected standard/balanced/preserve settings and does not expose experimental parameters, phrases, harmony, voice grouping, or orchestration diagnostics.
+- Reference notes use lightweight outlines with a lower confidence rail. The blue pitch guide is clipped near candidate notes and offers low, standard, and high display-only denoise levels. Optional voice hints connect only nearby, credible lead fragments instead of spanning long gaps or large pitch jumps. Toggle each layer independently, then select reference notes to ignore, restore, or add them to the editable draft.
+- Run the read-only game-fit check on the draft, then hide transcription guides and continue ordinary editing; the check never deletes, repitches, or quantizes notes.
+- Results enter the editor draft first and reach the formal track only after Apply/OK. Existing notes are never overwritten automatically, and percussion is never mapped automatically.
 
 ### Optimization, preview, and export
 
@@ -73,7 +73,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install_transcription.ps1
 1. Create a project, import MIDI, or open a BDO v9 score.
 2. Configure character name, Owner ID, output directory, and optional local samples.
 3. Choose BDO instruments and edit notes, velocities, articulations, FX, and pitch transforms.
-4. Optionally load reference audio, run local transcription, and manually review candidates, harmony, and voice groups.
+4. Optionally load reference audio, start transcription, use reference notes or the pitch guide to locate the melody, and add selected notes to the draft.
 5. Optionally analyze optimization, preview it, and apply it to the song or target track.
 6. Run Conversion Check and resolve range, invalid-FX, percussion, and instrument-merge issues.
 7. Preview the current editor state and export; the output is structurally read back for validation.
@@ -119,7 +119,7 @@ flowchart LR
 
 Primary boundaries:
 
-- `pyside_bdo_gui.py`: main-window orchestration, Qt lifecycle, and compatibility exports.
+- `bdo_music_composer/ui/main_window.py`: main-window orchestration, Qt lifecycle, and compatibility exports.
 - `bdo_music_composer/editor/model_revision.py`,
   `bdo_music_composer/app/conversion_validation_controller.py`,
   `bdo_music_composer/transcription/transcription_workspace_controller.py`,
@@ -142,13 +142,13 @@ Primary boundaries:
   application theme lives under the inert
   `bdo_music_composer/ui/theme/` subpackage.
 - `optimization/`: production pipeline, registry, and trusted local algorithm boundary.
-- `bdo_realtime_audio.py`, `bdo_sample_renderer.py`: real-time and offline sample preview.
-- `export_workflow.py`, `bdo_export/`, `bdo_codec/`: immutable requests, adaptation, binary I/O, and atomic publication.
+- `bdo_music_composer/audio/bdo_realtime_audio.py`, `bdo_music_composer/audio/bdo_sample_renderer.py`: real-time and offline sample preview.
+- `bdo_music_composer/export/export_workflow.py`, `bdo_export/`, `bdo_codec/`: immutable requests, adaptation, binary I/O, and atomic publication.
 - `bdo_music_composer/project/project_persistence.py`,
-  `bdo_music_composer/project/project_schema.py`, and `home_catalog.py`:
+  `bdo_music_composer/project/project_schema.py`, and `bdo_music_composer/app/home_catalog.py`:
   autosave, migrations, and bounded home discovery.
-- `bdo_transcription*.py`, `transcription_workers.py`: Qt-free analysis, stable candidate-range indexes, and background workers.
-- `i18n.py`, `project_paths.py`: runtime catalogs and source/frozen path boundaries.
+- `bdo_transcription*.py`, `bdo_music_composer/ui/transcription/transcription_workers.py`: Qt-free analysis, stable candidate-range indexes, and background workers.
+- `bdo_music_composer/ui/i18n.py`, `bdo_music_composer/core/project_paths.py`: runtime catalogs and source/frozen path boundaries.
 
 See [Architecture](docs/ARCHITECTURE.md), [AI Context](docs/AI_CONTEXT.md), [Project Structure](docs/PROJECT_STRUCTURE.md), [Conversion Settings](docs/CONVERSION_SETTINGS.md), and [BDO v9 codec](docs/BDO_V9_CODEC.md).
 
@@ -177,7 +177,7 @@ Use `tools/benchmark_dense_ui.py` for UI baselines. See the [roadmap](docs/OPTIM
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -q
-.\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
+.\.venv\Scripts\python.exe -m py_compile main.py bdo_music_composer/core/project_paths.py bdo_music_composer/ui/main_window.py bdo_music_composer/ui/i18n.py
 git diff --check
 ```
 

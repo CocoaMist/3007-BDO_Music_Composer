@@ -23,9 +23,9 @@ class UiPaintRegressionTests(unittest.TestCase):
             from PySide6.QtWidgets import QApplication
 
             from bdo_midi import Note
-            from i18n import install_localizer, tr
-            import pyside_bdo_gui as gui
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.i18n import install_localizer, tr
+            import bdo_music_composer.ui.main_window as gui
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog, MidiToBdoWindow, PianoRollCanvas,
                 TrackState,
             )
@@ -103,6 +103,61 @@ class UiPaintRegressionTests(unittest.TestCase):
             assert active.lightness() > inactive.lightness() + 45, (
                 active.getRgb(), inactive.getRgb()
             )
+
+            # At the minimum row height, semantic LOD removes text, the
+            # velocity rail and resize handles instead of compressing them
+            # into bright fragments. Black piano keys also drop labels while
+            # octave landmarks remain available on natural C rows.
+            editor.canvas.ROW_H = editor.canvas.MIN_ROW_H
+            editor.canvas.pitch_top = 64
+            compact_note = Note(
+                60,
+                127,
+                0.0,
+                160.0 / editor.canvas.px_per_ms,
+                0,
+            )
+            editor.canvas.set_notes([compact_note])
+            editor.canvas.selected = {0}
+            editor.canvas.update()
+            app.processEvents()
+            compact_rect = editor.canvas.note_rect(compact_note)
+            assert compact_rect.height() == 8.0
+            assert editor.canvas.note_velocity_bar_rects(
+                compact_rect,
+                compact_note.vel,
+                editor.canvas.devicePixelRatioF(),
+            ) is None
+            compact_image = editor.canvas.grab().toImage()
+            compact_dpr = editor.canvas.devicePixelRatioF()
+            bright_inner_pixels = []
+            for x in range(
+                round((compact_rect.left() + 6) * compact_dpr),
+                round((compact_rect.right() - 6) * compact_dpr),
+            ):
+                for y in range(
+                    round((compact_rect.top() + 2) * compact_dpr),
+                    round((compact_rect.bottom() - 2) * compact_dpr),
+                ):
+                    color = compact_image.pixelColor(x, y)
+                    if color.lightness() > 190:
+                        bright_inner_pixels.append(color.getRgb())
+            assert not bright_inner_pixels, bright_inner_pixels[:8]
+
+            black_pitch_y = (
+                editor.canvas.RULER_H
+                + (editor.canvas.pitch_top - 61) * editor.canvas.ROW_H
+            )
+            black_key_bright_pixels = []
+            for x in range(12, 52):
+                for y in range(
+                    round(black_pitch_y + 2),
+                    round(black_pitch_y + editor.canvas.ROW_H - 2),
+                ):
+                    color = compact_image.pixelColor(x, y)
+                    if color.lightness() > 150:
+                        black_key_bright_pixels.append(color.getRgb())
+            assert not black_key_bright_pixels, black_key_bright_pixels[:8]
             editor.close()
 
             window.close()

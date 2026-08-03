@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from bdo_midi import Note
 from bdo_music_composer.editor.editor_models import TrackState
-from home_catalog import IncrementalHomeScan, scan_local_projects
+from bdo_music_composer.app.home_catalog import IncrementalHomeScan, scan_local_projects
 from bdo_music_composer.project.project_persistence import (
     AutosaveRequest,
     PROJECT_INDEX_NAME,
@@ -184,7 +184,7 @@ class ProjectPersistenceTests(unittest.TestCase):
                 os.utime(project_dir / "project.json", (index + 1, index + 1))
 
             with patch(
-                "home_catalog.game_score_instrument_ids",
+                "bdo_music_composer.app.home_catalog.game_score_instrument_ids",
                 return_value=(0x0B,),
             ) as instrument_scan:
                 scan = IncrementalHomeScan(

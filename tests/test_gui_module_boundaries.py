@@ -27,14 +27,15 @@ class GuiModuleBoundaryTests(unittest.TestCase):
         from bdo_music_composer.ui import (
             home_widgets,
             startup_widgets,
+            transcription_rhythm_diagnostic,
             ui_notifications,
         )
         import bdo_music_composer.ui.editor.midi_note_editor as midi_note_editor
         import bdo_music_composer.ui.editor.piano_roll_canvas as piano_roll_canvas
-        import pyside_bdo_gui
-        import reference_audio_controller
+        import bdo_music_composer.ui.main_window as pyside_bdo_gui
+        import bdo_music_composer.audio.reference_audio_controller as reference_audio_controller
         import bdo_music_composer.ui.editor.timeline_canvas as timeline_canvas
-        import transcription_workers
+        import bdo_music_composer.ui.transcription.transcription_workers as transcription_workers
 
         expected = {
             "AcknowledgementsDialog": acknowledgements_dialog.AcknowledgementsDialog,
@@ -52,6 +53,7 @@ class GuiModuleBoundaryTests(unittest.TestCase):
             "ConversionValidationController": conversion_validation_controller.ConversionValidationController,
             "ModelRevision": model_revision.ModelRevision,
             "MainWindowStyleMixin": main_window_style.MainWindowStyleMixin,
+            "TranscriptionRhythmDiagnosticMixin": transcription_rhythm_diagnostic.TranscriptionRhythmDiagnosticMixin,
             "MidiOptimizeDialog": optimizer_dialog.MidiOptimizeDialog,
             "OptimizerAnalysisWorker": optimizer_dialog.OptimizerAnalysisWorker,
             "ReferenceAudioController": reference_audio_controller.ReferenceAudioController,
@@ -73,11 +75,8 @@ class GuiModuleBoundaryTests(unittest.TestCase):
             "HomeBackdrop": home_widgets.HomeBackdrop,
             "HomeEntryDelegate": home_widgets.HomeEntryDelegate,
             "HomeFooter": home_widgets.HomeFooter,
-            "LoadingSpinner": startup_widgets.LoadingSpinner,
-            "StartupArtwork": startup_widgets.StartupArtwork,
-            "StartupSplash": startup_widgets.StartupSplash,
         }
-        source = (ROOT / "pyside_bdo_gui.py").read_text(encoding="utf-8-sig")
+        source = (ROOT / "bdo_music_composer/ui/main_window.py").read_text(encoding="utf-8-sig")
         defined_classes = {
             node.name for node in ast.parse(source).body if isinstance(node, ast.ClassDef)
         }
@@ -108,13 +107,14 @@ class GuiModuleBoundaryTests(unittest.TestCase):
             "bdo_music_composer/ui/dialogs/track_settings_dialogs.py",
             "bdo_music_composer/ui/home_widgets.py",
             "bdo_music_composer/ui/startup_widgets.py",
+            "bdo_music_composer/ui/transcription_rhythm_diagnostic.py",
             "bdo_music_composer/ui/theme/fluent_theme.py",
             "bdo_music_composer/ui/theme/main_window_style.py",
             "bdo_music_composer/ui/transcription_ui_helpers.py",
             "bdo_music_composer/ui/ui_controls.py",
             "bdo_music_composer/ui/ui_notifications.py",
             "bdo_music_composer/ui/update_check_qt.py",
-            "editor_articulation_data.py",
+            "bdo_music_composer/ui/editor/editor_articulation_data.py",
             "bdo_music_composer/editor/editor_commands.py",
             "bdo_music_composer/editor/editor_import.py",
             "bdo_music_composer/editor/editor_models.py",
@@ -123,10 +123,10 @@ class GuiModuleBoundaryTests(unittest.TestCase):
             "bdo_music_composer/ui/editor/piano_roll_canvas.py",
             "bdo_music_composer/editor/preview_midi_writer.py",
             "bdo_music_composer/editor/velocity_curve.py",
-            "reference_audio_controller.py",
+            "bdo_music_composer/audio/reference_audio_controller.py",
             "bdo_music_composer/ui/editor/timeline_canvas.py",
-            "transcription_commit_plan.py",
-            "transcription_workers.py",
+            "bdo_music_composer/transcription/transcription_commit_plan.py",
+            "bdo_music_composer/ui/transcription/transcription_workers.py",
         ):
             with self.subTest(path=relative_path):
                 tree = ast.parse(
@@ -147,41 +147,46 @@ class GuiModuleBoundaryTests(unittest.TestCase):
 
     def test_preview_midi_writer_keeps_compatibility_export(self) -> None:
         from bdo_music_composer.editor import preview_midi_writer
-        import pyside_bdo_gui
+        import bdo_music_composer.ui.main_window as pyside_bdo_gui
 
         self.assertIs(
             pyside_bdo_gui.build_filtered_midi,
             preview_midi_writer.build_filtered_midi,
         )
 
-    def test_home_and_startup_constants_keep_compatibility_exports(self) -> None:
-        from bdo_music_composer.ui import home_widgets, startup_widgets
-        import pyside_bdo_gui
+    def test_home_constants_keep_compatibility_exports(self) -> None:
+        from bdo_music_composer.ui import home_widgets
+        import bdo_music_composer.ui.main_window as pyside_bdo_gui
 
-        for module, names in (
-            (
-                home_widgets,
-                (
-                    "HOME_BACKGROUND_IMAGE",
-                    "HOME_INSTRUMENT_IDS_ROLE",
-                    "SHAI_ENSEMBLE_MARK_IMAGE",
-                ),
-            ),
-            (startup_widgets, ("STARTUP_ART_IMAGE",)),
+        for name in (
+            "HOME_BACKGROUND_IMAGE",
+            "HOME_INSTRUMENT_IDS_ROLE",
+            "SHAI_ENSEMBLE_MARK_IMAGE",
         ):
-            for name in names:
-                with self.subTest(name=name):
-                    self.assertIs(getattr(pyside_bdo_gui, name), getattr(module, name))
+            with self.subTest(name=name):
+                self.assertIs(
+                    getattr(pyside_bdo_gui, name),
+                    getattr(home_widgets, name),
+                )
 
     def test_main_gui_stays_below_orchestration_line_budget(self) -> None:
-        source = (ROOT / "pyside_bdo_gui.py").read_text(encoding="utf-8-sig")
+        source = (ROOT / "bdo_music_composer/ui/main_window.py").read_text(encoding="utf-8-sig")
         self.assertLessEqual(len(source.splitlines()), 8_600)
+
+    def test_crash_logging_installation_uses_the_packaged_owner(self) -> None:
+        from bdo_music_composer.app import crash_logging
+        import bdo_music_composer.ui.main_window as pyside_bdo_gui
+
+        self.assertIs(
+            pyside_bdo_gui.install_crash_logging,
+            crash_logging.install_crash_logging,
+        )
 
     def test_game_profile_is_lazy_and_cached(self) -> None:
         from unittest.mock import patch
 
         from bdo_music_composer.app import game_profile_provider
-        import pyside_bdo_gui
+        import bdo_music_composer.ui.main_window as pyside_bdo_gui
 
         marker = object()
         game_profile_provider.get_bdo_profile.cache_clear()
@@ -197,7 +202,7 @@ class GuiModuleBoundaryTests(unittest.TestCase):
         finally:
             game_profile_provider.get_bdo_profile.cache_clear()
 
-        source = (ROOT / "pyside_bdo_gui.py").read_text(encoding="utf-8-sig")
+        source = (ROOT / "bdo_music_composer/ui/main_window.py").read_text(encoding="utf-8-sig")
         module = ast.parse(source)
         top_level_profile_reads = [
             call
@@ -216,7 +221,7 @@ class GuiModuleBoundaryTests(unittest.TestCase):
 
     def test_config_filename_helper_reexports_the_storage_owner(self) -> None:
         from bdo_music_composer.app import application_config
-        import pyside_bdo_gui
+        import bdo_music_composer.ui.main_window as pyside_bdo_gui
 
         self.assertIs(
             pyside_bdo_gui.safe_filename,
@@ -225,7 +230,7 @@ class GuiModuleBoundaryTests(unittest.TestCase):
 
     def test_audio_source_helpers_keep_compatibility_exports(self) -> None:
         from bdo_music_composer.app import audio_source_settings
-        import pyside_bdo_gui
+        import bdo_music_composer.ui.main_window as pyside_bdo_gui
 
         for name in (
             "audio_source_config",

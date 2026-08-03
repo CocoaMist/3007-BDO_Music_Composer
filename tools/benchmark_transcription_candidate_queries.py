@@ -15,7 +15,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from bdo_transcription_session import TranscriptionSession  # noqa: E402
+from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionSession  # noqa: E402
 
 
 @dataclass(frozen=True, slots=True)

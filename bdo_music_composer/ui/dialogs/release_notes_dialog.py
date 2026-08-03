@@ -36,7 +36,7 @@ from bdo_music_composer.app.update_check import (
     UpdateStatus,
 )
 from bdo_music_composer.ui.update_check_qt import UpdateCheckController
-from i18n import localizer, tr, trf
+from bdo_music_composer.ui.i18n import localizer, tr, trf
 
 
 def _active_locale() -> str:

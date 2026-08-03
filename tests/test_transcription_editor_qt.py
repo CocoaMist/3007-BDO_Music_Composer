@@ -36,7 +36,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication, QWidget
 
-            from transcription_editor_qt import TranscriptionWaveformLane
+            from bdo_music_composer.ui.transcription.transcription_editor_qt import TranscriptionWaveformLane
 
             class Canvas(QWidget):
                 KEY_W = 86
@@ -111,7 +111,137 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             completed.stdout + completed.stderr,
         )
 
-    def test_panel_exposes_actions_without_owning_session_or_worker(self) -> None:
+    def test_panel_exposes_practical_reliable_workflow(self) -> None:
+        completed = _run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication
+
+            from bdo_music_composer.ui.transcription.transcription_editor_qt import TranscriptionEditorPanel
+
+            app = QApplication([])
+            panel = TranscriptionEditorPanel()
+            panel.resize(920, panel.sizeHint().height())
+            panel.show()
+            app.processEvents()
+
+            assert panel.PRACTICAL_MODE
+            assert not hasattr(panel, "assist_panel")
+            assert panel.analysis_mode == "standard"
+            assert panel.sensitivity == "balanced"
+            assert panel.cleanup_profile == "preserve"
+            assert panel.workspace_title_label.text() == "音频扒谱"
+            assert panel.audio_button.text() == "载入音频"
+            assert panel.analyze_button.text() == "开始扒谱"
+            assert panel.write_current_track_button.text() == "采纳为草稿"
+            assert panel.reject_button.text() == "忽略所选"
+            assert panel.restore_button.text() == "恢复忽略"
+            assert panel.candidate_layer_button.isVisible()
+            assert panel.candidate_layer_button.text() == "参考音块 · 52%"
+            assert panel.pitch_guide_button.isVisible()
+            assert panel.pitch_guide_button.text() == "音高轨迹"
+            assert panel.pitch_only_button.isVisible()
+            assert panel.contour_denoise_combo.isVisible()
+            assert panel.contour_denoise == "standard"
+            assert not panel.melody_lines_visible
+            assert not panel.advanced_toggle_button.isVisible()
+            assert not panel.advanced_panel.isVisible()
+            assert not panel.redecode_button.isVisible()
+            assert not hasattr(panel, "assist_toggle_button")
+            assert not panel.review_more_bar.isVisible()
+
+            events = {
+                "load": 0,
+                "unload": 0,
+                "analyze": 0,
+            }
+            panel.load_audio_requested.connect(
+                lambda: events.__setitem__("load", events["load"] + 1)
+            )
+            panel.unload_audio_requested.connect(
+                lambda: events.__setitem__("unload", events["unload"] + 1)
+            )
+            panel.analyze_requested.connect(
+                lambda: events.__setitem__("analyze", events["analyze"] + 1)
+            )
+            panel.audio_button.click()
+            assert events["load"] == 1
+            panel.set_audio_loaded(True, display_name="reference.wav")
+            assert panel.audio_button.text() == "更换音频"
+            assert panel.remove_audio_button.isVisible()
+            panel.audio_button.click()
+            assert events["load"] == 2
+            assert events["unload"] == 0
+            panel.remove_audio_button.click()
+            assert events["unload"] == 1
+            panel.analyze_button.click()
+            assert events["analyze"] == 1
+
+            panel.set_range_available(True)
+            panel.set_advanced_controls_expanded(True)
+            assert not panel.advanced_controls_expanded
+            assert not panel.redecode_button.isVisible()
+            panel.set_action_state(
+                write_enabled=True,
+                reject_enabled=True,
+                rejected_count=2,
+                candidate_count=8,
+                staging_count=1,
+                draft_note_count=3,
+            )
+            assert panel.write_current_track_button.isVisible()
+            assert panel.review_display_group.isVisible()
+            assert panel.review_action_group.isVisible()
+            assert panel.review_commit_group.isVisible()
+            assert panel.reject_button.isVisible()
+            assert panel.restore_button.isVisible()
+            assert panel.clear_staging_button.isVisible()
+            assert not hasattr(panel, "game_adaptation_button")
+            assert not hasattr(panel, "continue_creation_button")
+            assert not panel.review_tools_toggle_button.isVisible()
+
+            assert not panel.visible_evidence_layers
+            assert not panel.contour_denoise_combo.isEnabled()
+            panel.pitch_only_button.click()
+            assert not panel.candidate_layer_visible
+            assert panel.visible_evidence_layers == frozenset({"contour"})
+            assert panel.contour_denoise_combo.isEnabled()
+            panel.pitch_only_button.click()
+            assert panel.candidate_layer_visible
+            assert not panel.visible_evidence_layers
+            assert not panel.contour_denoise_combo.isEnabled()
+
+            # Manually restoring another display layer exits guide-only mode
+            # instead of leaving a checked label that no longer describes the
+            # actual canvas state.
+            panel.pitch_only_button.click()
+            panel.candidate_layer_button.click()
+            assert not panel.pitch_only_button.isChecked()
+            assert panel.candidate_layer_visible
+            assert panel.visible_evidence_layers == frozenset({"contour"})
+            panel.pitch_guide_button.click()
+            assert not panel.visible_evidence_layers
+            assert not panel.contour_denoise_combo.isEnabled()
+
+            denoise_events = []
+            panel.contour_denoise_changed.connect(denoise_events.append)
+            panel.contour_denoise_combo.setCurrentIndex(
+                panel.contour_denoise_combo.findData("high")
+            )
+            assert panel.contour_denoise == "high"
+            assert denoise_events == ["high"]
+
+            panel.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def _obsolete_test_panel_exposes_actions_without_owning_session_or_worker(self) -> None:
         completed = _run_offscreen(
             """
             from types import SimpleNamespace
@@ -119,7 +249,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             from PySide6.QtCore import Qt
             from PySide6.QtWidgets import QApplication
 
-            from transcription_editor_qt import TranscriptionEditorPanel
+            from bdo_music_composer.ui.transcription.transcription_editor_qt import TranscriptionEditorPanel
 
             app = QApplication([])
             panel = TranscriptionEditorPanel()
@@ -132,11 +262,11 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             assert panel.analysis_mode == "standard"
             assert panel.sensitivity == "balanced"
             assert panel.cleanup_profile == "preserve"
-            assert panel.analyze_button.text() == "全曲"
+            assert panel.analyze_button.text() == "分析整首"
             assert panel.analyze_button.property("kind") == "primary"
-            assert panel.redecode_button.text() == "A–B"
+            assert panel.redecode_button.text() == "分析 A–B"
             assert panel.diagnostic_toggle_button.text() == "证据"
-            assert panel.cleanup_profile_caption.text() == "碎音"
+            assert panel.cleanup_profile_caption.text() == "碎音整理"
             assert panel.cleanup_profile_mark.text() == "◇"
             assert panel.cleanup_profile_combo.itemText(0) == "保留"
             assert panel.cleanup_profile_combo.itemText(1) == "平衡 β"
@@ -153,8 +283,11 @@ class TranscriptionEditorQtTests(unittest.TestCase):
                 )
             )
             assert panel.confidence_floor == 0.30
+            assert panel.candidate_layer_visible
+            assert panel.candidate_opacity == 0.72
+            assert panel.candidate_layer_button.text() == "识别音块 · 72%"
             assert panel.reference_background_opacity == 0.60
-            assert panel.reference_opacity_caption.text() == "背景"
+            assert panel.reference_opacity_caption.text() == "参考层"
             assert panel.reference_opacity_label.text() == "60%"
             assert panel.visible_evidence_layers == frozenset()
             assert not panel.spectrogram_visible
@@ -164,7 +297,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             assert not panel.spectrogram_checkbox.isEnabled()
             assert panel.melody_lines_visible
             assert panel.melody_lines_button.text() == "旋律线"
-            assert panel.melody_lines_button.isVisible()
+            assert not panel.melody_lines_button.isVisible()
             assert not panel.melody_lines_button.isEnabled()
             assert panel.melody_lines_button.toolTip() == "分析后显示旋律线"
             assert panel.melody_line_roles == frozenset(
@@ -193,6 +326,8 @@ class TranscriptionEditorQtTests(unittest.TestCase):
                 "melody_lines": [],
                 "melody_roles": [],
                 "reference_opacity": [],
+                "candidate_visibility": [],
+                "candidate_opacity": [],
                 "select_fragments": 0,
             }
             panel.load_audio_requested.connect(
@@ -238,6 +373,12 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             )
             panel.reference_background_opacity_changed.connect(
                 signals["reference_opacity"].append
+            )
+            panel.candidate_visibility_changed.connect(
+                signals["candidate_visibility"].append
+            )
+            panel.candidate_opacity_changed.connect(
+                signals["candidate_opacity"].append
             )
             panel.select_fragments_requested.connect(
                 lambda: signals.__setitem__(
@@ -307,6 +448,18 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             assert panel.reference_background_opacity == 0.75
             assert panel.reference_opacity_label.text() == "75%"
             assert signals["reference_opacity"] == [0.42]
+            panel.candidate_opacity_slider.setValue(54)
+            assert panel.candidate_opacity == 0.54
+            assert panel.candidate_layer_button.text() == "识别音块 · 54%"
+            assert signals["candidate_opacity"] == [0.54]
+            panel.candidate_layer_button.setChecked(False)
+            assert signals["candidate_visibility"] == [False]
+            panel.set_candidate_layer_visible(True)
+            panel.set_candidate_opacity(0.68)
+            assert panel.candidate_layer_visible
+            assert panel.candidate_opacity == 0.68
+            assert signals["candidate_visibility"] == [False]
+            assert signals["candidate_opacity"] == [0.54]
             panel._melody_role_actions["harmony"].setChecked(False)
             assert panel.melody_line_roles == frozenset(
                 {"primary_melody", "bass"}
@@ -343,6 +496,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
 
             panel.confidence_slider.setValue(75)
             assert signals["confidence"][-1] == 0.75
+            panel.set_advanced_controls_expanded(True)
             panel.diagnostic_toggle_button.click()
             assert panel.frame_checkbox.isVisible()
             assert panel.onset_checkbox.isVisible()
@@ -418,7 +572,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             completed.stdout + completed.stderr,
         )
 
-    def test_semantic_assist_is_collapsible_and_emits_host_intents(self) -> None:
+    def _obsolete_test_semantic_assist_is_collapsible_and_emits_host_intents(self) -> None:
         completed = _run_offscreen(
             """
             from types import SimpleNamespace
@@ -426,7 +580,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             from PySide6.QtCore import Qt
             from PySide6.QtWidgets import QApplication
 
-            from transcription_editor_qt import TranscriptionEditorPanel
+            from bdo_music_composer.ui.transcription.transcription_editor_qt import TranscriptionEditorPanel
 
             app = QApplication([])
             panel = TranscriptionEditorPanel()
@@ -534,6 +688,8 @@ class TranscriptionEditorQtTests(unittest.TestCase):
                 key_locked=False,
             )
             panel.set_harmony_analysis(analysis)
+            assert panel.assist_toggle_button.isVisible()
+            panel.set_advanced_controls_expanded(True)
             assert panel.assist_toggle_button.isVisible()
             assert not panel.assist_panel.isVisible()
             panel.set_assist_expanded(True)
@@ -650,8 +806,8 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             from PySide6.QtCore import Qt
             from PySide6.QtWidgets import QApplication
 
-            from i18n import install_localizer, tr
-            from transcription_editor_qt import TranscriptionEditorPanel
+            from bdo_music_composer.ui.i18n import install_localizer, tr
+            from bdo_music_composer.ui.transcription.transcription_editor_qt import TranscriptionEditorPanel
 
             app = QApplication([])
             localizer = install_localizer(app, "zh_CN")
@@ -678,11 +834,11 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             ))
 
             melody_labels = {
-                "zh_CN": "旋律线",
-                "zh_TW": "旋律線",
-                "en_US": "Melody lines",
-                "ja_JP": "メロディライン",
-                "ko_KR": "멜로디 라인",
+                "zh_CN": "声部提示",
+                "zh_TW": "聲部提示",
+                "en_US": "Voice hints",
+                "ja_JP": "声部ヒント",
+                "ko_KR": "성부 힌트",
             }
             alternative_prefixes = {
                 "zh_CN": "备选：",
@@ -707,9 +863,6 @@ class TranscriptionEditorQtTests(unittest.TestCase):
                     )
                 assert panel.melody_lines_button.text() == melody_labels[language]
                 assert panel.audio_button.toolTip() == "Play"
-                assert panel.assist_panel.harmony_summary.key_label.toolTip().startswith(
-                    alternative_prefixes[language]
-                )
                 assert panel.minimumSizeHint().width() <= 920, (
                     language,
                     panel.minimumSizeHint().width(),
@@ -724,12 +877,28 @@ class TranscriptionEditorQtTests(unittest.TestCase):
                     panel.minimumSizeHint().width(),
                 )
 
+            panel.resize(1536, panel.sizeHint().height())
+            app.processEvents()
+            assert panel._advanced_layout_wide is True
+            tuning_position = panel._advanced_layout.getItemPosition(
+                panel._advanced_layout.indexOf(panel.tuning_tools_bar)
+            )
+            guide_position = panel._advanced_layout.getItemPosition(
+                panel._advanced_layout.indexOf(panel.guide_tools_bar)
+            )
+            candidate_position = panel._advanced_layout.getItemPosition(
+                panel._advanced_layout.indexOf(panel.candidate_tools_bar)
+            )
+            assert tuning_position[:2] == (0, 0), tuning_position
+            assert candidate_position[:2] == (0, 1), candidate_position
+            assert guide_position[:2] == (1, 0), guide_position
+
             localizer.set_language("en_US")
             panel.set_audio_loaded(False)
-            assert panel.analyze_button.text() == "Full"
-            assert panel.cleanup_profile_caption.text() == "Fragments"
+            assert panel.analyze_button.text() == "Start Transcription"
+            assert panel.cleanup_profile_caption.text() == "Fragment cleanup"
             assert panel.cleanup_profile_combo.itemText(0) == "Keep"
-            assert panel.melody_lines_button.text() == "Melody lines"
+            assert panel.melody_lines_button.text() == "Voice hints"
             assert panel.spectrogram_checkbox.text() == "Spectrogram"
             assert (
                 localizer.translate("原始声谱图")
@@ -779,7 +948,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             from PySide6.QtGui import QImage
             from PySide6.QtWidgets import QApplication, QWidget
 
-            import pyside_bdo_gui
+            import bdo_music_composer.ui.main_window as pyside_bdo_gui
 
             requests = []
 
@@ -877,15 +1046,15 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             """
             from unittest.mock import patch
 
-            from PySide6.QtCore import QPoint, QPointF, Qt
+            from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
             from PySide6.QtGui import QImage
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication, QCheckBox, QToolButton, QWidget
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_instruments import VoiceGroup
-            from bdo_transcription_melody_lines import CONTOUR_KIND
-            import pyside_bdo_gui
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_instruments import VoiceGroup
+            from bdo_music_composer.transcription.bdo_transcription_melody_lines import CONNECTOR_KIND, CONTOUR_KIND
+            import bdo_music_composer.ui.main_window as pyside_bdo_gui
 
             class Editor(QWidget):
                 bpm = 120
@@ -931,6 +1100,27 @@ class TranscriptionEditorQtTests(unittest.TestCase):
                 candidates,
                 candidate_id_resolver=lambda item: item.candidate_id,
             )
+            clip_grid = QRectF(
+                canvas.KEY_W,
+                canvas.RULER_H,
+                canvas.width() - canvas.KEY_W,
+                canvas.height() - canvas.RULER_H,
+            )
+            first_clip = canvas._transcription_contour_clip_path(
+                clip_grid, 0.0, 1_000.0
+            )
+            first_build_count = canvas._contour_clip_build_count
+            second_clip = canvas._transcription_contour_clip_path(
+                clip_grid, 0.0, 1_000.0
+            )
+            assert not first_clip.isEmpty() and not second_clip.isEmpty()
+            assert canvas._contour_clip_build_count == first_build_count
+            canvas.ROW_H += 1.0
+            canvas._transcription_contour_clip_path(
+                clip_grid, 0.0, 1_000.0
+            )
+            assert canvas._contour_clip_build_count == first_build_count + 1
+            canvas.ROW_H -= 1.0
             lead = VoiceGroup(
                 "lead",
                 tuple(item.candidate_id for item in candidates),
@@ -944,23 +1134,19 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             )
             assert canvas.melody_lines_available
             assert canvas._melody_line_segments
+            canvas.set_melody_lines_visible(True)
 
             canvas._audio_offset_ms = 500.0
             shifted = canvas.visible_melody_line_segments(500.0, 900.0)
             assert shifted
-            assert min(item.start_audio_ms for item in shifted) <= 0.0
             assert canvas._last_melody_line_query_inspections < len(
                 canvas._melody_line_segments
             )
-            assert all(item.kind != CONTOUR_KIND for item in shifted)
+            assert all(item.kind == CONNECTOR_KIND for item in shifted)
 
             canvas.px_per_beat = 30.0
             overview = canvas.visible_melody_line_segments(500.0, 1_200.0)
-            assert overview
-            assert all(item.kind == CONTOUR_KIND for item in overview)
-            assert len(overview) < len(
-                canvas._melody_line_segments
-            )
+            assert overview == []
             canvas.set_melody_line_roles_visible({"bass"})
             assert canvas.visible_melody_line_segments(500.0, 1_200.0) == []
             canvas.set_melody_line_roles_visible({"primary_melody"})

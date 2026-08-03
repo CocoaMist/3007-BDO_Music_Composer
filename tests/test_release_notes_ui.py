@@ -327,7 +327,7 @@ class ReleaseNotesDialogTests(unittest.TestCase):
             from bdo_music_composer.ui.dialogs.release_notes_dialog import (
                 ReleaseNotesDialog,
             )
-            from i18n import install_localizer
+            from bdo_music_composer.ui.i18n import install_localizer
 
             app = QApplication([])
             active_localizer = install_localizer(app, "zh_CN")
@@ -378,7 +378,7 @@ class ReleaseNotesDialogTests(unittest.TestCase):
             """
             from unittest.mock import patch
             from PySide6.QtWidgets import QApplication
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
 
             class FakeDialog:
                 def __init__(self):

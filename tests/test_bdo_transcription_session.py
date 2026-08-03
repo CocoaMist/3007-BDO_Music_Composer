@@ -5,7 +5,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from bdo_transcription_session import (
+from bdo_music_composer.transcription.bdo_transcription_session import (
     CandidateAnnotation,
     CandidateRoute,
     CLEANUP_PROFILES,
@@ -52,7 +52,7 @@ class TranscriptionSessionTests(unittest.TestCase):
     def test_stable_candidate_id_preserves_backend_id_after_time_projection(
         self,
     ) -> None:
-        from bdo_transcription import (
+        from bdo_music_composer.transcription.bdo_transcription import (
             TranscriptionCandidate,
         )
 

@@ -20,12 +20,12 @@ class ExportVerificationUiTests(unittest.TestCase):
 
             from PySide6.QtWidgets import QApplication
 
-            from export_verification import (
+            from bdo_music_composer.export.export_verification import (
                 ExportVerificationIssue, ExportVerificationReport,
             )
-            from i18n import install_localizer
-            import pyside_bdo_gui as gui
-            from pyside_bdo_gui import MidiToBdoWindow
+            from bdo_music_composer.ui.i18n import install_localizer
+            import bdo_music_composer.ui.main_window as gui
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow
 
             app = QApplication([])
             install_localizer(app, "zh_CN")

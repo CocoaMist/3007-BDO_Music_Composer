@@ -46,6 +46,7 @@ class Node:
     sound_loop_count: int | None = None
     midi_break_loop_on_note_off: bool = False
     volume_envelope_modulator_ids: tuple[int, ...] = ()
+    pitch_rtpc_ids: tuple[int, ...] = ()
     envelope_release_ms: float | None = None
 
 
@@ -113,6 +114,20 @@ def _volume_envelope_modulator_ids(body: str) -> tuple[int, ...]:
         if not re.search(r"\brtpcType = [^\n]*\[Modulator\]", rtpc_body):
             continue
         if not re.search(r"\bParamID = [^\n]*\[Volume\]", rtpc_body):
+            continue
+        id_match = re.search(r"\bRTPCID = (\d+)", rtpc_body)
+        if id_match:
+            result.append(int(id_match.group(1)))
+    return tuple(dict.fromkeys(result))
+
+
+def _pitch_rtpc_ids(body: str) -> tuple[int, ...]:
+    """Return object-owned Pitch RTPC IDs without guessing their scaling."""
+
+    result: list[int] = []
+    for match in RTPC_OBJECT.finditer(body):
+        rtpc_body = match.group("body")
+        if not re.search(r"\bParamID = [^\n]*\[Pitch\]", rtpc_body):
             continue
         id_match = re.search(r"\bRTPCID = (\d+)", rtpc_body)
         if id_match:
@@ -250,6 +265,7 @@ def parse_nodes(section: str) -> dict[int, Node]:
             volume_envelope_modulator_ids=(
                 _volume_envelope_modulator_ids(body)
             ),
+            pitch_rtpc_ids=_pitch_rtpc_ids(body),
             envelope_release_ms=(
                 envelope_release * 1000.0
                 if match.group("type") == "CAkEnvelopeModulator"
@@ -263,16 +279,21 @@ def parse_nodes(section: str) -> dict[int, Node]:
 
 def effective_props(node: Node, nodes: dict[int, Node]) -> dict[str, int | None]:
     root_note: int | None = None
+    root_note_owner_id: int | None = None
+    root_note_inheritance_depth: int | None = None
     key_min = 0
     key_max = 127
     velocity_min = 0
     velocity_max = 127
     seen: set[int] = set()
     current: Node | None = node
+    depth = 0
     while current and current.node_id not in seen:
         seen.add(current.node_id)
         if root_note is None and "MidiTrackingRootNote" in current.props:
             root_note = current.props["MidiTrackingRootNote"]
+            root_note_owner_id = current.node_id
+            root_note_inheritance_depth = depth
         if "MidiKeyRangeMin" in current.props:
             key_min = max(key_min, current.props["MidiKeyRangeMin"])
         if "MidiKeyRangeMax" in current.props:
@@ -288,6 +309,7 @@ def effective_props(node: Node, nodes: dict[int, Node]) -> dict[str, int | None]
                 current.props["MidiVelocityRangeMax"],
             )
         current = nodes.get(current.parent_id) if current.parent_id else None
+        depth += 1
     if key_min > key_max or velocity_min > velocity_max:
         raise ValueError(
             f"empty inherited MIDI range for HIRC node {node.node_id}"
@@ -296,6 +318,9 @@ def effective_props(node: Node, nodes: dict[int, Node]) -> dict[str, int | None]
         root_note = (key_min + key_max) // 2
     return {
         "MidiTrackingRootNote": root_note,
+        "MidiTrackingRootNoteOwnerID": root_note_owner_id,
+        "MidiTrackingRootNoteInheritanceDepth": root_note_inheritance_depth,
+        "MidiTrackingRootNoteInferred": int(root_note_owner_id is None),
         "MidiKeyRangeMin": key_min,
         "MidiKeyRangeMax": key_max,
         "MidiVelocityRangeMin": velocity_min,
@@ -776,6 +801,14 @@ def main() -> int:
             makeup_gain_db = sum(
                 ancestor.makeup_gain_db for ancestor in lineage
             )
+            pitch_rtpc_bindings = [
+                {
+                    "owner_id": ancestor.node_id,
+                    "rtpc_ids": list(ancestor.pitch_rtpc_ids),
+                }
+                for ancestor in lineage
+                if ancestor.pitch_rtpc_ids
+            ]
             sample_loops: tuple[SampleLoop, ...] = ()
             if wem_path.is_file():
                 if wem_path not in loop_cache:
@@ -798,6 +831,13 @@ def main() -> int:
                 "sound_id": node.node_id,
                 "source_id": node.source_id,
                 "root_note": props["MidiTrackingRootNote"],
+                "root_note_owner_id": props["MidiTrackingRootNoteOwnerID"],
+                "root_note_inheritance_depth": props[
+                    "MidiTrackingRootNoteInheritanceDepth"
+                ],
+                "root_note_inferred": bool(
+                    props["MidiTrackingRootNoteInferred"]
+                ),
                 "key_min": props["MidiKeyRangeMin"],
                 "key_max": props["MidiKeyRangeMax"],
                 "velocity_min": props["MidiVelocityRangeMin"],
@@ -816,6 +856,8 @@ def main() -> int:
                 "pitch_cents": pitch_cents,
                 "pitch_random_min_cents": pitch_random_min,
                 "pitch_random_max_cents": pitch_random_max,
+                "pitch_rtpc_bindings": pitch_rtpc_bindings,
+                "unmodeled_pitch_rtpc": bool(pitch_rtpc_bindings),
                 "makeup_gain_db": makeup_gain_db,
                 "volume_db": lineage_volume_db(lineage),
                 "release_ms": lineage_release_ms(lineage, nodes),
@@ -907,7 +949,9 @@ def main() -> int:
 
     fields = [
         "evidence_sha256",
-        "bank", "sound_id", "source_id", "root_note", "key_min", "key_max",
+        "bank", "sound_id", "source_id", "root_note",
+        "root_note_owner_id", "root_note_inheritance_depth",
+        "root_note_inferred", "key_min", "key_max",
         "velocity_min", "velocity_max", "route_ntypes", "route_event_ids",
         "route_target_id", "selection_group_id", "selection_mode",
         "avoid_repeat", "playlist_index", "playlist_order",
@@ -919,7 +963,8 @@ def main() -> int:
         "instance_limit_global", "instance_use_virtual_behavior",
         "instance_limits",
         "pitch_cents", "pitch_random_min_cents",
-        "pitch_random_max_cents", "makeup_gain_db", "volume_db",
+        "pitch_random_max_cents", "pitch_rtpc_bindings",
+        "unmodeled_pitch_rtpc", "makeup_gain_db", "volume_db",
         "release_ms", "sound_loop_count",
         "midi_break_loop_on_note_off", "sample_loops",
         "loop_start_frame", "loop_end_frame", "loop_play_count",

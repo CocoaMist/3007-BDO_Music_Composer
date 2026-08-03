@@ -4,9 +4,9 @@ import random
 from types import SimpleNamespace
 import unittest
 
-from bdo_music_theory import TrackRole
-from bdo_transcription import TranscriptionCandidate
-from bdo_transcription_instruments import (
+from bdo_music_composer.editor.bdo_music_theory import TrackRole
+from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+from bdo_music_composer.transcription.bdo_transcription_instruments import (
     BdoInstrumentDescriptor,
     InstrumentAnalysisCancelled,
     NO_TIMBRE_CONFIDENCE_CAP,

@@ -1,10 +1,15 @@
-# BDO 作曲器界面契约（PAZ meta v757）
+# BDO 作曲器界面契约（PAZ meta v782）
 
 本文记录游戏作曲 Web UI 中除乐器、奏法和混音效果以外，可用于本工具兼容设计的
 设置与交互。它描述的是 **authoring UI 与原生客户端之间的桥接行为**，不是对未验证
 v9 二进制字段的猜测。
 
 ## 证据范围
+
+2026-08-03 对 meta v782（8,363 archives，SHA-256
+`ab149341b97aadf8855c82bc7a3f52492e9115ce201559c9d7b66d7ea67499e8`）重新执行
+限定路径复核。`musiccomposition.js` 和 `index.html` 的 SHA-256 与 v757 完全相同，
+因此下述 authoring UI 契约继续成立；这不是对未验证 DSP 或账号运行时额度的新声明。
 
 2026-07-26 对已复核的 UI archive 做了限定路径扫描。与作曲器名称匹配的资源只有：
 

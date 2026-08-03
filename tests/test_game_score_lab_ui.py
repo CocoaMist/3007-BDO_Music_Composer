@@ -16,9 +16,9 @@ class GameScoreLabUiTests(unittest.TestCase):
         script = textwrap.dedent(
             """
             from PySide6.QtWidgets import QApplication
-            from bdo_validation import ValidationIssue
-            from i18n import install_localizer
-            from pyside_bdo_gui import ConversionCheckDialog, MidiToBdoWindow, Note, TrackState
+            from bdo_music_composer.export.bdo_validation import ValidationIssue
+            from bdo_music_composer.ui.i18n import install_localizer
+            from bdo_music_composer.ui.main_window import ConversionCheckDialog, MidiToBdoWindow, Note, TrackState
 
             app = QApplication([])
             translations = install_localizer(app, "zh_CN")

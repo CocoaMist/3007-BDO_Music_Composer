@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from bdo_music_composer.editor.editor_import import TrackImportPresentation
-from bdo_music_composer.project.project_document import (
+from bdo_music_composer.app.project_document import (
     ProjectLoadError,
     ProjectLoadErrorCode,
     prepare_project_load,

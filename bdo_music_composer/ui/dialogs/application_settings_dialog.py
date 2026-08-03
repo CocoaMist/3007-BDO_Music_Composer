@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, cast
 
-from PySide6.QtCore import QObject, QThread, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QSize, QThread, Qt, QUrl, Signal
 from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QRadioButton,
     QScrollArea,
@@ -41,14 +42,14 @@ from bdo_music_composer.app.audio_source_settings import (
     displayed_audio_source,
     preview_source_mode,
 )
-from bdo_sample_pack import PACK_SUFFIX
-from bdo_score import read_bdo_score
-from conversion_settings import (
+from bdo_music_composer.audio.bdo_sample_pack import PACK_SUFFIX
+from bdo_music_composer.export.bdo_score import read_bdo_score
+from bdo_music_composer.core.conversion_settings import (
     VELOCITY_MODE_OFF,
     VELOCITY_MODE_PRESERVE,
 )
-from i18n import LANGUAGE_CHOICES, tr, trf
-from project_paths import GAME_ART_CACHE_DIR, USER_DATA_DIR
+from bdo_music_composer.ui.i18n import LANGUAGE_CHOICES, tr, trf
+from bdo_music_composer.core.project_paths import GAME_ART_CACHE_DIR, USER_DATA_DIR
 from tools.import_bdo_game_art import (
     GameArtImportError,
     import_game_instrument_art,
@@ -59,6 +60,48 @@ from bdo_music_composer.ui.ui_notifications import show_global_toast
 
 DEFAULT_OUTDIR = USER_DATA_DIR / "out" / "bdo"
 SETTINGS_FIELD_LABEL_WIDTH = 124
+
+
+def prompt_for_owner_identity(
+    parent: QWidget,
+    start_directory: str | Path,
+) -> tuple[int, str] | None:
+    """Prompt for a game score and return its validated export identity."""
+
+    path, _ = QFileDialog.getOpenFileName(
+        parent,
+        tr("选择游戏内保存的曲谱文件"),
+        str(start_directory),
+        tr("黑色沙漠曲谱文件 (*);;所有文件 (*.*)"),
+    )
+    if not path:
+        return None
+    try:
+        snapshot = read_bdo_score(Path(path), allow_trailing_data=True)
+        owner_id = int(snapshot.owner_id)
+    except ValueError:
+        show_global_toast(
+            parent,
+            tr("文件无法读取；请使用游戏内保存的曲谱。"),
+            kind="error",
+        )
+        return None
+    except Exception as exc:
+        show_global_toast(
+            parent,
+            trf("读取失败：{error}", error=exc),
+            kind="error",
+        )
+        return None
+    if not owner_id:
+        show_global_toast(
+            parent,
+            tr("未读取到有效 Owner ID，请选择游戏内保存的曲谱。"),
+            kind="warning",
+        )
+        return None
+    character_name = snapshot.character_name_1 or snapshot.character_name_2
+    return owner_id, str(character_name or "")
 
 
 class SettingsHost(Protocol):
@@ -155,7 +198,11 @@ class SettingsDialog(QDialog):
         self.settings_nav = QListWidget()
         self.settings_nav.setObjectName("SettingsNav")
         self.settings_nav.setProperty("i18nTranslateItems", True)
-        self.settings_nav.setFixedWidth(164)
+        # Explicit geometry avoids native QListWidget metrics changing the
+        # sidebar layout at different Windows scale factors and locales.
+        self.settings_nav.setFixedWidth(184)
+        self.settings_nav.setUniformItemSizes(True)
+        self.settings_nav.setSpacing(0)
         self.settings_nav.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.settings_nav.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.settings_pages = QStackedWidget()
@@ -174,7 +221,12 @@ class SettingsDialog(QDialog):
             (tr("MIDI 与力度"), midi_scroll),
             (tr("音源与外观"), audio_scroll),
         ):
-            self.settings_nav.addItem(label)
+            item = QListWidgetItem(label)
+            item.setSizeHint(QSize(0, 48))
+            item.setTextAlignment(
+                int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            )
+            self.settings_nav.addItem(item)
             self.settings_pages.addWidget(page)
         self.settings_nav.currentRowChanged.connect(self.settings_pages.setCurrentIndex)
         self.settings_nav.setCurrentRow(0)

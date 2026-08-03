@@ -15,11 +15,11 @@ class PianoRollInteractionTests(unittest.TestCase):
     def test_safe_creation_cursor_paste_and_ctrl_drag_clone(self) -> None:
         script = textwrap.dedent(
             """
-            from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+            from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt
             from PySide6.QtGui import QMouseEvent
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication, QLabel
-            from pyside_bdo_gui import MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState
+            from bdo_music_composer.ui.main_window import MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState
 
             app = QApplication([])
             track = TrackState(
@@ -34,7 +34,15 @@ class PianoRollInteractionTests(unittest.TestCase):
                 0x0B,
             )
             window = MidiToBdoWindow()
-            window.tracks = [track]
+            reference_track = TrackState(
+                2,
+                [Note(70, 75, 1500.0, 300.0, 0)],
+                0,
+                False,
+                "reference",
+                0x0B,
+            )
+            window.tracks = [track, reference_track]
             editor = MidiNoteEditorDialog(window, track, 120, 4)
             editor.resize(1180, 720)
             editor.show()
@@ -109,6 +117,9 @@ class PianoRollInteractionTests(unittest.TestCase):
             assert editor.canvas.note_velocity_bar_rects(
                 resize_rect, 90, 1.0
             ) is None
+            assert editor.canvas.note_velocity_bar_rects(
+                QRectF(0.0, 0.0, 80.0, 8.0), 90, 1.0
+            ) is None
             centre_y = resize_rect.center().y()
             assert editor.canvas.note_at(
                 QPointF(resize_rect.left() + 1.0, centre_y)
@@ -174,6 +185,17 @@ class PianoRollInteractionTests(unittest.TestCase):
             editor.undo()
             assert editor.canvas.notes == before
 
+            # Other-track reference lines are paint-only. They never block
+            # creating an editable note at the same pitch and time.
+            editor.ghost_box.setChecked(True)
+            assert len(editor.canvas.ghost_notes) == 1
+            QTest.mouseDClick(editor.canvas, Qt.LeftButton, pos=blank)
+            assert len(editor.canvas.notes) == len(before) + 1
+            assert editor.canvas.notes[-1].pitch == 70
+            assert editor.canvas.notes[-1].start == 1500.0
+            editor.undo()
+            assert editor.canvas.notes == before
+
             # Paste targets the visible edit cursor instead of a viewport offset.
             editor.canvas.selected = {0}
             editor.copy_selected()
@@ -182,6 +204,30 @@ class PianoRollInteractionTests(unittest.TestCase):
             editor.paste_notes()
             assert editor.canvas.notes[-1].start == 2000.0
             assert editor.canvas.notes[-1].vel == before[0].vel
+            editor.undo()
+            assert editor.canvas.notes == before
+
+            # Keyboard paste at the copied note's own onset must move the
+            # whole group to the nearest free grid position instead of
+            # creating an invisible same-pitch overlap. Repeated Ctrl+V keeps
+            # advancing from the newly pasted selection.
+            editor.canvas.selected = {0}
+            editor.canvas.set_edit_cursor(0.0)
+            QTest.keyClick(editor.canvas, Qt.Key_C, Qt.ControlModifier)
+            QTest.keyClick(editor.canvas, Qt.Key_V, Qt.ControlModifier)
+            assert editor.canvas.notes[-1].pitch == before[0].pitch
+            assert editor.canvas.notes[-1].start == editor.quantize_ms()
+            QTest.keyClick(editor.canvas, Qt.Key_V, Qt.ControlModifier)
+            assert editor.canvas.notes[-1].start == editor.quantize_ms() * 2
+            same_pitch = sorted(
+                (note for note in editor.canvas.notes if note.pitch == 60),
+                key=lambda note: note.start,
+            )
+            assert all(
+                left.start + left.dur <= right.start
+                for left, right in zip(same_pitch, same_pitch[1:])
+            )
+            editor.undo()
             editor.undo()
             assert editor.canvas.notes == before
 

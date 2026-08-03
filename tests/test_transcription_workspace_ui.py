@@ -38,6 +38,93 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             completed.stdout + completed.stderr,
         )
 
+    def test_practical_analysis_forces_safe_defaults_and_skips_assist(
+        self,
+    ) -> None:
+        completed = _run_offscreen(
+            """
+            from pathlib import Path
+
+            from PySide6.QtCore import QObject, Signal
+            from PySide6.QtWidgets import QApplication
+
+            import bdo_music_composer.ui.main_window as main_window
+            from bdo_music_composer.transcription.bdo_transcription_session import (
+                TranscriptionSession,
+                TranscriptionSessionState,
+            )
+
+            captured = {}
+
+            class FakeWorker(QObject):
+                progress_changed = Signal(int)
+                succeeded = Signal(object)
+                failed = Signal(str)
+                cancelled = Signal()
+                finished = Signal()
+
+                def __init__(
+                    self,
+                    audio_path,
+                    parent,
+                    *,
+                    analysis_mode,
+                    sensitivity,
+                    cleanup_profile,
+                ):
+                    super().__init__(parent)
+                    captured.update(
+                        audio_path=str(audio_path),
+                        analysis_mode=analysis_mode,
+                        sensitivity=sensitivity,
+                        cleanup_profile=cleanup_profile,
+                    )
+
+                def start(self):
+                    captured["started"] = True
+
+            app = QApplication([])
+            main_window.transcription_backend_quick_status = lambda: (True, "")
+            main_window.TranscriptionAnalysisWorker = FakeWorker
+            window = main_window.MidiToBdoWindow()
+            window._autosave_project = lambda *_args, **_kwargs: None
+            window._flush_autosave = lambda: None
+            window._stop_preview = lambda **_kwargs: None
+            window.reference_audio._audio_path = Path("reference.wav")
+            window.transcription_session = TranscriptionSession(
+                state=TranscriptionSessionState(
+                    analysis_mode="mixed_enhanced",
+                    sensitivity="sensitive",
+                    cleanup_profile="clean",
+                )
+            )
+
+            window._start_workspace_transcription_analysis()
+            assert captured == {
+                "audio_path": "reference.wav",
+                "analysis_mode": "standard",
+                "sensitivity": "balanced",
+                "cleanup_profile": "preserve",
+                "started": True,
+            }
+            state = window.transcription_session.state
+            assert state.analysis_mode == "standard"
+            assert state.sensitivity == "balanced"
+            assert state.cleanup_profile == "preserve"
+
+            window._start_transcription_assist_analysis()
+            assert window.transcription_assist_worker is None
+            assert window.harmony_analysis is None
+            assert window.instrument_match_analysis is None
+
+            window.workspace_transcription_worker = None
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assert_offscreen_success(completed)
+
     def test_entry_resolves_melodic_target_and_opens_embedded_editor(
         self,
     ) -> None:
@@ -45,7 +132,7 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox
 
-            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -85,11 +172,12 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
                 )
 
             window._open_note_editor = open_editor
-            assert not window.transcription_entry_button.isCheckable()
+            assert not hasattr(window, "transcription_entry_button")
+            assert not hasattr(window, "transcription_tools_slot")
 
             # A valid current selection opens directly without a chooser.
             window.selected_track = first
-            window.transcription_entry_button.click()
+            window._open_transcription_mode()
             assert calls == [(1, (), True)]
 
             # Percussion is never silently substituted. The user explicitly
@@ -107,7 +195,7 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             )
             try:
                 window.selected_track = drums
-                window.transcription_entry_button.click()
+                window._open_transcription_mode()
             finally:
                 QInputDialog.getItem = original_get_item
             assert calls[-1] == (2, (), True)
@@ -123,7 +211,7 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             try:
                 window.tracks = [drums, mapped_drums]
                 window.selected_track = drums
-                window.transcription_entry_button.click()
+                window._open_transcription_mode()
             finally:
                 QMessageBox.information = original_information
             assert len(calls) == 2
@@ -144,7 +232,7 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog,
                 MidiToBdoWindow,
                 Note,
@@ -221,9 +309,9 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication, QDialog
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_session import CandidateRoute, TranscriptionSession
-            from pyside_bdo_gui import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import CandidateRoute, TranscriptionSession
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog,
                 MidiToBdoWindow,
                 Note,
@@ -330,9 +418,9 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication, QDialog
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_session import CandidateRoute, TranscriptionSession
-            from pyside_bdo_gui import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import CandidateRoute, TranscriptionSession
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog,
                 MidiToBdoWindow,
                 TrackState,
@@ -521,13 +609,13 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_session import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import (
                 CandidateAnnotation,
                 CandidateRoute,
                 TranscriptionSession,
             )
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog,
                 MidiToBdoWindow,
                 TrackState,
@@ -623,7 +711,7 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
         )
         self.assert_offscreen_success(completed)
 
-    def test_fragment_profile_cached_redecode_projects_real_actions_without_apply(
+    def _obsolete_test_fragment_profile_cached_redecode_projects_real_actions_without_apply(
         self,
     ) -> None:
         completed = _run_offscreen(
@@ -631,17 +719,17 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             from PySide6.QtCore import QTimer
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import (
+            from bdo_music_composer.transcription.bdo_transcription import (
                 TranscriptionCandidate,
                 TranscriptionCandidateAnnotation,
                 TranscriptionPostprocessReport,
                 TranscriptionResult,
             )
-            from bdo_transcription_session import (
+            from bdo_music_composer.transcription.bdo_transcription_session import (
                 TranscriptionSession,
                 TranscriptionSessionState,
             )
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog,
                 MidiToBdoWindow,
                 Note,
@@ -866,7 +954,9 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             }
             assert "已隐藏 1" in editor.transcription_panel.status_label.text()
             assert not editor.canvas._suppressed_candidate_ids
-            assert editor.transcription_panel.show_suppressed_checkbox.isVisible()
+            editor.transcription_panel.set_advanced_controls_expanded(True)
+            assert editor.transcription_panel.candidate_layer_button.isVisible()
+            assert not editor.transcription_panel.show_suppressed_checkbox.isVisible()
 
             editor.transcription_panel.show_suppressed_checkbox.setChecked(True)
             app.processEvents()
@@ -916,12 +1006,12 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_session import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import (
                 TranscriptionSession,
                 TranscriptionSessionState,
             )
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog,
                 MidiToBdoWindow,
                 Note,

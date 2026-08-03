@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from bdo_preview_effects import (
+from bdo_music_composer.audio.bdo_preview_effects import (
     MAX_EFFECT_TAIL_SECONDS,
     PREVIEW_DELAY_SECONDS,
     PreviewEffectProcessor,
@@ -93,23 +93,23 @@ class PreviewEffectProcessorTests(unittest.TestCase):
         source[0] = 0.5
         with (
             patch(
-                "bdo_preview_effects.np.empty",
+                "bdo_music_composer.audio.bdo_preview_effects.np.empty",
                 side_effect=AssertionError("callback allocation"),
             ),
             patch(
-                "bdo_preview_effects.np.zeros",
+                "bdo_music_composer.audio.bdo_preview_effects.np.zeros",
                 side_effect=AssertionError("callback allocation"),
             ),
             patch(
-                "bdo_preview_effects.np.asarray",
+                "bdo_music_composer.audio.bdo_preview_effects.np.asarray",
                 side_effect=AssertionError("callback allocation"),
             ),
             patch(
-                "bdo_preview_effects.np.arange",
+                "bdo_music_composer.audio.bdo_preview_effects.np.arange",
                 side_effect=AssertionError("callback allocation"),
             ),
             patch(
-                "bdo_preview_effects.math.sin",
+                "bdo_music_composer.audio.bdo_preview_effects.math.sin",
                 side_effect=AssertionError("per-frame scalar modulation"),
             ),
         ):

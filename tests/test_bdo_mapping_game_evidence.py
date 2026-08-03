@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import unittest
 
-from bdo_instrument_samples import (
+from bdo_music_composer.audio.bdo_instrument_samples import (
     preview_route_ntype,
     select_zone_variants,
 )
@@ -17,9 +18,10 @@ MAPPING_PATH = ROOT / "data" / "mappings" / "bdo_wwise_midi_map.json"
 class CheckedInGameEvidenceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.banks = json.loads(
+        cls.mapping = json.loads(
             MAPPING_PATH.read_text(encoding="utf-8")
-        )["banks"]
+        )
+        cls.banks = cls.mapping["banks"]
 
     def test_four_native_routes_have_game_authored_partial_ranges(self) -> None:
         expected = {
@@ -124,6 +126,43 @@ class CheckedInGameEvidenceTests(unittest.TestCase):
                 self.assertFalse(row["instance_use_virtual_behavior"])
                 self.assertFalse(row["kill_newest"])
         self.assertEqual(expected, actual)
+
+    def test_v782_mapping_preserves_explicit_root_and_pitch_rtpc_provenance(self) -> None:
+        rows = [row for bank_rows in self.banks.values() for row in bank_rows]
+        self.assertEqual(3579, len(rows))
+        self.assertTrue(all(row["root_note_owner_id"] is not None for row in rows))
+        self.assertFalse(any(row["root_note_inferred"] for row in rows))
+        self.assertEqual(
+            1024,
+            sum(bool(row["unmodeled_pitch_rtpc"]) for row in rows),
+        )
+        self.assertTrue(all(
+            bool(row["pitch_rtpc_bindings"])
+            == bool(row["unmodeled_pitch_rtpc"])
+            for row in rows
+        ))
+
+    def test_checked_in_mapping_evidence_hash_covers_new_provenance(self) -> None:
+        rows = [row for bank_rows in self.banks.values() for row in bank_rows]
+        semantic_rows = [
+            {
+                key: value
+                for key, value in row.items()
+                if key not in {"wem_path", "wav_path", "evidence_sha256"}
+            }
+            for row in rows
+        ]
+        digest = hashlib.sha256(json.dumps(
+            {
+                "bank_versions": self.mapping["wwise_bank_versions"],
+                "rows": semantic_rows,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+        self.assertEqual(self.mapping["evidence_sha256"], digest)
+        self.assertTrue(all(row["evidence_sha256"] == digest for row in rows))
 
 
 if __name__ == "__main__":

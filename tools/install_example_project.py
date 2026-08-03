@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from project_paths import USER_DATA_DIR
+from bdo_music_composer.core.project_paths import USER_DATA_DIR
 
 
 EXAMPLE_METADATA_VERSION = 1

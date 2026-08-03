@@ -84,20 +84,22 @@ def estimate_pitch(samples: np.ndarray, sample_rate: int) -> tuple[float | None,
     if min_lag >= max_lag:
         return None, 0.0
     region = autocorrelation[min_lag:max_lag + 1]
-    peak_offset = int(np.argmax(region))
+    # Ignore the monotonically descending shoulder next to lag zero.  Treating
+    # its first above-threshold sample as a period made even a pure 220 Hz sine
+    # appear as the 4 kHz upper search bound with near-perfect confidence.
+    local_maxima = np.flatnonzero(
+        (region[1:-1] > region[:-2])
+        & (region[1:-1] >= region[2:])
+    ) + 1
+    if not len(local_maxima):
+        return None, 0.0
+    peak_offset = int(
+        local_maxima[np.argmax(region[local_maxima])]
+    )
     peak_lag = min_lag + peak_offset
     confidence = float(region[peak_offset])
     if confidence < 0.18:
         return None, confidence
-    # Prefer a smaller lag if it is nearly as periodic: this reduces octave-down
-    # errors on bright instruments whose second harmonic is strongest.
-    threshold = confidence * 0.88
-    local = np.flatnonzero(region >= threshold)
-    if len(local):
-        candidates = local + min_lag
-        candidates = candidates[(candidates > min_lag) & (candidates < max_lag)]
-        if len(candidates):
-            peak_lag = int(candidates[0])
     return sample_rate / peak_lag, confidence
 
 

@@ -17,8 +17,8 @@ class DenseProjectUiTests(unittest.TestCase):
             """
             from PySide6.QtCore import QPoint, QPointF, Qt
             from PySide6.QtWidgets import QApplication
-            from bdo_transcription import TranscriptionCandidate
-            from pyside_bdo_gui import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog, MidiToBdoWindow, Note, ReferenceAudioController,
                 TimelineCanvas, TrackState,
             )
@@ -185,6 +185,7 @@ class DenseProjectUiTests(unittest.TestCase):
             editor.resize(1180, 720)
             editor.show()
             app.processEvents()
+            editor.ghost_box.setChecked(True)
             editor.canvas.grab()
             roll_background_key = editor.canvas._background_cache.cacheKey()
             editor.canvas.grab()
@@ -248,15 +249,29 @@ class DenseProjectUiTests(unittest.TestCase):
             )
 
             class WheelEvent:
-                def __init__(self, x):
-                    self._position = QPointF(x, 200)
+                def __init__(
+                    self,
+                    x,
+                    modifiers=Qt.ControlModifier,
+                    y=200,
+                    *,
+                    angle_delta=QPoint(0, 120),
+                    pixel_delta=QPoint(0, 0),
+                ):
+                    self._position = QPointF(x, y)
+                    self._modifiers = modifiers
+                    self._angle_delta = angle_delta
+                    self._pixel_delta = pixel_delta
                     self.accepted = False
 
                 def angleDelta(self):
-                    return QPoint(0, 120)
+                    return self._angle_delta
+
+                def pixelDelta(self):
+                    return self._pixel_delta
 
                 def modifiers(self):
-                    return Qt.ControlModifier
+                    return self._modifiers
 
                 def position(self):
                     return self._position
@@ -272,6 +287,54 @@ class DenseProjectUiTests(unittest.TestCase):
             assert wheel.accepted
             assert abs(before - after) < 0.01
             assert editor.editor_zoom.value() == round(editor.canvas.px_per_beat)
+
+            anchor_y = 320.0
+            anchor_pitch = editor.canvas.pitch_at(anchor_y)
+            old_row_height = editor.canvas.ROW_H
+            vertical_wheel = WheelEvent(
+                anchor_x,
+                Qt.AltModifier,
+                anchor_y,
+            )
+            editor.canvas.wheelEvent(vertical_wheel)
+            assert vertical_wheel.accepted
+            assert editor.canvas.ROW_H > old_row_height, (
+                old_row_height, editor.canvas.ROW_H
+            )
+            vertical_wheel_height = editor.canvas.ROW_H
+            assert abs(editor.canvas.pitch_at(anchor_y) - anchor_pitch) <= 1, (
+                anchor_pitch, editor.canvas.pitch_at(anchor_y),
+                editor.canvas.pitch_top, editor.canvas.ROW_H,
+            )
+            horizontal_driver_wheel = WheelEvent(
+                anchor_x,
+                Qt.AltModifier,
+                anchor_y,
+                angle_delta=QPoint(-120, 0),
+            )
+            editor.canvas.wheelEvent(horizontal_driver_wheel)
+            assert horizontal_driver_wheel.accepted
+            assert editor.canvas.ROW_H < vertical_wheel_height
+
+            row_height_before_touchpad = editor.canvas.ROW_H
+            smooth_touchpad_wheel = WheelEvent(
+                anchor_x,
+                Qt.AltModifier,
+                anchor_y,
+                angle_delta=QPoint(0, 0),
+                pixel_delta=QPoint(0, 25),
+            )
+            editor.canvas.wheelEvent(smooth_touchpad_wheel)
+            assert smooth_touchpad_wheel.accepted
+            assert editor.canvas.ROW_H > row_height_before_touchpad
+            assert "px" in editor.status.text()
+
+            for _index in range(80):
+                editor.canvas.wheelEvent(
+                    WheelEvent(anchor_x, Qt.ControlModifier)
+                )
+            assert editor.canvas.px_per_beat > 320.0, editor.canvas.px_per_beat
+            assert editor.canvas.px_per_beat <= editor.canvas.MAX_PX_PER_BEAT
 
             editor.close()
             window.close()

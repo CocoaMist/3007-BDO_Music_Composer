@@ -14,12 +14,12 @@ import numpy as np
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtMultimedia import QAudioFormat
 
-from bdo_audio_lifecycle import (
+from bdo_music_composer.audio.bdo_audio_lifecycle import (
     sample_output_frames,
     voice_lifecycle,
 )
-from bdo_preview_effects import PreviewEffectSettings
-from bdo_realtime_audio import (
+from bdo_music_composer.audio.bdo_preview_effects import PreviewEffectSettings
+from bdo_music_composer.audio.bdo_realtime_audio import (
     AudioEngineError,
     BdoRealtimeAudioEngine,
     _AudioOutputWorker,
@@ -35,7 +35,7 @@ from bdo_realtime_audio import (
     select_wwise_zone_variants,
     soft_limit_in_place,
 )
-from pyside_bdo_gui import BDO_ARTICULATIONS, BDO_EDITOR_PITCH_RANGES
+from bdo_music_composer.ui.main_window import BDO_ARTICULATIONS, BDO_EDITOR_PITCH_RANGES
 
 
 APP = QCoreApplication.instance() or QCoreApplication([])
@@ -48,6 +48,18 @@ class RealtimeAudioTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.engine.stop()
+
+    def test_status_uses_device_presentation_head_not_render_cursor(self) -> None:
+        self.engine._frame = 48_000
+        self.engine._output_latency_frames = 4_800
+        self.engine._duration_frames = 96_000
+        self.engine._playing = True
+
+        status = self.engine.get_status()
+
+        self.assertAlmostEqual(status.position_ms, 900.0)
+        self.engine._set_output_latency_frames(96_000)
+        self.assertEqual(self.engine.get_status().position_ms, 0.0)
 
     @staticmethod
     def audio_format(
@@ -464,11 +476,11 @@ class RealtimeAudioTests(unittest.TestCase):
         with (
             patch("builtins.open", side_effect=AssertionError("callback file I/O")),
             patch(
-                "bdo_realtime_audio.json.loads",
+                "bdo_music_composer.audio.bdo_realtime_audio.json.loads",
                 side_effect=AssertionError("callback JSON parse"),
             ),
             patch(
-                "bdo_realtime_audio.wave.open",
+                "bdo_music_composer.audio.bdo_realtime_audio.wave.open",
                 side_effect=AssertionError("callback WAV decode"),
             ),
         ):
@@ -517,19 +529,19 @@ class RealtimeAudioTests(unittest.TestCase):
         with (
             patch("builtins.open", side_effect=AssertionError("callback file I/O")),
             patch(
-                "bdo_realtime_audio.json.loads",
+                "bdo_music_composer.audio.bdo_realtime_audio.json.loads",
                 side_effect=AssertionError("callback JSON parse"),
             ),
             patch(
-                "bdo_realtime_audio.wave.open",
+                "bdo_music_composer.audio.bdo_realtime_audio.wave.open",
                 side_effect=AssertionError("callback WAV decode"),
             ),
             patch(
-                "bdo_realtime_audio.np.empty",
+                "bdo_music_composer.audio.bdo_realtime_audio.np.empty",
                 side_effect=AssertionError("callback scratch allocation"),
             ),
             patch(
-                "bdo_realtime_audio.np.zeros",
+                "bdo_music_composer.audio.bdo_realtime_audio.np.zeros",
                 side_effect=AssertionError("callback scratch allocation"),
             ),
         ):
@@ -878,7 +890,7 @@ class RealtimeAudioTests(unittest.TestCase):
             )
             try:
                 with patch(
-                    "bdo_realtime_audio.select_wwise_zone_variants",
+                    "bdo_music_composer.audio.bdo_realtime_audio.select_wwise_zone_variants",
                     wraps=select_wwise_zone_variants,
                 ) as select_mock:
                     events, _cache, _bytes, _unverified, _duration = self.engine._prepare_project(
@@ -945,7 +957,7 @@ class RealtimeAudioTests(unittest.TestCase):
                 return bytes(4 * 16)
 
         source = ChunkedWave()
-        with patch("bdo_realtime_audio.wave.open", return_value=source):
+        with patch("bdo_music_composer.audio.bdo_realtime_audio.wave.open", return_value=source):
             with self.assertRaises(_LoadCancelled):
                 self.engine._decode_wav(Path("unused.wav"), cancel_event)
         self.assertEqual(source.reads, 1)
@@ -1134,7 +1146,7 @@ class RealtimeAudioTests(unittest.TestCase):
         # built voices×frames arrays. Rendering now needs only preallocated
         # frame-sized scratch, independent of the number of same-source voices.
         with patch(
-            "bdo_realtime_audio.np.asarray",
+            "bdo_music_composer.audio.bdo_realtime_audio.np.asarray",
             side_effect=AssertionError("per-block voice array allocation"),
         ):
             rendered = self.engine._render_locked(frames)
@@ -1200,7 +1212,7 @@ class RealtimeAudioTests(unittest.TestCase):
             tiled._ensure_render_buffers(frames)
             with (
                 patch(
-                    "bdo_realtime_audio.np.empty",
+                    "bdo_music_composer.audio.bdo_realtime_audio.np.empty",
                     side_effect=AssertionError("callback scratch allocation"),
                 ),
                 patch.object(
@@ -1212,7 +1224,7 @@ class RealtimeAudioTests(unittest.TestCase):
                 tiled_pcm = tiled._render_locked(frames).copy()
             with (
                 patch(
-                    "bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
+                    "bdo_music_composer.audio.bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
                     1_000,
                 ),
                 patch.object(
@@ -1297,7 +1309,7 @@ class RealtimeAudioTests(unittest.TestCase):
             tiled._ensure_render_buffers(frames)
             with (
                 patch(
-                    "bdo_realtime_audio.np.empty",
+                    "bdo_music_composer.audio.bdo_realtime_audio.np.empty",
                     side_effect=AssertionError("callback scratch allocation"),
                 ),
                 patch.object(
@@ -1309,7 +1321,7 @@ class RealtimeAudioTests(unittest.TestCase):
                 tiled_pcm = tiled._render_locked(frames).copy()
             with (
                 patch(
-                    "bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
+                    "bdo_music_composer.audio.bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
                     1_000,
                 ),
                 patch.object(
@@ -1400,15 +1412,15 @@ class RealtimeAudioTests(unittest.TestCase):
                 grouped_pcm = grouped._render_locked(frames).copy()
             with (
                 patch(
-                    "bdo_realtime_audio.EQUIVALENT_VOICE_GROUP_THRESHOLD",
+                    "bdo_music_composer.audio.bdo_realtime_audio.EQUIVALENT_VOICE_GROUP_THRESHOLD",
                     1_000,
                 ),
                 patch(
-                    "bdo_realtime_audio.EQUIVALENT_EFFECT_VOICE_GROUP_THRESHOLD",
+                    "bdo_music_composer.audio.bdo_realtime_audio.EQUIVALENT_EFFECT_VOICE_GROUP_THRESHOLD",
                     1_000,
                 ),
                 patch(
-                    "bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
+                    "bdo_music_composer.audio.bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
                     1_000,
                 ),
                 patch.object(
@@ -1500,11 +1512,11 @@ class RealtimeAudioTests(unittest.TestCase):
                 tiled_pcm = tiled._render_locked(frames).copy()
             with (
                 patch(
-                    "bdo_realtime_audio.EQUIVALENT_EFFECT_VOICE_GROUP_THRESHOLD",
+                    "bdo_music_composer.audio.bdo_realtime_audio.EQUIVALENT_EFFECT_VOICE_GROUP_THRESHOLD",
                     1_000,
                 ),
                 patch(
-                    "bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
+                    "bdo_music_composer.audio.bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
                     1_000,
                 ),
                 patch.object(
@@ -1595,7 +1607,7 @@ class RealtimeAudioTests(unittest.TestCase):
             ) as tiled_scalar_mix:
                 tiled_pcm = tiled._render_locked(frames).copy()
             with patch(
-                "bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
+                "bdo_music_composer.audio.bdo_realtime_audio.LINEAR_VOICE_BATCH_THRESHOLD",
                 1_000,
             ):
                 scalar_pcm = scalar._render_locked(frames).copy()
@@ -1647,7 +1659,7 @@ class RealtimeAudioTests(unittest.TestCase):
         )
 
         with patch(
-            "bdo_audio_mixing.np.empty_like",
+            "bdo_music_composer.audio.bdo_audio_mixing.np.empty_like",
             side_effect=AssertionError("articulation callback allocation"),
         ):
             rendered = self.engine._render_locked(512)
@@ -1707,7 +1719,7 @@ class RealtimeAudioTests(unittest.TestCase):
             ) as grouped_mix:
                 grouped_pcm = grouped._render_locked(frames).copy()
             with patch(
-                "bdo_realtime_audio.EQUIVALENT_VOICE_GROUP_THRESHOLD",
+                "bdo_music_composer.audio.bdo_realtime_audio.EQUIVALENT_VOICE_GROUP_THRESHOLD",
                 1_000,
             ):
                 scalar_pcm = scalar._render_locked(frames).copy()
@@ -1836,7 +1848,7 @@ class RealtimeAudioTests(unittest.TestCase):
         self.engine._playing = True
 
         with (
-            patch("bdo_realtime_audio.SOFT_VOICE_LIMIT", 32),
+            patch("bdo_music_composer.audio.bdo_realtime_audio.SOFT_VOICE_LIMIT", 32),
             patch.object(
                 self.engine,
                 "_voice_is_alive_at_frame",
@@ -1858,7 +1870,7 @@ class RealtimeAudioTests(unittest.TestCase):
         self.engine._seek_locked(100)
         self.assertIsNone(self.engine._last_voice_prune_frame)
 
-        with patch("bdo_realtime_audio.SOFT_VOICE_LIMIT", 1):
+        with patch("bdo_music_composer.audio.bdo_realtime_audio.SOFT_VOICE_LIMIT", 1):
             expired, _retired = self.engine._start_voice(
                 sample,
                 0.0,
@@ -2065,7 +2077,7 @@ class RealtimeAudioTests(unittest.TestCase):
         self.engine._duration_frames = 4_096
         self.engine._playing = True
 
-        with patch("bdo_realtime_audio.SOFT_VOICE_LIMIT", 1):
+        with patch("bdo_music_composer.audio.bdo_realtime_audio.SOFT_VOICE_LIMIT", 1):
             self.engine._render_locked(300)
 
         older = next(
@@ -2089,7 +2101,7 @@ class RealtimeAudioTests(unittest.TestCase):
         self.engine._duration_frames = 300
         self.engine._playing = True
 
-        with patch("bdo_realtime_audio.SOFT_VOICE_LIMIT", 1):
+        with patch("bdo_music_composer.audio.bdo_realtime_audio.SOFT_VOICE_LIMIT", 1):
             self.engine._render_locked(200)
 
         self.assertEqual(self.engine._voice_steals, 0)

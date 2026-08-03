@@ -15,14 +15,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from bdo_midi import Note  # noqa: E402
-from bdo_profile import load_bdo_profile  # noqa: E402
-from bdo_validation import ValidationContext, validate_tracks  # noqa: E402
+from bdo_music_composer.core.bdo_profile import load_bdo_profile  # noqa: E402
+from bdo_music_composer.export.bdo_validation import ValidationContext, validate_tracks  # noqa: E402
 from bdo_music_composer.app.conversion_validation_controller import (  # noqa: E402
     ConversionValidationController,
 )
 from bdo_music_composer.editor.editor_models import TrackState  # noqa: E402
-from pitch_transform import PitchTransformPlan  # noqa: E402
-from project_paths import PROFILES_DIR  # noqa: E402
+from bdo_music_composer.editor.pitch_transform import PitchTransformPlan  # noqa: E402
+from bdo_music_composer.core.project_paths import PROFILES_DIR  # noqa: E402
 
 
 INSTRUMENT_ID = 0x0B

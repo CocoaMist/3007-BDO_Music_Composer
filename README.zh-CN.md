@@ -28,13 +28,13 @@ v1.0.0 是首个公开稳定大版本。编辑、自动保存、优化、预览�
 - 打开 BDO v9 曲谱后保留双力度、轨道音量/设置、奏法和物理分块；未修改文档可字节级往返。
 - 工程撤销/重做、后台自动保存、版本列表和安全首页索引。
 
-### 扒谱和分析辅助
+### 实用扒谱
 
-- 载入本地 MP3/WAV，设置时间偏移和节拍原点，与 MIDI 播放头对齐。
-- 本地 Basic Pitch ONNX/CPU 分析、范围重解码、证据缓存和候选审阅。
-- 可编辑调性/和弦段、旋律/声部分组、片段清理、可解释 BDO 乐器 Top-3。
-- 分析结果先保存在审阅 sidecar；只有用户确认 Apply/OK 后才写入正式轨道。
-- 内嵌编辑模式刻意不做自动打击乐映射，也不自动覆盖音符或轨道分配。
+- 载入本地 WAV 或标准 MP3，点击“开始扒谱”运行本地 Basic Pitch ONNX/CPU 分析。
+- 生产界面固定使用经过保护的标准场景、平衡灵敏度和保留式清理，不暴露实验参数、乐句、和声、声部分组或配器诊断。
+- 参考音块以轻量线框显示，底部短线表达置信度；蓝色音高轨迹只在候选音块附近显示，并提供低、标准、高三级显示去噪。可选“声部提示”只连接相邻且可信的主旋律片段，不再跨长空白或大音程画折线。各层可独立开关，框选参考音块后可忽略、恢复或采纳为可编辑草稿。
+- 草稿可运行只读游戏适配检查，再收起扒谱参考层继续普通编辑；检查不会自动删音、移调或量化。
+- 结果先进入编辑器草稿，只有确认编辑器 Apply/OK 后才写入正式轨道；不会自动覆盖现有音符，也不自动映射打击乐。
 
 ### 优化、试听和导出
 
@@ -73,7 +73,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install_transcription.ps1
 1. 新建工程、导入 MIDI，或打开 BDO v9 曲谱。
 2. 在设置中配置角色名、Owner ID、输出目录和可选的本地音源。
 3. 选择 BDO 乐器，编辑音符、力度、奏法、FX 和移调计划。
-4. 可选：载入参考音频，运行本地扒谱，人工审阅候选、和声和声部分组。
+4. 可选：载入参考音频，开始扒谱，用参考音块或音高轨迹定位旋律，并把所选音块采纳为草稿。
 5. 可选：运行优化分析，预览后应用到全曲或目标轨。
 6. 运行“转换检查”，修复音域、无效 FX、打击乐映射和乐器合并问题。
 7. 试听当前编辑器模型并导出；导出会依次核对内存结果、主文件和游戏目录副本的
@@ -124,10 +124,10 @@ flowchart LR
 
 主要边界：
 
-- `pyside_bdo_gui.py`：主窗口、Qt 生命周期和工作流编排；兼容导出旧公开类。
+- `bdo_music_composer/ui/main_window.py`：主窗口、Qt 生命周期和工作流编排；兼容导出旧公开类。
 - `bdo_music_composer/editor/editor_import.py`：事务式 MIDI、BDO、工程轨道导入；通过类型化错误整体失败，
   不在损坏输入上恢复半份谱面。
-- `game_score_model.py`：正式谱面/试听范围、最终游戏乐器 ID、力度迁移和同乐器
+- `bdo_music_composer/editor/game_score_model.py`：正式谱面/试听范围、最终游戏乐器 ID、力度迁移和同乐器
   Volume/Aux 规则。
 - `bdo_music_composer/editor/model_revision.py`、
   `bdo_music_composer/app/conversion_validation_controller.py`、
@@ -146,22 +146,22 @@ flowchart LR
   `bdo_music_composer/app/game_profile_provider.py`、
   `bdo_music_composer/app/application_metadata.py`：原子配置读写、按需缓存的
   游戏规则 profile，以及统一版本/公开仓库元数据，不在导入期发起网络请求。
-- `home_catalog.py`、`bdo_music_composer/ui/home_widgets.py`、
+- `bdo_music_composer/app/home_catalog.py`、`bdo_music_composer/ui/home_widgets.py`、
   `bdo_music_composer/ui/startup_widgets.py`：有界首页数据发现与 Qt 展示分离。
 - 聚焦对话框位于 `bdo_music_composer/ui/dialogs/`，应用级语义主题位于
   inert 的 `bdo_music_composer/ui/theme/` 子包。
 - `optimization/`：生产优化管线、registry 和可信本地算法边界。
-- `bdo_realtime_audio.py`、`bdo_sample_renderer.py`：实时与离线采样试听；
+- `bdo_music_composer/audio/bdo_realtime_audio.py`、`bdo_music_composer/audio/bdo_sample_renderer.py`：实时与离线采样试听；
   `bdo_music_composer/editor/preview_midi_writer.py` 单独拥有标准 MIDI
   确定性投影，不参与 BDO v9 导出。
-- `export_workflow.py`、`export_verification.py`、`bdo_export/`、`bdo_codec/`：不可变请求、字段级导出自检、原文档复用、适配、二进制读写和分阶段原子发布；Codec 不依赖编辑器。
-- `bdo_music_composer/project/project_document.py`、
+- `bdo_music_composer/export/export_workflow.py`、`bdo_music_composer/export/export_verification.py`、`bdo_export/`、`bdo_codec/`：不可变请求、字段级导出自检、原文档复用、适配、二进制读写和分阶段原子发布；Codec 不依赖编辑器。
+- `bdo_music_composer/app/project_document.py`、
   `bdo_music_composer/project/project_persistence.py`、
   `bdo_music_composer/project/project_schema.py`：提交前完整 `ProjectLoadPlan`、
   递归深冻结的 `ProjectMetadataSnapshot`、原子自动保存和只执行一次的历史迁移。
-- `bdo_transcription*.py`、`transcription_commit_plan.py`、
-  `transcription_workers.py`：Qt-free 分析、稳定候选区间索引、正式提交纯计划和后台 worker。
-- `i18n.py`、`project_paths.py`：运行时目录和源码/冻结资源边界。
+- `bdo_transcription*.py`、`bdo_music_composer/transcription/transcription_commit_plan.py`、
+  `bdo_music_composer/ui/transcription/transcription_workers.py`：Qt-free 分析、稳定候选区间索引、正式提交纯计划和后台 worker。
+- `bdo_music_composer/ui/i18n.py`、`bdo_music_composer/core/project_paths.py`：运行时目录和源码/冻结资源边界。
 
 深入阅读：[架构](docs/ARCHITECTURE.md)、[AI 路由](docs/AI_CONTEXT.md)、[AI 编辑与结构演进指南](docs/AI_EDITING_GUIDE.md)、[工程结构](docs/PROJECT_STRUCTURE.md)、[转换设置边界](docs/CONVERSION_SETTINGS.md)、[BDO v9 codec](docs/BDO_V9_CODEC.md)。
 
@@ -191,7 +191,7 @@ editor owner，再迁移 7 个 dialogs/theme owner，随后把 5 个编辑器 Qt
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -q
 .\.venv\Scripts\python.exe -m unittest tests.test_architecture_dependencies tests.test_gui_module_boundaries -q
-.\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
+.\.venv\Scripts\python.exe -m py_compile main.py bdo_music_composer/core/project_paths.py bdo_music_composer/ui/main_window.py bdo_music_composer/ui/i18n.py
 git diff --check
 ```
 

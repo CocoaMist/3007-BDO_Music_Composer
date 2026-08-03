@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from bdo_audio_lifecycle import (
+from bdo_music_composer.audio.bdo_audio_lifecycle import (
     InstanceTimelineItem,
     decide_instance_limit,
     detect_active_signal_frames,

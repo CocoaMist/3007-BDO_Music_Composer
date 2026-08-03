@@ -19,14 +19,14 @@ class TranscriptionSemanticCanvasUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_instruments import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_instruments import (
                 BdoInstrumentMatch,
                 InstrumentMatchAnalysis,
                 VoiceGroup,
             )
-            from bdo_transcription_session import TranscriptionSession
-            from pyside_bdo_gui import MidiToBdoWindow
+            from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionSession
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -159,9 +159,9 @@ class TranscriptionSemanticCanvasUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription_harmony import HarmonyAnalysisCancelled
-            import pyside_bdo_gui as gui
-            import transcription_workers as workers
+            from bdo_music_composer.transcription.bdo_transcription_harmony import HarmonyAnalysisCancelled
+            import bdo_music_composer.ui.main_window as gui
+            import bdo_music_composer.ui.transcription.transcription_workers as workers
 
             app = QApplication([])
             worker = gui.TranscriptionAssistAnalysisWorker(
@@ -235,15 +235,15 @@ class TranscriptionSemanticCanvasUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import TranscriptionCandidate
-            from bdo_transcription_harmony import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_harmony import (
                 ChordSegment,
                 HarmonyAnalysis,
                 KeyEstimate,
             )
-            from bdo_transcription_instruments import InstrumentMatchAnalysis
-            from bdo_transcription_session import TranscriptionSession
-            from pyside_bdo_gui import MidiToBdoWindow
+            from bdo_music_composer.transcription.bdo_transcription_instruments import InstrumentMatchAnalysis
+            from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionSession
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -372,20 +372,20 @@ class TranscriptionSemanticCanvasUiTests(unittest.TestCase):
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import (
+            from bdo_music_composer.transcription.bdo_transcription import (
                 TranscriptionCandidate,
                 TranscriptionCandidateAnnotation,
                 TranscriptionPostprocessReport,
                 TranscriptionResult,
             )
-            from bdo_transcription_harmony import (
+            from bdo_music_composer.transcription.bdo_transcription_harmony import (
                 ChordSegment,
                 HarmonyAnalysis,
                 KeyEstimate,
             )
-            from bdo_transcription_instruments import VoiceGroup
-            from bdo_transcription_session import TranscriptionSession
-            from pyside_bdo_gui import (
+            from bdo_music_composer.transcription.bdo_transcription_instruments import VoiceGroup
+            from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionSession
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog,
                 MidiToBdoWindow,
                 PianoRollCanvas,
@@ -596,31 +596,41 @@ class TranscriptionSemanticCanvasUiTests(unittest.TestCase):
             assert canvas._voice_group_for_candidate("c-root") is group
             assert canvas._adjacent_voice_groups("voice-1") == ()
 
+            # Voice-group analysis remains available to review actions, but
+            # no longer paints inaccurate song-spanning bounding boxes.
+            assert not hasattr(canvas, "_voice_group_outlines")
+            assert not hasattr(canvas, "_paint_voice_group_outlines")
             image = QImage(980, 700, QImage.Format_ARGB32_Premultiplied)
             image.fill(0)
             painter = QPainter(image)
-            outline_calls = []
-            original_outline = canvas._paint_voice_group_outlines
-            canvas._paint_voice_group_outlines = (
-                lambda *args: outline_calls.append(args)
-            )
             canvas.px_per_beat = 39.0
             canvas._paint_transcription_candidates(
                 painter, canvas.grid_rect(), 0.0, 1000.0
             )
-            assert len(outline_calls) == 1
             canvas.px_per_beat = 40.0
             canvas._paint_transcription_candidates(
                 painter, canvas.grid_rect(), 0.0, 1000.0
             )
-            assert len(outline_calls) == 1
             canvas.px_per_beat = 161.0
             canvas._paint_transcription_candidates(
                 painter, canvas.grid_rect(), 0.0, 1000.0
             )
-            assert len(outline_calls) == 1
-            canvas._paint_voice_group_outlines = original_outline
             painter.end()
+
+            # A double-click promotes the visible candidate through the same
+            # validation path as the write action instead of swallowing it.
+            canvas.px_per_beat = 92.0
+            root_position = canvas.candidate_rect(candidates[0]).center()
+            QTest.mouseDClick(
+                canvas,
+                Qt.LeftButton,
+                Qt.NoModifier,
+                root_position.toPoint(),
+            )
+            app.processEvents()
+            assert len(canvas.notes) == 1
+            assert canvas.notes[0].pitch == candidates[0].pitch
+            assert canvas.notes[0].start == 225.0
 
             editor.close()
             window.active_transcription_editor = None

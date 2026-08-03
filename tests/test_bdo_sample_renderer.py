@@ -9,20 +9,21 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from bdo_instrument_samples import (
+from bdo_music_composer.audio.bdo_instrument_samples import (
     BDO_BANK_BY_ID,
     bank_for_instrument,
     banks_for_instrument,
     resolve_bdo_pitch,
 )
 from bdo_midi import BDO_INSTRUMENT_NAMES, _GM_TO_BDO_DRUM
-from bdo_realtime_audio import BANK_BY_ID
-from bdo_sample_renderer import (
+from bdo_music_composer.audio.bdo_realtime_audio import BANK_BY_ID
+from bdo_music_composer.audio.bdo_sample_renderer import (
     BdoSampleMap,
     GM_TO_BDO_DRUM,
     SAMPLE_RATE,
     _resample_for_note,
     render_preview,
+    sample_map_velocity_boundaries,
     sample_map_supported_pitches,
     sample_map_supports_note,
 )
@@ -48,6 +49,28 @@ def _row(
 
 
 class BdoSampleRendererTests(unittest.TestCase):
+    def test_velocity_boundary_hint_uses_mapping_metadata_only(self) -> None:
+        bank = bank_for_instrument(0x0A)
+        rows = []
+        for source_id, lower, upper in ((10, 0, 63), (11, 64, 127)):
+            row = _row(bank, source_id, 36, 88)
+            row.update({
+                "velocity_min": lower,
+                "velocity_max": upper,
+                "selection_group_id": source_id,
+                "wav_path": "Z:/definitely-unavailable/game-audio.wav",
+            })
+            rows.append(row)
+        with tempfile.TemporaryDirectory() as directory:
+            mapping = Path(directory) / "mapping.json"
+            mapping.write_text(
+                json.dumps({"banks": {bank: rows}}), encoding="utf-8"
+            )
+            self.assertEqual(
+                sample_map_velocity_boundaries(mapping, 0x0A, 60),
+                (64,),
+            )
+
     @staticmethod
     def write_long_wav(path: Path, seconds: float = 6.0) -> None:
         frames = round(SAMPLE_RATE * seconds)
@@ -127,6 +150,9 @@ class BdoSampleRendererTests(unittest.TestCase):
 
             self.assertIsNotNone(selected)
             self.assertEqual(Path(selected["wav_path"]), wav_path)
+            self.assertTrue(sample_map.has_complete_media(0x0A))
+            wav_path.unlink()
+            self.assertFalse(sample_map.has_complete_media(0x0A))
 
     def test_checked_in_ranges_are_fully_covered_by_every_selected_bank(
         self,

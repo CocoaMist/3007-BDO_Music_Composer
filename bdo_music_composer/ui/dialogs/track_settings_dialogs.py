@@ -28,7 +28,7 @@ from bdo_midi.instruments import (
     MARNIAN_SYNTH_MODE_OFFSETS,
     localized_bdo_instrument_name,
 )
-from bdo_track_effects import (
+from bdo_common.bdo_track_effects import (
     GAME_PERCENT_MAX,
     MasterEffects,
     TRACK_CHORUS_SEND_INDEX,
@@ -36,8 +36,8 @@ from bdo_track_effects import (
     TRACK_REVERB_SEND_INDEX,
     raw_track_settings,
 )
-from i18n import tr, trf
-from pitch_transform import PitchTransformPlan
+from bdo_music_composer.ui.i18n import tr, trf
+from bdo_music_composer.editor.pitch_transform import PitchTransformPlan
 
 
 class TrackDialogState(Protocol):

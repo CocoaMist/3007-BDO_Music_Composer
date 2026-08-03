@@ -10,11 +10,14 @@ import re
 from string import Formatter
 from typing import Callable, Iterable, Mapping
 
-from bdo_articulation_profiles import profile_for
-from bdo_lyrics import LyricContext, LyricExpressionMode, align_lyrics
-from bdo_music_theory import ContextClassifier, SongContext, TheoryContext, TrackRole, analyse_music, analyse_song, is_non_chord_tone
-from bdo_track_effects import DEFAULT_TRACK_VOLUME
-from bdo_techniques import EditOperation, RealizationKind, TECHNIQUE_PROFILES, TechniqueCandidate, instrument_family
+from bdo_music_composer.editor.bdo_articulation_profiles import profile_for
+from bdo_music_composer.editor.bdo_instrument_adaptation import (
+    articulation_supports_pitch,
+)
+from bdo_music_composer.editor.bdo_lyrics import LyricContext, LyricExpressionMode, align_lyrics
+from bdo_music_composer.editor.bdo_music_theory import ContextClassifier, SongContext, TheoryContext, TrackRole, analyse_music, analyse_song, is_non_chord_tone
+from bdo_common.bdo_track_effects import DEFAULT_TRACK_VOLUME
+from bdo_music_composer.editor.bdo_techniques import EditOperation, RealizationKind, TECHNIQUE_PROFILES, TechniqueCandidate, instrument_family
 
 
 Translator = Callable[[str], str]
@@ -1288,6 +1291,16 @@ def _apply_articulations(notes: list, supported: set[int], inst_id: int, manual_
     last_applied = -config.min_notes_between_articulations - 1
     for indices, options in sorted(by_group.items(), key=lambda item: notes[item[0][0]].start):
         candidate = max(options, key=lambda option: option.confidence)
+        if any(
+            not articulation_supports_pitch(
+                inst_id,
+                candidate.ntype,
+                notes[index].pitch,
+            )
+            for index in indices
+        ):
+            report.articulation_candidates_skipped += 1
+            continue
         profile = profile_for(inst_id, candidate.ntype)
         if profile is None:
             report.articulation_candidates_skipped += 1
@@ -1592,7 +1605,7 @@ def _mark_verified_candidates(candidates: list[TechniqueCandidate], inst_id: int
     ]
 
 
-def _apply_technique_edits(notes: list, selected: list[TechniqueCandidate], level: OptimizationLevel,
+def _apply_technique_edits(notes: list, inst_id: int, selected: list[TechniqueCandidate], level: OptimizationLevel,
                            role: TrackRole, config: OptimizerConfig, report: TrackOptimizationReport,
                            manual_track_fx: int | None = None) -> list:
     if manual_track_fx is not None and config.respect_manual_track_fx:
@@ -1604,6 +1617,16 @@ def _apply_technique_edits(notes: list, selected: list[TechniqueCandidate], leve
             onset = notes[candidate.note_indices[0]].start
             same_onset = tuple(index for index, note in enumerate(notes) if abs(note.start - onset) <= 12.0)
             if any(int(getattr(notes[index], "ntype", 0)) != 0 for index in same_onset):
+                continue
+            if any(
+                not articulation_supports_pitch(
+                    inst_id,
+                    candidate.ntype,
+                    notes[index].pitch,
+                )
+                for index in same_onset
+            ):
+                report.articulation_candidates_skipped += 1
                 continue
             for index in same_onset:
                 native_replacements[index] = notes[index]._replace(ntype=candidate.ntype)
@@ -2136,12 +2159,18 @@ def optimize_tracks(tracks: list, bpm: int, supported_articulations: dict[int, l
                 "相同 BDO 乐器合并后超过工具的 10000 音符处理阈值，"
                 "自动编曲不会继续加倍；该阈值不是游戏账号配额"
             )
-        if int(track.bdo_instrument_id) in {0x24, 0x25, 0x26}:
-            invalid_fx = sum(
-                int(getattr(note, "ntype", 0)) == 25 and not 36 <= note.pitch <= 43 for note in notes
+        invalid_fx = sum(
+            not articulation_supports_pitch(
+                int(track.bdo_instrument_id),
+                int(getattr(note, "ntype", 0)),
+                int(note.pitch),
             )
-            if invalid_fx:
-                report.warnings.append(f"{invalid_fx} 个电吉他 FX 音不在 C2-G2 触发区")
+            for note in notes
+        )
+        if invalid_fx:
+            report.warnings.append(
+                f"{invalid_fx} 个奏法音符超出游戏原生触发音区，未自动改写"
+            )
         for group in _onset_groups(notes):
             ntypes = {int(getattr(notes[index], "ntype", 0)) for index in group}
             if len(ntypes) > 1:
@@ -2188,7 +2217,14 @@ def optimize_tracks(tracks: list, bpm: int, supported_articulations: dict[int, l
             )
         selected = _beam_select(report.technique_candidates, config.beam_width)
         notes = _apply_technique_edits(
-            notes, selected, config.level, role, config, report, track.articulation_type
+            notes,
+            int(track.bdo_instrument_id),
+            selected,
+            config.level,
+            role,
+            config,
+            report,
+            track.articulation_type,
         )
         if lyric_context and role == TrackRole.PRIMARY_MELODY:
             local_lyrics = align_lyrics(

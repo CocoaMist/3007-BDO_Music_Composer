@@ -30,14 +30,14 @@ from PySide6.QtWidgets import (
 from bdo_music_composer.app.application_metadata import (
     RELEASE_NOTES_UI_ENABLED,
 )
-from bdo_instrument_lane_art_qt import InstrumentLaneArtwork
+from bdo_music_composer.ui.editor.bdo_instrument_lane_art_qt import InstrumentLaneArtwork
 from bdo_midi import BDO_ENSEMBLE_PLAYER_LIMIT
-from i18n import tr, trf
-from project_paths import ASSETS_DIR
+from bdo_music_composer.ui.i18n import tr, trf
+from bdo_music_composer.core.project_paths import ASSETS_DIR
 
 
 HOME_BACKGROUND_IMAGE = (
-    ASSETS_DIR / "ui" / "home" / "home_mountain_workshop_v1.jpg"
+    ASSETS_DIR / "ui" / "home" / "home_aristocratic_salon_v2.png"
 )
 SHAI_ENSEMBLE_MARK_IMAGE = ASSETS_DIR / "icons" / "shai_ensemble_mark.png"
 HOME_INSTRUMENT_IDS_ROLE = int(Qt.ItemDataRole.UserRole) + 1
@@ -86,41 +86,47 @@ class HomeFooter(QWidget):
 
 
 class HomeIdentityBadge(QPushButton):
-    """Compact one-line export identity entry for the home brand row."""
+    """Compact Owner-ID status entry for the home brand row."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._primary = tr("设置演奏者")
-        self._secondary = tr("身份待完善")
-        self._identity_complete = False
-        self.setObjectName("HomeUserButton")
+        self._primary = tr("Owner ID 未设置")
+        self._secondary = tr("Owner ID 未设置；点击前往设置")
+        self._owner_id_bound = False
+        self.setObjectName("HomeOwnerIdButton")
         self.setCursor(Qt.PointingHandCursor)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFixedHeight(30)
-        self.setMinimumWidth(104)
-        self.setMaximumWidth(148)
+        self.setMinimumWidth(134)
+        self.setMaximumWidth(180)
         self.setText(self._primary)
 
-    def set_identity(self, name: str, owner_id: int) -> None:
-        character_name = str(name or "").strip()
-        owner_bound = bool(owner_id)
-        self._identity_complete = bool(character_name and owner_bound)
-        self._primary = character_name or tr("设置演奏者")
-        if owner_bound:
-            self._secondary = tr("Owner ID 已绑定")
-        elif character_name:
-            self._secondary = tr("Owner ID 未设置")
+    def set_owner_id(self, owner_id: int) -> None:
+        self._owner_id_bound = bool(owner_id)
+        if self._owner_id_bound:
+            self._primary = tr("Owner ID 已绑定")
+            self._secondary = tr("点击头像，从游戏曲谱快速设置 Owner ID")
         else:
-            self._secondary = tr("身份待完善")
+            self._primary = tr("Owner ID 未设置")
+            self._secondary = tr("点击头像，从游戏曲谱快速设置 Owner ID")
         self.setText(self._primary)
-        description = f"{self._primary} · {self._secondary}"
-        self.setToolTip(description)
-        self.setAccessibleName(description)
-        self.setProperty("identityMissing", not self._identity_complete)
+        self.setToolTip(self._secondary)
+        self.setAccessibleName(self._primary)
+        self.setAccessibleDescription(self._secondary)
+        missing = not self._owner_id_bound
+        self.setProperty("ownerIdMissing", missing)
+        # Kept for callers that used the older generic identity state.
+        self.setProperty("identityMissing", missing)
         self.update()
 
+    def set_identity(self, name: str, owner_id: int) -> None:
+        """Compatibility wrapper; the home surface intentionally ignores names."""
+
+        del name
+        self.set_owner_id(owner_id)
+
     def sizeHint(self) -> QSize:
-        return QSize(126, 30)
+        return QSize(154, 30)
 
     def paintEvent(self, event) -> None:
         del event
@@ -136,26 +142,33 @@ class HomeIdentityBadge(QPushButton):
             painter.setPen(QPen(QColor("#5b4c36"), 1))
             painter.drawRoundedRect(bounds, 5.0, 5.0)
 
-        # A small neutral profile outline keeps the control recognizable
-        # without competing with the brand or looking like a second card.
-        painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(QColor("#9e8d72"), 1.2))
-        painter.drawEllipse(QRectF(11.0, 6.0, 6.0, 6.0))
-        painter.drawArc(QRectF(7.5, 12.0, 13.0, 10.0), 0, 180 * 16)
-        accent = QColor("#8ead77" if self._identity_complete else "#b8833d")
+        # A compact anonymous avatar makes the direct identity action clear
+        # without exposing the character name on the home surface.
+        avatar_outline = QColor("#a68a57" if self._owner_id_bound else "#707070")
+        painter.setBrush(QColor(29, 29, 29, 210))
+        painter.setPen(QPen(avatar_outline, 1.1))
+        painter.drawEllipse(QRectF(4.0, 3.0, 24.0, 24.0))
+        painter.setBrush(avatar_outline)
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(QRectF(12.0, 8.0, 8.0, 8.0))
+        painter.drawEllipse(QRectF(8.5, 16.0, 15.0, 8.0))
+
+        # The status lamp is deliberately neutral while the required ID is
+        # absent. It becomes green only after a valid Owner ID is loaded.
+        accent = QColor("#8ead77" if self._owner_id_bound else "#777777")
         painter.setBrush(accent)
         painter.setPen(QPen(QColor("#181817"), 1))
-        painter.drawEllipse(QRectF(18.0, 18.0, 6.0, 6.0))
+        painter.drawEllipse(QRectF(21.0, 20.0, 7.0, 7.0))
 
         primary_font = QFont(painter.font())
         primary_font.setPointSize(9)
-        primary_font.setBold(self._identity_complete)
+        primary_font.setBold(self._owner_id_bound)
         painter.setFont(primary_font)
         primary_rect = QRectF(
-            30.0, 3.0, max(36.0, bounds.width() - 47.0), 24.0
+            35.0, 3.0, max(54.0, bounds.width() - 52.0), 24.0
         )
         painter.setPen(
-            QColor("#e3ddd2" if self._identity_complete else "#cdb38a")
+            QColor("#e3ddd2" if self._owner_id_bound else "#999999")
         )
         painter.drawText(
             primary_rect,
@@ -172,8 +185,8 @@ class HomeIdentityBadge(QPushButton):
         )
 
 
-class EnsembleCapacityBadge(QWidget):
-    """Quiet Shai identity mark; exact capacity lives in contextual UI."""
+class EnsembleCapacityBadge(QPushButton):
+    """Toolbar logo carrying Owner-ID state and quiet ensemble context."""
 
     def __init__(
         self,
@@ -183,7 +196,12 @@ class EnsembleCapacityBadge(QWidget):
         super().__init__(parent)
         self.setObjectName("EnsembleCapacityBadge")
         self.setFixedSize(36, 36)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFlat(True)
         self._player_count = 0
+        self._owner_id_bound = False
+        self.setProperty("ownerIdMissing", True)
         self._description_override = ""
         source = QPixmap(str(icon_path))
         self._icon = source.scaled(
@@ -219,6 +237,15 @@ class EnsembleCapacityBadge(QWidget):
         self._refresh_description()
         self.update()
 
+    def set_owner_id(self, owner_id: int) -> None:
+        bound = bool(owner_id)
+        if bound == self._owner_id_bound:
+            return
+        self._owner_id_bound = bound
+        self.setProperty("ownerIdMissing", not bound)
+        self._refresh_description()
+        self.update()
+
     def _refresh_description(self) -> None:
         if self._description_override:
             description = self._description_override
@@ -236,9 +263,14 @@ class EnsembleCapacityBadge(QWidget):
                 count=self._player_count,
                 limit=BDO_ENSEMBLE_PLAYER_LIMIT,
             )
-        self.setToolTip(description)
-        self.setAccessibleName(tr("工程演奏人数"))
-        self.setAccessibleDescription(description)
+        owner_description = tr(
+            "Owner ID 已绑定；点击 Logo 可更改"
+            if self._owner_id_bound
+            else "Owner ID 未设置；点击 Logo 快速设置"
+        )
+        self.setToolTip(f"{owner_description}\n{description}")
+        self.setAccessibleName(tr("Owner ID 快捷设置"))
+        self.setAccessibleDescription(f"{owner_description}。{description}")
 
     def retranslate_dynamic_content(self) -> None:
         self._refresh_description()
@@ -247,20 +279,19 @@ class EnsembleCapacityBadge(QWidget):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        active_color = QColor("#ef8178" if self.is_over_limit else "#d6aa52")
-
         if not self._icon.isNull():
             painter.save()
             painter.setOpacity(0.9)
             painter.drawPixmap(3, 3, self._icon)
             painter.restore()
 
-        # Keep the persistent toolbar calm: a tiny status lamp carries only
-        # normal/over-limit state. Exact x/5 text remains in the workspace
-        # telemetry strip and the selected home card's tooltip.
+        # Owner identity is carried by the logo itself, so the state remains
+        # available on both home and editor pages without another home widget.
         painter.setPen(Qt.NoPen)
         painter.setBrush(
-            active_color if self._player_count > 0 else QColor("#514b40")
+            QColor("#8ead77")
+            if self._owner_id_bound
+            else QColor("#777777")
         )
         painter.drawEllipse(QRectF(27.0, 26.0, 6.0, 6.0))
 
@@ -325,10 +356,10 @@ class HomeBackdrop(QFrame):
             float(self.width()),
             0.0,
         )
-        readability.setColorAt(0.0, QColor(8, 9, 10, 176))
-        readability.setColorAt(0.24, QColor(9, 10, 11, 158))
-        readability.setColorAt(0.46, QColor(10, 11, 12, 102))
-        readability.setColorAt(0.66, QColor(11, 12, 13, 46))
+        readability.setColorAt(0.0, QColor(8, 9, 10, 158))
+        readability.setColorAt(0.24, QColor(9, 10, 11, 138))
+        readability.setColorAt(0.46, QColor(10, 11, 12, 88))
+        readability.setColorAt(0.66, QColor(11, 12, 13, 38))
         readability.setColorAt(1.0, QColor(11, 12, 13, 18))
         painter.fillRect(self.rect(), readability)
 

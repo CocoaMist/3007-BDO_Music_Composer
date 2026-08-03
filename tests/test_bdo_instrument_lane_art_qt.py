@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter
-from bdo_instrument_lane_art_qt import (
+from bdo_music_composer.ui.editor.bdo_instrument_lane_art_qt import (
     ACTIVE_HEADER_ART_OPACITY,
     BUILTIN_INSTRUMENT_ART_DIR,
     INACTIVE_HEADER_ART_OPACITY,

@@ -42,7 +42,7 @@ class ConversionDefaultsUiTests(unittest.TestCase):
             import mido
             from PySide6.QtWidgets import QApplication
 
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
 
             app = QApplication([])
             window = gui.MidiToBdoWindow()
@@ -110,7 +110,7 @@ class ConversionDefaultsUiTests(unittest.TestCase):
 
             from PySide6.QtWidgets import QApplication
 
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
 
             gui.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
             gui.CONFIG_PATH.write_text(

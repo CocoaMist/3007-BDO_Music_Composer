@@ -32,8 +32,8 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication
 
-            from i18n import install_localizer
-            from pyside_bdo_gui import Note, TimelineCanvas, TrackState
+            from bdo_music_composer.ui.i18n import install_localizer
+            from bdo_music_composer.ui.main_window import Note, TimelineCanvas, TrackState
 
             app = QApplication([])
             localizer = install_localizer(app, "zh_CN")
@@ -133,14 +133,81 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
             completed.stdout + completed.stderr,
         )
 
-    def test_transcription_advanced_controls_are_progressively_disclosed(self) -> None:
+    def test_transcription_practical_surface_removes_expert_disclosure(self) -> None:
         completed = _run_offscreen(
             """
             from PySide6.QtCore import Qt
             from PySide6.QtWidgets import QApplication, QWidget
 
-            from i18n import install_localizer
-            from transcription_editor_qt import TranscriptionEditorPanel
+            from bdo_music_composer.ui.i18n import install_localizer
+            from bdo_music_composer.ui.transcription.transcription_editor_qt import TranscriptionEditorPanel
+
+            app = QApplication([])
+            localizer = install_localizer(app, "zh_CN")
+            panel = TranscriptionEditorPanel()
+            panel.resize(920, panel.sizeHint().height())
+            panel.show()
+            app.processEvents()
+
+            assert panel.workspace_title_label.text() == "音频扒谱"
+            assert panel.audio_button.accessibleName()
+            assert panel.analyze_button.accessibleName() == "开始扒谱"
+            assert not panel.advanced_toggle_button.isVisible()
+            assert not panel.advanced_panel.isVisible()
+            assert not panel.redecode_button.isVisible()
+            assert not hasattr(panel, "assist_toggle_button")
+            assert not panel.review_tools_toggle_button.isVisible()
+            assert not hasattr(panel, "assist_panel")
+
+            panel.set_audio_loaded(True, display_name="reference.wav")
+            panel.set_range_available(True)
+            panel.set_assist_available(True)
+            panel.set_advanced_controls_expanded(True)
+            app.processEvents()
+            assert panel.audio_button.isVisible()
+            assert panel.remove_audio_button.isVisible()
+            assert panel.analyze_button.isVisible()
+            assert not panel.advanced_controls_expanded
+            assert not panel.redecode_button.isVisible()
+            assert not hasattr(panel, "assist_toggle_button")
+
+            visible_widgets = [
+                widget
+                for widget in panel.findChildren(QWidget)
+                if widget.isVisible()
+            ]
+            focusable_widgets = [
+                widget
+                for widget in visible_widgets
+                if widget.focusPolicy() != Qt.NoFocus
+            ]
+            assert len(visible_widgets) <= 24, len(visible_widgets)
+            assert len(focusable_widgets) <= 16, len(focusable_widgets)
+
+            localizer.set_language("en_US")
+            app.processEvents()
+            assert panel.workspace_title_label.text() == "Audio Transcription"
+            assert panel.analyze_button.text() == "Start Transcription"
+
+            panel.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def _obsolete_test_transcription_advanced_controls_are_progressively_disclosed(self) -> None:
+        completed = _run_offscreen(
+            """
+            from PySide6.QtCore import Qt
+            from PySide6.QtWidgets import QApplication, QWidget
+
+            from bdo_music_composer.ui.i18n import install_localizer
+            from bdo_music_composer.ui.transcription.transcription_editor_qt import TranscriptionEditorPanel
 
             app = QApplication([])
             localizer = install_localizer(app, "zh_CN")
@@ -153,13 +220,6 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
                 panel.analysis_mode_combo,
                 panel.sensitivity_combo,
                 panel.cleanup_profile_group,
-                panel.confidence_caption,
-                panel.confidence_slider,
-                panel.confidence_label,
-                panel.reference_opacity_button,
-                panel.align_audio_button,
-                panel.beat_origin_button,
-                panel.clear_range_button,
             )
             assert not panel.advanced_controls_expanded
             assert panel.advanced_toggle_button.isVisible()
@@ -167,12 +227,17 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
             assert all(not widget.isVisible() for widget in advanced)
             assert panel.audio_button.isVisible()
             assert panel.analyze_button.isVisible()
-            assert panel.redecode_button.isVisible()
-            assert panel.melody_lines_button.isVisible()
-            assert panel.diagnostic_toggle_button.isVisible()
-            assert panel.show_rejected_checkbox.isVisible()
-            assert panel.show_suppressed_checkbox.isVisible()
-            assert panel.write_current_track_button.isVisible()
+            assert not panel.redecode_button.isVisible()
+            assert panel.workspace_title_label.isVisible()
+            assert not panel.review_context_label.isVisible()
+            assert not panel.advanced_panel.isVisible()
+            assert not panel.guide_tools_bar.isVisible()
+            assert not panel.review_more_bar.isVisible()
+            assert not panel.melody_lines_button.isVisible()
+            assert not panel.diagnostic_toggle_button.isVisible()
+            assert not panel.show_rejected_checkbox.isVisible()
+            assert not panel.show_suppressed_checkbox.isVisible()
+            assert not panel.write_current_track_button.isVisible()
 
             visible_widgets = [
                 widget
@@ -193,7 +258,42 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
             app.processEvents()
             assert panel.advanced_controls_expanded
             assert all(widget.isVisible() for widget in advanced)
+            assert not panel.guide_tools_bar.isVisible()
+            assert not panel.candidate_tools_bar.isVisible()
+            assert not panel.alignment_tools_bar.isVisible()
+            # Candidate tuning lives behind the clearly labelled arrow rather
+            # than consuming another permanent command row.
+            assert not panel.confidence_slider.isVisible()
+            assert not panel.candidate_opacity_slider.isVisible()
+            assert not panel.show_rejected_checkbox.isVisible()
+            assert not panel.show_suppressed_checkbox.isVisible()
+            assert panel.advanced_panel.isVisible()
+            assert not panel.review_more_bar.isVisible()
             assert states == [True]
+
+            panel.set_audio_loaded(True, display_name="reference.wav")
+            assert panel.guide_tools_bar.isVisible()
+            assert panel.alignment_tools_bar.isVisible()
+            assert panel.melody_lines_button.isVisible()
+            assert panel.diagnostic_toggle_button.isVisible()
+            panel.set_range_available(True)
+            assert panel.redecode_button.isVisible()
+            panel.set_action_state(
+                write_enabled=True,
+                reject_enabled=True,
+                can_undo=True,
+                candidate_count=3,
+            )
+            assert panel.candidate_tools_bar.isVisible()
+            assert panel.review_context_label.isVisible()
+            assert panel.write_current_track_button.isVisible()
+            assert panel.reject_button.isVisible()
+            assert panel.review_tools_toggle_button.isVisible()
+            panel.review_tools_toggle_button.click()
+            assert panel.review_tools_expanded
+            assert panel.review_more_bar.isVisible()
+            panel.review_tools_toggle_button.click()
+            assert not panel.review_more_bar.isVisible()
 
             panel.diagnostic_toggle_button.click()
             assert panel.frame_checkbox.isVisible()
@@ -203,7 +303,7 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
             panel.advanced_toggle_button.click()
             assert not panel.advanced_controls_expanded
             assert all(not widget.isVisible() for widget in advanced)
-            assert panel.frame_checkbox.isVisible()
+            assert not panel.frame_checkbox.isVisible()
             assert states == [True, False]
 
             localizer.set_language("en_US")

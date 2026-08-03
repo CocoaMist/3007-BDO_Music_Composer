@@ -19,12 +19,13 @@ class UiLayoutSmokeTests(unittest.TestCase):
             from PySide6.QtCore import QPoint, Qt, QTimer
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QFrame, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget, QStyleOptionViewItem, QTextBrowser, QWidget
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.main_window import (
                 EnsembleCapacityBadge, GlobalToast, HOME_INSTRUMENT_IDS_ROLE, HomeEntry,
                 HomeEntryDelegate, MidiNoteEditorDialog, MidiToBdoWindow, Note,
                 MasterEffectsDialog, ReferenceAudioController,
-                SettingsDialog, StartupSplash, TrackFxDialog, TrackState,
+                SettingsDialog, TrackFxDialog, TrackState,
             )
+            from bdo_music_composer.ui.startup_widgets import StartupReveal
             from bdo_music_composer.ui.ui_notifications import (
                 show_global_toast,
             )
@@ -188,38 +189,51 @@ class UiLayoutSmokeTests(unittest.TestCase):
             app.processEvents()
             assert home_stack.currentIndex() == 0
 
-            splash = StartupSplash()
-            splash.show()
+            reveal = StartupReveal(window)
+            reveal.prepare_window()
+            target_geometry = reveal.target_window_geometry
+            reveal.show()
             app.processEvents()
-            assert splash.size().width() == 470
-            assert splash.size().height() == 734
-            splash_margins = splash.layout().contentsMargins()
-            assert splash_margins.left() == splash_margins.right() == 0
-            assert splash_margins.top() == splash_margins.bottom() == 0
-            assert splash.artwork.size() == splash.size()
-            assert splash.property("uiSurface") == "startup"
-            splash_card = splash.findChild(QFrame, "StartupSplashCard")
-            assert splash_card is not None
-            assert splash_card.property("uiRole") == "startupCanvas"
-            assert splash.windowFlags() & Qt.WindowStaysOnTopHint
-            assert splash.MINIMUM_VISIBLE_MS >= 1400
-            assert splash.artwork.has_artwork
-            assert not splash.artwork._cover.isNull()
-            assert splash.spinner._timer.isActive()
-            initial_spinner_frame = splash.spinner.frame
+            assert not reveal.isWindow()
+            assert reveal.parentWidget() is window
+            assert reveal.geometry() == window.rect()
+            assert reveal.property("uiSurface") == "startup"
+            reveal_overlay = reveal.findChild(QFrame, "StartupOverlay")
+            assert reveal_overlay is not None
+            assert reveal_overlay.property("overlayMode") == "textOnly"
+            assert 250 <= reveal.MINIMUM_VISIBLE_MS <= 500
+            assert 80 <= reveal.READY_HOLD_MS <= 180
+            assert reveal.FADE_OUT_MS <= 300
+            assert reveal.has_artwork
+            assert target_geometry is not None
+            assert window.size() == target_geometry.size()
+            assert window.centralWidget().isVisible()
+            assert reveal.spinner._timer.isActive()
+            initial_spinner_frame = reveal.spinner.frame
             QTest.qWait(90)
             app.processEvents()
-            assert splash.spinner.frame != initial_spinner_frame
-            splash.set_status("准备完成")
-            assert splash.status_label.text() == "准备完成"
-            splash.finish(window, minimum_visible_ms=0)
-            QTest.qWait(splash.FADE_OUT_MS // 2)
+            assert reveal.spinner.frame != initial_spinner_frame
+            initial_window_geometry = window.geometry()
+            assert reveal.fadeOpacity > 0.99
+            reveal.finish(minimum_visible_ms=0)
+            assert reveal.status_label.text() == "准备完成"
+            assert reveal.spinner._complete
+            assert not reveal.spinner._timer.isActive()
+            QTest.qWait(reveal.READY_HOLD_MS + reveal.FADE_OUT_MS // 4)
             app.processEvents()
-            assert splash.isVisible()
-            assert 0.0 < splash.opacity.opacity() < 1.0
-            QTest.qWait(splash.FADE_OUT_MS)
+            assert reveal.isVisible()
+            assert window.geometry() == initial_window_geometry
+            assert 0.0 < reveal.fadeOpacity < 1.0
+            assert reveal.fade_mode == "out"
+            assert window.centralWidget().isVisible()
+            QTest.qWait(reveal.FADE_OUT_MS + 180)
             app.processEvents()
-            assert splash.isHidden()
+            assert reveal.isHidden()
+            assert window.centralWidget().isVisible()
+            assert window.size() == target_geometry.size()
+            assert (
+                window.geometry().center() - target_geometry.center()
+            ).manhattanLength() <= 4
 
             toast = window.show_toast(
                 "测试提示", kind="warning", duration_ms=80
@@ -266,8 +280,8 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert not hasattr(window, "install_check")
             assert window.track_actions_button.menu() is not None
             assert len(window.track_actions_button.menu().actions()) == 4
-            assert not window.transcription_tools_slot.isHidden()
-            assert not window.transcription_entry_button.isHidden()
+            assert not hasattr(window, "transcription_tools_slot")
+            assert not hasattr(window, "transcription_entry_button")
             assert not hasattr(window, "delete_track_button")
             reference = window.reference_audio
             assert isinstance(reference, ReferenceAudioController)
@@ -404,10 +418,10 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert workspace_left == editor.contentsRect().left()
             assert workspace_left + workspace.width() == editor.contentsRect().right() + 1
             assert toolbar.mapTo(editor, QPoint(0, 0)).x() > workspace_left
-            assert toolbar.isAncestorOf(editor.apply_button)
             assert toolbar.isAncestorOf(editor.cancel_button)
             assert toolbar.isAncestorOf(editor.confirm_button)
-            assert editor.apply_button.property("kind") == "secondary"
+            assert not hasattr(editor, "apply_button")
+            assert "删除" not in editor.editor_toolbar_action_buttons
             assert not hasattr(editor, "playback_timeline")
             top_inspector = editor.findChild(QFrame, "NoteInspectorTop")
             assert top_inspector is not None and top_inspector.isVisible()
@@ -425,9 +439,26 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert not editor.grid_controls.isVisible()
             assert editor.quantize_quick.isVisible()
             assert editor.quantize_combo.currentText() == "1/4"
+            assert editor.quantize_combo.height() == 28
             assert editor.quantize_ms() == editor.canvas.beat_ms
-            assert editor.ghost_opacity_slider.value() == 24
-            assert editor.canvas._ghost_opacity == 0.24
+            aligned_controls = (
+                editor.quantize_quick,
+                editor.velocity_toggle,
+                editor.ghost_box,
+                editor.note_controls,
+            )
+            assert {widget.height() for widget in aligned_controls} == {28}
+            assert len(
+                {
+                    widget.geometry().center().y()
+                    for widget in aligned_controls
+                }
+            ) == 1
+            assert all(not group.isVisible() for group in editor.note_field_groups)
+            assert not editor.ghost_box.isChecked()
+            assert top_inspector.isAncestorOf(editor.ghost_box)
+            assert editor.ghost_opacity_slider.value() == 30
+            assert editor.canvas._ghost_opacity == 0.30
             assert editor.pitch_scroll.width() == 12
             assert editor.time_scroll.height() == 12
             grid_rect = editor.canvas.grid_rect()
@@ -457,6 +488,8 @@ class UiLayoutSmokeTests(unittest.TestCase):
             app.processEvents()
             assert top_inspector.height() == inspector_height
             assert editor.grid_controls.isVisible()
+            assert editor.ghost_box.toolTip()
+            assert editor.ghost_opacity_slider.accessibleName()
             assert [
                 editor.quantize_combo.itemText(index)
                 for index in range(editor.quantize_combo.count())
@@ -499,12 +532,21 @@ class UiLayoutSmokeTests(unittest.TestCase):
             editor.canvas.selected = {0}
             editor.refresh_fields()
             assert editor.selection_summary.text().startswith("已选择 1 个音符")
+            assert all(group.isVisible() for group in editor.note_field_groups)
             ruler_x = round(editor.canvas.KEY_W + 500.0 * editor.canvas.px_per_ms)
             QTest.mouseClick(editor.canvas, Qt.LeftButton, pos=QPoint(ruler_x, 5))
             assert abs(editor.playhead_ms - 500.0) < 10.0
             editor.velocity_toggle.setChecked(True)
             app.processEvents()
             assert editor.velocity_lane.isVisible()
+            assert editor.velocity_brush_button.isChecked()
+            assert editor.velocity_lane.edit_mode == "brush"
+            assert editor.velocity_radius_combo.currentData() == 2.0
+            assert editor.velocity_scope_combo.currentData() == "track"
+            editor.velocity_point_button.click()
+            assert editor.velocity_lane.edit_mode == "point"
+            editor.velocity_brush_button.click()
+            assert editor.velocity_lane.edit_mode == "brush"
             bar = editor.velocity_lane._bar_rect(0)
             target_y = editor.velocity_lane._y_for_velocity(64)
             QTest.mouseClick(

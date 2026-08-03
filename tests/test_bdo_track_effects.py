@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from bdo_track_effects import (
+from bdo_common.bdo_track_effects import (
     DEFAULT_TRACK_VOLUME,
     MasterEffects,
     TrackEffectSends,

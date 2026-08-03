@@ -11,11 +11,11 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pyside_bdo_gui as gui
+import bdo_music_composer.ui.main_window as gui
 from bdo_music_composer.app import crash_logging
 from bdo_export import channel_groups_to_bdo
 from bdo_midi import Note
-from home_catalog import GAME_SCORE_METADATA_MAX_BYTES, game_score_instrument_ids
+from bdo_music_composer.app.home_catalog import GAME_SCORE_METADATA_MAX_BYTES, game_score_instrument_ids
 
 
 class HomePageTests(unittest.TestCase):
@@ -24,7 +24,7 @@ class HomePageTests(unittest.TestCase):
             path = Path(temp) / "oversized-score"
             path.write_bytes(b"x" * (GAME_SCORE_METADATA_MAX_BYTES + 1))
             with patch(
-                "home_catalog.score_instrument_ids",
+                "bdo_music_composer.app.home_catalog.score_instrument_ids",
                 side_effect=AssertionError("oversized score must not decode"),
             ):
                 self.assertEqual(game_score_instrument_ids(path), ())
@@ -90,7 +90,7 @@ class HomePageTests(unittest.TestCase):
             from unittest.mock import patch
 
             from PySide6.QtWidgets import QApplication
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
 
             app = QApplication([])
             with tempfile.TemporaryDirectory() as temp:
@@ -200,7 +200,7 @@ class HomePageTests(unittest.TestCase):
             from unittest.mock import patch
 
             from PySide6.QtWidgets import QApplication
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
 
             app = QApplication([])
             with tempfile.TemporaryDirectory() as temp:
@@ -299,7 +299,7 @@ class HomePageTests(unittest.TestCase):
             from PySide6.QtCore import QEvent
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
 
             app = QApplication([])
             with tempfile.TemporaryDirectory() as temp:
@@ -324,13 +324,24 @@ class HomePageTests(unittest.TestCase):
                     assert window.game_score_count.text() == "1"
                     assert window.project_count.text() == "0"
                     window.home_search.clear()
-                    assert not window.toolbar_import_btn.isHidden()
+                    assert not window.toolbar_project_btn.isHidden()
+                    assert [
+                        action.text()
+                        for action in window.project_file_menu.actions()
+                        if not action.isSeparator()
+                    ] == [
+                        "新建项目",
+                        "导入 MIDI",
+                        "打开工程",
+                        "保存项目",
+                        "另存为",
+                    ]
                     assert not window.convert_button.isHidden()
                     assert not window.convert_button.isEnabled()
                     assert window.status_label.text() != "发现自动保存工程"
                     assert "发现自动保存工程" not in window.inspector_text.text()
                     window._show_workspace()
-                    assert not window.toolbar_import_btn.isHidden()
+                    assert not window.toolbar_project_btn.isHidden()
                     assert not window.convert_button.isHidden()
                     assert window.convert_button.isEnabled()
                     source = root / "source.mid"

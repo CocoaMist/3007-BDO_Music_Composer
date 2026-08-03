@@ -39,7 +39,7 @@ class ProcessMetricsTests(unittest.TestCase):
         script = textwrap.dedent(
             """
             from PySide6.QtWidgets import QApplication, QFrame
-            from pyside_bdo_gui import MidiToBdoWindow, Note, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, Note, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()

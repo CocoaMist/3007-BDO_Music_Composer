@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from pyside_bdo_gui import (
+from bdo_music_composer.ui.main_window import (
     audio_source_config,
     classify_audio_source,
     displayed_audio_source,

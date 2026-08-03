@@ -6,6 +6,17 @@ authoring 控件值，不是 dB、毫秒、Hz 或 Wwise 原生参数；没有游
 
 ## 本地只读证据
 
+2026-08-03 对用户提供的 PAZ meta v782 做了同样的限定只读复核。meta 包含
+8,363 个 archive，文件大小 40,282,440 bytes，SHA-256 为
+`ab149341b97aadf8855c82bc7a3f52492e9115ce201559c9d7b66d7ea67499e8`。
+作曲页 `musiccomposition.js` 与 `index.html` 的 SHA-256 均与 v757 完全相同，
+所以现有 authoring 控件/字段契约没有版本差异。新版 `init.bnk` 为 46,085 bytes，
+SHA-256 为 `41e76febfd561ca30508fa5d0c1dcb2807df3ed9ab4ca0903087475ab5a509fd`；
+它仍是 Wwise v145，117 Audio Bus、45 Aux Bus、34 FX ShareSet、11 FX Custom
+及 RoomVerb、Stereo Delay、Flanger、Meter、Peak Limiter 拓扑数量均未改变。
+二进制变化不能据此解释为听感变化；v9 byte 到 RTPC 的运行时绑定和游戏录音
+A/B 边界仍保持“未校准”。
+
 2026-07-26 对 PAZ meta v757 做了限定路径扫描，只读取以下资源：
 
 - `ui_data/ui_html/contents/js/musiccomposition.js`
@@ -142,7 +153,7 @@ Basic/Stereo/Super/Super Octave 偏移因此属于不同键。时间轴上的每
 
 ## 工具中的近似试听
 
-`bdo_preview_effects.py` 按已确认的层级实现三条有界本地总线：每条轨道分别
+`bdo_music_composer/audio/bdo_preview_effects.py` 按已确认的层级实现三条有界本地总线：每条轨道分别
 把 PCM 送入 Reverb、Delay、Chorus；五个共享参数只配置对应主效果。所有环形
 缓冲和路由 scratch 均在播放前分配，音频回调不读文件、不解析 JSON，也不按
 工程规模分配内存。Stop/Seek 会清除近似效果尾音。
@@ -152,7 +163,7 @@ Basic/Stereo/Super/Super Octave 偏移因此属于不同键。时间轴上的每
 feedback 在本地轻量处理器中限制在绝对值 0.85 以内以避免失稳。Stereo Delay
 的 ParamID 语义与八字节运行时绑定仍未闭环，**不能**称作 1:1。界面因此固定
 显示“未校准近似”，而 v9 导出仍由
-`bdo_track_effects.py` 原样保留/写回八字节设置，不消费这些预览换算。
+`bdo_common/bdo_track_effects.py` 原样保留/写回八字节设置，不消费这些预览换算。
 
 ## 工具界面与状态边界
 

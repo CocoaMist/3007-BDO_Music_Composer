@@ -15,16 +15,20 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from bdo_midi import BDO_INSTRUMENT_NAMES, BDO_INSTRUMENTS  # noqa: E402
-from bdo_instrument_samples import (  # noqa: E402
+from bdo_music_composer.audio.bdo_instrument_samples import (  # noqa: E402
     BDO_BANK_BY_ID,
+    CONFIRMED_ROOT_NOTE_OVERRIDES,
+    EXPECTED_CONFIRMED_ROOT_NOTE_OVERRIDE_ROWS,
+    PERCUSSION_EVENT_INSTRUMENT_IDS,
     bank_for_instrument,
     banks_for_instrument,
+    effective_sample_root_note,
     marnian_synth_matrix,
     preview_route_ntype,
 )
 from inspect_bdo import parse_bdo  # noqa: E402
-from pyside_bdo_gui import BDO_ARTICULATIONS, BDO_EDITOR_PITCH_RANGES  # noqa: E402
-from project_paths import WWISE_MIDI_MAP_PATH  # noqa: E402
+from bdo_music_composer.ui.main_window import BDO_ARTICULATIONS, BDO_EDITOR_PITCH_RANGES  # noqa: E402
+from bdo_music_composer.core.project_paths import WWISE_MIDI_MAP_PATH  # noqa: E402
 
 
 def _zone_pitches(rows: list[dict]) -> frozenset[int]:
@@ -189,6 +193,76 @@ def audit_articulation_routes(
     return problems
 
 
+def audit_root_note_corrections(
+    by_bank: dict[str, list[dict]],
+) -> list[str]:
+    """Gate confirmed C4 repairs and reject new unapproved low-root zones."""
+
+    problems: list[str] = []
+    corrected_rows = 0
+    missing_signatures: list[str] = []
+    for bank, overrides in CONFIRMED_ROOT_NOTE_OVERRIDES.items():
+        rows = by_bank.get(bank, [])
+        for signature in overrides:
+            matches = [
+                row
+                for row in rows
+                if (
+                    int(row["key_min"]),
+                    int(row["key_max"]),
+                    int(row["root_note"]),
+                )
+                == signature
+            ]
+            if not matches:
+                missing_signatures.append(f"{bank}:{signature}")
+            corrected_rows += len(matches)
+
+    percussion_banks = {
+        BDO_BANK_BY_ID[instrument_id]
+        for instrument_id in PERCUSSION_EVENT_INSTRUMENT_IDS
+        if instrument_id in BDO_BANK_BY_ID
+    }
+    unexpected: list[str] = []
+    for bank, rows in by_bank.items():
+        if bank in percussion_banks or bank not in BDO_BANK_BY_ID.values():
+            continue
+        for row in rows:
+            key_min = int(row["key_min"])
+            key_max = int(row["key_max"])
+            authored_root = int(row["root_note"])
+            effective_root = effective_sample_root_note(bank, row)
+            if (
+                49 <= key_min <= 64
+                and key_max <= 72
+                and authored_root <= key_min - 8
+                and effective_root == authored_root
+            ):
+                unexpected.append(
+                    f"{bank}:{key_min}-{key_max}/root {authored_root}"
+                )
+
+    print(
+        "Confirmed root-note preview corrections: "
+        f"{corrected_rows}/{EXPECTED_CONFIRMED_ROOT_NOTE_OVERRIDE_ROWS} rows"
+    )
+    if missing_signatures:
+        problems.append(
+            "confirmed root-note signatures missing: "
+            + ", ".join(missing_signatures)
+        )
+    if corrected_rows != EXPECTED_CONFIRMED_ROOT_NOTE_OVERRIDE_ROWS:
+        problems.append(
+            "confirmed root-note correction row count changed: "
+            f"{corrected_rows}"
+        )
+    if unexpected:
+        problems.append(
+            "unapproved low-root C4 zones: " + ", ".join(sorted(set(unexpected)))
+        )
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--map", type=Path, default=WWISE_MIDI_MAP_PATH)
@@ -295,6 +369,7 @@ def main() -> int:
             f"banks={len(banks)} {status}"
         )
 
+    root_note_problems = audit_root_note_corrections(by_bank)
     route_problems = audit_articulation_routes(by_bank)
 
     local_problems: list[str] = []
@@ -368,6 +443,7 @@ def main() -> int:
         or missing_wav
         or synth_missing
         or range_problems
+        or root_note_problems
         or route_problems
         or local_problems
     )

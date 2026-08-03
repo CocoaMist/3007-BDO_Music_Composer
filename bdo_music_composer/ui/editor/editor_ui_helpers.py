@@ -5,7 +5,7 @@ from __future__ import annotations
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QMenu
 
-from i18n import tr
+from bdo_music_composer.ui.i18n import tr
 
 
 TRACK_COLORS = (

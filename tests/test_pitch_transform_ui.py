@@ -21,7 +21,7 @@ class PitchTransformUiTests(unittest.TestCase):
             from PySide6.QtCore import QTimer
             from PySide6.QtWidgets import QApplication, QDialog
 
-            import pyside_bdo_gui as gui
+            import bdo_music_composer.ui.main_window as gui
 
             app = QApplication([])
             window = gui.MidiToBdoWindow()

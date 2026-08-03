@@ -17,7 +17,7 @@ class TrackVolumeUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -80,7 +80,7 @@ class TrackVolumeUiTests(unittest.TestCase):
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication, QSlider
 
-            from pyside_bdo_gui import Note, TimelineCanvas, TrackState
+            from bdo_music_composer.ui.main_window import Note, TimelineCanvas, TrackState
 
             app = QApplication([])
             canvas = TimelineCanvas()
@@ -153,7 +153,7 @@ class TrackVolumeUiTests(unittest.TestCase):
 
             from PySide6.QtWidgets import QApplication, QFrame, QWidget
 
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.main_window import (
                 MidiToBdoWindow, Note, SettingsDialog, TrackState,
             )
 

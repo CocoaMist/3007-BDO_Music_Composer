@@ -8,7 +8,7 @@ project recovery, application preferences, autosave, and export each rebuilt a
 slightly different subset. The result was temporal coupling: a missing field
 could inherit the value of the score opened immediately before it.
 
-`conversion_settings.py` is the Qt-free source of truth for conversion policy.
+`bdo_music_composer/core/conversion_settings.py` is the Qt-free source of truth for conversion policy.
 Its immutable `ConversionSettings` value owns:
 
 - optional BPM override;
@@ -125,7 +125,7 @@ the old exporter could successfully publish.
 
 ## Per-track octave adaptation
 
-`pitch_transform.py` implements the immutable extension seam. A
+`bdo_music_composer/editor/pitch_transform.py` implements the immutable extension seam. A
 `PitchTransformPlan` combines the global transpose with optional overrides
 keyed by stable editor `track_id`:
 

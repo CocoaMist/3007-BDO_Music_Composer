@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from bdo_spectrogram import (
+from bdo_music_composer.audio.bdo_spectrogram import (
     SpectrogramCancelled,
     choose_fft_size,
     midi_spectrogram,

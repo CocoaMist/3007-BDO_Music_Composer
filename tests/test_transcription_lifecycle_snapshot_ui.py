@@ -44,8 +44,8 @@ class TranscriptionLifecycleSnapshotUiTests(unittest.TestCase):
             from PySide6.QtGui import QCloseEvent
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import EvidenceDescriptor, TranscriptionResult
-            from pyside_bdo_gui import MidiToBdoWindow
+            from bdo_music_composer.transcription.bdo_transcription import EvidenceDescriptor, TranscriptionResult
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow
 
 
             class RunningWorker:
@@ -121,19 +121,19 @@ class TranscriptionLifecycleSnapshotUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import (
+            from bdo_music_composer.transcription.bdo_transcription import (
                 EvidenceDescriptor,
                 TranscriptionCandidate,
                 TranscriptionResult,
             )
-            from bdo_transcription_assist import (
+            from bdo_music_composer.transcription.bdo_transcription_assist import (
                 KeyReviewOverride,
                 LockedChordReview,
                 ManualVoiceGroupReview,
                 TranscriptionAssistReviewState,
             )
             from bdo_music_composer.editor.editor_commands import ProjectSnapshot
-            from pyside_bdo_gui import MidiToBdoWindow, TrackState
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, TrackState
 
             app = QApplication([])
             window = MidiToBdoWindow()

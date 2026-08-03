@@ -17,8 +17,8 @@ class LocaleResponsiveUiTests(unittest.TestCase):
             """
             from PySide6.QtWidgets import QApplication, QFrame, QLabel, QListWidget, QPushButton
 
-            from i18n import install_localizer, tr, trf
-            from pyside_bdo_gui import (
+            from bdo_music_composer.ui.i18n import install_localizer, tr, trf
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog,
                 MidiToBdoWindow,
                 MasterEffectsDialog,
@@ -98,12 +98,7 @@ class LocaleResponsiveUiTests(unittest.TestCase):
             )
             assert subtitle.wordWrap()
             assert settings.settings_nav.property("i18nTranslateItems") is True
-            assert (
-                editor.transcription_panel.assist_panel.harmony_summary.segment_combo.property(
-                    "i18nSkipItems"
-                )
-                is True
-            )
+            assert not hasattr(editor.transcription_panel, "assist_panel")
 
             for language in ("zh_CN", "zh_TW", "en_US", "ja_JP", "ko_KR"):
                 translations.set_language(language)
@@ -164,6 +159,7 @@ class LocaleResponsiveUiTests(unittest.TestCase):
 
                 for button in (
                     window.toolbar_home_btn,
+                    window.toolbar_project_btn,
                     window.toolbar_master_effects_btn,
                     window.pause_button,
                     editor.draft_play_button,
@@ -175,6 +171,7 @@ class LocaleResponsiveUiTests(unittest.TestCase):
                 assert window.ensemble_capacity_badge.toolTip()
                 assert window.ensemble_capacity_badge.accessibleName()
                 assert editor.music_volume_slider.accessibleName()
+                assert editor.ghost_box.accessibleName()
                 assert editor.ghost_opacity_slider.accessibleName()
 
                 # Mid-sized windows must not switch back to verbose rails

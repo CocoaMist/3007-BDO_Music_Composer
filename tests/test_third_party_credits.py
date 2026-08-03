@@ -8,7 +8,7 @@ import tempfile
 import textwrap
 import unittest
 
-from third_party_credits import (
+from bdo_music_composer.core.third_party_credits import (
     BASIC_PITCH_LICENSE_URL,
     BASIC_PITCH_MODEL_URL,
     BASIC_PITCH_NOTICE_URL,
@@ -94,8 +94,8 @@ class ThirdPartyCreditsTests(unittest.TestCase):
             """
             from unittest.mock import patch
             from PySide6.QtWidgets import QApplication, QDialog, QTextBrowser
-            from pyside_bdo_gui import MidiToBdoWindow
-            from third_party_credits import CREDIT_ENTRIES
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow
+            from bdo_music_composer.core.third_party_credits import CREDIT_ENTRIES
 
             app = QApplication([])
             window = MidiToBdoWindow()

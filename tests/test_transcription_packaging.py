@@ -46,7 +46,8 @@ class TranscriptionPackagingTests(unittest.TestCase):
             PROJECT_ROOT / "packaging" / "windows" / "BDOMusicComposer.spec"
         ).read_text(encoding="utf-8")
         self.assertIn('"timeline_background_v2.png"', spec)
-        self.assertIn('"home_mountain_workshop_v1.jpg"', spec)
+        self.assertIn('"home_aristocratic_salon_v2.png"', spec)
+        self.assertNotIn('"loading_noble_maestra_v2.png"', spec)
         self.assertIn('"assets" / "instruments" / "ai_v1"', spec)
         self.assertTrue(
             (
@@ -62,7 +63,7 @@ class TranscriptionPackagingTests(unittest.TestCase):
                 / "assets"
                 / "ui"
                 / "home"
-                / "home_mountain_workshop_v1.jpg"
+                / "home_aristocratic_salon_v2.png"
             ).is_file()
         )
         icon_root = PROJECT_ROOT / "assets" / "instruments" / "ai_v1"
@@ -376,7 +377,7 @@ class TranscriptionPackagingTests(unittest.TestCase):
                     sys.executable,
                     "-c",
                     (
-                        "from pathlib import Path; import pyside_bdo_gui as gui; "
+                        "from pathlib import Path; import bdo_music_composer.ui.main_window as gui; "
                         "assert gui.WRITABLE_ROOT == "
                         "Path(r'" + str(isolated) + "')"
                     ),

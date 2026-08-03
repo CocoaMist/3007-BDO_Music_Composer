@@ -25,7 +25,7 @@ from typing import Iterator, TextIO
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from project_paths import WWISE_MIDI_MAP_PATH
+from bdo_music_composer.core.project_paths import WWISE_MIDI_MAP_PATH
 from tools.map_wwise_midi_tracking import OBJECT, RTPC_OBJECT
 
 

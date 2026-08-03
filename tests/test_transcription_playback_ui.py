@@ -29,7 +29,7 @@ from types import SimpleNamespace
 
 from PySide6.QtWidgets import QApplication
 
-from pyside_bdo_gui import MidiNoteEditorDialog, MidiToBdoWindow, TrackState
+from bdo_music_composer.ui.main_window import MidiNoteEditorDialog, MidiToBdoWindow, TrackState
 
 
 class FakePlayer:
@@ -260,7 +260,7 @@ assert editor.draft_playback_state == "stopped"
         completed = _run_offscreen(
             r"""
             from PySide6.QtWidgets import QApplication
-            from pyside_bdo_gui import ReferenceAudioController
+            from bdo_music_composer.ui.main_window import ReferenceAudioController
 
             class FakePlayer:
                 def __init__(self):
@@ -296,32 +296,20 @@ assert editor.draft_playback_state == "stopped"
             completed.stdout + completed.stderr,
         )
 
-    def test_combined_source_is_available_without_semantic_voice_results(self) -> None:
+    def test_semantic_audition_source_is_absent_from_practical_panel(self) -> None:
         completed = _run_offscreen(
             r"""
             from PySide6.QtWidgets import QApplication
 
-            from transcription_editor_qt import TranscriptionEditorPanel
+            from bdo_music_composer.ui.transcription.transcription_editor_qt import TranscriptionEditorPanel
 
             app = QApplication([])
             panel = TranscriptionEditorPanel()
             panel.show()
             app.processEvents()
-            combo = panel.assist_panel.instrument_matches.source_combo
-            assert combo.findData("combined") >= 0, (
-                "transcription playback needs a persistent project+reference "
-                "source, not only voice-candidate A/B choices"
-            )
-            assert combo.currentData() == "combined", (
-                "transcription mode should default to creation-mode project "
-                "playback mixed with the reference when available"
-            )
-            assert combo.isEnabled(), (
-                "project/reference playback must not depend on semantic voice "
-                "analysis having produced a match"
-            )
+            assert not hasattr(panel, "assist_panel")
+            assert not hasattr(panel, "assist_toggle_button")
             panel.clear_voice_group_matches()
-            assert combo.isEnabled()
             panel.close()
             app.processEvents()
             app.quit()
@@ -336,9 +324,9 @@ assert editor.draft_playback_state == "stopped"
     def test_candidate_preview_is_exclusive_but_combined_uses_edited_draft(self) -> None:
         self.assert_offscreen_ok(
             r"""
-from bdo_transcription import TranscriptionCandidate
-from bdo_transcription_session import TranscriptionSession
-from pyside_bdo_gui import Note
+from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionSession
+from bdo_music_composer.ui.main_window import Note
 
 candidate = TranscriptionCandidate(
     60,

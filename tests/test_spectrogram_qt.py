@@ -11,8 +11,8 @@ import numpy as np
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtGui import QColor
 
-from bdo_spectrogram import choose_fft_size
-from bdo_spectrogram_qt import (
+from bdo_music_composer.audio.bdo_spectrogram import choose_fft_size
+from bdo_music_composer.ui.transcription.bdo_spectrogram_qt import (
     DEFAULT_SPECTROGRAM_CACHE_BYTES,
     SpectrogramTileController,
 )

@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 
 from bdo_export import channel_groups_to_bdo
 from bdo_midi import Note
-from bdo_score import compare_scores, read_bdo_score, snapshot_from_bytes
+from bdo_music_composer.export.bdo_score import compare_scores, read_bdo_score, snapshot_from_bytes
 
 
 def score(pitch: int, start: float = 0.0) -> bytes:

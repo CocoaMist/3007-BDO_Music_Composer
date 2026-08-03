@@ -19,8 +19,8 @@ class EditorInteractionUiTests(unittest.TestCase):
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication
 
-            from bdo_transcription import TranscriptionCandidate
-            from pyside_bdo_gui import (
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.ui.main_window import (
                 MidiNoteEditorDialog,
                 MidiToBdoWindow,
                 Note,
@@ -47,28 +47,36 @@ class EditorInteractionUiTests(unittest.TestCase):
             editor.show()
             app.processEvents()
 
-            # Ctrl+A is a dialog-wide editor command, not dependent on the
-            # piano-roll canvas retaining keyboard focus.
-            assert editor.select_all_shortcut.context() == Qt.WindowShortcut
-            assert not editor.select_all_shortcut.autoRepeat()
+            # Note-editing shortcuts follow canvas focus, leaving text fields
+            # with their native editing keys.
             editor.pitch_edit.setFocus()
-            editor.canvas.selected.clear()
+            editor.canvas.selected = {0}
             QTest.keyClick(
                 editor.pitch_edit,
                 Qt.Key_A,
                 Qt.ControlModifier,
             )
             app.processEvents()
+            assert editor.canvas.selected == {0}
+            editor.canvas.setFocus()
+            QTest.keyClick(
+                editor.canvas,
+                Qt.Key_A,
+                Qt.ControlModifier,
+            )
+            app.processEvents()
             assert editor.canvas.selected == {0, 1}
 
-            # Space remains a single play/pause toggle and cannot oscillate
-            # under key auto-repeat.
-            assert editor.space_shortcut.context() == Qt.WindowShortcut
-            assert not editor.space_shortcut.autoRepeat()
+            # Space follows the same focus rule and remains one play/pause
+            # toggle per physical key press.
             toggles = []
             editor.toggle_draft_playback = lambda: toggles.append("toggle")
             editor.pitch_edit.setFocus()
             QTest.keyClick(editor.pitch_edit, Qt.Key_Space)
+            app.processEvents()
+            assert toggles == []
+            editor.canvas.setFocus()
+            QTest.keyClick(editor.canvas, Qt.Key_Space)
             app.processEvents()
             assert toggles == ["toggle"]
 

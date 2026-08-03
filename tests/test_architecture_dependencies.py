@@ -97,12 +97,12 @@ class ArchitectureDependencyTests(unittest.TestCase):
         self.assert_forbidden_imports(
             _python_files("bdo_music_composer/editor")
             + (
-                ROOT / "game_score_model.py",
-                ROOT / "transcription_commit_plan.py",
+                ROOT
+                / "bdo_music_composer/transcription/transcription_commit_plan.py",
             ),
             frozenset({
                 "PySide6",
-                "pyside_bdo_gui",
+                "bdo_music_composer.ui.main_window",
                 "timeline_canvas",
                 "piano_roll_canvas",
                 "midi_note_editor",
@@ -170,8 +170,9 @@ class ArchitectureDependencyTests(unittest.TestCase):
     def test_export_workflow_does_not_depend_on_ui_or_project_storage(self) -> None:
         self.assert_forbidden_imports(
             (
-                ROOT / "export_workflow.py",
-                ROOT / "export_verification.py",
+                ROOT / "bdo_music_composer/export/export_workflow.py",
+                ROOT
+                / "bdo_music_composer/export/export_verification.py",
             ),
             frozenset({
                 "PySide6",
@@ -203,15 +204,26 @@ class ArchitectureDependencyTests(unittest.TestCase):
         )
 
     def test_packaged_non_ui_owners_remain_qt_free(self) -> None:
+        qt_audio_adapters = {
+            ROOT / "bdo_music_composer/audio/bdo_realtime_audio.py",
+            ROOT / "bdo_music_composer/audio/reference_audio_controller.py",
+        }
         paths = (
             _python_files("bdo_music_composer/app")
-            + _python_files("bdo_music_composer/audio")
+            + tuple(
+                path
+                for path in _python_files("bdo_music_composer/audio")
+                if path not in qt_audio_adapters
+            )
+            + _python_files("bdo_music_composer/core")
             + _python_files("bdo_music_composer/editor")
+            + _python_files("bdo_music_composer/export")
+            + _python_files("bdo_music_composer/research")
             + _python_files("bdo_music_composer/transcription")
         )
         self.assert_forbidden_imports(
             paths,
-            frozenset({"PySide6", "pyside_bdo_gui"}),
+            frozenset({"PySide6", "bdo_music_composer.ui.main_window"}),
         )
 
     def test_packaged_ui_components_do_not_import_composition_root(self) -> None:
@@ -228,13 +240,13 @@ class ArchitectureDependencyTests(unittest.TestCase):
         )
         self.assert_forbidden_imports(
             paths,
-            frozenset({"pyside_bdo_gui"}),
+            frozenset({"bdo_music_composer.ui.main_window"}),
         )
 
     def test_packaged_initializers_are_inert(self) -> None:
-        initializers = tuple(
-            sorted((ROOT / "bdo_music_composer").rglob("__init__.py"))
-        )
+        initializers = tuple(sorted(
+            (ROOT / "bdo_music_composer").rglob("__init__.py")
+        )) + (ROOT / "bdo_common/__init__.py",)
         self.assertTrue(initializers)
         for path in initializers:
             tree = ast.parse(
@@ -260,27 +272,27 @@ class ArchitectureDependencyTests(unittest.TestCase):
 
     def test_main_gui_does_not_bypass_export_workflow(self) -> None:
         self.assert_forbidden_imports(
-            (ROOT / "pyside_bdo_gui.py",),
+            (ROOT / "bdo_music_composer/ui/main_window.py",),
             frozenset({"bdo_codec", "bdo_export"}),
         )
 
     def test_focused_owners_keep_functions_within_review_budget(self) -> None:
         budgets = {
             "bdo_music_composer/editor/editor_import.py": 90,
-            "game_score_model.py": 80,
+            "bdo_music_composer/editor/game_score_model.py": 80,
             "bdo_music_composer/app/application_config.py": 45,
             "bdo_music_composer/app/game_profile_provider.py": 25,
-            "home_catalog.py": 80,
+            "bdo_music_composer/app/home_catalog.py": 80,
             "bdo_music_composer/editor/interval_index.py": 75,
             "bdo_music_composer/editor/preview_midi_writer.py": 90,
-            "transcription_commit_plan.py": 90,
+            "bdo_music_composer/transcription/transcription_commit_plan.py": 90,
             "bdo_export/source_reuse.py": 90,
-            "export_workflow.py": 100,
-            "export_verification.py": 100,
+            "bdo_music_composer/export/export_workflow.py": 100,
+            "bdo_music_composer/export/export_verification.py": 100,
             "bdo_music_composer/project/project_schema.py": 95,
-            "bdo_music_composer/project/project_document.py": 100,
+            "bdo_music_composer/app/project_document.py": 100,
             "bdo_music_composer/project/project_persistence.py": 100,
-            "bdo_validation.py": 90,
+            "bdo_music_composer/export/bdo_validation.py": 90,
         }
         for relative_path, budget in budgets.items():
             with self.subTest(path=relative_path):
@@ -288,14 +300,16 @@ class ArchitectureDependencyTests(unittest.TestCase):
 
     def test_known_ui_hotspots_do_not_grow_while_they_are_decomposed(self) -> None:
         for relative_path, budget in {
-            "pyside_bdo_gui.py": 450,
+            "bdo_music_composer/ui/main_window.py": 450,
             "bdo_music_composer/ui/editor/timeline_canvas.py": 375,
         }.items():
             with self.subTest(path=relative_path):
                 self.assert_function_span_budget(ROOT / relative_path, budget)
 
     def test_typed_transaction_hosts_stay_thin(self) -> None:
-        spans = dict(_function_spans(ROOT / "pyside_bdo_gui.py"))
+        spans = dict(
+            _function_spans(ROOT / "bdo_music_composer/ui/main_window.py")
+        )
         budgets = {
             "_prepare_transcription_commit_tracks": 60,
             "_build_transcription_commit_plan": 65,

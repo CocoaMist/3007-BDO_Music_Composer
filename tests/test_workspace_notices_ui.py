@@ -21,8 +21,8 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
             from PySide6.QtCore import Qt
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication
-            import pyside_bdo_gui as gui
-            from pyside_bdo_gui import MidiToBdoWindow, Note, TrackState
+            import bdo_music_composer.ui.main_window as gui
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, Note, TrackState
 
             app = QApplication([])
             config_dir = tempfile.TemporaryDirectory()
@@ -43,17 +43,34 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
             window.char_name = "MIDI"
             window.owner_id = 0
             window._refresh_home_identity()
-            assert window.home_user_button.property("identityMissing") is True
-            assert window.home_user_button.text() == "设置演奏者"
-            assert window.home_user_button._secondary == "身份待完善"
-            assert window.home_user_button.height() == 30
-            assert window.home_user_button.sizeHint().width() <= 130
+            logo = window.ensemble_capacity_badge
+            assert not hasattr(window, "home_owner_id_button")
+            assert logo.property("ownerIdMissing") is True
+            assert "点击 Logo" in logo.toolTip()
+            assert logo.size().width() == logo.size().height() == 36
+
+            from unittest.mock import patch
+            with (
+                patch.object(
+                    gui,
+                    "prompt_for_owner_identity",
+                    return_value=(456, "Hidden Shai"),
+                ),
+                patch.object(window, "_autosave_project") as autosave,
+            ):
+                logo.click()
+            assert window.owner_id == 456
+            assert window.char_name == "Hidden Shai"
+            assert logo.property("ownerIdMissing") is False
+            assert "Owner ID 已绑定" in logo.toolTip()
+            assert "Hidden Shai" not in logo.toolTip()
+            autosave.assert_called_once_with("owner id")
+
             window.char_name = "Shai"
             window.owner_id = 123
             window._refresh_home_identity()
-            assert window.home_user_button.property("identityMissing") is False
-            assert window.home_user_button.text() == "Shai"
-            assert window.home_user_button._secondary == "Owner ID 已绑定"
+            assert logo.property("ownerIdMissing") is False
+            assert "Shai" not in logo.toolTip()
 
             first = TrackState(
                 1, [Note(60, 90, 0.0, 300.0, 0)], 0, False, "one", 0x0B

@@ -62,7 +62,7 @@ class ImportTransactionTests(unittest.TestCase):
 
                 from bdo_midi import Note
                 from bdo_music_composer.editor.editor_models import TrackState
-                import pyside_bdo_gui as gui
+                import bdo_music_composer.ui.main_window as gui
 
                 app = QApplication([])
                 window = gui.MidiToBdoWindow()
@@ -195,7 +195,7 @@ class ImportTransactionTests(unittest.TestCase):
                 import json
                 from pathlib import Path
                 from PySide6.QtWidgets import QApplication
-                import pyside_bdo_gui as gui
+                import bdo_music_composer.ui.main_window as gui
 
                 app = QApplication([])
                 window = gui.MidiToBdoWindow()

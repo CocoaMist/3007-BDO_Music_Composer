@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from bdo_midi import Note
-from conversion_settings import ConversionSettings
+from bdo_music_composer.core.conversion_settings import ConversionSettings
 from bdo_music_composer.editor.editor_import import (
     EditorImportError,
     EditorImportErrorCode,

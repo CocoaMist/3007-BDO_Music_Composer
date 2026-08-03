@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 import unittest
 
-from bdo_transcription_assist import (
+from bdo_music_composer.transcription.bdo_transcription_assist import (
     KeyReviewOverride,
     LockedChordReview,
     ManualVoiceGroupReview,

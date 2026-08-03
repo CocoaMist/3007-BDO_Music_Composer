@@ -6,7 +6,7 @@ import random
 from types import SimpleNamespace
 import unittest
 
-from bdo_music_theory import (
+from bdo_music_composer.editor.bdo_music_theory import (
     HarmonyWindow,
     TheoryContext,
     TrackRole,
@@ -14,7 +14,7 @@ from bdo_music_theory import (
     _roles,
     is_non_chord_tone,
 )
-from bdo_lyrics import LyricExpressionMode, align_lyrics, lyric_onset_match
+from bdo_music_composer.editor.bdo_lyrics import LyricExpressionMode, align_lyrics, lyric_onset_match
 from optimization.builtin import (
     _detect_real_techniques,
     _ensemble_issues,

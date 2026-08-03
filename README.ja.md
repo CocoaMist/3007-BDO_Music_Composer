@@ -28,13 +28,13 @@ v1.0.0 は最初の公開安定メジャー版です。編集、オートセー�
 - BDO v9 の二つのベロシティ、トラック音量/設定、奏法、物理チャンクを保持して開き、未変更文書はバイト単位で往復。
 - Undo/Redo、バックグラウンドオートセーブ、版の検出、プライバシーに配慮したホーム索引。
 
-### 採譜・分析支援
+### 実用的な採譜
 
-- ローカル MP3/WAV、参照オフセット、拍原点、MIDI 再生ヘッドとの位置合わせ。
-- ローカル Basic Pitch ONNX/CPU 分析、範囲再デコード、証拠キャッシュ、候補レビュー。
-- 編集可能なキー/コード区間、メロディー/ボイスグループ、断片整理、説明可能な BDO 楽器 Top-3。
-- 分析結果はユーザーが Apply/OK を確認するまでレビュー sidecar に留まり、正式トラックを変更しません。
-- 埋め込み編集は自動打楽器マッピングを行わず、分析だけを根拠に正式音符やトラック割り当てを上書きしません。
+- ローカル WAV または標準 MP3 を読み込み、［採譜を開始］で Basic Pitch ONNX/CPU をローカル実行します。
+- 製品 UI は保護された standard/balanced/preserve 設定に固定し、実験的パラメーター、フレーズ、和声、ボイスグループ、編成診断を表示しません。
+- 参照ノートは軽い枠線と下部の信頼度バーで表示します。青いピッチガイドは候補ノート周辺に限定され、表示専用の低・標準・高ノイズ除去を選べます。任意の声部ヒントは近接した信頼できる主旋律断片だけを接続し、長い空白や大きな跳躍をまたぎません。各レイヤーは個別に切り替えでき、参照ノートを除外、復元、編集可能な下書きへ追加できます。
+- 下書きには読み取り専用のゲーム適合チェックを実行でき、その後に採譜ガイドを閉じて通常編集を続けられます。チェックはノートを削除、移調、クオンタイズしません。
+- 結果はまず編集ドラフトに入り、Apply/OK 後にのみ正式トラックへ反映されます。既存ノートの自動上書きや打楽器の自動マッピングは行いません。
 
 ### 最適化・試聴・書き出し
 
@@ -73,7 +73,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install_transcription.ps1
 1. 新規プロジェクト、MIDI 読み込み、または BDO v9 楽譜を開きます。
 2. キャラクター名、Owner ID、出力先、任意のローカルサンプルを設定します。
 3. BDO 楽器を選び、音符、ベロシティ、奏法、FX、ピッチ変換を編集します。
-4. 必要なら参照音声を読み込み、ローカル採譜を行い、候補・和声・ボイスグループを手動レビューします。
+4. 必要なら参照音声を読み込み、採譜を開始し、参照ノートまたはピッチガイドで旋律を確認して、選択ノートを下書きへ追加します。
 5. 必要なら最適化を分析・試聴し、全曲または対象トラックへ適用します。
 6. 「変換チェック」で音域、無効 FX、打楽器、楽器統合の問題を解消します。
 7. 現在の編集状態を試聴して書き出します。出力は構造的に再読込して検証されます。
@@ -119,7 +119,7 @@ flowchart LR
 
 主要境界：
 
-- `pyside_bdo_gui.py`：メインウィンドウ編成、Qt lifecycle、互換 export。
+- `bdo_music_composer/ui/main_window.py`：メインウィンドウ編成、Qt lifecycle、互換 export。
 - `bdo_music_composer/editor/model_revision.py`、
   `bdo_music_composer/app/conversion_validation_controller.py`、
   `bdo_music_composer/transcription/transcription_workspace_controller.py`、
@@ -138,13 +138,13 @@ flowchart LR
 - focused dialog は `bdo_music_composer/ui/dialogs/`、semantic application
   theme は inert な `bdo_music_composer/ui/theme/` subpackage にあります。
 - `optimization/`：本番 pipeline、registry、信頼ローカルアルゴリズム境界。
-- `bdo_realtime_audio.py`、`bdo_sample_renderer.py`：リアルタイム/オフライン試聴。
-- `export_workflow.py`、`bdo_export/`、`bdo_codec/`：不変 request、変換、binary I/O、atomic publish。
+- `bdo_music_composer/audio/bdo_realtime_audio.py`、`bdo_music_composer/audio/bdo_sample_renderer.py`：リアルタイム/オフライン試聴。
+- `bdo_music_composer/export/export_workflow.py`、`bdo_export/`、`bdo_codec/`：不変 request、変換、binary I/O、atomic publish。
 - `bdo_music_composer/project/project_persistence.py`、
-  `bdo_music_composer/project/project_schema.py`、`home_catalog.py`：autosave、
+  `bdo_music_composer/project/project_schema.py`、`bdo_music_composer/app/home_catalog.py`：autosave、
   migration、有界 home discovery。
-- `bdo_transcription*.py`、`transcription_workers.py`：Qt-free 分析、安定候補範囲 index、background worker。
-- `i18n.py`、`project_paths.py`：翻訳 catalog と source/frozen path 境界。
+- `bdo_transcription*.py`、`bdo_music_composer/ui/transcription/transcription_workers.py`：Qt-free 分析、安定候補範囲 index、background worker。
+- `bdo_music_composer/ui/i18n.py`、`bdo_music_composer/core/project_paths.py`：翻訳 catalog と source/frozen path 境界。
 
 詳細：[Architecture](docs/ARCHITECTURE.md)、[AI Context](docs/AI_CONTEXT.md)、[Project Structure](docs/PROJECT_STRUCTURE.md)、[Conversion Settings](docs/CONVERSION_SETTINGS.md)、[BDO v9 codec](docs/BDO_V9_CODEC.md)。
 
@@ -173,7 +173,7 @@ UI 基準は `tools/benchmark_dense_ui.py`、候補とリスクは [ロードマ
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -q
-.\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
+.\.venv\Scripts\python.exe -m py_compile main.py bdo_music_composer/core/project_paths.py bdo_music_composer/ui/main_window.py bdo_music_composer/ui/i18n.py
 git diff --check
 ```
 

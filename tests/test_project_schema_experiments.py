@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import atomic_io
-from bdo_experiments import AbExperimentRecord, read_experiment_records, write_experiment_records
+import bdo_common.atomic_io as atomic_io
+from bdo_music_composer.research.bdo_experiments import AbExperimentRecord, read_experiment_records, write_experiment_records
 from bdo_music_composer.project.project_schema import (
     CURRENT_PROJECT_SCHEMA,
     DEFAULT_REFERENCE_LAYER_SETTINGS,
@@ -202,11 +202,19 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
     def test_new_reference_layers_are_bounded_and_quiet(self) -> None:
         self.assertEqual(
             DEFAULT_REFERENCE_LAYER_SETTINGS["ghost_opacity_percent"],
-            24,
+            30,
         )
         self.assertEqual(
             DEFAULT_REFERENCE_LAYER_SETTINGS["background_opacity_percent"],
             45,
+        )
+        self.assertTrue(DEFAULT_REFERENCE_LAYER_SETTINGS["candidate_visible"])
+        self.assertFalse(
+            DEFAULT_REFERENCE_LAYER_SETTINGS["melody_lines_visible"]
+        )
+        self.assertEqual(
+            DEFAULT_REFERENCE_LAYER_SETTINGS["candidate_opacity_percent"],
+            52,
         )
         self.assertEqual(
             normalize_reference_layer_settings(None),
@@ -216,12 +224,16 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
             {
                 "ghost_visible": False,
                 "ghost_opacity_percent": 120,
+                "candidate_visible": False,
+                "candidate_opacity_percent": 7,
                 "background_opacity_percent": -4,
                 "frame_visible": True,
             }
         )
         self.assertFalse(normalized["ghost_visible"])
         self.assertEqual(normalized["ghost_opacity_percent"], 100)
+        self.assertFalse(normalized["candidate_visible"])
+        self.assertEqual(normalized["candidate_opacity_percent"], 7)
         self.assertEqual(normalized["background_opacity_percent"], 0)
         self.assertTrue(normalized["frame_visible"])
 
@@ -233,8 +245,8 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
             {"version": 1, "ghost_opacity_percent": 58}
         )
 
-        self.assertEqual(migrated_default["version"], 3)
-        self.assertEqual(migrated_default["ghost_opacity_percent"], 24)
+        self.assertEqual(migrated_default["version"], 7)
+        self.assertEqual(migrated_default["ghost_opacity_percent"], 30)
         self.assertEqual(preserved_custom["ghost_opacity_percent"], 58)
 
     def test_v2_quiet_defaults_migrate_to_lower_density_without_overwriting_custom_values(self) -> None:
@@ -253,11 +265,34 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(migrated_defaults["version"], 3)
-        self.assertEqual(migrated_defaults["ghost_opacity_percent"], 24)
+        self.assertEqual(migrated_defaults["version"], 7)
+        self.assertEqual(migrated_defaults["ghost_opacity_percent"], 30)
         self.assertEqual(migrated_defaults["background_opacity_percent"], 45)
         self.assertEqual(preserved_custom["ghost_opacity_percent"], 31)
         self.assertEqual(preserved_custom["background_opacity_percent"], 52)
+
+    def test_reference_display_denoise_and_voice_hints_migrate_safely(self) -> None:
+        migrated = normalize_reference_layer_settings(
+            {"version": 6},
+            legacy_defaults=True,
+        )
+        explicit = normalize_reference_layer_settings(
+            {
+                "version": 6,
+                "melody_lines_visible": True,
+                "contour_denoise": "high",
+            },
+            legacy_defaults=True,
+        )
+        invalid = normalize_reference_layer_settings(
+            {"contour_denoise": "destructive"}
+        )
+
+        self.assertFalse(migrated["melody_lines_visible"])
+        self.assertEqual(migrated["contour_denoise"], "standard")
+        self.assertTrue(explicit["melody_lines_visible"])
+        self.assertEqual(explicit["contour_denoise"], "high")
+        self.assertEqual(invalid["contour_denoise"], "standard")
 
     def test_project_file_reference_round_trips_only_inside_project(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

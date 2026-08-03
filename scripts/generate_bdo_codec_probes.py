@@ -20,7 +20,7 @@ from bdo_midi import (  # noqa: E402
     Note,
 )
 from bdo_export import channel_groups_to_bdo, extract_owner_id  # noqa: E402
-from editor_articulation_data import BDO_ARTICULATIONS  # noqa: E402
+from bdo_music_composer.ui.editor.editor_articulation_data import BDO_ARTICULATIONS  # noqa: E402
 from bdo_music_composer.editor.editor_models import (  # noqa: E402
     BDO_EDITOR_PITCH_RANGES,
 )

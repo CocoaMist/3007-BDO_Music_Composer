@@ -4,11 +4,13 @@ import json
 from pathlib import Path
 import unittest
 
-from bdo_instrument_samples import (
+from bdo_music_composer.audio.bdo_instrument_samples import (
+    CONFIRMED_ROOT_NOTE_OVERRIDES,
     MARNIAN_SYNTH_MODES,
     ROW_VOLUME_DB_MAX,
     ROW_VOLUME_DB_MIN,
     WwiseContainerRotation,
+    effective_sample_root_note,
     preview_has_native_articulation,
     preview_pitch_offset_semitones,
     preview_route_ntype,
@@ -19,6 +21,7 @@ from bdo_instrument_samples import (
     sample_pitch_ratio,
     select_zone_row,
     select_zone_variants,
+    velocity_zone_boundaries,
 )
 from bdo_midi import MARNIAN_SYNTH_MODE_OFFSETS
 
@@ -51,6 +54,17 @@ def _row(
 
 
 class InstrumentSampleSelectionTests(unittest.TestCase):
+    def test_velocity_boundaries_follow_pitch_and_articulation_route(self) -> None:
+        rows = [
+            {**_row(10, ntype=0, group_id=100), "velocity_min": 0, "velocity_max": 63},
+            {**_row(11, ntype=0, group_id=101), "velocity_min": 64, "velocity_max": 127},
+            {**_row(20, ntype=13, group_id=200), "velocity_min": 0, "velocity_max": 95},
+            {**_row(21, ntype=13, group_id=201), "velocity_min": 96, "velocity_max": 127},
+        ]
+        self.assertEqual(velocity_zone_boundaries(rows, 60, 0), (64,))
+        self.assertEqual(velocity_zone_boundaries(rows, 60, 13), (96,))
+        self.assertEqual(velocity_zone_boundaries(rows, 80, 0), ())
+
     def test_marnian_sample_modes_follow_the_wire_mapping(self) -> None:
         self.assertEqual(
             MARNIAN_SYNTH_MODES,
@@ -229,6 +243,65 @@ class InstrumentSampleSelectionTests(unittest.TestCase):
         self.assertAlmostEqual(
             sample_pitch_ratio(row, 60),
             2.0 ** (20.0 / 1_200.0),
+        )
+
+    def test_confirmed_c4_root_discontinuities_are_corrected_at_runtime(
+        self,
+    ) -> None:
+        corrected = [
+            (bank, row, effective_sample_root_note(bank, row))
+            for bank, rows in self.banks.items()
+            for row in rows
+            if effective_sample_root_note(bank, row)
+            != int(row["root_note"])
+        ]
+
+        self.assertEqual(len(CONFIRMED_ROOT_NOTE_OVERRIDES), 16)
+        self.assertEqual(len(corrected), 116)
+        self.assertEqual({root for _bank, _row, root in corrected}, {60})
+
+    def test_proharp_c4_preview_uses_effective_root_without_mutating_evidence(
+        self,
+    ) -> None:
+        bank = "midi_instrument_16_proharp"
+        row = next(
+            row
+            for row in self.banks[bank]
+            if int(row["source_id"]) == 178390170
+        )
+
+        self.assertEqual(row["root_note"], 12)
+        self.assertEqual(effective_sample_root_note(bank, row), 60)
+        self.assertAlmostEqual(sample_pitch_ratio(row, 60, bank=bank), 1.0)
+        self.assertAlmostEqual(sample_pitch_ratio(row, 60), 16.0)
+
+    def test_legitimate_cross_zone_and_percussion_roots_are_not_changed(
+        self,
+    ) -> None:
+        recorder_bank = "midi_instrument_02_recorder"
+        recorder = select_zone_row(
+            self.banks[recorder_bank],
+            60,
+            100,
+            ntype=0,
+            bank=recorder_bank,
+        )
+        drum_bank = "midi_instrument_13_prodrumset"
+        drum = select_zone_row(
+            self.banks[drum_bank],
+            52,
+            90,
+            ntype=99,
+            bank=drum_bank,
+        )
+
+        self.assertEqual(
+            effective_sample_root_note(recorder_bank, recorder),
+            int(recorder["root_note"]),
+        )
+        self.assertEqual(
+            effective_sample_root_note(drum_bank, drum),
+            int(drum["root_note"]),
         )
 
     def test_row_volume_gain_is_finite_bounded_and_defaults_to_unity(

@@ -28,13 +28,13 @@ v1.0.0은 첫 공개 안정 메이저 버전입니다. 편집, 자동 저장, �
 - BDO v9의 두 velocity, 트랙 음량/설정, 주법, 물리 chunk를 보존하여 열고 변경되지 않은 문서는 바이트 단위 왕복.
 - 프로젝트 undo/redo, 백그라운드 자동 저장, 버전 탐색, 개인정보 안전 홈 인덱스.
 
-### 채보 및 분석 보조
+### 실용 채보
 
-- 로컬 MP3/WAV, 기준 오프셋, beat origin, MIDI playhead 정렬.
-- 로컬 Basic Pitch ONNX/CPU 분석, 구간 재디코딩, 증거 cache, 후보 검토.
-- 편집 가능한 key/chord 구간, melody/voice group, fragment 정리, 설명 가능한 BDO 악기 Top-3.
-- 사용자가 Apply/OK를 확인하기 전에는 분석 결과가 review sidecar에만 있고 정식 트랙을 변경하지 않습니다.
-- 내장 편집은 자동 타악기 mapping을 의도적으로 제외하며 분석을 근거로 정식 음표나 트랙 배정을 덮어쓰지 않습니다.
+- 로컬 WAV 또는 표준 MP3를 불러오고 채보 시작을 눌러 Basic Pitch ONNX/CPU 분석을 로컬에서 실행합니다.
+- 제품 UI는 보호된 standard/balanced/preserve 설정을 사용하며 실험 매개변수, 프레이즈, 화성, voice group, 편성 진단을 노출하지 않습니다.
+- 참조 음표는 가벼운 윤곽선과 아래쪽 신뢰도 막대로 표시합니다. 파란 음높이 가이드는 후보 음표 주변으로 제한되며 표시 전용 낮음·표준·높음 노이즈 제거를 제공합니다. 선택형 성부 힌트는 가까운 신뢰 가능한 주선율 조각만 연결하고 긴 공백이나 큰 음정 도약을 가로지르지 않습니다. 각 레이어를 따로 켜고 끌 수 있으며 참조 음표를 무시, 복원하거나 편집 가능한 초안에 추가할 수 있습니다.
+- 초안에 읽기 전용 게임 적합성 검사를 실행한 뒤 채보 가이드를 숨기고 일반 편집을 계속할 수 있습니다. 검사는 음표를 삭제, 이조 또는 퀀타이즈하지 않습니다.
+- 결과는 먼저 편집기 초안에 들어가고 Apply/OK 후에만 정식 트랙에 반영됩니다. 기존 음표를 자동으로 덮어쓰거나 타악기를 자동 매핑하지 않습니다.
 
 ### 최적화, 미리듣기 및 내보내기
 
@@ -73,7 +73,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install_transcription.ps1
 1. 새 프로젝트를 만들거나 MIDI 또는 BDO v9 악보를 엽니다.
 2. 캐릭터명, Owner ID, 출력 경로, 선택적 로컬 샘플을 설정합니다.
 3. BDO 악기를 선택하고 음표, velocity, 주법, FX, pitch transform을 편집합니다.
-4. 필요하면 기준 오디오를 불러 로컬 채보를 실행하고 후보, 화성, voice group을 수동 검토합니다.
+4. 필요하면 기준 오디오를 불러 채보를 시작하고 참조 음표나 음높이 가이드로 선율을 찾은 뒤 선택 음표를 초안에 추가합니다.
 5. 필요하면 최적화를 분석·미리듣기한 뒤 전체 곡이나 대상 트랙에 적용합니다.
 6. 변환 검사를 실행해 음역, 잘못된 FX, 타악기, 악기 병합 문제를 해결합니다.
 7. 현재 편집 상태를 미리듣고 내보냅니다. 출력은 구조적으로 다시 읽어 검증됩니다.
@@ -119,7 +119,7 @@ flowchart LR
 
 주요 경계:
 
-- `pyside_bdo_gui.py`: main window orchestration, Qt lifecycle, 호환 export.
+- `bdo_music_composer/ui/main_window.py`: main window orchestration, Qt lifecycle, 호환 export.
 - `bdo_music_composer/editor/model_revision.py`,
   `bdo_music_composer/app/conversion_validation_controller.py`,
   `bdo_music_composer/transcription/transcription_workspace_controller.py`,
@@ -138,13 +138,13 @@ flowchart LR
 - focused dialog는 `bdo_music_composer/ui/dialogs/`, semantic application
   theme는 inert한 `bdo_music_composer/ui/theme/` subpackage에 있습니다.
 - `optimization/`: production pipeline, registry, 신뢰 로컬 알고리즘 경계.
-- `bdo_realtime_audio.py`, `bdo_sample_renderer.py`: 실시간/오프라인 샘플 미리듣기.
-- `export_workflow.py`, `bdo_export/`, `bdo_codec/`: 불변 request, adapter, binary I/O, atomic publication.
+- `bdo_music_composer/audio/bdo_realtime_audio.py`, `bdo_music_composer/audio/bdo_sample_renderer.py`: 실시간/오프라인 샘플 미리듣기.
+- `bdo_music_composer/export/export_workflow.py`, `bdo_export/`, `bdo_codec/`: 불변 request, adapter, binary I/O, atomic publication.
 - `bdo_music_composer/project/project_persistence.py`,
-  `bdo_music_composer/project/project_schema.py`, `home_catalog.py`: autosave,
+  `bdo_music_composer/project/project_schema.py`, `bdo_music_composer/app/home_catalog.py`: autosave,
   migration, bounded home discovery.
-- `bdo_transcription*.py`, `transcription_workers.py`: Qt-free 분석, 안정적인 candidate-range index 및 background worker.
-- `i18n.py`, `project_paths.py`: 번역 catalog와 source/frozen path 경계.
+- `bdo_transcription*.py`, `bdo_music_composer/ui/transcription/transcription_workers.py`: Qt-free 분석, 안정적인 candidate-range index 및 background worker.
+- `bdo_music_composer/ui/i18n.py`, `bdo_music_composer/core/project_paths.py`: 번역 catalog와 source/frozen path 경계.
 
 자세한 문서: [Architecture](docs/ARCHITECTURE.md), [AI Context](docs/AI_CONTEXT.md), [Project Structure](docs/PROJECT_STRUCTURE.md), [Conversion Settings](docs/CONVERSION_SETTINGS.md), [BDO v9 codec](docs/BDO_V9_CODEC.md).
 
@@ -172,7 +172,7 @@ UI 기준은 `tools/benchmark_dense_ui.py`, 후보와 위험은 [로드맵](docs
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -q
-.\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
+.\.venv\Scripts\python.exe -m py_compile main.py bdo_music_composer/core/project_paths.py bdo_music_composer/ui/main_window.py bdo_music_composer/ui/i18n.py
 git diff --check
 ```
 

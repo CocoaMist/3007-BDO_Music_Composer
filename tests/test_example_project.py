@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from pyside_bdo_gui import scan_example_projects
+from bdo_music_composer.ui.main_window import scan_example_projects
 from tools.install_example_project import install_example_project
 
 

@@ -21,14 +21,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from bdo_audio_research import sample_coverage_for_tracks
-from bdo_score import compare_scores, read_bdo_score
-from bdo_validation import (
+from bdo_music_composer.audio.bdo_audio_research import sample_coverage_for_tracks
+from bdo_music_composer.export.bdo_score import compare_scores, read_bdo_score
+from bdo_music_composer.export.bdo_validation import (
     ValidationIssue,
     localized_validation_message,
 )
-from i18n import tr, trf, trfv, trv
-from project_paths import WWISE_MIDI_MAP_PATH
+from bdo_music_composer.ui.i18n import tr, trf, trfv, trv
+from bdo_music_composer.core.project_paths import WWISE_MIDI_MAP_PATH
 
 
 BDO_SAMPLE_MAP_PATH = WWISE_MIDI_MAP_PATH

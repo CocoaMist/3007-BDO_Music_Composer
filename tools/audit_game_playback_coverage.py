@@ -13,20 +13,20 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from bdo_instrument_samples import (  # noqa: E402
+from bdo_music_composer.audio.bdo_instrument_samples import (  # noqa: E402
     bank_for_instrument,
     preview_has_native_articulation,
     preview_route_ntype,
     row_routes_ntype,
 )
-from bdo_sample_renderer import (  # noqa: E402
+from bdo_music_composer.audio.bdo_sample_renderer import (  # noqa: E402
     BdoSampleMap,
     sample_map_supported_pitches,
     sample_map_supports_note,
 )
 from inspect_bdo import parse_bdo  # noqa: E402
 from bdo_midi import BDO_INSTRUMENT_NAMES  # noqa: E402
-from pyside_bdo_gui import (  # noqa: E402
+from bdo_music_composer.ui.main_window import (  # noqa: E402
     BDO_ARTICULATIONS,
     BDO_SAMPLE_MAP_PATH,
     decode_marnian_instrument,

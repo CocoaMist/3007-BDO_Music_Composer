@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 
 from bdo_midi import BDO_NOTE_MAX, BDO_NOTE_MIN, Note
-from bdo_transcription import TranscriptionCandidate
-from bdo_transcription_policy import (
+from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+from bdo_music_composer.transcription.bdo_transcription_policy import (
     BDO_PERCUSSION_INSTRUMENT_ID,
     CANDIDATE_NOTE_POLICY,
 )

@@ -12,7 +12,7 @@ from typing import Protocol, Sequence
 
 from bdo_codec import BdoDocument
 from bdo_midi import BDO_INSTRUMENT_NAMES, BDO_INSTRUMENTS
-from bdo_track_effects import DEFAULT_TRACK_VOLUME
+from bdo_common.bdo_track_effects import DEFAULT_TRACK_VOLUME
 
 
 class SourceProjectionTrack(Protocol):

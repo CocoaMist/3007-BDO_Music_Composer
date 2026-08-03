@@ -10,8 +10,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from bdo_sample_pack import PACK_SUFFIX
-from project_paths import user_documents_dir
+from bdo_music_composer.audio.bdo_sample_pack import PACK_SUFFIX
+from bdo_music_composer.core.project_paths import user_documents_dir
 
 
 DEFAULT_AUDIO_SOURCES = {

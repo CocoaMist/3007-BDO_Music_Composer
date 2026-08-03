@@ -134,6 +134,16 @@ class SpriteLayoutTests(unittest.TestCase):
 
 
 class LocalGameArtImportTests(unittest.TestCase):
+    def test_reviewed_meta_versions_include_current_v782(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for version in (757, 782):
+                with self.subTest(version=version):
+                    (root / "pad00000.meta").write_bytes(
+                        struct.pack("<II", version, 0)
+                    )
+                    self.assertEqual(version, read_paz_meta(root).version)
+
     def test_unreviewed_meta_version_requires_explicit_override(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

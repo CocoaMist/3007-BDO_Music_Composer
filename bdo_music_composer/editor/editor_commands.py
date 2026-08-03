@@ -4,7 +4,88 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import math
 from typing import Sequence
+
+
+def next_non_overlapping_paste_origin(
+    existing_notes: Sequence[object],
+    clipboard_notes: Sequence[object],
+    requested_origin_ms: float,
+    *,
+    grid_step_ms: float | None,
+    grid_origin_ms: float = 0.0,
+) -> float:
+    """Move a pasted note group right until same-pitch intervals are free.
+
+    Clipboard note starts are relative to the copied group's first onset. The
+    whole group moves as one unit, preserving its rhythm and chords. Touching
+    interval boundaries are valid; only positive-duration overlap moves the
+    group. The search is monotonic and clears at least one existing interval
+    per pass, so it remains bounded for dense tracks.
+    """
+
+    if not clipboard_notes:
+        return max(0.0, float(requested_origin_ms))
+    step = (
+        max(1e-6, float(grid_step_ms))
+        if grid_step_ms is not None
+        else None
+    )
+    grid_origin = float(grid_origin_ms)
+    epsilon = 1e-6
+
+    def snap_forward(value: float) -> float:
+        if step is None:
+            return max(0.0, float(value))
+        grid_index = math.ceil(
+            (float(value) - grid_origin - epsilon) / step
+        )
+        return max(0.0, grid_origin + grid_index * step)
+
+    origin = snap_forward(max(0.0, float(requested_origin_ms)))
+    intervals_by_pitch: dict[int, list[tuple[float, float]]] = {}
+    for note in existing_notes:
+        start = float(getattr(note, "start", 0.0))
+        duration = max(0.0, float(getattr(note, "dur", 0.0)))
+        if not math.isfinite(start) or not math.isfinite(duration):
+            continue
+        intervals_by_pitch.setdefault(
+            int(getattr(note, "pitch", 0)),
+            [],
+        ).append((start, start + duration))
+    for intervals in intervals_by_pitch.values():
+        intervals.sort()
+
+    maximum_passes = sum(len(value) for value in intervals_by_pitch.values()) + 1
+    for _pass in range(maximum_passes):
+        required_origin = origin
+        for note in clipboard_notes:
+            relative_start = float(getattr(note, "start", 0.0))
+            duration = max(0.0, float(getattr(note, "dur", 0.0)))
+            pasted_start = origin + relative_start
+            pasted_end = pasted_start + duration
+            for existing_start, existing_end in intervals_by_pitch.get(
+                int(getattr(note, "pitch", 0)),
+                (),
+            ):
+                if (
+                    pasted_start < existing_end - epsilon
+                    and pasted_end > existing_start + epsilon
+                ):
+                    required_origin = max(
+                        required_origin,
+                        existing_end - relative_start,
+                    )
+        if required_origin <= origin + epsilon:
+            return origin
+        origin = snap_forward(
+            max(
+                origin + (step if step is not None else epsilon),
+                required_origin,
+            )
+        )
+    return origin
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,4 +180,8 @@ class ProjectCommandStack:
         self._redo = list(redo)
 
 
-__all__ = ["ProjectCommandStack", "ProjectSnapshot"]
+__all__ = [
+    "ProjectCommandStack",
+    "ProjectSnapshot",
+    "next_non_overlapping_paste_origin",
+]
