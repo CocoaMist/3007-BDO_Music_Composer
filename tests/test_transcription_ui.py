@@ -91,6 +91,8 @@ class TranscriptionUiTests(unittest.TestCase):
 
             app = QApplication([])
             window = gui.MidiToBdoWindow()
+            assert window.reference_timbre_analysis_busy is False
+            assert window.reference_timbre_analysis_error is False
             window._autosave_project = lambda *_args, **_kwargs: None
             target = gui.TrackState(
                 1, [gui.Note(60, 90, 0.0, 400.0, 0)],
@@ -177,6 +179,100 @@ class TranscriptionUiTests(unittest.TestCase):
             assert restored.transcription_panel.melody_lines_visible
             assert not restored.transcription_panel.spectrogram_visible
             restored.close()
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_timbre_controls_are_compact_persisted_and_show_a_legend(self) -> None:
+        completed = _run_offscreen(
+            """
+            from types import SimpleNamespace
+            from unittest.mock import patch
+            from PySide6.QtWidgets import QApplication
+
+            import bdo_music_composer.ui.main_window as gui
+            from bdo_music_composer.project.project_schema import (
+                normalize_reference_layer_settings,
+            )
+
+            app = QApplication([])
+            window = gui.MidiToBdoWindow()
+            window._autosave_project = lambda *_args, **_kwargs: None
+            target = gui.TrackState(1, [], 0, False, "target", 0x0B)
+            window.tracks = [target]
+            window.reference_layer_settings = normalize_reference_layer_settings({
+                "timbre_grouping_enabled": True,
+                "external_instrument_labels_enabled": True,
+            })
+            with patch(
+                "bdo_music_composer.ui.editor.midi_note_editor.muscriptor_backend_status",
+                return_value=(True, "fake-muscriptor"),
+            ):
+                editor = gui.MidiNoteEditorDialog(
+                    window, target, 120, 4, transcription_mode=True
+                )
+
+            panel = editor.transcription_panel
+            assert panel.timbre_grouping_enabled, "grouping"
+            assert panel.external_instrument_labels_enabled, "external checked"
+            assert panel._external_instrument_labels_available
+            analysis = SimpleNamespace(groups=(SimpleNamespace(
+                group_id="timbre-a",
+                candidate_ids=("a", "b"),
+                color="#4AA3DF",
+                confidence=0.74,
+                label_family="piano",
+                label_confidence=0.82,
+            ),))
+            panel.set_timbre_analysis(analysis)
+            assert "音色 A" in panel.timbre_legend_label.text(), panel.timbre_legend_label.text()
+            assert "钢琴" in panel.timbre_legend_label.text(), panel.timbre_legend_label.text()
+            assert "已分为 1 组" in panel.timbre_legend_label.text(), panel.timbre_legend_label.text()
+            assert "覆盖 2/2" in panel.timbre_legend_label.text(), panel.timbre_legend_label.text()
+            assert "平均可信 74%" in panel.timbre_legend_label.text(), panel.timbre_legend_label.text()
+            assert "已分为 1 组" in panel.pitch_timbre_legend_label.text(), panel.pitch_timbre_legend_label.text()
+            assert "平均可信 74%" in panel.pitch_timbre_legend_label.text(), panel.pitch_timbre_legend_label.text()
+
+            prediction = SimpleNamespace(
+                evidence_stage="predictive",
+                groups=(SimpleNamespace(
+                    group_id="voice-a",
+                    candidate_ids=("a", "b"),
+                    color="#4AA3DF",
+                    confidence=0.48,
+                    candidate_confidences=(("a", 0.44), ("b", 0.36)),
+                    label_family="",
+                    label_confidence=0.0,
+                ),),
+            )
+            panel.set_timbre_analysis(prediction, busy=True)
+            assert "预测中" in panel.pitch_timbre_legend_label.text()
+            assert "颜色越鲜明，判断越可靠" in panel.pitch_timbre_legend_label.text()
+            assert "饱和度=" not in panel.pitch_timbre_legend_label.text()
+
+            prediction.evidence_stage = "hybrid"
+            panel.set_timbre_analysis(prediction)
+            assert "少量片段仍为预测" in panel.pitch_timbre_legend_label.text()
+
+            panel.set_timbre_analysis(SimpleNamespace(groups=()))
+            assert "分析完成" in panel.pitch_timbre_legend_label.text()
+            assert "完成分析后" not in panel.pitch_timbre_legend_label.text()
+
+            panel.external_instrument_labels_checkbox.setChecked(False)
+            assert not window.reference_layer_settings[
+                "external_instrument_labels_enabled"
+            ]
+            panel.timbre_grouping_checkbox.setChecked(False)
+            assert not window.reference_layer_settings["timbre_grouping_enabled"]
+
+            editor.close()
             window.close()
             app.processEvents()
             app.quit()
@@ -370,6 +466,96 @@ class TranscriptionUiTests(unittest.TestCase):
                 window.reference_audio.set_audio_path(None)
                 app.processEvents()
 
+            editor.close()
+            window.active_transcription_editor = None
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_analysis_is_independent_from_automatic_timbre_grouping(self) -> None:
+        completed = _run_offscreen(
+            """
+            import tempfile
+            import wave
+            from pathlib import Path
+
+            from PySide6.QtCore import QObject, Signal
+            from PySide6.QtWidgets import QApplication
+            import bdo_music_composer.ui.main_window as gui
+            import bdo_music_composer.ui.editor.midi_note_editor as editor_ui
+
+            started = []
+
+            class FakeWorker(QObject):
+                progress_changed = Signal(int)
+                succeeded = Signal(object)
+                failed = Signal(str)
+                cancelled = Signal()
+                finished = Signal()
+
+                def __init__(self, audio_path, parent, **_options):
+                    super().__init__(parent)
+                    self.audio_path = str(audio_path)
+
+                def start(self):
+                    started.append(self.audio_path)
+
+            gui.transcription_backend_quick_status = lambda: (True, "")
+            editor_ui.transcription_backend_quick_status = lambda: (True, "")
+            gui.TranscriptionAnalysisWorker = FakeWorker
+            app = QApplication([])
+            window = gui.MidiToBdoWindow()
+            window._autosave_project = lambda *_args, **_kwargs: None
+            window._stop_preview = lambda **_kwargs: None
+            window.reference_layer_settings["timbre_grouping_enabled"] = False
+            track = gui.TrackState(1, [], 0, False, "target", 0x0B)
+            window.tracks = [track]
+            editor = gui.MidiNoteEditorDialog(
+                window,
+                track,
+                120,
+                4,
+                transcription_mode=True,
+            )
+            window.active_transcription_editor = editor
+            window._refresh_transcription_workspace()
+            assert not editor.transcription_panel.timbre_grouping_enabled
+            assert not editor.transcription_panel.analyze_button.isEnabled()
+
+            with tempfile.TemporaryDirectory() as folder:
+                audio_path = Path(folder) / "silent-restore.wav"
+                with wave.open(str(audio_path), "wb") as audio:
+                    audio.setnchannels(1)
+                    audio.setsampwidth(2)
+                    audio.setframerate(8_000)
+                    audio.writeframes(b"\\0\\0" * 8_000)
+
+                # Project restore deliberately suppresses file_changed.  The
+                # live timeline signal must still make Analyze ready without
+                # touching the automatic-classification option.
+                assert window.reference_audio.set_audio_path(
+                    audio_path,
+                    notify=False,
+                )
+                app.processEvents()
+                assert editor.transcription_panel._audio_loaded
+                assert editor.transcription_panel.analyze_button.isEnabled()
+                editor.transcription_panel.analyze_button.click()
+                app.processEvents()
+                assert started == [str(audio_path.resolve())]
+                assert not editor.transcription_panel.timbre_grouping_enabled
+                assert window.reference_timbre_worker is None
+                window.reference_audio.set_audio_path(None, notify=False)
+                app.processEvents()
+
+            window.workspace_transcription_worker = None
             editor.close()
             window.active_transcription_editor = None
             window.close()
@@ -655,7 +841,8 @@ class TranscriptionUiTests(unittest.TestCase):
             assert editor.playhead_ms == 0.0
 
             # When game samples are available, both engines start from the same
-            # position. An already-playing reference is not continuously re-seeked.
+            # position. The rendered game clock corrects material reference
+            # drift even when the media backend still reports Playing.
             window._realtime_preview_blockers = lambda _tracks: []
             editor.transcription_audition_source = "combined"
             editor.set_draft_playhead(200.0)
@@ -672,7 +859,7 @@ class TranscriptionUiTests(unittest.TestCase):
             realtime.status.position_ms = 450.0
             editor.poll_draft_playback()
             assert editor.playhead_ms == 450.0
-            assert reference.positions == []
+            assert reference.positions == [450.0], reference.positions
             editor.pause_draft()
             assert realtime.status.state == "paused"
             assert not reference.is_playing

@@ -15,7 +15,15 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QLinearGradient,
+    QPainter,
+    QPen,
+    QPixmap,
+    QPolygonF,
+    QRadialGradient,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -30,9 +38,12 @@ from bdo_music_composer.ui.i18n import tr
 
 
 class _LoadingSpinner(QWidget):
+    """A restrained score-line pulse rather than a generic busy spinner."""
+
     def __init__(self, size: int = 42, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("LoadingSpinner")
+        self.setProperty("animationStyle", "scoreLine")
         self.setFixedSize(size, size)
         self._frame = 0
         self._complete = False
@@ -67,49 +78,58 @@ class _LoadingSpinner(QWidget):
         super().hideEvent(event)
 
     def _advance(self) -> None:
-        self._frame = (self._frame + 1) % 12
+        self._frame = (self._frame + 1) % 48
         self.update()
 
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        center_y = self.height() / 2.0
+        left = 3.0
+        right = self.width() - 3.0
+        center_x = self.width() / 2.0
+
+        painter.setPen(QPen(QColor(207, 171, 104, 70), 1.0))
+        painter.drawLine(QPointF(left, center_y), QPointF(right, center_y))
+        for ratio in (0.18, 0.34, 0.66, 0.82):
+            x = left + (right - left) * ratio
+            painter.drawLine(QPointF(x, center_y - 2.0), QPointF(x, center_y + 2.0))
+
+        diamond = QPolygonF((
+            QPointF(center_x, center_y - 4.0),
+            QPointF(center_x + 4.0, center_y),
+            QPointF(center_x, center_y + 4.0),
+            QPointF(center_x - 4.0, center_y),
+        ))
         if self._complete:
-            pen = QPen(QColor(245, 165, 36, 235), 2.2)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            painter.setPen(pen)
-            painter.setBrush(QColor(245, 165, 36, 20))
-            inset = 5.0
-            painter.drawEllipse(
-                QPointF(self.width() / 2.0, self.height() / 2.0),
-                self.width() / 2.0 - inset,
-                self.height() / 2.0 - inset,
-            )
-            painter.drawLine(
-                QPointF(self.width() * 0.28, self.height() * 0.52),
-                QPointF(self.width() * 0.44, self.height() * 0.68),
-            )
-            painter.drawLine(
-                QPointF(self.width() * 0.44, self.height() * 0.68),
-                QPointF(self.width() * 0.74, self.height() * 0.34),
-            )
+            painter.setPen(QPen(QColor(232, 198, 132, 225), 1.25))
+            painter.drawLine(QPointF(left, center_y), QPointF(right, center_y))
+            painter.setBrush(QColor(224, 180, 95, 230))
+            painter.drawPolygon(diamond)
             return
-        painter.translate(self.width() / 2.0, self.height() / 2.0)
-        radius = max(7.0, min(self.width(), self.height()) / 2.0 - 5.0)
-        spoke = max(4.0, radius * 0.34)
-        line_width = max(2.0, self.width() / 15.0)
-        for index in range(12):
-            distance = (index - self._frame) % 12
-            alpha = max(38, 255 - distance * 19)
-            pen = QPen(QColor(245, 165, 36, alpha), line_width)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen)
-            painter.drawLine(
-                QPointF(0.0, -radius),
-                QPointF(0.0, -radius + spoke),
-            )
-            painter.rotate(30.0)
+
+        phase = self._frame / 47.0
+        pulse_x = left + (right - left) * phase
+        glow = QRadialGradient(QPointF(pulse_x, center_y), 9.0)
+        glow.setColorAt(0.0, QColor(245, 207, 134, 105))
+        glow.setColorAt(0.55, QColor(229, 178, 82, 36))
+        glow.setColorAt(1.0, QColor(229, 178, 82, 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(glow)
+        painter.drawEllipse(QPointF(pulse_x, center_y), 9.0, 9.0)
+        highlight = QLinearGradient(pulse_x - 8.0, 0.0, pulse_x + 8.0, 0.0)
+        highlight.setColorAt(0.0, QColor(237, 195, 113, 0))
+        highlight.setColorAt(0.5, QColor(246, 217, 159, 245))
+        highlight.setColorAt(1.0, QColor(237, 195, 113, 0))
+        painter.setPen(QPen(highlight, 1.6))
+        painter.drawLine(
+            QPointF(max(left, pulse_x - 8.0), center_y),
+            QPointF(min(right, pulse_x + 8.0), center_y),
+        )
+        painter.setPen(QPen(QColor(197, 151, 70, 150), 1.0))
+        painter.setBrush(QColor(30, 28, 24, 230))
+        painter.drawPolygon(diamond)
 
 
 class StartupReveal(QWidget):
@@ -125,6 +145,7 @@ class StartupReveal(QWidget):
         super().__init__(parent)
         self.setObjectName("StartupReveal")
         self.setProperty("uiSurface", "startup")
+        self.setProperty("revealStyle", "salonScore")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._shown_at = time.monotonic()
@@ -145,25 +166,22 @@ class StartupReveal(QWidget):
         self.content = QFrame()
         self.content.setObjectName("StartupOverlay")
         self.content.setProperty("overlayMode", "textOnly")
-        self.content.setMaximumWidth(620)
+        self.content.setMaximumWidth(560)
         layout = QVBoxLayout(self.content)
-        layout.setContentsMargins(44, 22, 44, 40)
-        layout.setSpacing(10)
+        layout.setContentsMargins(34, 22, 34, 26)
+        layout.setSpacing(7)
 
-        brand = QHBoxLayout()
-        brand.setSpacing(12)
         eyebrow = QLabel("BDO MUSIC COMPOSER")
         eyebrow.setObjectName("StartupEyebrow")
-        brand.addWidget(eyebrow)
+        layout.addWidget(eyebrow)
         title = QLabel(tr("正在打开曲谱工作台"))
         title.setObjectName("StartupTitle")
-        brand.addWidget(title)
-        brand.addStretch(1)
-        layout.addLayout(brand)
+        layout.addWidget(title)
+        layout.addSpacing(2)
 
         activity = QHBoxLayout()
         activity.setSpacing(14)
-        self.spinner = _LoadingSpinner(34)
+        self.spinner = _LoadingSpinner(42)
         activity.addWidget(self.spinner, alignment=Qt.AlignmentFlag.AlignVCenter)
         status_group = QVBoxLayout()
         status_group.setSpacing(3)
@@ -181,30 +199,34 @@ class StartupReveal(QWidget):
         self.setStyleSheet(
             """
             QWidget#StartupReveal { background: transparent; }
-            QFrame#StartupOverlay { background: transparent; border: 0; }
+            QFrame#StartupOverlay {
+                background: rgba(14, 14, 15, 178);
+                border: 0;
+                border-top: 1px solid rgba(191, 145, 66, 150);
+            }
             QLabel#StartupEyebrow {
-                color: #d89b37;
-                font-family: "Microsoft YaHei UI";
-                font-size: 10px;
-                font-weight: 900;
+                color: #bd9557;
+                font-family: "Segoe UI Semibold", "Microsoft YaHei UI";
+                font-size: 9px;
+                font-weight: 700;
                 letter-spacing: 2px;
             }
             QLabel#StartupTitle {
-                color: #e1d9cb;
-                font-family: "Microsoft YaHei UI";
-                font-size: 11px;
-                font-weight: 700;
+                color: #eee6d8;
+                font-family: "Microsoft YaHei UI", "Segoe UI";
+                font-size: 17px;
+                font-weight: 600;
             }
             QLabel#StartupStatus {
-                color: #f0c66f;
+                color: #d8bd87;
                 font-family: "Microsoft YaHei UI";
-                font-size: 14px;
-                font-weight: 800;
+                font-size: 12px;
+                font-weight: 600;
             }
             QLabel#StartupDetail {
-                color: #c5bdb0;
+                color: #9e978c;
                 font-family: "Microsoft YaHei UI";
-                font-size: 10px;
+                font-size: 9px;
             }
             """
         )
@@ -298,13 +320,28 @@ class StartupReveal(QWidget):
             surface = self._scaled_surface(home_snapshot, size).copy()
 
         painter = QPainter(surface)
-        painter.fillRect(surface.rect(), QColor(9, 10, 11, 92))
+        painter.fillRect(surface.rect(), QColor(9, 10, 11, 104))
+        warmth = QRadialGradient(
+            QPointF(size.width() * 0.19, size.height() * 0.74),
+            max(size.width(), size.height()) * 0.66,
+        )
+        warmth.setColorAt(0.0, QColor(103, 72, 34, 34))
+        warmth.setColorAt(0.48, QColor(49, 34, 20, 14))
+        warmth.setColorAt(1.0, QColor(5, 6, 7, 0))
+        painter.fillRect(surface.rect(), warmth)
         shade = QLinearGradient(0.0, 0.0, 0.0, float(size.height()))
         shade.setColorAt(0.0, QColor(12, 12, 13, 18))
         shade.setColorAt(0.58, QColor(12, 12, 13, 28))
         shade.setColorAt(0.82, QColor(9, 9, 10, 112))
         shade.setColorAt(1.0, QColor(7, 8, 9, 196))
         painter.fillRect(surface.rect(), shade)
+        staff_left = size.width() * 0.48
+        staff_right = size.width() * 0.94
+        staff_top = size.height() * 0.78
+        painter.setPen(QPen(QColor(205, 175, 116, 22), 1.0))
+        for line in range(5):
+            y = staff_top + line * 7.0
+            painter.drawLine(QPointF(staff_left, y), QPointF(staff_right, y))
         painter.end()
         return surface
 

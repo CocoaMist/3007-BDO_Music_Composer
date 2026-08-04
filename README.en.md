@@ -30,9 +30,9 @@ v1.0.0 is the first public stable major release. Automated regression covers the
 
 ### Practical transcription
 
-- Load a local WAV or standard MP3 and click Start Transcription to run local Basic Pitch ONNX/CPU analysis.
+- Load a local WAV or standard MP3 and click Analyze to run local Basic Pitch ONNX/CPU analysis.
 - The production UI uses protected standard/balanced/preserve settings and does not expose experimental parameters, phrases, harmony, voice grouping, or orchestration diagnostics.
-- Reference notes use lightweight outlines with a lower confidence rail. The blue pitch guide is clipped near candidate notes and offers low, standard, and high display-only denoise levels. Optional voice hints connect only nearby, credible lead fragments instead of spanning long gaps or large pitch jumps. Toggle each layer independently, then select reference notes to ignore, restore, or add them to the editable draft.
+- Analyzed Notes use lightweight outlines with a lower recognition-confidence rail and can be selected, filtered, or added to the draft. A read-only continuity preview connects evidence-backed weak same-pitch splits while retaining every onset and candidate identity. Pitch Line is a separate continuous-pitch view with hysteresis continuation, a constrained two-pass Bézier stroke, independent opacity, and low/standard/high display-only denoise levels. Automatic timbre classification builds reliable prototypes first, absorbs short fragments, and reports coverage and confidence; uniquely owned pitch-line segments inherit the group colour, while conflicts and insufficient evidence stay neutral. Optional Melody Guidance adds a deduplicated, bounded weight to timbre groups matched by manually edited notes in repeated time windows. Once stable, it labels that group's analyzed notes and pitch lines as the current track instrument at highest display priority without rewriting acoustic recognition or export.
 - Run the read-only game-fit check on the draft, then hide transcription guides and continue ordinary editing; the check never deletes, repitches, or quantizes notes.
 - Results enter the editor draft first and reach the formal track only after Apply/OK. Existing notes are never overwritten automatically, and percussion is never mapped automatically.
 

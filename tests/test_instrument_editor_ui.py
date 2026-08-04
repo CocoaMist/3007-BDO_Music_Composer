@@ -85,6 +85,51 @@ class InstrumentEditorUiTests(unittest.TestCase):
             completed.stdout + completed.stderr,
         )
 
+    def test_track_context_menu_exposes_bounded_move_actions(self) -> None:
+        completed = _run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication, QMenu
+
+            from bdo_music_composer.ui.main_window import TimelineCanvas, TrackState
+
+            app = QApplication([])
+            first = TrackState(1, [], 0, False, "first", 0x0B)
+            middle = TrackState(2, [], 0, False, "middle", 0x0B)
+            last = TrackState(3, [], 0, False, "last", 0x0B)
+            timeline = TimelineCanvas()
+            timeline.set_tracks([first, middle, last])
+            requested = []
+            timeline.move_track_requested.connect(
+                lambda track, direction: requested.append((track, direction))
+            )
+
+            menu_states = []
+
+            for track in (middle, first, last):
+                menu = QMenu(timeline)
+                move_up, move_down = timeline._add_track_move_actions(
+                    menu,
+                    track,
+                )
+                menu_states.append(
+                    (move_up.isEnabled(), move_down.isEnabled())
+                )
+                if track is middle:
+                    move_up.trigger()
+
+            assert menu_states == [(True, True), (False, True), (True, False)]
+            assert requested == [(middle, -1)]
+            timeline.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
     def test_note_articulation_is_readable_grouped_and_can_return_to_normal(self) -> None:
         completed = _run_offscreen(
             """
@@ -161,7 +206,7 @@ class InstrumentEditorUiTests(unittest.TestCase):
                 editor.articulation_overflow_button,
             ]
             assert {widget.y() for widget in controls} == {0}
-            assert {widget.height() for widget in controls} == {28}
+            assert {widget.height() for widget in controls} == {26}
             editor.articulation_preview_button.click()
             assert previewed[-1] == (60, 4, True)
 

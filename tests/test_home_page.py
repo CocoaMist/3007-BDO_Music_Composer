@@ -369,6 +369,11 @@ class HomePageTests(unittest.TestCase):
                         )
                     ]
                     window.reference_audio.set_volume_percent(65)
+                    # This lifecycle gate covers reference playback, project
+                    # persistence, and shutdown. Reference-tempo inference has
+                    # dedicated algorithm/worker tests and would make this
+                    # generic gate depend on first-run Numba startup speed.
+                    window.reference_layer_settings["follow_reference_bpm"] = False
                     assert window.reference_audio.set_audio_path(reference_audio)
                     deadline = time.monotonic() + 4.0
                     while window.reference_audio.waveform_loading and time.monotonic() < deadline:
@@ -490,7 +495,20 @@ class HomePageTests(unittest.TestCase):
                     assert window._wait_for_autosave_idle(timeout_ms=20_000)
                     window.close()
                     app.processEvents()
-                    assert window.reference_audio.player.audioOutput() is None
+                    shutdown_deadline = time.monotonic() + 20.0
+                    while (
+                        not window.reference_audio.shutdown_complete
+                        and time.monotonic() < shutdown_deadline
+                    ):
+                        QTest.qWait(20)
+                        app.processEvents()
+                    # QMediaPlayer.audioOutput() is not a portable synchronous
+                    # detach probe on Windows hosts without an audio device.
+                    # Verify the controller contract and backend-neutral state;
+                    # shutdown() still performs the explicit setAudioOutput(None).
+                    assert window.reference_audio.shutdown_complete
+                    assert window.reference_audio.player.source().isEmpty()
+                    assert not window.reference_audio.is_playing
                     print("checkpoint:window-closed", flush=True)
                     window.deleteLater()
                     QApplication.sendPostedEvents(None, QEvent.DeferredDelete)

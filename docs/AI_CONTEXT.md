@@ -19,9 +19,10 @@ the canonical path directly, with no root compatibility shim.
 
 | User request | Read first | Likely edit |
 |---|---|---|
-| Main-window composition / toolbar | `MidiToBdoWindow._build_*`, `MainWindowStyleMixin`, semantic theme | `bdo_music_composer/ui/main_window.py`, `bdo_music_composer/ui/theme/main_window_style.py`, `bdo_music_composer/ui/theme/fluent_theme.py` |
-| Timeline behavior / painting | shared interval index, reference-audio protocol, track interactions | `bdo_music_composer/editor/interval_index.py`, `bdo_music_composer/ui/editor/timeline_canvas.py`, `bdo_music_composer/editor/editor_models.py`, thin signal adapters in `bdo_music_composer/ui/main_window.py` |
+| Main-window composition / toolbar / page transition | `MidiToBdoWindow._build_*`, `StackedPageCrossfade`, `MainWindowStyleMixin`, semantic theme | `bdo_music_composer/ui/main_window.py`, `bdo_music_composer/ui/page_transition_qt.py`, `bdo_music_composer/ui/theme/main_window_style.py`, `bdo_music_composer/ui/theme/fluent_theme.py` |
+| Timeline behavior / painting | shared interval index, reference-audio protocol, track interactions; the multitrack free-point velocity editor is dormant and has no workspace activation control | `bdo_music_composer/editor/interval_index.py`, `bdo_music_composer/editor/velocity_curve.py`, `bdo_music_composer/ui/editor/timeline_canvas.py`, `bdo_music_composer/ui/editor/timeline_velocity_curve_qt.py`, `bdo_music_composer/editor/editor_models.py`, thin transaction host in `bdo_music_composer/ui/timeline_velocity_curve_host.py` |
 | Application settings / local source fields | dialog host contract and Qt-free source normalization | `bdo_music_composer/ui/dialogs/application_settings_dialog.py`, `bdo_music_composer/app/audio_source_settings.py`, thin apply adapter in `bdo_music_composer/ui/main_window.py` |
+| Interface preference persistence | validated global UI schema, debounced Qt bindings, project/global ownership tests | `bdo_music_composer/app/ui_preferences.py`, `bdo_music_composer/ui/ui_preferences_qt.py`, `tests/test_ui_preferences.py` |
 | Config JSON / safe output names | atomic storage, corrupt backup, unknown-field preservation | `bdo_music_composer/app/application_config.py`; callers only provide path and mapping |
 | Track pitch / Aux / master-effect dialogs | structural track contract and raw-byte preservation | `bdo_music_composer/ui/dialogs/track_settings_dialogs.py`, `bdo_common/bdo_track_effects.py`, thin apply adapters in `bdo_music_composer/ui/main_window.py` |
 | Home page/unified projects | bounded scanners, safe project index, extracted presentation widgets | `bdo_music_composer/app/home_catalog.py`, `bdo_music_composer/ui/home_widgets.py`, `bdo_music_composer/project/project_persistence.py`, thin composition in `bdo_music_composer/ui/main_window.py`, `bdo_music_composer/ui/i18n.py` |
@@ -38,7 +39,7 @@ the canonical path directly, with no root compatibility shim.
 | Articulation recommendation | profile + technique registry | `bdo_music_composer/editor/bdo_articulation_profiles.py`, `bdo_music_composer/editor/bdo_techniques.py` |
 | Harmony/role analysis | theory context | `bdo_music_composer/editor/bdo_music_theory.py` |
 | Lyrics | lyric expression mode | `bdo_music_composer/editor/bdo_lyrics.py` |
-| Preview/audio timing | shared lifecycle, engine and tests | `bdo_music_composer/audio/bdo_audio_lifecycle.py`, `bdo_music_composer/audio/bdo_realtime_audio.py`, `bdo_music_composer/audio/bdo_sample_renderer.py` |
+| Preview/audio timing | shared lifecycle, engine, reference drift policy and tests | `bdo_music_composer/audio/bdo_audio_lifecycle.py`, `bdo_music_composer/audio/bdo_realtime_audio.py`, `bdo_music_composer/audio/bdo_sample_renderer.py`, `bdo_music_composer/audio/reference_clock_sync.py` |
 | Reference-audio load/decode failures | bounded WAV/MP3 content probe, Qt playback/waveform owner, streamed transcription decode, spectrogram source gate | `bdo_music_composer/audio/reference_audio_format.py`, `bdo_music_composer/audio/reference_audio_controller.py`, `bdo_music_composer/transcription/bdo_transcription.py`, `bdo_music_composer/ui/transcription/bdo_spectrogram_qt.py` |
 | Standard-MIDI preview/round-trip projection | deterministic event ordering, `/4` metadata, controls, lyrics, percussion channel, duration scaling | `bdo_music_composer/editor/preview_midi_writer.py`; `bdo_music_composer/ui/main_window.py` only re-exports the same function |
 | Game mixer/effects | track volume, Aux/master byte layers, raw compatibility | `bdo_common/bdo_track_effects.py`, `docs/BDO_MIXER_EFFECTS.md` |
@@ -64,6 +65,7 @@ the canonical path directly, with no root compatibility shim.
 | Export consistency/debug mismatch | editor projection versus prepared/primary/game-copy fields, canonical 730 layout, lossless source bytes, redacted report | `bdo_music_composer/export/export_verification.py`, integration in `bdo_music_composer/export/export_workflow.py`, `tests/test_export_verification.py` |
 | Formal game-score scope, velocity materialization, shared instrument mixer | game-model unit tests plus UI/export round trips | `bdo_music_composer/editor/game_score_model.py`, thin UI adapters |
 | Conversion defaults/settings lifecycle | `docs/CONVERSION_SETTINGS.md`; new-score vs legacy/BDO source policy | `bdo_music_composer/core/conversion_settings.py`, thin adapters in `bdo_music_composer/ui/main_window.py` and `bdo_music_composer/export/export_workflow.py` |
+| Global/reference BPM and network room preview | one project tempo, static export range `1..200`, confidence-gated reference following, no second room tempo or unverified game-control claim | `bdo_music_composer/ui/workspace_tempo_qt.py`, `bdo_music_composer/transcription/reference_tempo.py`, `bdo_music_composer/ui/dialogs/multiplayer_sync_dialog.py`, `docs/MULTIPLAYER_SYNCHRONIZER.md` |
 | Global/per-track pitch projection | `docs/CONVERSION_SETTINGS.md`; stable track IDs, drum exemption, `12k` voice adaptation | `bdo_music_composer/editor/pitch_transform.py`, `bdo_music_composer/export/bdo_validation.py`, `bdo_music_composer/export/export_workflow.py`, preview adapters |
 | Game rules / conversion issues | lazy profile provider, ordered focused validation stages | `bdo_music_composer/app/game_profile_provider.py`, `bdo_music_composer/core/bdo_profile.py`, `bdo_music_composer/export/bdo_validation.py`, `data/profiles/` |
 | Revisioned conversion validation | explicit mutation boundary, cache-hit and notice tests | `bdo_music_composer/editor/model_revision.py`, `bdo_music_composer/app/conversion_validation_controller.py`, thin adapter in `bdo_music_composer/ui/main_window.py` |
@@ -281,6 +283,26 @@ new production code imports the owner directly. See
 - `reference_audio_offset_ms` maps audio time into project time;
   `beat_origin_ms` changes grid/quantization phase only. Do not use one as the
   other or move formal notes when either changes.
+- Every adjustable interface control must have an explicit persistence owner.
+  Musical/reference-layer state belongs to the project snapshot; reusable
+  window, timeline and editor interaction preferences belong under the local
+  `ui_preferences` application-config key. Add validation, restore, a debounced
+  atomic save trigger and an open/change/reopen test together. Do not let
+  offscreen tests read or write the interactive user's preferences.
+- Source audio uses decoded sample time; project time is exactly `audio_ms +
+  reference_audio_offset_ms`. Cached evidence, raw candidates, pitch contours,
+  harmony/group sidecars, waveform frames, and detected beat grids stay in
+  source-audio milliseconds. Apply the offset exactly once at a UI/project
+  boundary.
+- Rhythm projection is a bounded local boundary correction. Both onset and
+  offset must remain within `maximum_local_shift_ms` of the raw candidate, and
+  detected source beats must be inverted through their source tempo segment.
+  Never multiply elapsed detected beats by the project beat length: that is an
+  implicit whole-song time stretch whose error grows with song position.
+- In combined playback the rendered BDO engine position is the master project
+  clock. Reference playback may be re-seeked while playing when the pure drift
+  policy requests it; MP3 backend duration/padding is not a project content
+  boundary once the analyzed sample-count duration is available.
 - Do not put confidence thresholds, cleanup profiles, postprocess versions,
   flags, or lineage into the v4 evidence cache key. These change candidate
   decoding/review only and must reuse the same audio/model evidence.
@@ -293,7 +315,9 @@ new production code imports the owner directly. See
   diverge at quantization and interval boundaries.
 - Cleanup duration thresholds are annotation features, never sufficient
   deletion evidence. `preserve` is the safe default and only removes exact
-  duplicates. Selecting experimental `balanced` directly executes same-pitch
+  duplicates. It may dry-run the balanced evidence gate to mark display-only
+  continuity bridges; those bridges retain every candidate ID, onset marker,
+  hit target, and draft action. Selecting experimental `balanced` directly executes same-pitch
   NMS and evidence-gated false-split merges; selecting experimental `clean`
   additionally executes reversible isolated/weak/severe suppression. The
   selected profile is the only action switch—do not add another gate that can
@@ -334,6 +358,15 @@ new production code imports the owner directly. See
   path, or reference path; keep at most 32 representative game samples per
   instrument, eight clean reference segments per voice group, a 16 MiB resident
   profile index, and a 45% confidence cap when local timbre evidence is absent.
+- Reference-timbre presentation may use the ready time/pitch voice groups as a
+  provisional, confidence-capped prediction while acoustic profiling runs.
+  Publish it as soon as structural grouping completes. Acoustic groups override
+  covered candidates, but acoustic unknowns keep provisional structural groups
+  so Melody Guidance does not lose its voting identity after worker completion.
+  Hue means group identity, saturation means group-assignment confidence, and
+  local opacity means candidate/span audio evidence. Keep the user Pitch Line
+  opacity as an independent master multiplier and never present a prediction as
+  verified source identity.
 - Keep `gm_to_bdo_instrument` as the single GM→BDO domain mapping entry point.
   UI and match presentation must not introduce another mapping table.
 - Schema v10 stores transcription-review payload v4, including
@@ -347,15 +380,22 @@ new production code imports the owner directly. See
   evidence, and sample features are cache/runtime results. Audio identity
   mismatch must orphan old assist decisions rather than
   silently applying them.
-- Reference-layer settings v7 persist only lightweight view state:
-  ghost-note and candidate visibility/opacity, contour denoise, plus one shared opacity for voice hints,
+- Reference-layer settings v9 persist only lightweight view state:
+  ghost-note and candidate visibility/opacity, contour denoise, independent
+  contour opacity, opt-in melody guidance, plus one shared opacity for voice hints,
   Frame/Onset/Contour evidence, and spectrogram tiles.  It never serializes
-  rendered tiles or audio data; v8 migration retains the former full-strength
-  rendering while new projects use quieter defaults. New projects keep the
+  rendered tiles or audio data; v8→v9 migration derives contour opacity from
+  the former shared evidence opacity while new projects start at 82%. New
+  projects keep the
   derived voice hints off because dense recognition makes them noisy; when
   enabled they default to the primary role and connect only nearby notes with
   jumps of at most seven semitones. The raw pitch guide remains an explicit
   user switch.
+- Melody guidance deduplicates hits by time window and pitch. One unambiguous
+  window may produce only a weak prediction; the current track's instrument
+  becomes the highest-priority display assignment only after two distinct
+  windows establish focus. Neither state mutates candidates, notes, routing, or
+  export.
 - Schema v10 adds `pitch_transform`. Resolve it by stable `track_id`; never use
   track-list position as identity. Automatic/voice overrides are `12k`, drums
   resolve to zero, and preview/validation/export must consume the same plan.
@@ -391,6 +431,13 @@ new production code imports the owner directly. See
 - Autosave JSON encoding and disk I/O belong to the single coalescing writer,
   not the GUI timer callback. Home discovery reads `project.index.json` or a
   bounded legacy prefix and applies its item limit before metadata parsing.
+- Each completed note-editor transaction must schedule an immediate immutable
+  recovery snapshot. Overlay the active editor draft only in the autosave track
+  view; never mutate the formal `TrackState` before Apply. Drag gestures save on
+  release, undo/redo also save, and closing/rejecting the editor must queue a
+  formal-track snapshot that removes the draft overlay. Keep writes atomic,
+  single-writer/coalesced, retry transient failures with a finite bound, and
+  drain the final request on shutdown.
 - A frozen outer request does not freeze nested dict/list values. Capture save
   metadata through `ProjectMetadataSnapshot.capture()` and its recursive JSON
   freezer; do not hand GUI-owned containers to the writer.

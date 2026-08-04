@@ -124,6 +124,45 @@ class BdoEffectsUiTests(unittest.TestCase):
             """
         )
 
+    def test_beginner_instrument_preserves_but_cannot_author_aux_sends(self) -> None:
+        self._run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication, QLabel, QSpinBox, QWidget
+
+            from bdo_music_composer.ui.main_window import TrackFxDialog, TrackState
+
+            app = QApplication([])
+            parent = QWidget()
+            raw = (61, 12, 62, 34, 63, 56, 78, 90)
+            track = TrackState(
+                1, [], 0, False, "beginner", 0x00,
+                bdo_track_settings=raw,
+            )
+            dialog = TrackFxDialog(parent, track)
+            fields = (
+                dialog.findChild(QSpinBox, "TrackReverbSend"),
+                dialog.findChild(QSpinBox, "TrackDelaySend"),
+                dialog.findChild(QSpinBox, "TrackChorusSend"),
+            )
+            assert all(field is not None and not field.isEnabled() for field in fields)
+            assert any(
+                "不提供 Effector/AuxSend" in label.text()
+                for label in dialog.findChildren(QLabel)
+            )
+
+            # Even programmatic changes cannot turn unsupported authoring into
+            # a wire mutation; imported bytes remain available for round-trip.
+            fields[0].setValue(10)
+            assert dialog.selected_track_settings() == raw
+            assert not dialog.track_effects_changed()
+            assert dialog.changed_send_indices() == frozenset()
+            dialog.close()
+            parent.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+
     def test_track_fx_commit_marks_conversion_check_dirty(self) -> None:
         self._run_offscreen(
             """
@@ -530,6 +569,44 @@ class BdoEffectsUiTests(unittest.TestCase):
                 assert engine._preview_effects.reverb_enabled
                 assert committed["duration_ms"] > duration * 1000 / 48_000
                 engine.stop()
+            app.quit()
+            """
+        )
+
+    def test_beginner_instrument_aux_bytes_are_not_auditioned(self) -> None:
+        self._run_offscreen(
+            """
+            from types import SimpleNamespace
+
+            from PySide6.QtCore import QCoreApplication
+
+            from bdo_music_composer.audio.bdo_realtime_audio import BdoRealtimeAudioEngine
+
+            app = QCoreApplication([])
+            engine = BdoRealtimeAudioEngine(
+                None,
+                {"paz_root": "", "audio_root": ""},
+            )
+            track = SimpleNamespace(
+                track_id=1,
+                bdo_instrument_id=0x00,
+                bdo_track_volume=70,
+                bdo_track_settings=(100, 0, 100, 0, 100, 0, 0, 0),
+                duration_scale=1.0,
+                articulation_type=None,
+                notes=[SimpleNamespace(
+                    pitch=60, vel=90, start=0.0, dur=100.0, ntype=0,
+                )],
+            )
+            events, _cache, _bytes, _unverified, _duration = (
+                engine._prepare_procedural_project([track], 0, 0, 0, None)
+            )
+            assert len(events) == 1
+            assert events[0].reverb_send == 0.0
+            assert events[0].delay_send == 0.0
+            assert events[0].chorus_send == 0.0
+            assert track.bdo_track_settings == (100, 0, 100, 0, 100, 0, 0, 0)
+            engine.stop()
             app.quit()
             """
         )

@@ -256,6 +256,61 @@ assert editor.draft_playback_state == "stopped"
 """
         )
 
+    def test_reference_only_uses_content_end_and_loops_to_project_start(self) -> None:
+        self.assert_offscreen_ok(
+            r"""
+reference = FakeReference(offset_ms=1_000.0, duration_ms=3_000.0)
+window.reference_audio = reference
+editor.transcription_audition_source = "original"
+editor.loop_box.setChecked(True)
+editor.set_draft_playhead(1_000.0)
+editor.play_draft()
+
+# Simulate a backend whose compressed stream continues past the analyzed
+# content boundary.  The project clock must loop at the content end and must
+# not reintroduce the leading 1 s offset as audible media.
+reference.audio_position_ms = 3_000.0
+reference.is_playing = True
+editor.poll_draft_playback()
+assert reference.positions[-1] == 1_000.0, reference.positions
+assert editor.playhead_ms == 1_000.0
+assert reference.is_playing
+"""
+        )
+
+    def test_main_reference_poll_pauses_at_analyzed_content_end(self) -> None:
+        self.assert_offscreen_ok(
+            r"""
+reference = FakeReference(offset_ms=250.0, duration_ms=3_000.0)
+window.reference_audio = reference
+window._sync_preview_state = lambda: None
+reference.audio_position_ms = 3_000.0
+reference.is_playing = True
+
+window._poll_reference_audio_status()
+
+assert not reference.is_playing
+assert reference.pause_count == 1
+assert window.timeline.playhead_ms == 3_250.0
+"""
+        )
+
+    def test_main_reference_transport_keeps_seek_and_starts_before_metadata(self) -> None:
+        self.assert_offscreen_ok(
+            r"""
+reference = FakeReference(offset_ms=0.0, duration_ms=0.0)
+window.reference_audio = reference
+window._sync_preview_state = lambda: None
+window.timeline.set_playhead(420.0)
+
+window._start_reference_audio_from(420.0)
+
+assert reference.is_playing and reference.play_count == 1
+assert reference.positions[-1] == 420.0
+assert window.timeline.playhead_ms == 420.0
+"""
+        )
+
     def test_controller_reapplies_seek_when_duration_metadata_arrives(self) -> None:
         completed = _run_offscreen(
             r"""
@@ -287,6 +342,15 @@ assert editor.draft_playback_state == "stopped"
             controller._apply_pending_position()
             assert controller._pending_project_position_ms is None
             assert player.positions[-1] == 320
+
+            # The analysis sample count is the content-duration authority.
+            # A multimedia backend may include compressed encoder padding.
+            controller.set_content_duration_ms(2_970.0)
+            assert controller.backend_duration_ms == 3_000.0
+            assert controller.duration_ms == 2_970.0
+            assert controller.project_end_ms == 3_070.0
+            controller.set_content_duration_ms(None)
+            assert controller.duration_ms == 3_000.0
             app.quit()
             """
         )
@@ -375,6 +439,15 @@ editor.poll_draft_playback()
 assert editor.draft_playback_state == "playing"
 assert realtime.status.state == "playing"
 assert reference.is_playing and reference.positions[-1] == 200.0
+
+# The rendered BDO clock is authoritative in combined mode. A lagging
+# reference stream must be repositioned while it is still playing instead of
+# retaining a growing offset for the rest of the song.
+realtime.status.position_ms = 1_000.0
+reference.audio_position_ms = 600.0
+editor.draft_reference_last_resync_at = 0.0
+editor.poll_draft_playback()
+assert reference.positions[-1] == 1_000.0, reference.positions
 editor.pause_draft()
 assert realtime.status.state == "paused" and not reference.is_playing
 editor.resume_draft()
@@ -383,6 +456,55 @@ editor.stop_draft()
 assert realtime.clear_count == 1
 assert reference.stop_count == 1
 """
+        )
+
+    def test_main_combined_transport_corrects_drift_while_playing(self) -> None:
+        completed = _run_offscreen(
+            r"""
+            from types import SimpleNamespace
+
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow
+
+            class Reference:
+                audio_path = "reference.wav"
+                duration_ms = 10_000.0
+                is_playing = True
+
+                def __init__(self):
+                    self.project_position_ms = 4_500.0
+                    self.positions = []
+
+                def project_to_audio(self, project_ms):
+                    return float(project_ms)
+
+                def set_position(self, project_ms):
+                    self.positions.append(float(project_ms))
+                    self.project_position_ms = float(project_ms)
+
+                def play(self):
+                    self.is_playing = True
+
+                def pause(self):
+                    self.is_playing = False
+
+            reference = Reference()
+            host = SimpleNamespace(
+                reference_audio=reference,
+                reference_last_resync_at=0.0,
+            )
+            MidiToBdoWindow._sync_reference_to_position(
+                host,
+                5_000.0,
+                play=True,
+            )
+            assert reference.positions == [5_000.0]
+            assert reference.is_playing
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
         )
 
 

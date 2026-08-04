@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from bdo_midi.instruments import (
     MARNIAN_SYNTH_INSTRUMENT_IDS,
     MARNIAN_SYNTH_MODE_OFFSETS,
+    instrument_supports_composer_effects,
     localized_bdo_instrument_name,
 )
 from bdo_common.bdo_track_effects import (
@@ -180,6 +181,20 @@ class TrackFxDialog(QDialog):
         title.setObjectName("TrackTitle")
         layout.addWidget(title)
 
+        effects_supported = instrument_supports_composer_effects(
+            track.bdo_instrument_id
+        )
+        self._effects_supported = effects_supported
+        if not effects_supported:
+            capability_hint = QLabel(
+                tr(
+                    "当前初级乐器在游戏中不提供 Effector/AuxSend；现有曲谱字节会原样保留。"
+                )
+            )
+            capability_hint.setObjectName("EffectScopeNotice")
+            capability_hint.setWordWrap(True)
+            layout.addWidget(capability_hint)
+
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
         layout.addLayout(form)
@@ -209,6 +224,7 @@ class TrackFxDialog(QDialog):
             field.setRange(0, GAME_PERCENT_MAX)
             raw_value = int(self._original_track_settings[index])
             field.setValue(max(0, min(GAME_PERCENT_MAX, raw_value)))
+            field.setEnabled(effects_supported)
             tooltip = tr(help_text)
             if raw_value > GAME_PERCENT_MAX:
                 tooltip += "\n" + trf(
@@ -256,16 +272,19 @@ class TrackFxDialog(QDialog):
         """Return edited Aux sends while preserving untouched wire bytes."""
 
         settings = list(self._original_track_settings)
-        for index in self._effect_dirty:
-            settings[index] = self._effect_fields[index].value()
+        if self._effects_supported:
+            for index in self._effect_dirty:
+                settings[index] = self._effect_fields[index].value()
         return tuple(settings)
 
     def track_effects_changed(self) -> bool:
-        return bool(self._effect_dirty)
+        return self._effects_supported and bool(self._effect_dirty)
 
     def changed_send_indices(self) -> frozenset[int]:
         """Return only Aux fields explicitly edited in this dialog."""
 
+        if not self._effects_supported:
+            return frozenset()
         return frozenset(self._effect_dirty)
 
 
@@ -356,7 +375,7 @@ class MasterEffectsDialog(QDialog):
             "延迟反馈",
             "delay_feedback",
             self._original.delay_feedback,
-            "延迟反馈：控制回声返回延迟线的比例；越高，重复越多。本地试听固定约 250 ms。",
+            "延迟反馈：控制回声返回延迟线的比例；游戏说明约 2–20 次延迟声，本地试听固定约 250 ms 并按该范围近似。",
         )
         self._add_field(ambience_grid, 0, 0, "混响时间", self.reverb)
         self._add_field(ambience_grid, 0, 2, "延迟反馈", self.delay)
@@ -387,7 +406,7 @@ class MasterEffectsDialog(QDialog):
             "LFO 频率",
             "chorus_lfo_frequency",
             self._original.chorus_lfo_frequency,
-            "LFO 频率：控制合唱起伏速度；越高，流动越快。",
+            "LFO 频率：控制合唱起伏速度；0 仍为慢速运动，本地试听按约 0.03–0.30 Hz 近似。",
         )
         self._add_field(chorus_grid, 0, 0, "合唱反馈", self.chorus_feedback)
         self._add_field(chorus_grid, 0, 2, "LFO 深度", self.chorus_depth)

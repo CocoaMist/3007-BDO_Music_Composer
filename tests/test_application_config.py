@@ -9,8 +9,10 @@ from unittest.mock import patch
 import bdo_common.atomic_io as atomic_io
 from bdo_music_composer.app.application_config import (
     load_config,
+    owner_identity,
     safe_filename,
     save_config,
+    set_owner_identity,
 )
 
 
@@ -118,6 +120,22 @@ class ApplicationConfigTests(unittest.TestCase):
         self.assertEqual(safe_filename("中文曲谱"), "中文曲谱")
         self.assertEqual(safe_filename(" ._* ", "未命名项目"), "未命名项目")
         self.assertEqual(safe_filename("x" * 100), "x" * 80)
+
+    def test_owner_identity_is_validated_and_can_be_unlinked(self) -> None:
+        config = {"language": "en_US", "future_feature": True}
+
+        set_owner_identity(config, 0x1234, "Marnie")
+
+        self.assertEqual(owner_identity(config), (0x1234, "Marnie"))
+        self.assertEqual(config["future_feature"], True)
+
+        config["owner_identity"] = {"owner_id": True, "character_name": "bad"}
+        self.assertEqual(owner_identity(config), (0, ""))
+
+        set_owner_identity(config, 0)
+        self.assertNotIn("owner_identity", config)
+        with self.assertRaisesRegex(ValueError, "unsigned 32-bit"):
+            set_owner_identity(config, -1)
 
 
 if __name__ == "__main__":

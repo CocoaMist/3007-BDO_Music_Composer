@@ -15,11 +15,13 @@ from PySide6.QtGui import QColor, QImage
 
 from bdo_music_composer.ui.transcription.bdo_transcription_evidence_qt import (
     DEFAULT_IMAGE_CACHE_BYTES,
+    ContourColorSpan,
     EvidenceImageCache,
     EvidenceTile,
     EvidenceTileController,
     EvidenceTileKey,
     TILE_DURATION_MS,
+    _constrained_bezier_controls,
     _rgba_image,
 )
 
@@ -53,6 +55,20 @@ class TranscriptionEvidenceQtTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         _app()
+
+    def test_contour_bezier_controls_have_bounded_pitch_overshoot(self) -> None:
+        control_1, control_2 = _constrained_bezier_controls(
+            (0.0, 20.0),
+            (2.0, 10.0),
+            (4.0, 14.0),
+            (6.0, 2.0),
+            maximum_y_overshoot=0.32,
+        )
+
+        self.assertGreaterEqual(control_1[1], 9.68)
+        self.assertLessEqual(control_1[1], 14.32)
+        self.assertGreaterEqual(control_2[1], 9.68)
+        self.assertLessEqual(control_2[1], 14.32)
 
     def test_visible_tiles_are_pooled_coloured_and_contour_is_optional(self) -> None:
         with tempfile.TemporaryDirectory() as folder_name:
@@ -209,6 +225,39 @@ class TranscriptionEvidenceQtTests(unittest.TestCase):
         # level; only the weak secondary ridge is removed.
         self.assertGreater(opaque_count(high), 0)
 
+    def test_contour_hysteresis_bridges_weak_dips_but_not_weak_starts(self) -> None:
+        contour = np.zeros((24, 18), dtype=np.float32)
+        contour[:, 8] = 0.82
+        contour[10:12, 8] = 0.14
+
+        connected = _rgba_image(
+            contour,
+            "contour",
+            contour_denoise="standard",
+        )
+        weak_only = np.zeros_like(contour)
+        weak_only[:, 8] = 0.14
+        hidden = _rgba_image(
+            weak_only,
+            "contour",
+            contour_denoise="standard",
+        )
+
+        self.assertTrue(
+            any(
+                connected.pixelColor(x, y).alpha() > 0
+                for x in range(20, 24)
+                for y in range(connected.height())
+            )
+        )
+        self.assertFalse(
+            any(
+                hidden.pixelColor(x, y).alpha() > 0
+                for x in range(hidden.width())
+                for y in range(hidden.height())
+            )
+        )
+
     def test_contour_denoise_is_part_of_the_tile_cache_key(self) -> None:
         base = EvidenceTileKey("source", "contour", 0, 48, 72, 80)
         low = EvidenceTileKey(
@@ -231,6 +280,175 @@ class TranscriptionEvidenceQtTests(unittest.TestCase):
         )
         self.assertNotEqual(base, low)
         self.assertNotEqual(low, high)
+
+    def test_contour_uses_unique_group_colour_and_neutralizes_conflict(
+        self,
+    ) -> None:
+        contour = np.zeros((12, 20), dtype=np.float32)
+        contour[:, 5] = 0.88
+        red_span = ContourColorSpan(
+            0.0,
+            1_000.0,
+            64.0,
+            66.0,
+            "#E15B64",
+        )
+        coloured = _rgba_image(
+            contour,
+            "contour",
+            contour_time_start_ms=0.0,
+            contour_time_end_ms=1_000.0,
+            contour_pitch_min=60.0,
+            contour_bins_per_semitone=1,
+            contour_color_spans=(red_span,),
+        )
+        coloured_pixels = [
+            coloured.pixelColor(x, y)
+            for x in range(coloured.width())
+            for y in range(coloured.height())
+            if coloured.pixelColor(x, y).alpha() > 0
+        ]
+        self.assertTrue(coloured_pixels)
+        self.assertTrue(
+            all(color.red() > color.blue() for color in coloured_pixels)
+        )
+
+        conflict = _rgba_image(
+            contour,
+            "contour",
+            contour_time_start_ms=0.0,
+            contour_time_end_ms=1_000.0,
+            contour_pitch_min=60.0,
+            contour_bins_per_semitone=1,
+            contour_color_spans=(
+                red_span,
+                ContourColorSpan(
+                    0.0,
+                    1_000.0,
+                    64.0,
+                    66.0,
+                    "#56B870",
+                ),
+            ),
+        )
+        conflict_pixels = [
+            conflict.pixelColor(x, y)
+            for x in range(conflict.width())
+            for y in range(conflict.height())
+            if conflict.pixelColor(x, y).alpha() > 0
+        ]
+        self.assertTrue(conflict_pixels)
+        self.assertTrue(
+            all(
+                abs(color.red() - color.green()) < 20
+                for color in conflict_pixels
+            )
+        )
+
+    def test_contour_keeps_distinct_instrument_colours_across_time(self) -> None:
+        contour = np.zeros((20, 12), dtype=np.float32)
+        contour[:10, 5] = 0.92
+        contour[10:, 8] = 0.92
+        image = _rgba_image(
+            contour,
+            "contour",
+            contour_time_start_ms=0.0,
+            contour_time_end_ms=1_000.0,
+            contour_pitch_min=60.0,
+            contour_bins_per_semitone=1,
+            contour_color_spans=(
+                ContourColorSpan(0.0, 490.0, 64.0, 66.0, "#E15B64"),
+                ContourColorSpan(510.0, 1_000.0, 67.0, 69.0, "#56B870"),
+            ),
+        )
+        early = [
+            image.pixelColor(x, y)
+            for x in range(0, image.width() // 2 - 2)
+            for y in range(image.height())
+            if image.pixelColor(x, y).alpha() > 24
+        ]
+        late = [
+            image.pixelColor(x, y)
+            for x in range(image.width() // 2 + 2, image.width())
+            for y in range(image.height())
+            if image.pixelColor(x, y).alpha() > 24
+        ]
+        self.assertTrue(early)
+        self.assertTrue(late)
+        self.assertTrue(any(color.red() > color.green() for color in early))
+        self.assertTrue(any(color.green() > color.red() for color in late))
+
+    def test_contour_uses_saturation_and_opacity_as_separate_evidence(self) -> None:
+        contour = np.zeros((12, 20), dtype=np.float32)
+        contour[:, 5] = 0.92
+        strong = _rgba_image(
+            contour,
+            "contour",
+            contour_time_start_ms=0.0,
+            contour_time_end_ms=1_000.0,
+            contour_pitch_min=60.0,
+            contour_bins_per_semitone=1,
+            contour_color_spans=(
+                ContourColorSpan(
+                    0.0, 1_000.0, 64.0, 66.0, "#E15B64", 1.0, 1.0, 1.0
+                ),
+            ),
+        )
+        weak = _rgba_image(
+            contour,
+            "contour",
+            contour_time_start_ms=0.0,
+            contour_time_end_ms=1_000.0,
+            contour_pitch_min=60.0,
+            contour_bins_per_semitone=1,
+            contour_color_spans=(
+                ContourColorSpan(
+                    0.0, 1_000.0, 64.0, 66.0, "#E15B64", 1.0, 0.15, 0.15
+                ),
+            ),
+        )
+        strong_pixels = [
+            strong.pixelColor(x, y)
+            for x in range(strong.width())
+            for y in range(strong.height())
+            if strong.pixelColor(x, y).alpha() > 0
+        ]
+        weak_pixels = [
+            weak.pixelColor(x, y)
+            for x in range(weak.width())
+            for y in range(weak.height())
+            if weak.pixelColor(x, y).alpha() > 0
+        ]
+        self.assertTrue(strong_pixels and weak_pixels)
+        self.assertGreater(
+            max(color.hsvSaturation() for color in strong_pixels),
+            max(color.hsvSaturation() for color in weak_pixels),
+        )
+        self.assertGreater(
+            max(color.alpha() for color in strong_pixels),
+            max(color.alpha() for color in weak_pixels),
+        )
+
+    def test_contour_colour_revision_is_part_of_tile_cache_key(self) -> None:
+        first = EvidenceTileKey(
+            "source",
+            "contour",
+            0,
+            48,
+            72,
+            80,
+            contour_color_revision="groups-1",
+        )
+        second = EvidenceTileKey(
+            "source",
+            "contour",
+            0,
+            48,
+            72,
+            80,
+            contour_color_revision="groups-2",
+        )
+        self.assertNotEqual(first, second)
 
     def test_generation_and_cache_key_drop_stale_worker_results(self) -> None:
         old_started = threading.Event()

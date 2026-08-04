@@ -18,7 +18,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             """
             from PySide6.QtCore import QPoint, Qt, QTimer
             from PySide6.QtTest import QTest
-            from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QFrame, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget, QStyleOptionViewItem, QTextBrowser, QWidget
+            from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QFrame, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QStackedWidget, QStyle, QStyleOptionComboBox, QStyleOptionViewItem, QTextBrowser, QWidget
             from bdo_music_composer.ui.main_window import (
                 EnsembleCapacityBadge, GlobalToast, HOME_INSTRUMENT_IDS_ROLE, HomeEntry,
                 HomeEntryDelegate, MidiNoteEditorDialog, MidiToBdoWindow, Note,
@@ -39,7 +39,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert window._system_uses_dark_theme()
             main_toolbar = window.findChild(QFrame, "Toolbar")
             assert main_toolbar is not None
-            assert 50 <= main_toolbar.height() <= 60
+            assert 43 <= main_toolbar.height() <= 46
             ensemble_badge = window.findChild(
                 EnsembleCapacityBadge, "EnsembleCapacityBadge"
             )
@@ -68,7 +68,15 @@ class UiLayoutSmokeTests(unittest.TestCase):
                 QFrame, "TimelineControlBar"
             )
             assert timeline_controls is not None
-            assert 47 <= timeline_controls.height() <= 53
+            assert timeline_controls.height() == 42
+            assert window.main_page_transition.is_running
+            QTest.qWait(260)
+            app.processEvents()
+            assert not window.main_page_transition.is_running
+            assert window.workspace_page.graphicsEffect() is None
+            assert window.findChild(
+                QWidget, "MainPageTransitionOverlay"
+            ) is None
             assert window.timeline._lane_height() == 68
             window._show_home()
             app.processEvents()
@@ -85,8 +93,16 @@ class UiLayoutSmokeTests(unittest.TestCase):
 
             home_shell = window.findChild(QFrame, "HomeShell")
             home_stack = window.findChild(QStackedWidget, "HomeLibraryStack")
+            home_library_surface = window.findChild(
+                QFrame, "HomeLibrarySurface"
+            )
+            home_library_tabs = window.findChild(QFrame, "HomeLibraryTabs")
+            home_card_headers = window.findChildren(QFrame, "HomeCardHeader")
             home_actions = window.findChildren(QPushButton, "HomeQuickAction")
             assert home_shell is not None and home_stack is not None
+            assert home_library_surface is not None
+            assert home_library_tabs is not None
+            assert len(home_card_headers) == 2
             assert window.home_backdrop is home_shell
             assert window.home_backdrop.has_artwork
             assert not window.home_backdrop._cover.isNull()
@@ -169,8 +185,20 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert shell_rect.bottom() == home_rect.bottom()
             assert window.home_sidebar.geometry().topLeft() == QPoint(0, 0)
             assert window.home_sidebar.height() == home_shell.height()
-            assert 560 <= window.home_sidebar.width() <= 620
+            assert window.home_sidebar.width() == 584
             assert window.home_sidebar.width() < home_shell.width()
+            hero_rect = window.home_hero.rect().translated(
+                window.home_hero.mapTo(home_shell, QPoint(0, 0))
+            )
+            assert hero_rect.left() >= 30
+            assert hero_rect.right() < window.home_sidebar.width()
+            assert window.home_new_btn.mapTo(home_shell, QPoint(0, 0)).y() < 90
+            assert window.home_search.height() == 36
+            assert window.home_refresh_btn.size().height() == 36
+            assert window.home_refresh_btn.size().width() == 58
+            assert home_library_surface.rect().contains(
+                window.home_footer.geometry().center()
+            )
             action_rects = [
                 action.rect().translated(action.mapTo(window.home_page, QPoint(0, 0)))
                 for action in home_actions
@@ -181,6 +209,19 @@ class UiLayoutSmokeTests(unittest.TestCase):
                 for left in range(len(action_rects))
                 for right in range(left + 1, len(action_rects))
             )
+            assert window.home_new_btn.width() > window.home_import_btn.width()
+            assert abs(
+                window.home_import_btn.width() - window.home_open_btn.width()
+            ) <= 1
+            window.resize(1360, 820)
+            app.processEvents()
+            assert window.home_sidebar.width() == 632
+            window.resize(1600, 900)
+            app.processEvents()
+            assert window.home_sidebar.width() == 680
+            window.resize(window.minimumSize())
+            app.processEvents()
+            assert window.home_sidebar.width() == 584
             window.home_game_nav.click()
             app.processEvents()
             assert home_stack.currentIndex() == 1
@@ -198,6 +239,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert reveal.parentWidget() is window
             assert reveal.geometry() == window.rect()
             assert reveal.property("uiSurface") == "startup"
+            assert reveal.property("revealStyle") == "salonScore"
             reveal_overlay = reveal.findChild(QFrame, "StartupOverlay")
             assert reveal_overlay is not None
             assert reveal_overlay.property("overlayMode") == "textOnly"
@@ -209,6 +251,8 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert window.size() == target_geometry.size()
             assert window.centralWidget().isVisible()
             assert reveal.spinner._timer.isActive()
+            assert reveal.spinner.property("animationStyle") == "scoreLine"
+            assert reveal.spinner.size().width() == 42
             initial_spinner_frame = reveal.spinner.frame
             QTest.qWait(90)
             app.processEvents()
@@ -279,7 +323,10 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert not hasattr(window, "open_output_button")
             assert not hasattr(window, "install_check")
             assert window.track_actions_button.menu() is not None
-            assert len(window.track_actions_button.menu().actions()) == 4
+            assert [
+                action.text()
+                for action in window.track_actions_button.menu().actions()
+            ] == ["删除轨道", "上移轨道", "下移轨道", "", "清除 Solo", "取消静音"]
             assert not hasattr(window, "transcription_tools_slot")
             assert not hasattr(window, "transcription_entry_button")
             assert not hasattr(window, "delete_track_button")
@@ -425,7 +472,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert not hasattr(editor, "playback_timeline")
             top_inspector = editor.findChild(QFrame, "NoteInspectorTop")
             assert top_inspector is not None and top_inspector.isVisible()
-            assert top_inspector.height() == 38
+            assert top_inspector.height() == 34
             assert top_inspector.isAncestorOf(editor.velocity_toggle)
             assert editor.canvas.ROW_H == 24
             assert editor.canvas.KEY_W == 86
@@ -439,7 +486,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert not editor.grid_controls.isVisible()
             assert editor.quantize_quick.isVisible()
             assert editor.quantize_combo.currentText() == "1/4"
-            assert editor.quantize_combo.height() == 28
+            assert editor.quantize_combo.height() == 26
             assert editor.quantize_ms() == editor.canvas.beat_ms
             aligned_controls = (
                 editor.quantize_quick,
@@ -447,7 +494,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
                 editor.ghost_box,
                 editor.note_controls,
             )
-            assert {widget.height() for widget in aligned_controls} == {28}
+            assert {widget.height() for widget in aligned_controls} == {26}
             assert len(
                 {
                     widget.geometry().center().y()
@@ -494,6 +541,31 @@ class UiLayoutSmokeTests(unittest.TestCase):
                 editor.quantize_combo.itemText(index)
                 for index in range(editor.quantize_combo.count())
             ] == ["1/4", "1/8", "1/16", "1/32", "1/64"]
+            quantize_option = QStyleOptionComboBox()
+            quantize_option.initFrom(editor.quantize_combo)
+            quantize_edit_rect = editor.quantize_combo.style().subControlRect(
+                QStyle.CC_ComboBox,
+                quantize_option,
+                QStyle.SC_ComboBoxEditField,
+                editor.quantize_combo,
+            )
+            quantize_text_width = max(
+                editor.quantize_combo.fontMetrics().horizontalAdvance(
+                    editor.quantize_combo.itemText(index)
+                )
+                for index in range(editor.quantize_combo.count())
+            )
+            assert quantize_edit_rect.width() >= quantize_text_width, (
+                quantize_edit_rect.width(),
+                quantize_text_width,
+                editor.quantize_combo.width(),
+            )
+            for index in (2, 3, 4):
+                editor.quantize_combo.setCurrentIndex(index)
+                app.processEvents()
+                assert editor.quantize_combo.currentText() in {
+                    "1/16", "1/32", "1/64"
+                }
             editor.quantize_combo.setCurrentIndex(0)
             app.processEvents()
             assert editor.quantize_ms() == editor.canvas.beat_ms
@@ -516,7 +588,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert editor.note_controls.isVisible()
             footer = editor.findChild(QFrame, "EditorFooter")
             assert footer is not None
-            assert footer.height() == 31
+            assert footer.height() == 27
             assert footer.geometry().bottom() <= editor.contentsRect().bottom()
             assert footer.isAncestorOf(editor.music_volume_slider)
             assert footer.isAncestorOf(editor.transcription_mode_toggle)
@@ -629,15 +701,24 @@ class UiLayoutSmokeTests(unittest.TestCase):
             window._realtime_preview_blockers = lambda _tracks: []
             editor.draw_mode_button.setChecked(True)
             before_count = len(editor.canvas.notes)
+            inherited_velocity = (
+                editor._last_selected_note_properties[0]
+                if editor._last_selected_note_properties is not None
+                else editor.default_note_velocity
+            )
             draw_start = QPoint(editor.canvas.KEY_W + 500, editor.canvas.RULER_H + 180)
             draw_end = QPoint(draw_start.x() + 90, draw_start.y() - 10)
             QTest.mousePress(editor.canvas, Qt.LeftButton, pos=draw_start)
             QTest.mouseMove(editor.canvas, pos=draw_end)
             QTest.mouseRelease(editor.canvas, Qt.LeftButton, pos=draw_end)
-            assert len(editor.canvas.notes) == before_count + 1
+            assert len(editor.canvas.notes) == before_count + 1, (
+                len(editor.canvas.notes), before_count
+            )
             drawn = editor.canvas.notes[-1]
-            assert drawn.dur > editor.quantize_ms()
-            assert drawn.vel > 100
+            assert drawn.dur > editor.quantize_ms(), (
+                drawn, editor.quantize_ms()
+            )
+            assert drawn.vel > inherited_velocity, (drawn, inherited_velocity)
             drawn_pitch = drawn.pitch
             QTest.keyClick(editor.canvas, Qt.Key_Up)
             assert editor.canvas.notes[-1].pitch == drawn_pitch + 1

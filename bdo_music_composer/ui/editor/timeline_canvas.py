@@ -8,8 +8,8 @@ import math
 from pathlib import Path
 from typing import Protocol
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QMenu, QScrollBar, QWidget
 
 from bdo_music_composer.editor.bdo_instrument_adaptation import instrument_editor_display_adaptations
@@ -34,6 +34,7 @@ from .editor_ui_helpers import (
     add_instrument_submenus,
     articulation_color,
 )
+from .timeline_velocity_curve_qt import TimelineVelocityCurveOverlay
 from bdo_music_composer.ui.i18n import tr, trf, trv
 from bdo_music_composer.editor.interval_index import IntervalIndex
 from bdo_music_composer.editor.pitch_transform import (
@@ -48,10 +49,29 @@ TIMELINE_BACKGROUND_OPACITY = 0.24
 
 
 @dataclass(frozen=True, slots=True)
+class _TimelineNoteOverviewBin:
+    start: float
+    end: float
+    pitch_min: int
+    pitch_max: int
+    pitch_mask: int
+    articulation_type: int
+
+
+@dataclass(frozen=True, slots=True)
+class _TimelineNoteOverviewLevel:
+    bucket_count: int
+    bins: tuple[_TimelineNoteOverviewBin, ...]
+    starts: tuple[float, ...]
+    max_span: float
+
+
+@dataclass(frozen=True, slots=True)
 class _TimelineTrackNoteIndex:
     intervals: IntervalIndex[object]
     pitch_min: int
     pitch_max: int
+    overview_levels: tuple[_TimelineNoteOverviewLevel, ...]
 
 
 class ReferenceAudioView(Protocol):
@@ -88,6 +108,8 @@ class TimelineCanvas(QWidget):
     game_volume_committed = Signal(object, int, int)
     instrument_changed = Signal(object, int)
     mixer_unify_requested = Signal(object)
+    create_track_requested = Signal(int)
+    move_track_requested = Signal(object, int)
     selected = Signal(object)
     validation_requested = Signal(object)
     effects_requested = Signal(object)
@@ -97,9 +119,14 @@ class TimelineCanvas(QWidget):
     seek_requested = Signal(float)
     time_range_changed = Signal(object)
     playhead_changed = Signal(float)
+    velocity_curve_committed = Signal(object, object)
     TRACK_NOTE_QUERY_BLOCK_SIZE = 128
     GRID_MIN_TICK_SPACING_PX = 56.0
     MEASURE_BANDING_MIN_WIDTH_PX = 72.0
+    EDIT_TAIL_MEASURES = 8
+    EDIT_TAIL_MIN_MS = 10_000.0
+    NOTE_OVERVIEW_BUCKET_PX = 3.0
+    NOTE_OVERVIEW_LEVELS = (256,)
     KEYBOARD_SHORTCUT_HINT = (
         "上下键选择轨道；M 静音；S 独奏；F 打开效果；"
         "Enter 编辑音符；左右键调整轨道音量（Shift 5）"
@@ -143,12 +170,31 @@ class TimelineCanvas(QWidget):
         self._instrument_adaptations = instrument_editor_display_adaptations()
         self.instrument_lane_art = InstrumentLaneArtwork()
         self.track_scroll = QScrollBar(Qt.Vertical, self)
+        self.velocity_curve_overlay = TimelineVelocityCurveOverlay(self)
+        self.velocity_curve_overlay.commit_requested.connect(
+            self.velocity_curve_committed.emit
+        )
         self._track_note_indexes: dict[int, _TimelineTrackNoteIndex] = {}
         self._last_track_note_query_inspections = 0
         self._conversion_problem_cache: dict[tuple[object, ...], bool] = {}
+        self._conversion_problem_masks: dict[tuple[object, ...], int] = {}
         self._timeline_end_cache = 1.0
+        # The multitrack page is mostly static while playback advances.  Keep
+        # notes, headers, artwork, text, grid and waveform in one device-local
+        # pixmap so a narrow playhead update does not re-run every visible
+        # interval query and every text/layout operation at audio-frame rate.
+        self._static_timeline_cache = QPixmap()
+        self._static_timeline_cache_key: tuple[object, ...] | None = None
+        self._static_timeline_hit_regions: list[tuple[QRectF, str, object]] = []
+        self._viewport_motion_active = False
+        self._viewport_motion_timer = QTimer(self)
+        self._viewport_motion_timer.setSingleShot(True)
+        self._viewport_motion_timer.setInterval(140)
+        self._viewport_motion_timer.timeout.connect(
+            self._finish_viewport_motion
+        )
         self.track_scroll.setObjectName("TimelineScroll")
-        self.track_scroll.valueChanged.connect(self.update)
+        self.track_scroll.valueChanged.connect(self._track_scroll_changed)
         self.setObjectName("TimelineCanvas")
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAccessibleName(tr("轨道时间轴"))
@@ -169,11 +215,13 @@ class TimelineCanvas(QWidget):
                 in self._instrument_adaptations.items()
             },
         )
+        self._static_timeline_cache_key = None
         self.update()
         return loaded
 
     def set_tracks(self, tracks: list[TrackState]) -> None:
         self.tracks = tracks
+        self.velocity_curve_overlay.synchronize_tracks(tracks)
         if not any(track is self.selected_track for track in tracks):
             self.selected_track = None
         valid_track_ids = {int(track.track_id) for track in tracks}
@@ -272,7 +320,10 @@ class TimelineCanvas(QWidget):
         self._reference_audio_updated()
 
     def _reference_audio_updated(self) -> None:
-        self._rebuild_track_indexes()
+        # Reference alignment and waveform updates do not mutate editor
+        # notes. Rebuilding every interval/overview index here made loading
+        # or moving a reference audio file scale with the whole score.
+        self._refresh_timeline_end_cache()
         self.playhead_ms = min(self.playhead_ms, self._timeline_end_ms())
         self._clamp_view()
         self._update_track_scrollbar()
@@ -300,7 +351,7 @@ class TimelineCanvas(QWidget):
     def _rebuild_track_indexes(self) -> None:
         self._track_note_indexes = {}
         self._conversion_problem_cache.clear()
-        timeline_end = 1.0
+        self._conversion_problem_masks.clear()
         for track in self.tracks:
             duration_scale = float(track.duration_scale)
             intervals = IntervalIndex.build(
@@ -319,14 +370,144 @@ class TimelineCanvas(QWidget):
                     (int(note.pitch) for note in intervals.items),
                     default=0,
                 ),
+                # Dense overview bins are only needed for tracks that are
+                # actually painted. Building them lazily avoids blocking the
+                # workspace when a large project contains many offscreen
+                # tracks.
+                overview_levels=(),
             )
-            timeline_end = max(
-                timeline_end,
-                intervals.maximum_end,
-            )
+        self._refresh_timeline_end_cache()
+
+    def _refresh_timeline_end_cache(self) -> None:
+        timeline_end = max(
+            1.0,
+            max(
+                (
+                    index.intervals.maximum_end
+                    for index in self._track_note_indexes.values()
+                ),
+                default=1.0,
+            ),
+        )
         if self.reference_audio is not None:
             timeline_end = max(timeline_end, self.reference_audio.project_end_ms)
+        # A note-only project still needs blank musical space at its right
+        # edge. Otherwise the last note becomes a hard boundary and users
+        # cannot pan right to author the next phrase. A loaded reference with
+        # known duration remains the authoritative timeline boundary.
+        reference_duration = (
+            self.reference_audio.duration_ms
+            if self.reference_audio is not None
+            else 0.0
+        )
+        if reference_duration <= 0.0:
+            measure_ms = 60_000.0 / max(1, self.bpm) * max(1, self.time_sig)
+            timeline_end += max(
+                self.EDIT_TAIL_MIN_MS,
+                measure_ms * self.EDIT_TAIL_MEASURES,
+            )
         self._timeline_end_cache = timeline_end
+
+    def _build_note_overview_levels(
+        self,
+        intervals: IntervalIndex[object],
+    ) -> tuple[_TimelineNoteOverviewLevel, ...]:
+        """Precompute bounded visual summaries for dense timeline zooms."""
+
+        timeline_end = max(1.0, float(intervals.maximum_end))
+        levels: list[_TimelineNoteOverviewLevel] = []
+        for bucket_count in self.NOTE_OVERVIEW_LEVELS:
+            starts = [float("inf")] * bucket_count
+            ends = [float("-inf")] * bucket_count
+            pitch_mins = [128] * bucket_count
+            pitch_maxes = [-1] * bucket_count
+            pitch_masks = [0] * bucket_count
+            articulation_types = [0] * bucket_count
+            for note, effective_end in zip(intervals.items, intervals.ends):
+                start = float(note.start)
+                end = float(effective_end)
+                bucket = max(
+                    0,
+                    min(
+                        bucket_count - 1,
+                        int(start / timeline_end * bucket_count),
+                    ),
+                )
+                pitch = int(note.pitch)
+                ntype = int(getattr(note, "ntype", 0))
+                starts[bucket] = min(starts[bucket], start)
+                ends[bucket] = max(ends[bucket], end)
+                pitch_mins[bucket] = min(pitch_mins[bucket], pitch)
+                pitch_maxes[bucket] = max(pitch_maxes[bucket], pitch)
+                pitch_masks[bucket] |= 1 << max(0, pitch)
+                if ntype != 0 and articulation_types[bucket] == 0:
+                    articulation_types[bucket] = ntype
+            overview_bins = tuple(
+                _TimelineNoteOverviewBin(
+                    start=starts[bucket],
+                    end=ends[bucket],
+                    pitch_min=pitch_mins[bucket],
+                    pitch_max=pitch_maxes[bucket],
+                    pitch_mask=pitch_masks[bucket],
+                    articulation_type=articulation_types[bucket],
+                )
+                for bucket in range(bucket_count)
+                if pitch_maxes[bucket] >= 0
+            )
+            levels.append(
+                _TimelineNoteOverviewLevel(
+                    bucket_count=bucket_count,
+                    bins=overview_bins,
+                    starts=tuple(value.start for value in overview_bins),
+                    max_span=max(
+                        (value.end - value.start for value in overview_bins),
+                        default=0.0,
+                    ),
+                )
+            )
+        return tuple(levels)
+
+    def _visible_note_overview_bins(
+        self,
+        track: TrackState,
+        visible_start: float,
+        visible_duration: float,
+        region_width: float,
+    ) -> tuple[_TimelineNoteOverviewBin, ...]:
+        index = self._track_note_indexes.get(id(track))
+        if index is None:
+            return ()
+        if not index.overview_levels:
+            index = _TimelineTrackNoteIndex(
+                intervals=index.intervals,
+                pitch_min=index.pitch_min,
+                pitch_max=index.pitch_max,
+                overview_levels=self._build_note_overview_levels(
+                    index.intervals
+                ),
+            )
+            self._track_note_indexes[id(track)] = index
+        track_duration = max(1.0, float(index.intervals.maximum_end))
+        desired_bucket_count = (
+            track_duration / max(1.0, visible_duration)
+            * max(1.0, region_width)
+            / self.NOTE_OVERVIEW_BUCKET_PX
+        )
+        level = min(
+            index.overview_levels,
+            key=lambda value: abs(value.bucket_count - desired_bucket_count),
+        )
+        visible_end = visible_start + visible_duration
+        lower = bisect_left(
+            level.starts,
+            visible_start - level.max_span,
+        )
+        upper = bisect_right(level.starts, visible_end)
+        return tuple(
+            value
+            for value in level.bins[lower:upper]
+            if value.end >= visible_start
+        )
 
     def _visible_track_notes(self, track: TrackState, start: float, end: float) -> list:
         ordered, lo, hi = self._visible_track_note_window(track, start, end)
@@ -368,6 +549,7 @@ class TimelineCanvas(QWidget):
         emit: bool,
     ) -> None:
         self.selected_track = track
+        self.velocity_curve_overlay.selected_track_changed(track)
         if emit and track is not None:
             self.selected.emit(track)
         self._ensure_selected_track_visible()
@@ -429,6 +611,7 @@ class TimelineCanvas(QWidget):
         self.pitch_transform_plan = plan
         self.conversion_transpose = plan.global_semitones
         self._conversion_problem_cache.clear()
+        self._conversion_problem_masks.clear()
         self.update()
 
     def set_musical_grid(
@@ -445,6 +628,10 @@ class TimelineCanvas(QWidget):
         if values == (self.bpm, self.time_sig, self.beat_origin_ms):
             return
         self.bpm, self.time_sig, self.beat_origin_ms = values
+        self._refresh_timeline_end_cache()
+        self.playhead_ms = min(self.playhead_ms, self._timeline_end_ms())
+        self._clamp_view()
+        self._update_track_scrollbar()
         self.update()
 
     def _visible_musical_ticks(
@@ -545,6 +732,23 @@ class TimelineCanvas(QWidget):
                 result = converted_pitch < BDO_NOTE_MIN or converted_pitch > BDO_NOTE_MAX
         self._conversion_problem_cache[cache_key] = result
         return result
+
+    def _conversion_problem_mask(self, track: TrackState) -> int:
+        cache_key = (
+            int(track.bdo_instrument_id),
+            str(track.marnian_synth_mode),
+            self.pitch_transform_plan.effective_track_semitones(track),
+            track_uses_canonical_drum_lanes(track),
+        )
+        cached = self._conversion_problem_masks.get(cache_key)
+        if cached is not None:
+            return cached
+        mask = 0
+        for pitch in range(128):
+            if self._note_has_conversion_problem(track, pitch):
+                mask |= 1 << pitch
+        self._conversion_problem_masks[cache_key] = mask
+        return mask
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -702,6 +906,7 @@ class TimelineCanvas(QWidget):
         self.zoom_factor = new_zoom
         self.view_start_ms = center - self._visible_duration_ms() / 2
         self._clamp_view()
+        self._begin_viewport_motion()
         self.update()
         self.changed.emit()
 
@@ -712,6 +917,7 @@ class TimelineCanvas(QWidget):
             return
         self.view_start_ms = new_start
         self._clamp_view()
+        self._begin_viewport_motion()
         self.update()
         self.changed.emit()
 
@@ -720,6 +926,20 @@ class TimelineCanvas(QWidget):
         if max_start <= 0:
             return 0
         return round(self.view_start_ms / max_start * 1000)
+
+    def _track_scroll_changed(self, _value: int) -> None:
+        self._begin_viewport_motion()
+        self.update()
+
+    def _begin_viewport_motion(self) -> None:
+        self._viewport_motion_active = True
+        self._viewport_motion_timer.start()
+
+    def _finish_viewport_motion(self) -> None:
+        if not self._viewport_motion_active:
+            return
+        self._viewport_motion_active = False
+        self.update()
 
     def _timeline_end_ms(self) -> float:
         return self._timeline_end_cache
@@ -916,6 +1136,10 @@ class TimelineCanvas(QWidget):
         visible_start: float,
         visible_duration: float,
         visible_end: float,
+        *,
+        paint_meters: bool = True,
+        paint_selected_velocity: bool = True,
+        paint_reference_position: bool = True,
     ) -> None:
         any_solo = any(track.solo for track in self.tracks)
         scroll_y = self.track_scroll.value() if self.track_scroll.isVisible() else 0
@@ -1123,20 +1347,15 @@ class TimelineCanvas(QWidget):
             )
             self.hit_regions.append((volume_rect, "track_volume", track))
 
-            meter_level = self.track_levels.get(int(track.track_id), 0.0) if active else 0.0
-            meter_rect = QRectF(left + header_w - 14, y + 8, 7, lane_h - 16)
-            segment_count = 10
-            segment_gap = 1.0
-            segment_height = (meter_rect.height() - segment_gap * (segment_count - 1)) / segment_count
-            lit_segments = min(segment_count, math.ceil(meter_level * segment_count))
-            painter.setPen(Qt.NoPen)
-            for segment in range(segment_count):
-                segment_y = meter_rect.bottom() - (segment + 1) * segment_height - segment * segment_gap
-                if segment < lit_segments:
-                    color = "#d05c4f" if segment >= 9 else ("#caa24f" if segment >= 7 else "#83a543")
-                else:
-                    color = "#343438"
-                painter.fillRect(QRectF(meter_rect.left(), segment_y, meter_rect.width(), segment_height), QColor(color))
+            if paint_meters:
+                self._paint_track_meter(
+                    painter,
+                    track,
+                    left + header_w - 14,
+                    y,
+                    lane_h,
+                    active,
+                )
 
             # No nested horizontal gutter: the colored note region shares the
             # grid's exact left/right edge, while retaining a little vertical
@@ -1153,38 +1372,24 @@ class TimelineCanvas(QWidget):
                 pitch_span = max(1, pitch_max - pitch_min)
                 painter.save()
                 painter.setClipRect(region_rect)
-                normal_rects: list[QRectF] = []
-                articulation_markers: dict[str, list[QRectF]] = {}
-                invalid_rects: list[QRectF] = []
                 ordered, note_lo, note_hi = self._visible_track_note_window(
                     track, visible_start, visible_end,
                 )
-                for note_index in range(note_lo, min(note_hi, note_lo + 2600)):
-                    note = ordered[note_index]
-                    scaled_dur = note.dur * track.duration_scale
-                    note_end = note.start + scaled_dur
-                    if note_end < visible_start or note.start > visible_end:
-                        continue
-                    x = region_rect.left() + ((note.start - visible_start) / visible_duration) * region_rect.width()
-                    w = max(2.5, (scaled_dur / visible_duration) * region_rect.width())
-                    pitch_pos = (note.pitch - pitch_min) / pitch_span
-                    note_y = region_rect.top() + 6 + (1.0 - pitch_pos) * (region_rect.height() - 14)
-                    note_rect = QRectF(x, note_y, w, 5.0)
-                    if self._note_has_conversion_problem(track, note.pitch):
-                        invalid_rects.append(note_rect)
-                    else:
-                        normal_rects.append(note_rect)
-                        ntype = int(getattr(note, "ntype", 0))
-                        if ntype != 0:
-                            marker = QRectF(
-                                note_rect.left(),
-                                note_rect.top(),
-                                min(2.0, note_rect.width()),
-                                note_rect.height(),
-                            )
-                            articulation_markers.setdefault(
-                                articulation_color(ntype), []
-                            ).append(marker)
+                (
+                    normal_rects,
+                    articulation_markers,
+                    invalid_rects,
+                ) = self._timeline_note_rect_batches(
+                    track,
+                    region_rect,
+                    visible_start,
+                    visible_duration,
+                    pitch_min,
+                    pitch_span,
+                    ordered,
+                    note_lo,
+                    note_hi,
+                )
                 painter.setPen(Qt.NoPen)
                 if normal_rects:
                     note_fill = QColor(track.color if active else "#566149")
@@ -1199,6 +1404,25 @@ class TimelineCanvas(QWidget):
                     painter.setPen(QPen(QColor("#ffb1a8"), 1))
                     painter.drawRects(invalid_rects)
                 painter.restore()
+
+            if not self._viewport_motion_active:
+                self.velocity_curve_overlay.paint_velocity_trace(
+                    painter,
+                    track,
+                    region_rect,
+                    visible_start,
+                    visible_duration,
+                    active,
+                )
+            if focused and paint_selected_velocity:
+                self.velocity_curve_overlay.paint_selected_track(
+                    painter,
+                    track,
+                    region_rect,
+                    visible_start,
+                    visible_duration,
+                    self.time_range,
+                )
 
             title_left = left + (34.0 if has_validation_notice else 12.0)
             title_right = left + header_w - 114.0
@@ -1251,7 +1475,142 @@ class TimelineCanvas(QWidget):
                 visible_start,
                 visible_duration,
                 visible_end,
+                paint_position=paint_reference_position,
             )
+
+    def _timeline_note_rect_batches(
+        self,
+        track: TrackState,
+        region: QRectF,
+        visible_start: float,
+        visible_duration: float,
+        pitch_min: int,
+        pitch_span: int,
+        ordered: list[object],
+        note_lo: int,
+        note_hi: int,
+    ) -> tuple[list[QRectF], dict[str, list[QRectF]], list[QRectF]]:
+        """Project visible notes with a pixel-bounded overview LOD.
+
+        Once several notes compete for each horizontal pixel, individual
+        2.5-DIP rectangles are no longer distinguishable.  Collapse those
+        onsets into three-pixel pitch-envelope buckets instead of spending a
+        full paint pass on thousands of overdrawn blocks.  Conversion errors
+        and articulation colors remain visible in the collapsed view.
+        """
+
+        normal_rects: list[QRectF] = []
+        articulation_markers: dict[str, list[QRectF]] = {}
+        invalid_rects: list[QRectF] = []
+        note_count = max(0, note_hi - note_lo)
+        detail_limit = max(320, int(region.width() / 2.0))
+        use_overview = note_count > detail_limit
+
+        if use_overview:
+            conversion_problem_mask = self._conversion_problem_mask(track)
+            overview_bins = self._visible_note_overview_bins(
+                track,
+                visible_start,
+                visible_duration,
+                region.width(),
+            )
+            if self._viewport_motion_active and len(overview_bins) > 1:
+                overview_bins = tuple(
+                    _TimelineNoteOverviewBin(
+                        start=min(value.start for value in pair),
+                        end=max(value.end for value in pair),
+                        pitch_min=min(value.pitch_min for value in pair),
+                        pitch_max=max(value.pitch_max for value in pair),
+                        pitch_mask=pair[0].pitch_mask
+                        | (pair[1].pitch_mask if len(pair) > 1 else 0),
+                        articulation_type=pair[0].articulation_type
+                        or (
+                            pair[1].articulation_type
+                            if len(pair) > 1
+                            else 0
+                        ),
+                    )
+                    for index in range(0, len(overview_bins), 2)
+                    for pair in (overview_bins[index:index + 2],)
+                )
+            for summary in overview_bins:
+                x = region.left() + (
+                    (summary.start - visible_start) / visible_duration
+                ) * region.width()
+                width = max(
+                    2.5,
+                    (summary.end - summary.start)
+                    / visible_duration
+                    * region.width(),
+                )
+                high_position = (summary.pitch_max - pitch_min) / pitch_span
+                low_position = (summary.pitch_min - pitch_min) / pitch_span
+                top = (
+                    region.top()
+                    + 6
+                    + (1.0 - high_position) * (region.height() - 14)
+                )
+                bottom = (
+                    region.top()
+                    + 6
+                    + (1.0 - low_position) * (region.height() - 14)
+                    + 5.0
+                )
+                rect = QRectF(x, top, width, max(5.0, bottom - top))
+                if summary.pitch_mask & conversion_problem_mask:
+                    invalid_rects.append(rect)
+                    continue
+                normal_rects.append(rect)
+                if summary.articulation_type != 0:
+                    marker_color = articulation_color(summary.articulation_type)
+                    articulation_markers.setdefault(marker_color, []).append(
+                        QRectF(
+                            rect.left(),
+                            rect.top(),
+                            min(2.0, rect.width()),
+                            rect.height(),
+                        )
+                    )
+            return normal_rects, articulation_markers, invalid_rects
+
+        for note_index in range(note_lo, note_hi):
+            note = ordered[note_index]
+            scaled_dur = float(note.dur) * float(track.duration_scale)
+            note_end = float(note.start) + scaled_dur
+            if note_end < visible_start or float(note.start) > visible_start + visible_duration:
+                continue
+            x = region.left() + (
+                (float(note.start) - visible_start) / visible_duration
+            ) * region.width()
+            width = max(
+                2.5,
+                (scaled_dur / visible_duration) * region.width(),
+            )
+            pitch_pos = (int(note.pitch) - pitch_min) / pitch_span
+            note_y = (
+                region.top()
+                + 6
+                + (1.0 - pitch_pos) * (region.height() - 14)
+            )
+            has_problem = self._note_has_conversion_problem(track, note.pitch)
+            ntype = int(getattr(note, "ntype", 0))
+
+            note_rect = QRectF(x, note_y, width, 5.0)
+            if has_problem:
+                invalid_rects.append(note_rect)
+            else:
+                normal_rects.append(note_rect)
+                if ntype != 0:
+                    marker = QRectF(
+                        note_rect.left(),
+                        note_rect.top(),
+                        min(2.0, note_rect.width()),
+                        note_rect.height(),
+                    )
+                    articulation_markers.setdefault(
+                        articulation_color(ntype), []
+                    ).append(marker)
+        return normal_rects, articulation_markers, invalid_rects
 
     @staticmethod
     def _volume_label_width(font_metrics, label: str) -> float:
@@ -1299,6 +1658,8 @@ class TimelineCanvas(QWidget):
         visible_start: float,
         visible_duration: float,
         visible_end: float,
+        *,
+        paint_position: bool = True,
     ) -> None:
         controller = self.reference_audio
         if controller is None:
@@ -1424,14 +1785,13 @@ class TimelineCanvas(QWidget):
             placeholder = tr("正在分析波形…") if controller.waveform_loading else tr("载入 MP3/WAV 后显示波形")
             painter.drawText(waveform_rect, Qt.AlignCenter, placeholder)
 
-        position = controller.project_position_ms
-        if controller.audio_path and visible_start <= position <= visible_end:
-            position_x = waveform_rect.left() + (
-                (position - visible_start) / visible_duration
-            ) * waveform_rect.width()
-            painter.fillRect(
-                QRectF(position_x, waveform_rect.top(), 1.5, waveform_rect.height()),
-                QColor("#f4e3bd"),
+        if paint_position:
+            self._paint_reference_audio_position(
+                painter,
+                waveform_rect,
+                visible_start,
+                visible_duration,
+                visible_end,
             )
 
     def _paint_ruler_overlay(
@@ -1482,13 +1842,313 @@ class TimelineCanvas(QWidget):
         painter.drawLine(grid_left, top, grid_left, grid_top + grid_h)
         painter.drawLine(left, grid_top, grid_left + grid_w, grid_top)
 
+    def _paint_track_meter(
+        self,
+        painter: QPainter,
+        track: TrackState,
+        meter_left: float,
+        row_y: float,
+        lane_h: int,
+        active: bool,
+    ) -> None:
+        meter_level = (
+            self.track_levels.get(int(track.track_id), 0.0) if active else 0.0
+        )
+        meter_rect = QRectF(meter_left, row_y + 8, 7, lane_h - 16)
+        segment_count = 10
+        segment_gap = 1.0
+        segment_height = (
+            meter_rect.height() - segment_gap * (segment_count - 1)
+        ) / segment_count
+        lit_segments = min(
+            segment_count,
+            math.ceil(meter_level * segment_count),
+        )
+        painter.setPen(Qt.NoPen)
+        for segment in range(segment_count):
+            segment_y = (
+                meter_rect.bottom()
+                - (segment + 1) * segment_height
+                - segment * segment_gap
+            )
+            if segment < lit_segments:
+                color = (
+                    "#d05c4f"
+                    if segment >= 9
+                    else "#caa24f"
+                    if segment >= 7
+                    else "#83a543"
+                )
+            else:
+                color = "#343438"
+            painter.fillRect(
+                QRectF(
+                    meter_rect.left(),
+                    segment_y,
+                    meter_rect.width(),
+                    segment_height,
+                ),
+                QColor(color),
+            )
+
+    def _paint_reference_audio_position(
+        self,
+        painter: QPainter,
+        waveform_rect: QRectF,
+        visible_start: float,
+        visible_duration: float,
+        visible_end: float,
+    ) -> None:
+        controller = self.reference_audio
+        if controller is None or not controller.audio_path:
+            return
+        position = float(controller.project_position_ms)
+        if not visible_start <= position <= visible_end:
+            return
+        position_x = waveform_rect.left() + (
+            (position - visible_start) / visible_duration
+        ) * waveform_rect.width()
+        painter.fillRect(
+            QRectF(
+                position_x,
+                waveform_rect.top(),
+                1.5,
+                waveform_rect.height(),
+            ),
+            QColor("#f4e3bd"),
+        )
+
+    def _static_timeline_key(
+        self,
+        *,
+        grid_h: float,
+        visible_start: float,
+        visible_duration: float,
+    ) -> tuple[object, ...]:
+        instrument_grid_h = max(
+            0.0,
+            grid_h - self._reference_audio_lane_height(),
+        )
+        first_row, last_row = self._visible_track_row_range(instrument_grid_h)
+        visible_tracks: list[tuple[object, ...]] = []
+        for track in self.tracks[first_row:last_row]:
+            index = self._track_note_indexes.get(id(track))
+            notice = self._track_validation_notice(track)
+            visible_tracks.append(
+                (
+                    id(track),
+                    id(index.intervals) if index is not None else 0,
+                    int(track.track_id),
+                    str(track.display_name),
+                    int(track.bdo_instrument_id),
+                    bool(track.muted),
+                    bool(track.solo),
+                    float(track.duration_scale),
+                    str(track.marnian_synth_mode),
+                    str(track.color),
+                    int(track.bdo_track_volume),
+                    tuple(notice["errors"]),
+                    tuple(notice["attentions"]),
+                    _ui_bdo_instrument_name(track.bdo_instrument_id),
+                )
+            )
+        controller = self.reference_audio
+        waveform = getattr(controller, "waveform", ()) if controller else ()
+        reference_key = (
+            id(controller),
+            str(getattr(controller, "audio_path", "") or ""),
+            str(getattr(controller, "display_name", "") or ""),
+            int(getattr(controller, "volume_percent", 0) or 0),
+            bool(getattr(controller, "waveform_loading", False)),
+            id(waveform),
+            len(waveform) if waveform is not None else 0,
+            round(float(getattr(controller, "project_end_ms", 0.0) or 0.0), 3),
+        )
+        return (
+            self.width(),
+            self.height(),
+            round(float(self.devicePixelRatioF()), 3),
+            round(float(visible_start), 3),
+            round(float(visible_duration), 3),
+            round(float(grid_h), 3),
+            int(self.track_scroll.value()),
+            bool(self._viewport_motion_active),
+            bool(self.track_scroll.isVisible()),
+            int(self.bpm),
+            int(self.time_sig),
+            round(float(self.beat_origin_ms), 3),
+            id(self.selected_track),
+            bool(self.hasFocus()),
+            self.pitch_transform_plan,
+            tuple(visible_tracks),
+            reference_key,
+            tr("轨道"),
+            tr("音量"),
+        )
+
+    def _render_static_timeline(
+        self,
+        *,
+        area: QRectF,
+        header_w: int,
+        ruler_h: int,
+        lane_h: int,
+        grid_w: float,
+        grid_h: float,
+        visible_start: float,
+        visible_duration: float,
+        visible_end: float,
+    ) -> None:
+        ratio = max(1.0, float(self.devicePixelRatioF()))
+        pixel_size = QSize(
+            max(1, round(self.width() * ratio)),
+            max(1, round(self.height() * ratio)),
+        )
+        cache = QPixmap(pixel_size)
+        cache.setDevicePixelRatio(ratio)
+        cache.fill(Qt.transparent)
+        painter = QPainter(cache)
+        try:
+            self.hit_regions = []
+            self._paint_canvas_background(painter)
+            left, top, grid_left, grid_top = self._paint_timeline_shell(
+                painter,
+                area,
+                header_w,
+                ruler_h,
+                grid_w,
+                grid_h,
+            )
+            self.grid_rect = QRectF(
+                grid_left,
+                top,
+                grid_w,
+                grid_h + ruler_h,
+            )
+            bars = self._paint_grid_ruler(
+                painter,
+                left,
+                top,
+                grid_left,
+                grid_top,
+                grid_w,
+                grid_h,
+                visible_start,
+                visible_duration,
+            )
+            self._paint_track_rows(
+                painter,
+                left,
+                grid_left,
+                grid_top,
+                header_w,
+                grid_w,
+                grid_h,
+                lane_h,
+                visible_start,
+                visible_duration,
+                visible_end,
+                paint_meters=False,
+                paint_selected_velocity=False,
+                paint_reference_position=False,
+            )
+            self._paint_ruler_overlay(
+                painter,
+                area,
+                left,
+                top,
+                grid_left,
+                grid_top,
+                grid_w,
+                grid_h,
+                ruler_h,
+                bars,
+                visible_start,
+                visible_duration,
+                None,
+            )
+        finally:
+            painter.end()
+        self._static_timeline_cache = cache
+        self._static_timeline_hit_regions = list(self.hit_regions)
+
+    def _paint_dynamic_track_overlays(
+        self,
+        painter: QPainter,
+        *,
+        left: float,
+        grid_left: float,
+        grid_top: float,
+        header_w: int,
+        grid_w: float,
+        grid_h: float,
+        lane_h: int,
+        visible_start: float,
+        visible_duration: float,
+        visible_end: float,
+    ) -> None:
+        any_solo = any(track.solo for track in self.tracks)
+        scroll_y = self.track_scroll.value() if self.track_scroll.isVisible() else 0
+        instrument_grid_h = max(
+            0.0,
+            grid_h - self._reference_audio_lane_height(),
+        )
+        first_row, last_row = self._visible_track_row_range(instrument_grid_h)
+        painter.save()
+        painter.setClipRect(
+            QRectF(left, grid_top, header_w + grid_w, instrument_grid_h)
+        )
+        for row in range(first_row, last_row):
+            track = self.tracks[row]
+            y = grid_top + row * lane_h - scroll_y
+            active = not track.muted and (not any_solo or track.solo)
+            self._paint_track_meter(
+                painter,
+                track,
+                left + header_w - 14,
+                y,
+                lane_h,
+                active,
+            )
+            if track is self.selected_track:
+                region_rect = QRectF(
+                    grid_left,
+                    y + 9,
+                    grid_w,
+                    lane_h - 18,
+                )
+                self.velocity_curve_overlay.paint_selected_track(
+                    painter,
+                    track,
+                    region_rect,
+                    visible_start,
+                    visible_duration,
+                    self.time_range,
+                )
+        painter.restore()
+        controller = self.reference_audio
+        if controller is not None:
+            reference_h = self._reference_audio_lane_height()
+            y = grid_top + grid_h - reference_h
+            waveform_rect = QRectF(
+                grid_left,
+                y + 5,
+                grid_w,
+                max(12, reference_h - 10),
+            )
+            self._paint_reference_audio_position(
+                painter,
+                waveform_rect,
+                visible_start,
+                visible_duration,
+                visible_end,
+            )
+
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
-        self._paint_canvas_background(painter)
-        self.hit_regions = []
-
         area, header_w, ruler_h, lane_h = self._timeline_layout_metrics()
         if self._timeline_row_count() <= 0:
+            self._paint_canvas_background(painter)
             painter.setPen(QColor("#8d8780"))
             painter.drawText(
                 area,
@@ -1503,20 +2163,50 @@ class TimelineCanvas(QWidget):
         scrollbar_w = 14 if self.track_scroll.isVisible() else 0
         grid_w = max(120, area.width() - header_w - scrollbar_w)
         grid_h = max(80, area.bottom() - (area.top() + ruler_h))
-        left, top, grid_left, grid_top = self._paint_timeline_shell(
-            painter, area, header_w, ruler_h, grid_w, grid_h
+        left = area.left()
+        top = area.top()
+        grid_left = left + header_w
+        grid_top = top + ruler_h
+        cache_key = self._static_timeline_key(
+            grid_h=grid_h,
+            visible_start=visible_start,
+            visible_duration=visible_duration,
         )
-        self.grid_rect = QRectF(grid_left, top, grid_w, grid_h + ruler_h)
-        bars = self._paint_grid_ruler(
-            painter, left, top, grid_left, grid_top, grid_w, grid_h, visible_start, visible_duration
+        if (
+            cache_key != self._static_timeline_cache_key
+            or self._static_timeline_cache.isNull()
+        ):
+            self._render_static_timeline(
+                area=area,
+                header_w=header_w,
+                ruler_h=ruler_h,
+                lane_h=lane_h,
+                grid_w=grid_w,
+                grid_h=grid_h,
+                visible_start=visible_start,
+                visible_duration=visible_duration,
+                visible_end=visible_end,
+            )
+            self._static_timeline_cache_key = cache_key
+        painter.drawPixmap(0, 0, self._static_timeline_cache)
+        self.hit_regions = list(self._static_timeline_hit_regions)
+        self.velocity_curve_overlay.begin_frame()
+        self._paint_dynamic_track_overlays(
+            painter,
+            left=left,
+            grid_left=grid_left,
+            grid_top=grid_top,
+            header_w=header_w,
+            grid_w=grid_w,
+            grid_h=grid_h,
+            lane_h=lane_h,
+            visible_start=visible_start,
+            visible_duration=visible_duration,
+            visible_end=visible_end,
         )
-        play_x = self._paint_playhead(
+        self._paint_playhead(
             painter, top, grid_left, grid_top, grid_w, grid_h,
             visible_start, visible_duration, visible_end, grid_h
-        )
-        self._paint_track_rows(
-            painter, left, grid_left, grid_top, header_w, grid_w, grid_h,
-            lane_h, visible_start, visible_duration, visible_end
         )
         self._paint_time_range(
             painter,
@@ -1529,10 +2219,6 @@ class TimelineCanvas(QWidget):
             visible_duration,
             visible_end,
         )
-        self._paint_ruler_overlay(
-            painter, area, left, top, grid_left, grid_top, grid_w, grid_h,
-            ruler_h, bars, visible_start, visible_duration, play_x
-        )
         if self.buffer_visible:
             buffer_y = grid_top - 3
             painter.fillRect(QRectF(grid_left, buffer_y, grid_w, 3), QColor("#30383a"))
@@ -1541,16 +2227,28 @@ class TimelineCanvas(QWidget):
                     QRectF(grid_left, buffer_y, grid_w * self.buffer_progress, 3),
                     QColor("#55b8ad"),
                 )
-
     def mousePressEvent(self, event) -> None:
         pos = event.position()
         self.setFocus(Qt.MouseFocusReason)
+        if self.velocity_curve_overlay.mouse_press(pos, event.button()):
+            return
         if event.button() == Qt.RightButton:
             for rect, _action, track in reversed(self.hit_regions):
                 if rect.contains(pos) and isinstance(track, TrackState):
                     self._select_track(track, emit=True)
                     self._show_instrument_menu(track, event.globalPosition().toPoint())
                     return
+            # The reference-audio lane is a separate transport layer, not a
+            # musical track. Its header must not offer track creation.
+            if any(
+                rect.contains(pos) and track is self.reference_audio
+                for rect, _action, track in self.hit_regions
+            ):
+                return
+            area, header_w, _ruler_h, _lane_h = self._timeline_layout_metrics()
+            if pos.x() < area.left() + header_w:
+                self._show_create_track_menu(event.globalPosition().toPoint())
+                return
             super().mousePressEvent(event)
             return
         for rect, action, track in reversed(self.hit_regions):
@@ -1582,6 +2280,7 @@ class TimelineCanvas(QWidget):
                 if not isinstance(track, TrackState):
                     continue
                 if action == "lane":
+                    self._select_track(track, emit=True)
                     continue
                 self._select_track(track, emit=True)
                 if action in {"validation_error", "validation_attention"}:
@@ -1657,9 +2356,15 @@ class TimelineCanvas(QWidget):
     def _show_instrument_menu(self, track: TrackState, global_pos) -> None:
         menu = QMenu(self)
         edit_notes_action = menu.addAction(tr("编辑音符…"))
+        create_track_action = menu.addAction(tr("新建轨道"))
         pitch_action = menu.addAction(tr("轨道八度…"))
         pitch_action.setEnabled(
             not track_uses_percussion_pitch_semantics(track)
+        )
+        menu.addSeparator()
+        move_up_action, move_down_action = self._add_track_move_actions(
+            menu,
+            track,
         )
         menu.addSeparator()
         optimize_action = menu.addAction(tr("优化此轨道"))
@@ -1678,8 +2383,13 @@ class TimelineCanvas(QWidget):
         if selected is edit_notes_action:
             self.note_editor_requested.emit(track)
             return
+        if selected is create_track_action:
+            self._show_create_track_menu(global_pos)
+            return
         if selected is pitch_action:
             self.pitch_requested.emit(track)
+            return
+        if selected in {move_up_action, move_down_action}:
             return
         if selected is optimize_action:
             self.midi_tools_requested.emit(track)
@@ -1695,7 +2405,44 @@ class TimelineCanvas(QWidget):
         self.instrument_changed.emit(track, previous_instrument_id)
         self.update()
 
+    def _add_track_move_actions(
+        self,
+        menu: QMenu,
+        track: TrackState,
+    ) -> tuple[QAction, QAction]:
+        move_up_action = menu.addAction(tr("上移轨道"))
+        move_down_action = menu.addAction(tr("下移轨道"))
+        try:
+            track_index = self.tracks.index(track)
+        except ValueError:
+            track_index = -1
+        move_up_action.setEnabled(track_index > 0)
+        move_down_action.setEnabled(
+            0 <= track_index < len(self.tracks) - 1
+        )
+        move_up_action.triggered.connect(
+            lambda _checked=False: self.move_track_requested.emit(track, -1)
+        )
+        move_down_action.triggered.connect(
+            lambda _checked=False: self.move_track_requested.emit(track, 1)
+        )
+        return move_up_action, move_down_action
+
+    def _show_create_track_menu(self, global_pos) -> None:
+        """Choose an instrument for a new musical lane from the left rail."""
+
+        menu = QMenu(self)
+        title = menu.addAction(tr("选择新轨道的 BDO 乐器"))
+        title.setEnabled(False)
+        menu.addSeparator()
+        add_instrument_submenus(menu, -1, _ui_bdo_instrument_names())
+        selected = menu.exec(global_pos)
+        if selected is not None and selected.data() is not None:
+            self.create_track_requested.emit(int(selected.data()))
+
     def mouseDoubleClickEvent(self, event) -> None:
+        if self.velocity_curve_overlay.active:
+            return
         if event.button() == Qt.LeftButton:
             for rect, action, track in reversed(self.hit_regions):
                 if track is self.reference_audio and rect.contains(event.position()):
@@ -1716,6 +2463,8 @@ class TimelineCanvas(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
+        if self.velocity_curve_overlay.mouse_move(pos):
+            return
         if self._volume_drag_track is not None:
             self._set_track_volume_from_position(
                 self._volume_drag_track,
@@ -1791,6 +2540,8 @@ class TimelineCanvas(QWidget):
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if self.velocity_curve_overlay.mouse_release(event.button()):
+            return
         if self._volume_drag_track is not None:
             track = self._volume_drag_track
             previous_volume = int(self._volume_drag_initial)
@@ -1845,6 +2596,8 @@ class TimelineCanvas(QWidget):
         self.changed.emit()
 
     def keyPressEvent(self, event) -> None:
+        if self.velocity_curve_overlay.key_press(event):
+            return
         key = event.key()
         modifiers = event.modifiers()
         navigation_keys = {

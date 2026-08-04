@@ -246,6 +246,7 @@ EDITOR_GESTURE_SPECS = (
     EditorGestureSpec("Shift+滚轮", "横向滚动时间", "鼠标与视图"),
     EditorGestureSpec("Ctrl+滚轮", "缩放时间", "鼠标与视图"),
     EditorGestureSpec("Alt+滚轮", "调整音块高度", "鼠标与视图"),
+    EditorGestureSpec("触控板双指滑动", "平移时间与音高", "鼠标与视图"),
 )
 
 

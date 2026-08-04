@@ -102,9 +102,11 @@ class TranscriptionRhythmDiagnosticMixin:
         if self.transcription_rhythm_runner.busy:
             return
         self.transcription_rhythm_sidecar = None
+        editor = self.active_transcription_editor
+        panel = getattr(editor, "transcription_panel", None)
         profile = str(
             getattr(
-                editor.transcription_panel,
+                panel,
                 "rhythm_alignment_profile",
                 "auto",
             )
@@ -137,6 +139,13 @@ class TranscriptionRhythmDiagnosticMixin:
             candidates=tuple(self.transcription_session.candidates),
             grid=grid,
         ):
+            return
+        consume_follow = getattr(
+            self,
+            "_consume_reference_bpm_follow_result",
+            None,
+        )
+        if callable(consume_follow) and consume_follow(sidecar):
             return
         self.transcription_rhythm_sidecar = sidecar
         merge_count = sum(
@@ -174,6 +183,9 @@ class TranscriptionRhythmDiagnosticMixin:
         )
 
     def _transcription_rhythm_diagnostic_failed(self, message: str) -> None:
+        stopped = getattr(self, "_reference_bpm_follow_stopped", None)
+        if callable(stopped):
+            stopped()
         self.transcription_rhythm_sidecar = None
         self._set_transcription_status(
             trf(
@@ -183,6 +195,9 @@ class TranscriptionRhythmDiagnosticMixin:
         )
 
     def _transcription_rhythm_diagnostic_cancelled(self) -> None:
+        stopped = getattr(self, "_reference_bpm_follow_stopped", None)
+        if callable(stopped):
+            stopped()
         self.transcription_rhythm_sidecar = None
         self._set_transcription_status(
             tr("节奏诊断已取消；没有修改任何音符。")

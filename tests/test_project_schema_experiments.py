@@ -10,6 +10,7 @@ from bdo_music_composer.research.bdo_experiments import AbExperimentRecord, read
 from bdo_music_composer.project.project_schema import (
     CURRENT_PROJECT_SCHEMA,
     DEFAULT_REFERENCE_LAYER_SETTINGS,
+    REFERENCE_LAYER_SETTINGS_VERSION,
     migrate_project,
     normalize_reference_layer_settings,
     project_relative_file_reference,
@@ -217,6 +218,21 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
             52,
         )
         self.assertEqual(
+            DEFAULT_REFERENCE_LAYER_SETTINGS["contour_opacity_percent"],
+            82,
+        )
+        self.assertFalse(
+            DEFAULT_REFERENCE_LAYER_SETTINGS["melody_guidance_enabled"]
+        )
+        self.assertTrue(
+            DEFAULT_REFERENCE_LAYER_SETTINGS["timbre_grouping_enabled"]
+        )
+        self.assertFalse(
+            DEFAULT_REFERENCE_LAYER_SETTINGS[
+                "external_instrument_labels_enabled"
+            ]
+        )
+        self.assertEqual(
             normalize_reference_layer_settings(None),
             DEFAULT_REFERENCE_LAYER_SETTINGS,
         )
@@ -237,6 +253,23 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
         self.assertEqual(normalized["background_opacity_percent"], 0)
         self.assertTrue(normalized["frame_visible"])
 
+    def test_v8_contour_opacity_migrates_from_effective_background(self) -> None:
+        migrated = normalize_reference_layer_settings(
+            {"version": 8, "background_opacity_percent": 37}
+        )
+        explicit = normalize_reference_layer_settings(
+            {
+                "version": 8,
+                "background_opacity_percent": 37,
+                "contour_opacity_percent": 74,
+                "melody_guidance_enabled": True,
+            }
+        )
+
+        self.assertEqual(migrated["contour_opacity_percent"], 37)
+        self.assertEqual(explicit["contour_opacity_percent"], 74)
+        self.assertTrue(explicit["melody_guidance_enabled"])
+
     def test_old_default_ghost_opacity_migrates_without_overwriting_custom_value(self) -> None:
         migrated_default = normalize_reference_layer_settings(
             {"version": 1, "ghost_opacity_percent": 70}
@@ -245,7 +278,10 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
             {"version": 1, "ghost_opacity_percent": 58}
         )
 
-        self.assertEqual(migrated_default["version"], 7)
+        self.assertEqual(
+            migrated_default["version"],
+            REFERENCE_LAYER_SETTINGS_VERSION,
+        )
         self.assertEqual(migrated_default["ghost_opacity_percent"], 30)
         self.assertEqual(preserved_custom["ghost_opacity_percent"], 58)
 
@@ -265,7 +301,10 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(migrated_defaults["version"], 7)
+        self.assertEqual(
+            migrated_defaults["version"],
+            REFERENCE_LAYER_SETTINGS_VERSION,
+        )
         self.assertEqual(migrated_defaults["ghost_opacity_percent"], 30)
         self.assertEqual(migrated_defaults["background_opacity_percent"], 45)
         self.assertEqual(preserved_custom["ghost_opacity_percent"], 31)

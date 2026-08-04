@@ -25,7 +25,7 @@ from bdo_music_composer.transcription.rhythm_grid import (
 )
 
 
-RHYTHM_ALIGNMENT_VERSION = "rhythm-alignment-v1"
+RHYTHM_ALIGNMENT_VERSION = "rhythm-alignment-v2-source-clock"
 RhythmAlignmentProfile = Literal["raw", "auto", "strict_1_64"]
 CancelCallback = Callable[[], bool]
 
@@ -532,6 +532,45 @@ def _choose_step(beat: float, beat_ms: float, config: RhythmAlignmentConfig) -> 
     return _AUTO_STEPS[-1]
 
 
+def _segment_for_time(grid: RhythmGrid, time_ms: float) -> RhythmTempoSegment:
+    selected = grid.tempo_segments[0]
+    for segment in grid.tempo_segments:
+        if time_ms < segment.start_ms:
+            break
+        selected = segment
+        if segment.end_ms is None or time_ms < segment.end_ms:
+            break
+    return selected
+
+
+def _audio_time_for_beat(
+    grid: RhythmGrid,
+    beat: float,
+    *,
+    near_time_ms: float,
+) -> float:
+    """Invert a local beat coordinate without changing the source clock."""
+
+    segment = _segment_for_time(grid, near_time_ms)
+    return segment.start_ms + (
+        (float(beat) - segment.beat_at_start)
+        * 60_000.0
+        / segment.bpm
+    )
+
+
+def _bounded_boundary(
+    projected_ms: float,
+    raw_ms: float,
+    maximum_shift_ms: float,
+) -> float:
+    maximum = max(0.0, float(maximum_shift_ms))
+    return max(
+        float(raw_ms) - maximum,
+        min(float(raw_ms) + maximum, float(projected_ms)),
+    )
+
+
 def analyse_rhythm_alignment(
     *,
     evidence_cache_key: str,
@@ -557,7 +596,6 @@ def analyse_rhythm_alignment(
         onset_evidence=onset,
         cancelled=cancelled,
     )
-    target_beat_ms = 60_000.0 / settings.bpm
     source_beat_ms = 60_000.0 / estimate.detected_bpm
     projections: list[RhythmTimingProjection] = []
     candidate_pitch = {
@@ -595,15 +633,44 @@ def analyse_rhythm_alignment(
             snapped_end_beat = round(end_beat / step) * step
             if snapped_end_beat <= snapped_start_beat:
                 snapped_end_beat = snapped_start_beat + step
-            projected_start = settings.beat_origin_audio_ms + snapped_start_beat * target_beat_ms
-            projected_end = settings.beat_origin_audio_ms + snapped_end_beat * target_beat_ms
-            projected_start = max(0.0, projected_start)
-            projected_duration = max(target_beat_ms / 64.0, projected_end - projected_start)
+            # Candidates, evidence, waveform samples and the reference player
+            # all use decoded source-audio milliseconds.  Never convert the
+            # detected beat number through the project BPM here: doing so
+            # time-stretches the whole song and creates error that grows with
+            # elapsed time.  A project-tempo fit must be a separate explicit
+            # edit, not a display projection.
+            projected_start = _audio_time_for_beat(
+                estimate.grid,
+                snapped_start_beat,
+                near_time_ms=refined_start,
+            )
+            projected_end = _audio_time_for_beat(
+                estimate.grid,
+                snapped_end_beat,
+                near_time_ms=raw_start + raw_duration,
+            )
+            projected_start = max(
+                0.0,
+                _bounded_boundary(
+                    projected_start,
+                    raw_start,
+                    config.maximum_local_shift_ms,
+                ),
+            )
+            projected_end = _bounded_boundary(
+                projected_end,
+                raw_start + raw_duration,
+                config.maximum_local_shift_ms,
+            )
+            if projected_end <= projected_start:
+                projected_start = raw_start
+                projected_end = raw_start + raw_duration
+            projected_duration = projected_end - projected_start
             reasons = (
                 "onset_peak_refined" if not math.isclose(refined_start, raw_start, abs_tol=1e-6) else "raw_onset",
                 "strict_1_64" if config.profile == "strict_1_64" else "adaptive_grid",
                 "triplet_grid" if triplet else "straight_grid",
-                "project_tempo_projection" if not math.isclose(estimate.detected_bpm, settings.bpm, rel_tol=0.01) else "project_grid",
+                "source_audio_grid",
             )
         projections.append(
             RhythmTimingProjection(
@@ -645,6 +712,10 @@ def analyse_rhythm_alignment(
                     == candidate_pitch.get(anchor.candidate_id)
                 ):
                     continue
+                if abs(anchor.start_ms - item.raw_start_ms) > (
+                    config.maximum_local_shift_ms + 1e-9
+                ):
+                    continue
                 projections[member] = replace(
                     item,
                     start_ms=anchor.start_ms,
@@ -663,21 +734,39 @@ def analyse_rhythm_alignment(
         for left, right in zip(pitch_indices, pitch_indices[1:]):
             previous = projections[left]
             following = projections[right]
+            if config.profile == "raw":
+                continue
             if following.start_ms <= previous.start_ms:
-                shifted_start = previous.start_ms + target_beat_ms / 16.0
-                following = replace(
-                    following,
-                    start_ms=shifted_start,
-                    shift_ms=shifted_start - following.raw_start_ms,
-                    reason_codes=tuple(
-                        dict.fromkeys(
-                            (*following.reason_codes, "same_pitch_collision_shifted")
-                        )
-                    ),
+                local_bpm = rhythm_position_at(
+                    estimate.grid,
+                    following.raw_start_ms,
+                ).bpm
+                shifted_start = (
+                    previous.start_ms + 60_000.0 / local_bpm / 16.0
                 )
-                projections[right] = following
+                if abs(shifted_start - following.raw_start_ms) <= (
+                    config.maximum_local_shift_ms + 1e-9
+                ):
+                    following = replace(
+                        following,
+                        start_ms=shifted_start,
+                        shift_ms=shifted_start - following.raw_start_ms,
+                        reason_codes=tuple(
+                            dict.fromkeys(
+                                (*following.reason_codes, "same_pitch_collision_shifted")
+                            )
+                        ),
+                    )
+                    projections[right] = following
             maximum_duration = following.start_ms - previous.start_ms
-            if maximum_duration > 0.0 and previous.duration_ms > maximum_duration:
+            capped_end = previous.start_ms + maximum_duration
+            raw_end = previous.raw_start_ms + previous.raw_duration_ms
+            if (
+                maximum_duration > 0.0
+                and previous.duration_ms > maximum_duration
+                and abs(capped_end - raw_end)
+                <= config.maximum_local_shift_ms + 1e-9
+            ):
                 projections[left] = replace(
                     previous,
                     duration_ms=maximum_duration,
@@ -691,7 +780,17 @@ def analyse_rhythm_alignment(
         estimate=estimate,
         config=config,
     )
-    shifts = [abs(item.shift_ms) for item in projections]
+    shifts = [
+        boundary_shift
+        for item in projections
+        for boundary_shift in (
+            abs(item.start_ms - item.raw_start_ms),
+            abs(
+                (item.start_ms + item.duration_ms)
+                - (item.raw_start_ms + item.raw_duration_ms)
+            ),
+        )
+    ]
     aligned_count = sum(
         not math.isclose(item.start_ms, item.raw_start_ms, abs_tol=1e-6)
         or not math.isclose(item.duration_ms, item.raw_duration_ms, abs_tol=1e-6)

@@ -7,9 +7,16 @@ import numpy as np
 
 from bdo_music_composer.audio.bdo_preview_effects import (
     MAX_EFFECT_TAIL_SECONDS,
+    PREVIEW_CHORUS_MAX_FREQUENCY_HZ,
+    PREVIEW_CHORUS_MIN_FREQUENCY_HZ,
+    PREVIEW_DELAY_AUDIBLE_GAIN,
+    PREVIEW_DELAY_MAX_REPEATS,
+    PREVIEW_DELAY_MIN_REPEATS,
     PREVIEW_DELAY_SECONDS,
     PreviewEffectProcessor,
     PreviewEffectSettings,
+    preview_chorus_frequency_hz,
+    preview_delay_repeat_count,
     preview_send_gain,
 )
 
@@ -53,6 +60,63 @@ class PreviewEffectProcessorTests(unittest.TestCase):
         self.assertLessEqual(
             processor.tail_frames(),
             round(rate * MAX_EFFECT_TAIL_SECONDS),
+        )
+
+    def test_delay_feedback_matches_documented_two_to_twenty_echo_endpoints(
+        self,
+    ) -> None:
+        rate = 8_000
+        interval = round(rate * PREVIEW_DELAY_SECONDS)
+        self.assertEqual(preview_delay_repeat_count(0), PREVIEW_DELAY_MIN_REPEATS)
+        self.assertEqual(
+            preview_delay_repeat_count(100),
+            PREVIEW_DELAY_MAX_REPEATS,
+        )
+
+        for value, repeats in (
+            (0, PREVIEW_DELAY_MIN_REPEATS),
+            (100, PREVIEW_DELAY_MAX_REPEATS),
+        ):
+            processor = PreviewEffectProcessor(rate)
+            processor.configure(
+                PreviewEffectSettings(delay_feedback=value),
+                reverb_send=False,
+                delay_send=True,
+                chorus_send=False,
+            )
+            frames = interval * (repeats + 1) + 1
+            source = np.zeros((frames, 2), dtype=np.float32)
+            source[0] = 1.0
+            output = np.zeros_like(source)
+            silent = np.zeros_like(source)
+            processor.process(output, silent, source, silent, frames)
+
+            self.assertGreaterEqual(
+                float(output[interval * repeats, 0]),
+                PREVIEW_DELAY_AUDIBLE_GAIN - 1.0e-6,
+            )
+            self.assertLess(
+                float(output[interval * (repeats + 1), 0]),
+                PREVIEW_DELAY_AUDIBLE_GAIN,
+            )
+            self.assertEqual(
+                processor.tail_frames(),
+                interval * repeats,
+            )
+
+    def test_lfo_frequency_zero_remains_slowly_moving(self) -> None:
+        self.assertAlmostEqual(
+            preview_chorus_frequency_hz(0),
+            PREVIEW_CHORUS_MIN_FREQUENCY_HZ,
+        )
+        self.assertAlmostEqual(
+            preview_chorus_frequency_hz(100),
+            PREVIEW_CHORUS_MAX_FREQUENCY_HZ,
+        )
+        self.assertGreater(preview_chorus_frequency_hz(0), 0.0)
+        self.assertLess(
+            preview_chorus_frequency_hz(0),
+            preview_chorus_frequency_hz(50),
         )
 
     def test_reset_clears_delay_and_modulation_state(self) -> None:

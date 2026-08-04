@@ -84,8 +84,8 @@ class FakeManager:
 def _release_payload() -> bytes:
     return json.dumps(
         {
-            "tag_name": "v1.1.0",
-            "name": "v1.1.0",
+            "tag_name": "v1.2.0",
+            "name": "v1.2.0",
             "body": "notes",
             "draft": False,
             "prerelease": False,

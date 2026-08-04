@@ -8,6 +8,7 @@ from bdo_music_composer.core.conversion_settings import ConversionSettings
 from bdo_midi import (
     MARNIAN_SYNTH_INSTRUMENT_IDS,
     MARNIAN_SYNTH_MODE_OFFSETS,
+    instrument_supports_composer_effects,
 )
 from bdo_common.bdo_track_effects import (
     TRACK_CHORUS_SEND_INDEX,
@@ -46,6 +47,18 @@ class Track:
 
 
 class GameInstrumentIdentityTests(unittest.TestCase):
+    def test_effect_capability_fails_closed_for_beginner_and_unknown_ids(self) -> None:
+        for instrument_id in (0x00, 0x01, 0x02, 0x04, 0x05, 0x06, 0x07, 0x08, 0xFF):
+            with self.subTest(instrument_id=instrument_id):
+                self.assertFalse(
+                    instrument_supports_composer_effects(instrument_id)
+                )
+        for instrument_id in (0x0A, 0x0B, 0x0D, 0x11, 0x14, 0x17, 0x24, 0x28):
+            with self.subTest(instrument_id=instrument_id):
+                self.assertTrue(
+                    instrument_supports_composer_effects(instrument_id)
+                )
+
     def test_marnian_mode_is_part_of_the_serialized_instrument_key(self) -> None:
         expected_ids = {
             "basic": 0x14,

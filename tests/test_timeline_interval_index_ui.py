@@ -32,6 +32,52 @@ class TimelineIntervalIndexUiTests(unittest.TestCase):
             track_index = timeline._track_note_indexes[id(track)]
             assert not isinstance(track_index, tuple)
             assert track_index.intervals.ends[0] == 300_000.0
+            assert track_index.overview_levels == ()
+
+            # Dense visual summaries and velocity traces are view-owned
+            # caches. Project loading must leave them lazy until the track is
+            # actually painted.
+            assert timeline.velocity_curve_overlay._velocity_traces == {}
+            overview = timeline._visible_note_overview_bins(
+                track,
+                290_000.0,
+                1_000.0,
+                800.0,
+            )
+            assert overview
+            assert timeline._track_note_indexes[id(track)].overview_levels
+            assert timeline.velocity_curve_overlay._velocity_traces == {}
+            assert timeline.velocity_curve_overlay.velocity_trace_points(
+                track,
+                290_000.0,
+                291_000.0,
+            )
+            assert id(track) in timeline.velocity_curve_overlay._velocity_traces
+
+            # Reference-audio alignment changes only affect the timeline
+            # boundary. They must not rebuild every note index in the song.
+            from PySide6.QtCore import QObject, Signal
+
+            class Reference(QObject):
+                changed = Signal()
+                timeline_changed = Signal()
+                audio_path = None
+                waveform_loading = False
+                duration_ms = 20_000.0
+                project_end_ms = 320_000.0
+
+            reference = Reference()
+            interval_identity = id(
+                timeline._track_note_indexes[id(track)].intervals
+            )
+            timeline.set_reference_audio(reference)
+            assert timeline._timeline_end_ms() == 320_000.0
+            reference.project_end_ms = 330_000.0
+            reference.timeline_changed.emit()
+            assert timeline._timeline_end_ms() == 330_000.0
+            assert id(
+                timeline._track_note_indexes[id(track)].intervals
+            ) == interval_identity
 
             left = 290_000.0
             right = 291_000.0
@@ -48,6 +94,15 @@ class TimelineIntervalIndexUiTests(unittest.TestCase):
             ]
 
             assert actual == expected
+
+            # A musical-grid change updates the editable tail immediately;
+            # it must not retain the duration calculated for the old BPM.
+            reference.duration_ms = 0.0
+            reference.project_end_ms = 0.0
+            reference.timeline_changed.emit()
+            tail_at_120 = timeline._timeline_end_ms()
+            timeline.set_musical_grid(60, 4, 0.0)
+            assert timeline._timeline_end_ms() > tail_at_120
             assert notes[0] in actual
             assert 1 < len(actual) < 100
             assert (

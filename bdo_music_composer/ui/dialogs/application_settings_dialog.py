@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from bdo_export import BDO_BPM_MAX
 from bdo_music_composer.app.audio_source_settings import (
     classify_audio_source,
     default_game_music_dir,
@@ -254,10 +255,10 @@ class SettingsDialog(QDialog):
         form.addRow(tr("写入角色名"), self.char_name)
 
         self.bpm_override = QSpinBox()
-        self.bpm_override.setRange(0, 240)
+        self.bpm_override.setRange(0, BDO_BPM_MAX)
         self.bpm_override.setSpecialValueText(tr("使用 MIDI"))
         self.bpm_override.setValue(parent.bpm_override or 0)
-        form.addRow(tr("BPM 覆盖"), self.bpm_override)
+        form.addRow(tr("全局 BPM（高级）"), self.bpm_override)
 
         self.transpose = QSpinBox()
         self.transpose.setRange(-48, 48)
@@ -314,17 +315,22 @@ class SettingsDialog(QDialog):
         )
         general_page_layout.addWidget(owner)
         self.owner_id = parent.owner_id
+        self.owner_identity_changed = False
         owner_row = QHBoxLayout()
         self.owner_load_button = PillButton(tr("从游戏曲谱读取"), "secondary")
         self.owner_load_button.setMinimumWidth(124)
         self.owner_load_button.setMaximumWidth(220)
         self.owner_load_button.clicked.connect(self._load_owner_id)
+        self.owner_clear_button = PillButton(tr("解除绑定"), "ghost")
+        self.owner_clear_button.setObjectName("ClearOwnerIdentityButton")
+        self.owner_clear_button.clicked.connect(self._clear_owner_id)
         self.owner_status = QLabel()
         self.owner_status.setObjectName("OwnerStatus")
         self.owner_status.setWordWrap(True)
         self.owner_status.setMinimumWidth(0)
         self.owner_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         owner_row.addWidget(self.owner_load_button, alignment=Qt.AlignTop)
+        owner_row.addWidget(self.owner_clear_button, alignment=Qt.AlignTop)
         owner_row.addWidget(self.owner_status, stretch=1)
         owner_layout.addLayout(owner_row)
         self._refresh_owner_status()
@@ -799,6 +805,7 @@ class SettingsDialog(QDialog):
         super().closeEvent(event)
 
     def _refresh_owner_status(self, error: str = "") -> None:
+        self.owner_clear_button.setEnabled(bool(self.owner_id))
         if error:
             self.owner_status.setText(error)
             self.owner_status.setProperty("ownerError", True)
@@ -840,8 +847,25 @@ class SettingsDialog(QDialog):
             self._refresh_owner_status(trf("读取失败：{error}", error=exc))
             return
         self.owner_id = owner_id
+        self.owner_identity_changed = True
         if char_name:
             self.char_name.setText(char_name)
+        self._refresh_owner_status()
+
+    def _clear_owner_id(self) -> None:
+        if not self.owner_id:
+            return
+        answer = QMessageBox.question(
+            self,
+            tr("解除绑定"),
+            tr("这会清除当前项目和本机配置中的 Owner ID；之后导出前需要重新读取游戏曲谱。"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.owner_id = 0
+        self.owner_identity_changed = True
         self._refresh_owner_status()
 
     def _sync_velocity_controls(self) -> None:

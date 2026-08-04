@@ -72,6 +72,16 @@ MARNIAN_SYNTH_MODE_OFFSETS = {
     "superoct": 3,
 }
 
+# The current game guide exposes the shared Effector/AuxSend authoring path for
+# Florchestra and Marnian instruments.  Beginner instruments still carry the
+# same eight wire bytes and must round-trip losslessly, but those bytes are not
+# evidence that the game authoring UI applies the buses to them.
+BDO_EFFECT_CAPABLE_INSTRUMENT_IDS = frozenset(
+    instrument_id
+    for instrument_id in BDO_INSTRUMENT_NAMES
+    if instrument_id not in {0x00, 0x01, 0x02, 0x04, 0x05, 0x06, 0x07, 0x08}
+)
+
 
 def performance_instrument_id(serialized_id: int) -> int:
     """Map a wire ID to the physical instrument selected by a performer."""
@@ -81,6 +91,21 @@ def performance_instrument_id(serialized_id: int) -> int:
         if base_id <= numeric_id <= base_id + 3:
             return base_id
     return numeric_id
+
+
+def instrument_supports_composer_effects(instrument_id: int) -> bool:
+    """Return whether current game authoring exposes Effector/AuxSend.
+
+    Marnian mode IDs are serialized as base plus ``0..3``; capability belongs
+    to the physical performance instrument, not to an individual sound mode.
+    Unknown and beginner IDs fail closed while their wire settings remain
+    available to the codec for lossless preservation.
+    """
+
+    return (
+        performance_instrument_id(int(instrument_id))
+        in BDO_EFFECT_CAPABLE_INSTRUMENT_IDS
+    )
 
 
 def unique_performance_instrument_ids(instrument_ids) -> tuple[int, ...]:
@@ -221,11 +246,13 @@ def gm_to_bdo_instrument(program: int, is_percussion: bool = False) -> int:
 
 
 __all__ = [
-    "BDO_ENSEMBLE_PLAYER_LIMIT", "BDO_INSTRUMENTS", "BDO_INSTRUMENT_NAMES",
+    "BDO_EFFECT_CAPABLE_INSTRUMENT_IDS", "BDO_ENSEMBLE_PLAYER_LIMIT",
+    "BDO_INSTRUMENTS", "BDO_INSTRUMENT_NAMES",
     "BDO_NOTE_MIN", "BDO_NOTE_MAX", "MARNIAN_SYNTH_INSTRUMENT_IDS",
     "MARNIAN_SYNTH_MODE_OFFSETS",
     "GM_PROGRAM_NAMES",
-    "InstrumentNameTranslator", "localized_bdo_instrument_name",
+    "InstrumentNameTranslator", "instrument_supports_composer_effects",
+    "localized_bdo_instrument_name",
     "localized_bdo_instrument_names", "localized_gm_program_name",
     "DEFAULT_INSTRUMENT", "_GM_TO_BDO_DRUM", "gm_program_name",
     "gm_to_bdo_instrument", "performance_instrument_id",

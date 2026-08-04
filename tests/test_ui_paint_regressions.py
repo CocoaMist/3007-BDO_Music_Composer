@@ -12,6 +12,144 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class UiPaintRegressionTests(unittest.TestCase):
+    def test_timeline_playback_reuses_static_frame_without_note_queries(self) -> None:
+        script = textwrap.dedent(
+            """
+            from PySide6.QtCore import QRectF
+            from PySide6.QtTest import QTest
+            from PySide6.QtWidgets import QApplication
+
+            from bdo_midi import Note
+            from bdo_music_composer.editor.editor_models import TrackState
+            from bdo_music_composer.ui.editor.timeline_canvas import TimelineCanvas
+
+            app = QApplication([])
+            tracks = [
+                TrackState(
+                    track_id,
+                    [
+                        Note(
+                            36 + note_index % 48,
+                            80,
+                            note_index * 37.0,
+                            28.0,
+                            0,
+                        )
+                        for note_index in range(2_000)
+                    ],
+                    0,
+                    False,
+                    f"Track {track_id}",
+                    0x0B,
+                )
+                for track_id in range(12)
+            ]
+            canvas = TimelineCanvas()
+            canvas.resize(1400, 760)
+            canvas.set_tracks(tracks)
+            canvas.show()
+            app.processEvents()
+            assert not canvas._static_timeline_cache.isNull()
+
+            # Dense overview geometry is bounded by display resolution rather
+            # than note count, while the authoritative interval index remains
+            # untouched for editing and export.
+            visible_duration = canvas._visible_duration_ms()
+            ordered, note_lo, note_hi = canvas._visible_track_note_window(
+                tracks[0], 0.0, visible_duration
+            )
+            pitch_min, pitch_max = canvas._track_pitch_bounds(tracks[0])
+            normal, markers, invalid = canvas._timeline_note_rect_batches(
+                tracks[0],
+                QRectF(0.0, 0.0, 1200.0, 48.0),
+                0.0,
+                visible_duration,
+                pitch_min,
+                max(1, pitch_max - pitch_min),
+                ordered,
+                note_lo,
+                note_hi,
+            )
+            assert 0 < len(normal) + len(invalid) <= 256
+            assert not markers
+            trace = canvas.velocity_curve_overlay.velocity_trace_points(
+                tracks[0], 0.0, visible_duration
+            )
+            bounded_trace = canvas.velocity_curve_overlay._bounded_velocity_trace(
+                trace, 0.0, visible_duration, 64
+            )
+            assert len(trace) == 2_000
+            assert 0 < len(bounded_trace) <= 64
+
+            trace_paints = []
+            original_trace_paint = (
+                canvas.velocity_curve_overlay.paint_velocity_trace
+            )
+            def counted_trace_paint(*args, **kwargs):
+                trace_paints.append(1)
+                return original_trace_paint(*args, **kwargs)
+            canvas.velocity_curve_overlay.paint_velocity_trace = counted_trace_paint
+            canvas.set_zoom_percent(400)
+            app.processEvents()
+            assert canvas._viewport_motion_active
+            assert trace_paints == []
+            QTest.qWait(180)
+            app.processEvents()
+            assert not canvas._viewport_motion_active
+            assert trace_paints
+            canvas.velocity_curve_overlay.paint_velocity_trace = original_trace_paint
+
+            queries = []
+            original_query = canvas._visible_track_note_window
+            def counted_query(*args, **kwargs):
+                queries.append(1)
+                return original_query(*args, **kwargs)
+            canvas._visible_track_note_window = counted_query
+
+            for frame in range(30):
+                canvas.set_playhead(frame * 16.0)
+                app.processEvents()
+            assert queries == [], len(queries)
+
+            # Audio meters stay live but are outside the static cache.
+            cache_key = canvas._static_timeline_cache_key
+            canvas.set_track_levels({0: 0.9, 1: 0.5})
+            app.processEvents()
+            assert canvas._static_timeline_cache_key == cache_key
+            assert queries == [], len(queries)
+
+            # A real static visual change rebuilds once, then playback reuses
+            # the new frame again.
+            tracks[0].muted = True
+            canvas.update()
+            app.processEvents()
+            assert queries, "mute change did not invalidate the static frame"
+            queries.clear()
+            for frame in range(30, 60):
+                canvas.set_playhead(frame * 16.0)
+                app.processEvents()
+            assert queries == [], len(queries)
+
+            canvas.close()
+            app.quit()
+            """
+        )
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
     def test_marquee_stays_translucent_and_volume_uses_locale_width(self) -> None:
         script = textwrap.dedent(
             """

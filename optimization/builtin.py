@@ -17,6 +17,7 @@ from bdo_music_composer.editor.bdo_instrument_adaptation import (
 from bdo_music_composer.editor.bdo_lyrics import LyricContext, LyricExpressionMode, align_lyrics
 from bdo_music_composer.editor.bdo_music_theory import ContextClassifier, SongContext, TheoryContext, TrackRole, analyse_music, analyse_song, is_non_chord_tone
 from bdo_common.bdo_track_effects import DEFAULT_TRACK_VOLUME
+from bdo_midi.instruments import instrument_supports_composer_effects
 from bdo_music_composer.editor.bdo_techniques import EditOperation, RealizationKind, TECHNIQUE_PROFILES, TechniqueCandidate, instrument_family
 
 
@@ -1821,7 +1822,12 @@ def _suggest_effects(tracks: list, context: SongContext, config: OptimizerConfig
     current_reverb = _clamp(int(config.current_reverb), 0, 255)
     current_delay = _clamp(int(config.current_delay), 0, 255)
     current_chorus = tuple(_clamp(int(value), 0, 255) for value in config.current_chorus) if config.current_chorus else None
-    notes = [note for track in tracks for note in track.notes]
+    effect_tracks = [
+        track
+        for track in tracks
+        if instrument_supports_composer_effects(track.bdo_instrument_id)
+    ]
+    notes = [note for track in effect_tracks for note in track.notes]
     if not notes or not config.optimize_effects:
         return EffectSuggestion(
             current_reverb, current_delay, current_chorus,
@@ -1833,7 +1839,11 @@ def _suggest_effects(tracks: list, context: SongContext, config: OptimizerConfig
     beats = max(1.0, end / max(1.0, context.beat_ms))
     density = len(notes) / beats
     long_ratio = sum(float(note.dur) >= context.beat_ms * 1.2 for note in notes) / len(notes)
-    families = {instrument_family(int(track.bdo_instrument_id)) for track in tracks if track.notes}
+    families = {
+        instrument_family(int(track.bdo_instrument_id))
+        for track in effect_tracks
+        if track.notes
+    }
     styles = {tag.name for tag in context.styles}
     rhythm_heavy = TrackRole.PERCUSSION in context.track_roles.values() and TrackRole.BASS in context.track_roles.values()
     reasons = []
