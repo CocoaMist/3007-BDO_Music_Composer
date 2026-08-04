@@ -490,6 +490,13 @@ class HomePageTests(unittest.TestCase):
                     assert window._wait_for_autosave_idle(timeout_ms=20_000)
                     window.close()
                     app.processEvents()
+                    shutdown_deadline = time.monotonic() + 20.0
+                    while (
+                        not window.reference_audio.shutdown_complete
+                        and time.monotonic() < shutdown_deadline
+                    ):
+                        QTest.qWait(20)
+                        app.processEvents()
                     # QMediaPlayer.audioOutput() is not a portable synchronous
                     # detach probe on Windows hosts without an audio device.
                     # Verify the controller contract and backend-neutral state;
