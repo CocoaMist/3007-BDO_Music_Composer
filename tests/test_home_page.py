@@ -369,6 +369,11 @@ class HomePageTests(unittest.TestCase):
                         )
                     ]
                     window.reference_audio.set_volume_percent(65)
+                    # This lifecycle gate covers reference playback, project
+                    # persistence, and shutdown. Reference-tempo inference has
+                    # dedicated algorithm/worker tests and would make this
+                    # generic gate depend on first-run Numba startup speed.
+                    window.reference_layer_settings["follow_reference_bpm"] = False
                     assert window.reference_audio.set_audio_path(reference_audio)
                     deadline = time.monotonic() + 4.0
                     while window.reference_audio.waveform_loading and time.monotonic() < deadline:
