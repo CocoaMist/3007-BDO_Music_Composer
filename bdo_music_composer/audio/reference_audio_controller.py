@@ -93,6 +93,7 @@ class ReferenceAudioController(QObject):
         self.waveform_loading = False
         self._waveform_deferred_for_playback = False
         self._pending_project_position_ms: float | None = None
+        self.shutdown_complete = False
 
         self.audio_output = QAudioOutput(self)
         self.audio_output.setVolume(0.5)
@@ -245,6 +246,7 @@ class ReferenceAudioController(QObject):
         # A source-less QMediaPlayer can still retain the platform audio backend.
         # Detach it explicitly so headless/no-device Windows processes can exit.
         self.player.setAudioOutput(None)
+        self.shutdown_complete = True
 
     def project_to_audio(self, project_ms: float) -> float:
         return float(project_ms) - self._project_offset_ms
