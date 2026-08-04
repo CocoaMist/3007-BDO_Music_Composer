@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from bdo_music_composer.editor.editor_models import TrackState
+from bdo_music_composer.editor.game_score_model import (
+    reconcile_track_game_velocity_records,
+)
 from bdo_music_composer.ui.i18n import tr, trf
 
 
@@ -27,6 +30,7 @@ class TimelineVelocityCurveHostMixin:
             for previous, current in zip(track.notes, next_notes)
         )
         self._push_project_snapshot()
+        reconcile_track_game_velocity_records(track, next_notes)
         track.notes = next_notes
         self.timeline.set_tracks(self.tracks)
         self._select_track(track)

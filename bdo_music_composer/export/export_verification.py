@@ -447,8 +447,6 @@ def _canonical_expectations(
 ) -> tuple[ExpectedGameInstrument, ...]:
     notes_by_instrument: dict[int, list[_ProjectedNote]] = {}
     for track, projected in zip(request.direct_tracks, projected_tracks):
-        if not projected:
-            continue
         instrument_id = serialized_game_instrument_id(track)
         notes_by_instrument.setdefault(instrument_id, []).extend(projected)
     if _DRUM_INSTRUMENT_ID in notes_by_instrument:

@@ -25,6 +25,7 @@ from bdo_music_composer.editor.game_score_model import (
     normalize_legacy_track_velocity,
     preview_tracks,
     propagate_game_instrument_mix,
+    reconcile_game_velocity_records,
     scaled_game_velocity,
     serialized_game_instrument_id,
 )
@@ -126,6 +127,59 @@ class GameInstrumentIdentityTests(unittest.TestCase):
 
 
 class GameVelocityModelTests(unittest.TestCase):
+    def test_dual_velocity_follows_non_velocity_block_edits(self) -> None:
+        previous = (
+            Note(60, 80, 0.0, 100.0, 3),
+            Note(62, 81, 200.0, 110.0, 4),
+            Note(64, 82, 400.0, 120.0, 5),
+            Note(65, 83, 600.0, 130.0, 6),
+        )
+        records = tuple(
+            (*note, velocity_b)
+            for note, velocity_b in zip(previous, (41, 42, 43, 44))
+        )
+        edited = (
+            previous[0]._replace(pitch=61, start=50.0),
+            previous[1]._replace(dur=220.0),
+            previous[2]._replace(ntype=12),
+            previous[3]._replace(vel=99),
+            Note(67, 50, 800.0, 140.0, 0),
+        )
+
+        reconciled = reconcile_game_velocity_records(
+            previous,
+            records,
+            edited,
+        )
+
+        self.assertEqual([record[5] for record in reconciled], [41, 42, 43, 99, 50])
+        self.assertEqual(
+            [record[:5] for record in reconciled],
+            [tuple(note) for note in edited],
+        )
+
+    def test_ambiguous_multi_note_drag_never_cross_binds_velocity_b(self) -> None:
+        previous = (
+            Note(60, 80, 0.0, 100.0, 3),
+            Note(64, 80, 0.0, 100.0, 3),
+        )
+        records = (
+            (*previous[0], 31),
+            (*previous[1], 67),
+        )
+        edited = (
+            Note(61, 80, 50.0, 100.0, 3),
+            Note(65, 80, 50.0, 100.0, 3),
+        )
+
+        reconciled = reconcile_game_velocity_records(
+            previous,
+            records,
+            edited,
+        )
+
+        self.assertEqual([record[5] for record in reconciled], [80, 80])
+
     def test_legacy_scale_is_baked_and_clamped_in_the_game_velocity_field(self) -> None:
         self.assertEqual(scaled_game_velocity(91, 0.5), 46)
         self.assertEqual(scaled_game_velocity(100, 2), 127)

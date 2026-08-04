@@ -241,6 +241,7 @@ from bdo_music_composer.editor.game_score_model import (  # noqa: E402
     inherit_game_instrument_mix,
     preview_tracks,
     propagate_game_instrument_mix,
+    reconcile_track_game_velocity_records,
 )
 from bdo_music_composer.editor.pitch_transform import (  # noqa: E402
     PitchTransformPlan,
@@ -672,6 +673,7 @@ class _TrackCommitCheckpoint:
     notes: tuple[Note, ...]
     notes_optimized: bool
     articulation_type: int | None
+    bdo_source_note_records: tuple[tuple, ...]
 
 
 class ConvertWorker(QThread):
@@ -5419,6 +5421,7 @@ class MidiToBdoWindow(
             item.track.notes = list(item.notes)
             item.track.notes_optimized = item.notes_optimized
             item.track.articulation_type = item.articulation_type
+            item.track.bdo_source_note_records = item.bdo_source_note_records
 
     def _log_transcription_commit_failure(self, stage: str) -> None:
         append_crash_log(
@@ -5506,6 +5509,7 @@ class MidiToBdoWindow(
                 tuple(track.notes),
                 bool(track.notes_optimized),
                 track.articulation_type,
+                tuple(track.bdo_source_note_records),
             )
             for track in published_tracks
         )
@@ -5527,6 +5531,7 @@ class MidiToBdoWindow(
                 track = tracks_by_id[track_id]
                 if tuple(track.notes) == notes:
                     continue
+                reconcile_track_game_velocity_records(track, notes)
                 track.notes = list(notes)
                 track.notes_optimized = False
             self.project_commands.push(before)
@@ -8000,11 +8005,13 @@ class MidiToBdoWindow(
             self._push_project_snapshot()
         note_count = 0
         for track in self.tracks:
-            track.notes = list(bake_game_velocity_transform(
+            next_notes = tuple(bake_game_velocity_transform(
                 track.notes,
                 settings,
                 legacy_scale=getattr(track, "volume_scale", 1.0),
             ))
+            reconcile_track_game_velocity_records(track, next_notes)
+            track.notes = list(next_notes)
             track.volume_scale = 1.0
             note_count += len(track.notes)
         return settings.with_updates(

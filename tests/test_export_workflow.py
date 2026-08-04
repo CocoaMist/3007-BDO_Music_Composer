@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from bdo_codec import decode_score
+from bdo_codec import UnsafeOpaqueDataError, decode_score, encode_score
 from bdo_export import channel_groups_to_bdo
 from bdo_midi import Note
 from bdo_music_composer.export.bdo_score import read_bdo_score
@@ -170,6 +170,86 @@ class ExportWorkflowTests(unittest.TestCase):
 
         self.assertEqual(prepared.data, source_data)
         self.assertEqual(prepared.summary, canonical_summary)
+
+    def test_opaque_source_data_is_reused_exactly_and_blocks_editor_rebuild(
+        self,
+    ) -> None:
+        note = Note(60, 91, 1.25, 300.5, 11)
+        source_data, _summary = channel_groups_to_bdo(
+            120,
+            4,
+            [([note], 0, False)],
+            char_name="Name",
+            owner_id=123,
+            instrument_map={0: 0x0B},
+            preserve_note_types=True,
+            track_volumes={0: 70},
+            track_settings_map={0: (0,) * 8},
+        )
+        base = decode_score(source_data)
+        active = base.groups[0].tracks[0]
+        opaque_track = replace(
+            active,
+            extra_data=b"\x01",
+            source_offset=None,
+            _original_note_count=None,
+            _raw_prefix=None,
+        )
+        track_document = replace(
+            base,
+            groups=(replace(
+                base.groups[0],
+                tracks=(opaque_track, *base.groups[0].tracks[1:]),
+            ),),
+            source_bytes=None,
+            _source_fingerprint=None,
+            _source_group_shape=None,
+            _source_opaque_tracks=(),
+            trailing_data=b"",
+        )
+        track_data = encode_score(track_document, mode="lossless")
+
+        trailing = bytearray(base.trailing_data)
+        self.assertTrue(trailing)
+        trailing[-1] = 1
+        trailing_document = replace(
+            base,
+            trailing_data=bytes(trailing),
+            source_bytes=None,
+            _source_fingerprint=None,
+        )
+        trailing_data = encode_score(trailing_document, mode="lossless")
+
+        snapshots = freeze_export_tracks([
+            MutableTrack(
+                [note],
+                bdo_source_group_index=0,
+            )
+        ])
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for opaque_data in (track_data, trailing_data):
+                with self.subTest(source_size=len(opaque_data)):
+                    request = ExportRequest(
+                        direct_tracks=snapshots,
+                        bpm=120,
+                        time_signature=4,
+                        out_path=root / "score.bdo",
+                        character_name="Name",
+                        owner_id=123,
+                        conversion=ConversionSettings(),
+                        pitch_plan=PitchTransformPlan(0),
+                        reverb=0,
+                        delay=0,
+                        chorus=None,
+                        game_dir=root / "game",
+                        track_volumes=((0, 70),),
+                        track_settings=((0, (0,) * 8),),
+                        source_document=decode_score(opaque_data),
+                    )
+                    self.assertEqual(prepare_export(request).data, opaque_data)
+                    with self.assertRaises(UnsafeOpaqueDataError):
+                        prepare_export(replace(request, bpm=121))
 
     def test_snapshot_is_detached_from_editor_note_container(self) -> None:
         original = Note(60, 90, 0.0, 250.0, 0)
@@ -467,6 +547,48 @@ class ExportWorkflowTests(unittest.TestCase):
             (active_track.notes[0].velocity_a, active_track.notes[0].velocity_b),
             (91, 72),
         )
+
+    def test_verified_publish_keeps_an_empty_selected_game_instrument(self) -> None:
+        settings = (10, 1, 20, 2, 30, 3, 4, 5)
+        snapshot = freeze_export_tracks([
+            MutableTrack(
+                [],
+                bdo_instrument_id=0x28,
+                bdo_track_volume=83,
+                bdo_track_settings=settings,
+            )
+        ])
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "empty-instrument.bdo"
+            request = ExportRequest(
+                direct_tracks=snapshot,
+                bpm=120,
+                time_signature=4,
+                out_path=output,
+                character_name="MIDI",
+                owner_id=123,
+                conversion=ConversionSettings(),
+                pitch_plan=PitchTransformPlan(0),
+                reverb=1,
+                delay=2,
+                chorus=(3, 4, 5),
+                game_dir=root / "game",
+                track_volumes=((0, 83),),
+                track_settings=((0, settings),),
+            )
+
+            execute_export(request)
+            document = decode_score(output.read_bytes())
+
+        self.assertEqual(len(document.groups), 1)
+        self.assertTrue(all(
+            track.instrument_id == 0x28
+            and track.volume == 83
+            and track.settings.values == settings
+            and not track.notes
+            for track in document.groups[0].tracks
+        ))
 
     def test_bdo_drum_target_never_uses_melodic_transpose_or_serialization(self) -> None:
         snapshots = freeze_export_tracks([

@@ -28,6 +28,70 @@ def _run_offscreen(
 
 
 class TranscriptionEditorCommitUiTests(unittest.TestCase):
+    def test_note_block_edits_keep_velocity_b_until_velocity_changes(self) -> None:
+        completed = _run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication
+
+            from bdo_midi import Note
+            from bdo_music_composer.transcription.bdo_transcription_session import (
+                TranscriptionEditorCommit,
+            )
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow, TrackState
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            window._stop_preview = lambda *_args, **_kwargs: None
+            window.show_toast = lambda *_args, **_kwargs: None
+            window._autosave_project = lambda *_args, **_kwargs: None
+            original = Note(60, 90, 0.0, 200.0, 3)
+            track = TrackState(
+                1,
+                [original],
+                0,
+                False,
+                "current",
+                0x0B,
+                bdo_source_note_records=((60, 90, 0.0, 200.0, 3, 41),),
+            )
+            window.tracks = [track]
+            window.timeline.set_tracks(window.tracks)
+
+            moved = original._replace(pitch=62, start=125.0, dur=260.0, ntype=12)
+            report = window._commit_note_editor(TranscriptionEditorCommit(
+                current_track_id=1,
+                draft_notes=(moved,),
+            ))
+            assert report is not None and report.project_changed
+            assert track.bdo_source_note_records == (
+                (62, 90, 125.0, 260.0, 12, 41),
+            )
+
+            louder = moved._replace(vel=108)
+            report = window._commit_note_editor(TranscriptionEditorCommit(
+                current_track_id=1,
+                draft_notes=(louder,),
+            ))
+            assert report is not None and report.project_changed
+            assert track.bdo_source_note_records == (
+                (62, 108, 125.0, 260.0, 12, 108),
+            )
+
+            window._undo_project()
+            assert window.tracks[0].bdo_source_note_records == (
+                (62, 90, 125.0, 260.0, 12, 41),
+            )
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
     def test_recommended_new_track_is_part_of_one_atomic_apply(self) -> None:
         completed = _run_offscreen(
             """

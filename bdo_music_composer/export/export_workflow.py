@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence, TypeVar
 
 from bdo_common.atomic_io import atomic_copy_file, atomic_write_bytes
-from bdo_codec import encode_score
+from bdo_codec import UnsafeOpaqueDataError, encode_score
 from bdo_export import (
     bind_dual_velocities,
     channel_groups_to_bdo,
@@ -479,6 +479,27 @@ def _request_matches_source_document(
     )
 
 
+def _reject_unsafe_opaque_source_rebuild(source_document: object) -> None:
+    """Fail closed before an editor rebuild could discard unknown wire data."""
+
+    for group_index, group in enumerate(getattr(source_document, "groups", ())):
+        for track_index, track in enumerate(getattr(group, "tracks", ())):
+            extra_data = bytes(getattr(track, "extra_data", b""))
+            if any(extra_data):
+                raise UnsafeOpaqueDataError(
+                    f"groups[{group_index}].tracks[{track_index}].extra_data",
+                    int(getattr(track, "source_offset", 0) or 0),
+                    "editor rebuild would discard unknown track data",
+                )
+    trailing_data = bytes(getattr(source_document, "trailing_data", b""))
+    if any(trailing_data):
+        raise UnsafeOpaqueDataError(
+            "trailing_data",
+            int(getattr(source_document, "_trailing_offset", 0) or 0),
+            "editor rebuild would discard unknown trailing data",
+        )
+
+
 def prepare_export(request: ExportRequest) -> PreparedExport:
     """Build bytes without touching the filesystem."""
 
@@ -505,6 +526,8 @@ def prepare_export(request: ExportRequest) -> PreparedExport:
         bdo_data = encode_score(source_document, mode="lossless")
         summary = score_summary(source_document)
     else:
+        if source_document is not None:
+            _reject_unsafe_opaque_source_rebuild(source_document)
         bdo_data, summary = channel_groups_to_bdo(
             request.bpm,
             request.time_signature,

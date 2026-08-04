@@ -1296,7 +1296,7 @@ class TimelineCanvas(QWidget):
             # user deliberately edits this slider.
             volume_rect = QRectF(left + header_w - 101, y + 42, 50, 16)
             volume_value_rect = QRectF(left + header_w - 48, y + 42, 26, 16)
-            volume_label = tr("音量")
+            volume_label = tr("轨道音量")
             volume_label_width = self._volume_label_width(
                 painter.fontMetrics(),
                 volume_label,
@@ -1983,7 +1983,7 @@ class TimelineCanvas(QWidget):
             tuple(visible_tracks),
             reference_key,
             tr("轨道"),
-            tr("音量"),
+            tr("轨道音量"),
         )
 
     def _render_static_timeline(
