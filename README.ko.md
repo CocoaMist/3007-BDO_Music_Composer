@@ -6,6 +6,15 @@
 
 BDO Music Composer는 비공식 PySide6 MIDI 편집기, 로컬 오디오 채보 워크벤치, 결정론적 최적화기, 게임 샘플 미리듣기 및 Black Desert v9 악보 내보내기 도구입니다. 유지보수자와 지인을 위한 작은 악보 실험실이며 범용 DAW가 아닙니다. Pearl Abyss와 관련이 없습니다.
 
+<!-- section:screenshots -->
+## 인터페이스 미리보기
+
+![로컬 프로젝트와 게임 악보 홈](docs/images/readme-home.png)
+
+| 멀티트랙 타임라인 | 피아노 롤 음표 편집기 |
+|---|---|
+| ![멀티트랙 편곡 타임라인](docs/images/readme-timeline.png) | ![벨로시티 레인과 단축키 HUD가 있는 피아노 롤](docs/images/readme-piano-roll.png) |
+
 <!-- section:status -->
 ## 상태 및 고지
 
