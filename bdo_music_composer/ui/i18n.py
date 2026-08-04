@@ -304,6 +304,7 @@ EN = {
     "LFO 频率": "LFO Frequency", "音源模式": "Source Mode",
     "Basic 默认；其他模式待验证": "Basic by default; other modes need verification",
     "游戏参数 · 本地 FX 试听为未校准近似": "Game parameters · local FX preview is an uncalibrated approximation",
+    "当前初级乐器在游戏中不提供 Effector/AuxSend；现有曲谱字节会原样保留。": "The game does not expose Effector/AuxSend for this beginner instrument; existing score bytes will be preserved unchanged.",
     "每轨发送在轨道 FX；本地试听为未校准近似，导出值不变。": "Per-track sends are under AuxSend; local preview is uncalibrated and export values remain unchanged.",
     "导入原值 {value}；修改后按 0–100 写入。": "Imported value {value}; edits use 0–100.",
     "深度": "Depth", "频率": "Frequency",
@@ -396,6 +397,7 @@ JA = {
     "LFO 频率": "LFO周波数", "音源模式": "音源モード",
     "Basic 默认；其他模式待验证": "Basicが既定。その他のモードは要検証",
     "游戏参数 · 本地 FX 试听为未校准近似": "ゲーム設定 · ローカルFX試聴は未校正の近似です",
+    "当前初级乐器在游戏中不提供 Effector/AuxSend；现有曲谱字节会原样保留。": "この初心者用楽器ではゲームのEffector/AuxSendを使用できません。既存の楽譜バイトは変更せず保持します。",
     "每轨发送在轨道 FX；本地试听为未校准近似，导出值不变。": "トラックごとの送信量はAuxSendで設定します。ローカル試聴は未校正の近似で、書き出し値は変わりません。",
     "导入原值 {value}；修改后按 0–100 写入。": "読み込み値 {value}。編集後は0～100で保存します。",
     "深度": "深さ", "频率": "周波数",
@@ -485,6 +487,7 @@ KO = {
     "LFO 频率": "LFO 주파수", "音源模式": "음원 모드",
     "Basic 默认；其他模式待验证": "기본값은 Basic, 다른 모드는 검증 필요",
     "游戏参数 · 本地 FX 试听为未校准近似": "게임 설정 · 로컬 FX 미리듣기는 보정되지 않은 근사치",
+    "当前初级乐器在游戏中不提供 Effector/AuxSend；现有曲谱字节会原样保留。": "이 초보자용 악기는 게임에서 Effector/AuxSend를 제공하지 않습니다. 기존 악보 바이트는 변경 없이 보존됩니다.",
     "每轨发送在轨道 FX；本地试听为未校准近似，导出值不变。": "트랙별 전송량은 AuxSend에서 설정합니다. 로컬 미리듣기는 보정되지 않은 근사치이며 내보내기 값은 바뀌지 않습니다.",
     "导入原值 {value}；修改后按 0–100 写入。": "가져온 값 {value}; 수정 후에는 0~100으로 저장합니다.",
     "深度": "깊이", "频率": "주파수",
@@ -1066,7 +1069,7 @@ EN.update({
     "选择模式：双击新建，拖动空白框选，Ctrl+拖动复制": "Select mode: double-click to add, drag empty space to select, Ctrl-drag to clone",
     "选择音符后应用奏法": "Select notes, then apply a Musical Technique",
     "常用奏法": "Common Musical Techniques", "网格与参考": "Grid and Reference", "水平缩放": "Horizontal Zoom",
-    "Ctrl+滚轮：时间缩放；Alt+滚轮：音块高度": "Ctrl+wheel: time zoom; Alt+wheel: note height",
+    "触控板双指滑动：平移；Ctrl+滚轮：时间缩放；Alt+滚轮：音块高度": "Two-finger touchpad scroll: pan; Ctrl+wheel: time zoom; Alt+wheel: note height",
     "右键删除音符 · Ctrl 拖选追加 · 拖动音符两端调整时值": "Right-click to delete · Ctrl-drag to add selection · Drag note edges to resize",
     "右键删除 · Ctrl 拖选追加 · 拖动两端调整时值": "Right-click to delete · Ctrl-drag to add selection · Drag edges to resize",
     "双击新建 · Ctrl+拖动复制 · Alt 临时取消吸附 · Ctrl+D 复制": "Double-click to add · Ctrl-drag to clone · Alt bypasses snap · Ctrl+D duplicates",
@@ -1104,7 +1107,7 @@ JA.update({
     "选择模式：双击新建，拖动空白框选，Ctrl+拖动复制": "選択モード：ダブルクリックで追加、空白ドラッグで範囲選択、Ctrlドラッグで複製",
     "选择音符后应用奏法": "ノートを選択して奏法を適用",
     "常用奏法": "よく使う奏法", "网格与参考": "グリッドと参照", "水平缩放": "横方向ズーム",
-    "Ctrl+滚轮：时间缩放；Alt+滚轮：音块高度": "Ctrl+ホイール：時間ズーム；Alt+ホイール：音符の高さ",
+    "触控板双指滑动：平移；Ctrl+滚轮：时间缩放；Alt+滚轮：音块高度": "タッチパッドを2本指でスクロール：移動；Ctrl+ホイール：時間ズーム；Alt+ホイール：音符の高さ",
     "右键删除音符 · Ctrl 拖选追加 · 拖动音符两端调整时值": "右クリックで削除・Ctrlドラッグで選択追加・端をドラッグして長さを調整",
     "右键删除 · Ctrl 拖选追加 · 拖动两端调整时值": "右クリックで削除・Ctrlドラッグで選択追加・端をドラッグして長さを調整",
     "双击新建 · Ctrl+拖动复制 · Alt 临时取消吸附 · Ctrl+D 复制": "ダブルクリックで追加・Ctrlドラッグで複製・Altでスナップ解除・Ctrl+Dで複製",
@@ -1142,7 +1145,7 @@ KO.update({
     "选择模式：双击新建，拖动空白框选，Ctrl+拖动复制": "선택 모드: 두 번 클릭해 추가, 빈 공간을 드래그해 선택, Ctrl+드래그로 복제",
     "选择音符后应用奏法": "음표를 선택한 뒤 주법 적용",
     "常用奏法": "자주 쓰는 주법", "网格与参考": "그리드 및 참조", "水平缩放": "가로 확대/축소",
-    "Ctrl+滚轮：时间缩放；Alt+滚轮：音块高度": "Ctrl+휠: 시간 확대/축소; Alt+휠: 음표 높이",
+    "触控板双指滑动：平移；Ctrl+滚轮：时间缩放；Alt+滚轮：音块高度": "터치패드 두 손가락 스크롤: 이동; Ctrl+휠: 시간 확대/축소; Alt+휠: 음표 높이",
     "右键删除音符 · Ctrl 拖选追加 · 拖动音符两端调整时值": "우클릭으로 삭제 · Ctrl 드래그로 선택 추가 · 음표 가장자리를 드래그하여 길이 조절",
     "右键删除 · Ctrl 拖选追加 · 拖动两端调整时值": "우클릭으로 삭제 · Ctrl 드래그로 선택 추가 · 가장자리를 드래그하여 길이 조절",
     "双击新建 · Ctrl+拖动复制 · Alt 临时取消吸附 · Ctrl+D 复制": "두 번 클릭해 추가 · Ctrl+드래그로 복제 · Alt로 스냅 해제 · Ctrl+D로 복제",
@@ -2516,7 +2519,11 @@ EN.update({
     "更换音频": "Change Audio",
     "移除音频": "Remove Audio",
     "移除参考音频": "Remove Reference Audio",
-    "开始扒谱": "Start Transcription",
+    "分析": "Analyze",
+    "显示强度": "Display intensity",
+    "筛选与节奏": "Filters & rhythm",
+    "乐器区分": "Instrument distinction",
+    "节奏网格": "Rhythm grid",
     "识别结果": "Detected Notes",
     "忽略所选": "Ignore Selected",
     "恢复忽略": "Restore Ignored",
@@ -2524,7 +2531,7 @@ EN.update({
     "将所选识别音块加入当前轨道": (
         "Add the selected detected notes to this track"
     ),
-    "载入音频，然后开始扒谱": "Load audio, then start transcription",
+    "载入音频，然后分析": "Load audio, then analyze",
     "识别到 {count} 个音块 · 框选后点击“应用所选”": (
         "{count} notes detected · Select an area, then click Apply Selected"
     ),
@@ -2562,7 +2569,11 @@ JA.update({
     "更换音频": "音声を変更",
     "移除音频": "音声を解除",
     "移除参考音频": "参照音声を解除",
-    "开始扒谱": "採譜を開始",
+    "分析": "解析",
+    "显示强度": "表示の強さ",
+    "筛选与节奏": "フィルターとリズム",
+    "乐器区分": "楽器の区別",
+    "节奏网格": "リズムグリッド",
     "识别结果": "認識結果",
     "忽略所选": "選択を除外",
     "恢复忽略": "除外を復元",
@@ -2570,7 +2581,7 @@ JA.update({
     "将所选识别音块加入当前轨道": (
         "選択した認識ノートを現在のトラックに追加"
     ),
-    "载入音频，然后开始扒谱": "音声を読み込み、採譜を開始してください",
+    "载入音频，然后分析": "音声を読み込んで解析してください",
     "识别到 {count} 个音块 · 框选后点击“应用所选”": (
         "{count}個のノートを認識・範囲選択して［選択を適用］をクリック"
     ),
@@ -2608,7 +2619,11 @@ KO.update({
     "更换音频": "오디오 변경",
     "移除音频": "오디오 제거",
     "移除参考音频": "참조 오디오 제거",
-    "开始扒谱": "채보 시작",
+    "分析": "분석",
+    "显示强度": "표시 강도",
+    "筛选与节奏": "필터 및 리듬",
+    "乐器区分": "악기 구분",
+    "节奏网格": "리듬 그리드",
     "识别结果": "인식 결과",
     "忽略所选": "선택 항목 무시",
     "恢复忽略": "무시 항목 복원",
@@ -2616,7 +2631,7 @@ KO.update({
     "将所选识别音块加入当前轨道": (
         "선택한 인식 음표를 현재 트랙에 추가"
     ),
-    "载入音频，然后开始扒谱": "오디오를 불러온 뒤 채보를 시작하세요",
+    "载入音频，然后分析": "오디오를 불러온 뒤 분석하세요",
     "识别到 {count} 个音块 · 框选后点击“应用所选”": (
         "음표 {count}개 인식 · 영역을 선택한 뒤 선택 항목 적용을 클릭하세요"
     ),
@@ -6086,6 +6101,349 @@ for _source, (_english, _japanese, _korean) in _ACCESSIBILITY_TRANSLATIONS.items
 del _source, _english, _japanese, _korean
 
 
+_REFERENCE_TIMBRE_TRANSLATIONS = {
+    "分析音块": (
+        "Analyzed notes",
+        "解析ノート",
+        "분석 음표",
+    ),
+    "分析音块 · {opacity}%": (
+        "Analyzed notes · {opacity}%",
+        "解析ノート・{opacity}%",
+        "분석 음표 · {opacity}%",
+    ),
+    "离散识别结果；可框选、筛选并采纳为可编辑草稿": (
+        "Discrete analysis results; select, filter, and add them to the editable draft",
+        "離散的な解析結果。範囲選択、絞り込み、編集可能な下書きへの追加ができます",
+        "개별 분석 결과이며 영역 선택, 필터링, 편집 가능한 초안 추가를 할 수 있습니다",
+    ),
+    "分析后的离散音块，用于框选、筛选并采纳为可编辑草稿": (
+        "Discrete analyzed notes for selection, filtering, and adding to the editable draft",
+        "範囲選択、絞り込み、編集可能な下書きへの追加に使う離散解析ノートです",
+        "영역 선택, 필터링, 편집 가능한 초안 추가에 사용하는 개별 분석 음표입니다",
+    ),
+    "音高线": ("Pitch line", "ピッチライン", "음높이 선"),
+    "连续音高证据；用于观察滑音、颤音和音准变化": (
+        "Continuous pitch evidence for inspecting slides, vibrato, and intonation",
+        "スライド、ビブラート、イントネーションを確認するための連続ピッチ証拠です",
+        "슬라이드, 비브라토, 음정 변화를 살펴보는 연속 음높이 근거입니다",
+    ),
+    "连续音高证据，用于观察滑音、颤音和音准变化；与分析音块独立显示": (
+        "Continuous pitch evidence for inspecting slides, vibrato, and intonation; displayed independently from analyzed notes",
+        "スライド、ビブラート、イントネーションを確認する連続ピッチ証拠です。解析ノートとは独立して表示します",
+        "슬라이드, 비브라토, 음정 변화를 살펴보는 연속 음높이 근거이며 분석 음표와 독립적으로 표시합니다",
+    ),
+    "去噪强度": ("Denoise strength", "ノイズ除去の強さ", "노이즈 제거 강도"),
+    "线条透明度": ("Line opacity", "ラインの不透明度", "선 불투명도"),
+    "音高线透明度": ("Pitch-line opacity", "ピッチラインの不透明度", "음높이 선 불투명도"),
+    "只调整音高线，不影响分析音块和其他参考证据": (
+        "Adjusts only the pitch line; analyzed notes and other reference evidence are unchanged",
+        "ピッチラインだけを調整し、解析ノートや他の参照証拠には影響しません",
+        "음높이 선만 조절하며 분석 음표와 다른 참조 근거에는 영향을 주지 않습니다",
+    ),
+    "旋律引导（弱证据）": (
+        "Melody guidance (weak evidence)",
+        "メロディガイド（弱い証拠）",
+        "멜로디 안내(약한 근거)",
+    ),
+    "按时间段统计当前轨道手工音符命中的音色组；只渐进突出显示，不修改识别和乐器标签": (
+        "Counts timbre-group hits from manually edited notes in time windows; only changes gradual emphasis and never recognition or instrument labels",
+        "現在のトラックで手動編集したノートの音色グループ命中を時間区間ごとに集計します。段階的な強調表示だけを行い、認識結果や楽器ラベルは変更しません",
+        "현재 트랙에서 수동 편집한 음표의 음색 그룹 적중을 시간 구간별로 집계합니다. 점진적 강조만 바꾸며 인식 결과나 악기 라벨은 수정하지 않습니다",
+    ),
+    "按时间段统计当前轨道手工音符命中的音色组；稳定后最高优先标记为当前轨道乐器，不修改声学识别或导出": (
+        "Counts timbre-group hits from manually edited notes in time windows; once stable, labels that group as the current track instrument at highest priority without changing acoustic recognition or export",
+        "現在のトラックで手動編集したノートの音色グループ命中を時間区間ごとに集計し、安定後は現在のトラック楽器を最優先で表示します。音響認識や書き出しは変更しません",
+        "현재 트랙에서 수동 편집한 음표의 음색 그룹 적중을 시간 구간별로 집계하고 안정되면 현재 트랙 악기를 최우선으로 표시합니다. 음향 인식이나 내보내기는 변경하지 않습니다",
+    ),
+    "旋律引导已关闭": (
+        "Melody guidance is off",
+        "メロディガイドはオフです",
+        "멜로디 안내가 꺼져 있습니다",
+    ),
+    "引导开启 · {notes} 个可用音符 · 尚未形成稳定音色倾向": (
+        "Guidance on · {notes} usable notes · no stable timbre tendency yet",
+        "ガイド有効・使用可能なノート {notes} 個・安定した音色傾向はまだありません",
+        "안내 켜짐 · 사용 가능한 음표 {notes}개 · 아직 안정적인 음색 경향이 없습니다",
+    ),
+    "引导开启 · {windows} 个时间段 · {hits} 个去重命中 · {state}": (
+        "Guidance on · {windows} windows · {hits} deduplicated hits · {state}",
+        "ガイド有効・{windows} 区間・重複除外後 {hits} 命中・{state}",
+        "안내 켜짐 · 시간 구간 {windows}개 · 중복 제거 적중 {hits}개 · {state}",
+    ),
+    "引导开启 · {windows} 个时间段 · {hits} 个去重命中 · {state}{target}": (
+        "Guidance on · {windows} windows · {hits} deduplicated hits · {state}{target}",
+        "ガイド有効・{windows} 区間・重複除外後 {hits} 命中・{state}{target}",
+        "안내 켜짐 · 시간 구간 {windows}개 · 중복 제거 적중 {hits}개 · {state}{target}",
+    ),
+    " · 最高优先：{instrument}": (
+        " · highest priority: {instrument}",
+        "・最優先：{instrument}",
+        " · 최우선: {instrument}",
+    ),
+    "{group} · 引导确认：{instrument}（最高优先） · 声学分类 {confidence}%": (
+        "{group} · guidance-confirmed: {instrument} (highest priority) · acoustic classification {confidence}%",
+        "{group}・ガイド確認：{instrument}（最優先）・音響分類 {confidence}%",
+        "{group} · 안내 확인: {instrument}(최우선) · 음향 분류 {confidence}%",
+    ),
+    "引导：{instrument} · ": (
+        "Guided: {instrument} · ",
+        "ガイド：{instrument}・",
+        "안내: {instrument} · ",
+    ),
+    "已形成渐进突出": (
+        "gradual emphasis established",
+        "段階的な強調を形成済み",
+        "점진적 강조 형성됨",
+    ),
+    "已形成少样本预测 {confidence}%": (
+        "few-sample prediction {confidence}%",
+        "少数サンプル予測 {confidence}%",
+        "소수 샘플 예측 {confidence}%",
+    ),
+    "证据仍在累积": (
+        "evidence is still accumulating",
+        "証拠を蓄積中",
+        "근거 누적 중",
+    ),
+    "旋律线、Frame、Onset 与声谱透明度；音高线在其菜单内单独调整": (
+        "Melody-line, Frame, Onset, and spectrogram opacity; adjust pitch lines separately in their menu",
+        "メロディライン、Frame、Onset、スペクトログラムの不透明度。ピッチラインは専用メニューで個別に調整します",
+        "멜로디 선, Frame, Onset 및 스펙트로그램 불투명도입니다. 음높이 선은 해당 메뉴에서 별도로 조절합니다",
+    ),
+    "专注音高线": ("Focus pitch line", "ピッチラインに集中", "음높이 선에 집중"),
+    "临时隐藏分析音块和声部提示，只查看连续音高线": (
+        "Temporarily hide analyzed notes and voice hints to inspect only the continuous pitch line",
+        "解析ノートと声部ヒントを一時的に隠し、連続ピッチラインだけを表示します",
+        "분석 음표와 성부 힌트를 잠시 숨기고 연속 음높이 선만 표시합니다",
+    ),
+    "按音色分组着色（实验）": (
+        "Color by timbre (experimental)",
+        "音色別に色分け（実験）",
+        "음색별 색상(실험)",
+    ),
+    "从低重叠片段提取音色特征并稳定着色；结果只用于参考显示，不会修改候选音符或正式轨道": (
+        "Extract timbre from low-overlap passages and apply stable colors. This is display-only and never changes candidates or score tracks.",
+        "重なりの少ない区間から音色特徴を抽出して安定した色を付けます。表示専用で、候補音符や正式トラックは変更しません。",
+        "겹침이 적은 구간에서 음색 특징을 추출해 안정적인 색상을 적용합니다. 표시 전용이며 후보 음표나 정식 트랙을 변경하지 않습니다.",
+    ),
+    "通用乐器标签（可选）": (
+        "Generic instrument labels (optional)",
+        "一般楽器ラベル（任意）",
+        "일반 악기 라벨(선택)",
+    ),
+    "需要单独安装 MuScriptor；模型不随应用打包，首次运行可能由 MuScriptor 下载；不会写入分轨": (
+        "Requires a separate MuScriptor installation. Models are not bundled and MuScriptor may download one on first use; no tracks are created.",
+        "MuScriptorを別途インストールする必要があります。モデルは同梱されず、初回実行時にMuScriptorがダウンロードする場合があります。トラックは作成しません。",
+        "MuScriptor를 별도로 설치해야 합니다. 모델은 포함되지 않으며 첫 실행 시 MuScriptor가 다운로드할 수 있습니다. 트랙은 생성하지 않습니다.",
+    ),
+    "由已安装的 MuScriptor small 提供通用乐器标签；结果不会自动分轨": (
+        "Uses an installed MuScriptor small model for generic labels; results never create tracks automatically.",
+        "インストール済みのMuScriptor smallで一般ラベルを付けます。結果から自動でトラックを作成しません。",
+        "설치된 MuScriptor small로 일반 라벨을 제공합니다. 결과로 트랙을 자동 생성하지 않습니다.",
+    ),
+    "乐器颜色：自动分类": (
+        "Instrument colors: automatic classification",
+        "楽器カラー：自動分類",
+        "악기 색상: 자동 분류",
+    ),
+    "完成分析后自动按乐器颜色显示分析音块": (
+        "Analyzed notes automatically use instrument colors after analysis",
+        "解析後、解析ノートを楽器カラーで自動表示します",
+        "분석 후 분석 음표를 악기 색상으로 자동 표시합니다",
+    ),
+    "完成分析后自动按乐器颜色显示音高线": (
+        "Pitch lines automatically use instrument colors after analysis",
+        "解析後、ピッチラインを楽器カラーで自動表示します",
+        "분석 후 음높이 선을 악기 색상으로 자동 표시합니다",
+    ),
+    "分析完成 · 未找到可分类音色；分析音块保持中性色": (
+        "Analysis complete · no classifiable timbre found; analyzed notes remain neutral",
+        "解析完了・分類可能な音色が見つからないため、解析ノートは中間色のままです",
+        "분석 완료 · 분류 가능한 음색을 찾지 못해 분석 음표는 중립색으로 유지됩니다",
+    ),
+    "分析完成 · 未找到可分类音色；音高线保持中性色": (
+        "Analysis complete · no classifiable timbre found; pitch lines remain neutral",
+        "解析完了・分類可能な音色が見つからないため、ピッチラインは中間色のままです",
+        "분석 완료 · 분류 가능한 음색을 찾지 못해 음높이 선은 중립색으로 유지됩니다",
+    ),
+    "少样本预测 · 声学复核中": (
+        "Few-sample prediction · acoustic verification in progress",
+        "少数サンプル予測・音響検証中",
+        "소수 샘플 예측 · 음향 검증 중",
+    ),
+    "少样本预测 · 声学复核不可用": (
+        "Few-sample prediction · acoustic verification unavailable",
+        "少数サンプル予測・音響検証を利用できません",
+        "소수 샘플 예측 · 음향 검증 사용 불가",
+    ),
+    "少样本预测 · 等待更多音频证据": (
+        "Few-sample prediction · awaiting more audio evidence",
+        "少数サンプル予測・追加の音声証拠を待機中",
+        "소수 샘플 예측 · 추가 오디오 증거 대기 중",
+    ),
+    "颜色=乐器组 · 饱和度=分类把握 · 透明度=局部音频证据": (
+        "Hue = instrument group · saturation = class confidence · opacity = local audio evidence",
+        "色相＝楽器グループ・彩度＝分類の確信度・不透明度＝局所音声証拠",
+        "색상=악기 그룹 · 채도=분류 확신도 · 불투명도=국소 오디오 증거",
+    ),
+    "正在提取低污染音色片段…": (
+        "Extracting low-contamination timbre passages…",
+        "混入の少ない音色区間を抽出中…",
+        "혼입이 적은 음색 구간을 추출하는 중…",
+    ),
+    "正在自动分类并生成音高线颜色…": (
+        "Automatically classifying and generating pitch-line colors…",
+        "自動分類してピッチラインの色を生成中…",
+        "자동 분류하고 음높이 선 색상을 생성하는 중…",
+    ),
+    "音色分组不可用；候选音符未受影响": (
+        "Timbre grouping is unavailable; candidate notes were not changed",
+        "音色グループ化を利用できません。候補音符は変更されていません",
+        "음색 그룹화를 사용할 수 없습니다. 후보 음표는 변경되지 않았습니다",
+    ),
+    "乐器颜色不可用；音高线保持中性色": (
+        "Instrument colors are unavailable; pitch lines remain neutral",
+        "楽器カラーを利用できないため、ピッチラインは中間色のままです",
+        "악기 색상을 사용할 수 없어 음높이 선은 중립색으로 유지됩니다",
+    ),
+    "外部标签不可用；仅显示匿名音色": (
+        "External labels are unavailable; showing anonymous timbres only",
+        "外部ラベルを利用できないため、匿名音色のみ表示します",
+        "외부 라벨을 사용할 수 없어 익명 음색만 표시합니다",
+    ),
+    "外部标签分析失败；仅显示匿名音色": (
+        "External label analysis failed; showing anonymous timbres only",
+        "外部ラベル分析に失敗したため、匿名音色のみ表示します",
+        "외부 라벨 분석에 실패하여 익명 음색만 표시합니다",
+    ),
+    "外部标签未通过一致性门槛；仅显示匿名音色": (
+        "External labels did not meet the consensus threshold; showing anonymous timbres only",
+        "外部ラベルが一致度の基準を満たさないため、匿名音色のみ表示します",
+        "외부 라벨이 일치도 기준을 충족하지 않아 익명 음색만 표시합니다",
+    ),
+    "未分类": ("Unclassified", "未分類", "미분류"),
+    "未分类 · 证据不足": (
+        "Unclassified · insufficient evidence",
+        "未分類・証拠不足",
+        "미분류 · 근거 부족",
+    ),
+    "自动分类 {classified}/{total}": (
+        "Auto-classified {classified}/{total}",
+        "自動分類 {classified}/{total}",
+        "자동 분류 {classified}/{total}",
+    ),
+    "已分为 {groups} 组 · 覆盖 {classified}/{total} · 平均可信 {confidence}%": (
+        "{groups} groups · coverage {classified}/{total} · average confidence {confidence}%",
+        "{groups}グループ・対象 {classified}/{total}・平均信頼度 {confidence}%",
+        "{groups}개 그룹 · 범위 {classified}/{total} · 평균 신뢰도 {confidence}%",
+    ),
+    "预测中 · 正在用音频校正": (
+        "Predicting · refining with audio",
+        "予測中・音声で補正しています",
+        "예측 중 · 오디오로 보정 중",
+    ),
+    "预测结果 · 音频校正不可用": (
+        "Prediction · audio refinement unavailable",
+        "予測結果・音声補正を利用できません",
+        "예측 결과 · 오디오 보정 사용 불가",
+    ),
+    "预测结果 · 等待更多音频证据": (
+        "Prediction · awaiting more audio evidence",
+        "予測結果・追加の音声根拠を待っています",
+        "예측 결과 · 추가 오디오 근거 대기 중",
+    ),
+    "声学已确认 · 少量片段仍为预测": (
+        "Audio-confirmed · a few segments remain predicted",
+        "音響確認済み・一部の区間は予測のままです",
+        "음향 확인 완료 · 일부 구간은 아직 예측",
+    ),
+    "声学已确认": (
+        "Audio-confirmed",
+        "音響確認済み",
+        "음향 확인 완료",
+    ),
+    "{group} · {confidence}% · {count} 个": (
+        "{group} · {confidence}% · {count} notes",
+        "{group}・{confidence}%・{count}音",
+        "{group} · {confidence}% · {count}개",
+    ),
+    "{group} · 疑似{family} {confidence}% · {count} 个": (
+        "{group} · likely {family} {confidence}% · {count} notes",
+        "{group}・{family}の可能性 {confidence}%・{count}音",
+        "{group} · {family} 추정 {confidence}% · {count}개",
+    ),
+    "{group} · {instrument} · 引导优先 · {count} 个": (
+        "{group} · {instrument} · guidance priority · {count} notes",
+        "{group}・{instrument}・ガイド優先・{count}音",
+        "{group} · {instrument} · 가이드 우선 · {count}개",
+    ),
+    "未分类 · {count} 个": (
+        "Unclassified · {count} notes",
+        "未分類・{count}音",
+        "미분류 · {count}개",
+    ),
+    "另有 {count} 组": (
+        "{count} more groups",
+        "ほか {count}グループ",
+        "그 외 {count}개 그룹",
+    ),
+    "颜色越鲜明，判断越可靠": (
+        "Brighter colors indicate more reliable results",
+        "色が鮮明なほど判断の信頼性が高くなります",
+        "색이 선명할수록 판단이 더 신뢰할 만합니다",
+    ),
+    "音色 {name}": ("Timbre {name}", "音色 {name}", "음색 {name}"),
+    "{group} · 分类置信 {confidence}%": (
+        "{group} · class confidence {confidence}%",
+        "{group}・分類信頼度 {confidence}%",
+        "{group} · 분류 신뢰도 {confidence}%",
+    ),
+    "识别 {recognition}% · 分类 {classification}%": (
+        "recognition {recognition}% · class {classification}%",
+        "認識 {recognition}%・分類 {classification}%",
+        "인식 {recognition}% · 분류 {classification}%",
+    ),
+    "{group} · 疑似{family} {confidence}%": (
+        "{group} · likely {family} {confidence}%",
+        "{group}・{family}の可能性 {confidence}%",
+        "{group} · {family} 추정 {confidence}%",
+    ),
+    "钢琴": ("Piano", "ピアノ", "피아노"),
+    "键盘打击乐": (
+        "Chromatic percussion",
+        "鍵盤打楽器",
+        "건반 타악기",
+    ),
+    "风琴": ("Organ", "オルガン", "오르간"),
+    "吉他类": ("Guitar family", "ギター系", "기타 계열"),
+    "贝斯类": ("Bass family", "ベース系", "베이스 계열"),
+    "弦乐组": ("String family", "弦楽器群", "현악기군"),
+    "合奏": ("Ensemble", "アンサンブル", "앙상블"),
+    "铜管": ("Brass", "金管", "금관악기"),
+    "簧管": ("Reed", "リード", "리드 악기"),
+    "吹管": ("Pipe", "パイプ", "파이프"),
+    "合成器主音": ("Synth lead", "シンセリード", "신스 리드"),
+    "合成器铺底": ("Synth pad", "シンセパッド", "신스 패드"),
+    "合成器效果": ("Synth effect", "シンセ効果", "신스 효과"),
+    "民族乐器": ("Ethnic", "民族楽器", "민속 악기"),
+    "鼓组": ("Drum kit", "ドラムキット", "드럼 키트"),
+}
+
+for _source, (_english, _japanese, _korean) in (
+    _REFERENCE_TIMBRE_TRANSLATIONS.items()
+):
+    if _source in EN or _source in JA or _source in KO:
+        raise RuntimeError(
+            f"duplicate reference-timbre localization source: {_source}"
+        )
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+
 _EFFECT_GUIDANCE_TRANSLATIONS = {
     "音源与外观": (
         "Audio & Appearance",
@@ -6162,10 +6520,10 @@ _EFFECT_GUIDANCE_TRANSLATIONS = {
         "リバーブ時間：残響の長さを調整します。ローカル試聴では0.2～8.0秒として近似します。",
         "리버브 시간: 잔향 길이를 조절합니다. 로컬 미리듣기는 0.2–8.0초로 근사합니다.",
     ),
-    "延迟反馈：控制回声返回延迟线的比例；越高，重复越多。本地试听固定约 250 ms。": (
-        "Delay Feedback: controls how much echo returns to the delay line; higher values produce more repeats. Local preview uses about 250 ms.",
-        "ディレイフィードバック：エコーをディレイラインへ戻す量です。高いほど反復が増えます。ローカル試聴は約250 ms固定です。",
-        "딜레이 피드백: 에코가 딜레이 라인으로 돌아가는 양입니다. 높을수록 반복이 많아집니다. 로컬 미리듣기는 약 250ms로 고정됩니다.",
+    "延迟反馈：控制回声返回延迟线的比例；游戏说明约 2–20 次延迟声，本地试听固定约 250 ms 并按该范围近似。": (
+        "Delay Feedback: controls how much echo returns to the delay line. The game guide describes about 2–20 delayed sounds; local preview uses about 250 ms and approximates that range.",
+        "ディレイフィードバック：エコーをディレイラインへ戻す量です。ゲームガイドの約2～20回のディレイ音に合わせ、ローカル試聴は約250 ms固定で近似します。",
+        "딜레이 피드백: 에코가 딜레이 라인으로 돌아가는 양입니다. 게임 가이드의 약 2–20회 지연음을 기준으로 로컬 미리듣기는 약 250ms 고정으로 근사합니다.",
     ),
     "合唱反馈：控制调制延迟的反馈强度；越高，梳状与旋动感越明显。": (
         "Chorus Feedback: controls modulated-delay feedback; higher values make comb filtering and swirling more pronounced.",
@@ -6177,10 +6535,10 @@ _EFFECT_GUIDANCE_TRANSLATIONS = {
         "LFO深度：コーラスのディレイ時間が揺れる幅です。高いほど広がりと音程の揺れが強くなります。",
         "LFO 깊이: 코러스 딜레이 시간이 흔들리는 폭입니다. 높을수록 공간 폭과 음높이 움직임이 커집니다.",
     ),
-    "LFO 频率：控制合唱起伏速度；越高，流动越快。": (
-        "LFO Frequency: controls the chorus modulation speed; higher values move faster.",
-        "LFO周波数：コーラスの揺れる速さです。高いほど速く変化します。",
-        "LFO 주파수: 코러스가 움직이는 속도입니다. 높을수록 더 빠르게 움직입니다.",
+    "LFO 频率：控制合唱起伏速度；0 仍为慢速运动，本地试听按约 0.03–0.30 Hz 近似。": (
+        "LFO Frequency: controls the chorus modulation speed. Zero still moves slowly; local preview approximates about 0.03–0.30 Hz.",
+        "LFO周波数：コーラスの揺れる速さです。0でもゆっくり動き、ローカル試聴では約0.03～0.30 Hzとして近似します。",
+        "LFO 주파수: 코러스가 움직이는 속도입니다. 0에서도 천천히 움직이며, 로컬 미리듣기는 약 0.03–0.30Hz로 근사합니다.",
     ),
 }
 
@@ -6611,6 +6969,8 @@ EN.update({
     "缩放时间": "Zoom time",
     "Alt+滚轮": "Alt+wheel",
     "调整音块高度": "Adjust note-block height",
+    "触控板双指滑动": "Two-finger touchpad scroll",
+    "平移时间与音高": "Pan time and pitch",
     "时间 · 音高": "Time · Pitch",
     "Shift+方向键": "Shift+arrow keys",
     "时值 · 八度": "Duration · Octave",
@@ -6687,6 +7047,8 @@ JA.update({
     "缩放时间": "時間ズーム",
     "Alt+滚轮": "Alt+ホイール",
     "调整音块高度": "ノートの高さを調整",
+    "触控板双指滑动": "タッチパッドを2本指でスクロール",
+    "平移时间与音高": "時間と音高を移動",
     "时间 · 音高": "時間・音高",
     "Shift+方向键": "Shift+方向キー",
     "时值 · 八度": "長さ・オクターブ",
@@ -6763,6 +7125,8 @@ KO.update({
     "缩放时间": "시간 확대/축소",
     "Alt+滚轮": "Alt+휠",
     "调整音块高度": "음표 블록 높이 조정",
+    "触控板双指滑动": "터치패드 두 손가락 스크롤",
+    "平移时间与音高": "시간과 음높이 이동",
     "时间 · 音高": "시간 · 음높이",
     "Shift+方向键": "Shift+방향키",
     "时值 · 八度": "길이 · 옥타브",
@@ -7597,6 +7961,248 @@ KO.update({
     "虚线为 Wwise 路由分层；不代表实测响度": "점선은 Wwise 라우팅 레이어이며 실측 음량이 아닙니다",
     "当前音符没有独立的 Wwise 力度分层": "이 노트에는 별도의 Wwise 벨로시티 레이어가 없습니다",
 })
+
+_OWNER_IDENTITY_TRANSLATIONS = {
+    "解除绑定": (
+        "Unlink",
+        "連携を解除",
+        "연결 해제",
+    ),
+    "这会清除当前项目和本机配置中的 Owner ID；之后导出前需要重新读取游戏曲谱。": (
+        "This clears the Owner ID from the current project and this computer's configuration. Read an in-game score again before exporting.",
+        "現在のプロジェクトとこのPCの設定からOwner IDを消去します。書き出す前にゲーム内楽譜からもう一度読み取ってください。",
+        "현재 프로젝트와 이 컴퓨터의 설정에서 Owner ID를 지웁니다. 내보내기 전에 게임 내 악보에서 다시 읽으세요.",
+    ),
+}
+
+for _source, (_english, _japanese, _korean) in _OWNER_IDENTITY_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+_TRACK_ORDER_TRANSLATIONS = {
+    "上移轨道": ("Move Track Up", "トラックを上へ移動", "트랙 위로 이동"),
+    "下移轨道": ("Move Track Down", "トラックを下へ移動", "트랙 아래로 이동"),
+}
+
+for _source, (_english, _japanese, _korean) in _TRACK_ORDER_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+_WORKSPACE_TEMPO_TRANSLATIONS = {
+    "全局 BPM": ("Global BPM", "グローバル BPM", "글로벌 BPM"),
+    "自动跟随": ("Follow", "追従", "따라가기"),
+    "全局 BPM（高级）": ("Global BPM (advanced)", "グローバル BPM（詳細）", "글로벌 BPM(고급)"),
+    "所有轨道共用；同步时间网格、试听、分析、自动保存和 BDO 导出。导出兼容范围 1–200；游戏官方作曲指南当前标注上限 180。": (
+        "Shared by every track; synchronizes the time grid, preview, analysis, autosave, and BDO export. Export compatibility is 1–200; the current official game composing guide lists 180 as the maximum.",
+        "全トラック共通。時間グリッド、試聴、解析、自動保存、BDO書き出しを同期します。書き出し互換範囲は1～200ですが、現在の公式作曲ガイドの上限は180です。",
+        "모든 트랙이 공유하며 시간 그리드, 미리 듣기, 분석, 자동 저장 및 BDO 내보내기를 동기화합니다. 내보내기 호환 범위는 1–200이며 현재 공식 작곡 안내의 상한은 180입니다.",
+    ),
+    "跟随参考 BPM": ("Follow reference BPM", "参照 BPM に追従", "참조 BPM 따르기"),
+    "参考音频分析得到可靠节拍后，自动更新工程全局 BPM": (
+        "Automatically update the project Global BPM after reference-audio analysis finds a reliable tempo",
+        "参照音声の解析で信頼できるテンポが得られたら、プロジェクトのグローバル BPM を自動更新します",
+        "참조 오디오 분석에서 신뢰할 수 있는 템포를 찾으면 프로젝트 글로벌 BPM을 자동으로 업데이트합니다",
+    ),
+    "全局 BPM 已设为 {bpm}；已停止自动跟随参考音乐": (
+        "Global BPM set to {bpm}; automatic reference-music following is off",
+        "グローバル BPM を {bpm} に設定し、参照音楽への自動追従を停止しました",
+        "글로벌 BPM을 {bpm}(으)로 설정하고 참조 음악 자동 추적을 중지했습니다",
+    ),
+    "参考 BPM 证据不足；保留当前全局 BPM，可手动调节": (
+        "Insufficient reference-BPM evidence; keeping the current Global BPM, which can be adjusted manually",
+        "参照 BPM の証拠が不足しています。現在のグローバル BPM を維持し、手動で調整できます",
+        "참조 BPM 근거가 부족하여 현재 글로벌 BPM을 유지합니다. 수동으로 조절할 수 있습니다",
+    ),
+    "已跟随参考音乐：全局 BPM {bpm} · 置信 {confidence}%": (
+        "Following reference music: Global BPM {bpm} · confidence {confidence}%",
+        "参照音楽に追従：グローバル BPM {bpm}・信頼度 {confidence}%",
+        "참조 음악 적용: 글로벌 BPM {bpm} · 신뢰도 {confidence}%",
+    ),
+    "参考音乐 BPM 与工程一致：{bpm}": (
+        "Reference BPM matches the project: {bpm}",
+        "参照音楽の BPM はプロジェクトと一致しています：{bpm}",
+        "참조 음악 BPM이 프로젝트와 일치합니다: {bpm}",
+    ),
+    "正在检测参考音乐 BPM…": ("Detecting reference-music BPM…", "参照音楽の BPM を検出中…", "참조 음악 BPM 감지 중…"),
+    "未能可靠检测参考 BPM；保留当前值，可手动调节": (
+        "Reference BPM could not be detected reliably; keeping the current value, which can be adjusted manually",
+        "参照 BPM を確実に検出できませんでした。現在の値を維持し、手動で調整できます",
+        "참조 BPM을 안정적으로 감지하지 못해 현재 값을 유지합니다. 수동으로 조절할 수 있습니다",
+    ),
+    "所有轨道共用；同步时间网格、试听、分析、自动保存和 BDO 导出。游戏静态安全范围 1–200。": (
+        "Shared by every track; synchronizes the time grid, preview, analysis, autosave, and BDO export. The static game-safe range is 1–200.",
+        "全トラック共通。時間グリッド、試聴、解析、自動保存、BDO書き出しを同期します。ゲームの静的安全範囲は1～200です。",
+        "모든 트랙이 공유하며 시간 그리드, 미리 듣기, 분석, 자동 저장 및 BDO 내보내기를 동기화합니다. 게임의 정적 안전 범위는 1–200입니다.",
+    ),
+    "全局 BPM 已设为 {bpm}；时间网格、试听与导出已同步": (
+        "Global BPM set to {bpm}; time grid, preview, and export are synchronized",
+        "グローバル BPM を {bpm} に設定しました。時間グリッド、試聴、書き出しを同期しました",
+        "글로벌 BPM을 {bpm}(으)로 설정했습니다. 시간 그리드, 미리 듣기 및 내보내기가 동기화되었습니다",
+    ),
+    "多人同步器": ("Multiplayer Sync", "マルチプレイ同期", "멀티플레이 동기화"),
+    "多人同步器暂未开放；网络房间功能仍在开发中": (
+        "Multiplayer Sync is not available yet; network rooms are still in development",
+        "マルチプレイ同期はまだ利用できません。ネットワークルーム機能は開発中です",
+        "멀티플레이 동기화는 아직 사용할 수 없으며 네트워크 방 기능은 개발 중입니다",
+    ),
+    "网络合奏房间": ("Network Ensemble Room", "ネットワーク合奏ルーム", "네트워크 합주 방"),
+    "未连接 · 功能预留": ("Disconnected · reserved", "未接続・準備中", "연결 안 됨 · 예약 기능"),
+    "用于协调黑色沙漠双队伍或 FF14 合奏的共同开始时刻；不控制游戏按键。": (
+        "Coordinates one shared start time for two Black Desert teams or an FFXIV ensemble; it does not control game input.",
+        "黒い砂漠の2チームまたはFF14合奏の共通開始時刻を調整します。ゲーム入力は操作しません。",
+        "검은사막 두 팀 또는 FF14 합주의 공통 시작 시각을 조율하며 게임 입력은 제어하지 않습니다.",
+    ),
+    "北京时间": ("Beijing time", "北京時間", "베이징 시간"),
+    "工程节拍": ("Project tempo", "プロジェクトテンポ", "프로젝트 템포"),
+    "房间状态": ("Room status", "ルーム状態", "방 상태"),
+    "连接设置": ("Connection", "接続設定", "연결 설정"),
+    "创建房间": ("Create room", "ルームを作成", "방 만들기"),
+    "加入房间": ("Join room", "ルームに参加", "방 참가"),
+    "IP 地址或主机名": ("IP address or host name", "IPアドレスまたはホスト名", "IP 주소 또는 호스트 이름"),
+    "6 位数字 PIN": ("6-digit PIN", "6桁のPIN", "6자리 PIN"),
+    "方式": ("Mode", "方式", "방식"),
+    "IP 地址": ("IP address", "IPアドレス", "IP 주소"),
+    "端口号": ("Port", "ポート", "포트"),
+    "PIN 码": ("PIN", "PIN", "PIN"),
+    "倒计时时间": ("Countdown", "カウントダウン", "카운트다운"),
+    " 秒": (" s", " 秒", "초"),
+    "同步设计": ("Synchronization design", "同期設計", "동기화 설계"),
+    "房主广播未来的绝对开始时刻；成员先估计时钟偏移与往返延迟，再用本机单调时钟倒计时。PIN 只用于房间验证，不等同于加密。": (
+        "The host broadcasts a future absolute start time. Members first estimate clock offset and round-trip delay, then count down on a local monotonic clock. The PIN authenticates the room; it is not encryption.",
+        "ホストは将来の絶対開始時刻を配信します。メンバーは時計のずれと往復遅延を推定し、ローカルの単調時計でカウントダウンします。PINはルーム確認用で、暗号化ではありません。",
+        "방장은 미래의 절대 시작 시각을 전송합니다. 참가자는 시계 오프셋과 왕복 지연을 추정한 뒤 로컬 단조 시계로 카운트다운합니다. PIN은 방 확인용이며 암호화가 아닙니다.",
+    ),
+    "延迟 -- ms · 偏移 -- ms · 抖动 -- ms": ("Delay -- ms · offset -- ms · jitter -- ms", "遅延 -- ms・ずれ -- ms・ジッター -- ms", "지연 -- ms · 오프셋 -- ms · 지터 -- ms"),
+    "房间成员": ("Room members", "ルームメンバー", "방 참가자"),
+    "0 人在线": ("0 online", "オンライン 0人", "0명 온라인"),
+    "A 队 · 队长 · 等待连接": ("Team A · leader · waiting", "Aチーム・リーダー・接続待ち", "A팀 · 리더 · 연결 대기"),
+    "B 队 · 队长 · 等待连接": ("Team B · leader · waiting", "Bチーム・リーダー・接続待ち", "B팀 · 리더 · 연결 대기"),
+    "成员加入后显示队伍、角色、就绪状态和延迟": ("Joined members will show team, role, ready state, and latency", "参加後にチーム、役割、準備状態、遅延を表示します", "참가 후 팀, 역할, 준비 상태 및 지연을 표시합니다"),
+    "创建房间（预留）": ("Create room (reserved)", "ルーム作成（準備中）", "방 만들기(예약)"),
+    "加入房间（预留）": ("Join room (reserved)", "ルーム参加（準備中）", "방 참가(예약)"),
+    "网络协议尚未启用；当前仅完成房间界面和数据边界": ("The network protocol is not enabled; only the room UI and data boundary are implemented", "ネットワークプロトコルは未実装です。現在はルームUIとデータ境界のみ完成しています", "네트워크 프로토콜은 아직 활성화되지 않았으며 방 UI와 데이터 경계만 구현되었습니다"),
+    "排练辅助雏形 · 不控制游戏输入，也不宣称消除客户端或网络延迟": (
+        "Rehearsal-assist prototype · Does not control game input or claim to remove client or network latency",
+        "リハーサル補助の試作版・ゲーム入力は操作せず、クライアントやネットワーク遅延の解消を保証しません",
+        "합주 보조 프로토타입 · 게임 입력을 제어하지 않으며 클라이언트 또는 네트워크 지연 제거를 보장하지 않습니다",
+    ),
+    "跟随工程全局 BPM": ("Follows project Global BPM", "プロジェクトのグローバル BPM に追従", "프로젝트 글로벌 BPM 연동"),
+    "{bpm} BPM · {meter}/4": ("{bpm} BPM · {meter}/4", "{bpm} BPM・{meter}/4", "{bpm} BPM · {meter}/4"),
+    "团队数": ("Teams", "チーム数", "팀 수"),
+    "预备小节": ("Count-in bars", "予備小節", "카운트인 마디"),
+    "本机倒计时": ("Local countdown", "ローカルカウントダウン", "로컬 카운트다운"),
+    "按全局 BPM 给两位队长统一预备拍；适合语音或同屏排练。": (
+        "Give both leaders the same count-in at the Global BPM; suited to voice chat or same-screen rehearsals.",
+        "グローバル BPM で2人のリーダーに同じ予備拍を提示します。ボイスチャットや同じ画面での練習向けです。",
+        "글로벌 BPM에 맞춰 두 리더에게 동일한 카운트인을 제공합니다. 음성 채팅 또는 같은 화면 합주에 적합합니다.",
+    ),
+    "网络广播": ("Network broadcast", "ネットワーク配信", "네트워크 브로드캐스트"),
+    "预留房间时钟、延迟估计和重同步接口。": (
+        "Reserved for room clocks, latency estimation, and resynchronization.",
+        "ルームクロック、遅延推定、再同期のインターフェースを予約しています。",
+        "룸 시계, 지연 추정 및 재동기화 인터페이스를 위해 예약되었습니다.",
+    ),
+    "硬件同步": ("Hardware sync", "ハードウェア同期", "하드웨어 동기화"),
+    "预留外部同步器适配接口；当前不连接任何设备。": (
+        "Reserved for external synchronizer adapters; no device is currently connected.",
+        "外部同期装置のアダプター用インターフェースです。現在はどの機器にも接続しません。",
+        "외부 동기화 장치 어댑터용 인터페이스이며 현재 어떤 장치에도 연결하지 않습니다.",
+    ),
+    "开始倒计时": ("Start countdown", "カウントダウン開始", "카운트다운 시작"),
+    "现在开始": ("Start now", "スタート", "지금 시작"),
+    "预备 {bar}/{bars} · 第 {beat} 拍": (
+        "Count-in {bar}/{bars} · Beat {beat}",
+        "予備 {bar}/{bars}・{beat} 拍目",
+        "카운트인 {bar}/{bars} · {beat}박",
+    ),
+    "可用": ("Available", "利用可能", "사용 가능"),
+    "预留": ("Reserved", "準備中", "예약됨"),
+}
+
+for _source, (_english, _japanese, _korean) in _WORKSPACE_TEMPO_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+_REFERENCE_TIMBRE_HYBRID_TRANSLATIONS = {
+    "声学分类 · 少样本补全未知片段": (
+        "Acoustic classes · few-shot completion for unknown spans",
+        "音響分類・未知区間を少数サンプルで補完",
+        "음향 분류 · 미확인 구간을 소수 샘플로 보완",
+    ),
+}
+
+for _source, (
+    _english,
+    _japanese,
+    _korean,
+) in _REFERENCE_TIMBRE_HYBRID_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+_TIMELINE_VELOCITY_CURVE_TRANSLATIONS = {
+    "力度节点": ("Velocity Points", "ベロシティポイント", "벨로시티 포인트"),
+    "力度 0–127": ("Velocity 0–127", "ベロシティ 0–127", "벨로시티 0–127"),
+    "力度 {velocity:.0f} · 左 {left:.0f}% · 右 {right:.0f}%": (
+        "Velocity {velocity:.0f} · L {left:.0f}% · R {right:.0f}%",
+        "ベロシティ {velocity:.0f}・左 {left:.0f}%・右 {right:.0f}%",
+        "벨로시티 {velocity:.0f} · 왼쪽 {left:.0f}% · 오른쪽 {right:.0f}%",
+    ),
+    "当前可见区": ("Visible Range", "現在の表示範囲", "현재 표시 구간"),
+    "A–B 区间": ("A–B Range", "A–B区間", "A–B 구간"),
+    "正在编辑 · {count} 节点": (
+        "Editing · {count} points",
+        "編集中・{count}ポイント",
+        "편집 중 · 포인트 {count}개",
+    ),
+    "精准力度 · {track} · {scope}": (
+        "Precision Velocity · {track} · {scope}",
+        "精密ベロシティ・{track}・{scope}",
+        "정밀 벨로시티 · {track} · {scope}",
+    ),
+    "节点 {index}/{count} · 时间 {time:.2f}% · 力度 {gain:.1f}% · 左权重 {left:.1f}% · 右权重 {right:.1f}%": (
+        "Point {index}/{count} · Time {time:.2f}% · Velocity {gain:.1f}% · Left {left:.1f}% · Right {right:.1f}%",
+        "ポイント {index}/{count}・時間 {time:.2f}%・ベロシティ {gain:.1f}%・左 {left:.1f}%・右 {right:.1f}%",
+        "포인트 {index}/{count} · 시간 {time:.2f}% · 벨로시티 {gain:.1f}% · 왼쪽 {left:.1f}% · 오른쪽 {right:.1f}%",
+    ),
+    "单击创建节点；拖动节点精调；拖动左右手柄改变权重；右键删除中间节点": (
+        "Click to add a point; drag points to fine-tune; drag side handles to change weight; right-click an interior point to delete",
+        "クリックでポイント追加・ポイントをドラッグして微調整・左右ハンドルで重みを変更・中間ポイントを右クリックで削除",
+        "클릭해 포인트 추가 · 포인트 드래그로 미세 조정 · 좌우 핸들로 가중치 변경 · 중간 포인트 우클릭으로 삭제",
+    ),
+    "力度节点目标轨道已经失效": (
+        "The velocity-point target track is no longer available",
+        "ベロシティポイントの対象トラックは使用できなくなりました",
+        "벨로시티 포인트 대상 트랙을 더 이상 사용할 수 없습니다",
+    ),
+    "已应用 {track} 的精准力度 · {count} 音符": (
+        "Applied precision velocity to {track} · {count} notes",
+        "{track}に精密ベロシティを適用・{count}ノート",
+        "{track}에 정밀 벨로시티 적용 · 음표 {count}개",
+    ),
+}
+
+for _source, (
+    _english,
+    _japanese,
+    _korean,
+) in _TIMELINE_VELOCITY_CURVE_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
 
 # These feature-local catalog additions are declared after ``Localizer`` to
 # keep the existing generated catalog blocks untouched. Refresh the derived

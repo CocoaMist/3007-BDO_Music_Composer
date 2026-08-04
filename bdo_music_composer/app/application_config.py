@@ -10,9 +10,55 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import time
-from typing import Any, Mapping
+from typing import Any, Mapping, MutableMapping
 
 from bdo_common.atomic_io import atomic_copy_file, atomic_write_bytes
+
+
+OWNER_IDENTITY_KEY = "owner_identity"
+_MAX_OWNER_ID = 0xFFFFFFFF
+
+
+def owner_identity(config: Mapping[str, Any]) -> tuple[int, str]:
+    """Read the optional locally remembered export identity safely.
+
+    Owner IDs are account-linked values.  They stay in the user-writable
+    application configuration rather than in the installation or source tree,
+    and malformed hand-edited values fail closed to an unbound identity.
+    """
+
+    raw_identity = config.get(OWNER_IDENTITY_KEY)
+    if not isinstance(raw_identity, Mapping):
+        return 0, ""
+    raw_owner_id = raw_identity.get("owner_id")
+    if isinstance(raw_owner_id, bool) or not isinstance(raw_owner_id, int):
+        return 0, ""
+    owner_id = int(raw_owner_id)
+    if not 0 < owner_id <= _MAX_OWNER_ID:
+        return 0, ""
+    character_name = raw_identity.get("character_name", "")
+    return owner_id, str(character_name).strip() if isinstance(character_name, str) else ""
+
+
+def set_owner_identity(
+    config: MutableMapping[str, Any],
+    owner_id: int,
+    character_name: str = "",
+) -> None:
+    """Set or remove the optional local Owner ID binding in *config*."""
+
+    if isinstance(owner_id, bool):
+        raise ValueError("owner_id must be an unsigned 32-bit integer")
+    normalized_owner_id = int(owner_id)
+    if normalized_owner_id == 0:
+        config.pop(OWNER_IDENTITY_KEY, None)
+        return
+    if not 0 < normalized_owner_id <= _MAX_OWNER_ID:
+        raise ValueError("owner_id must be an unsigned 32-bit integer")
+    config[OWNER_IDENTITY_KEY] = {
+        "owner_id": normalized_owner_id,
+        "character_name": str(character_name).strip(),
+    }
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
@@ -94,4 +140,11 @@ def safe_filename(value: str, fallback: str = "project") -> str:
     return cleaned[:80] or fallback
 
 
-__all__ = ["load_config", "safe_filename", "save_config"]
+__all__ = [
+    "OWNER_IDENTITY_KEY",
+    "load_config",
+    "owner_identity",
+    "safe_filename",
+    "save_config",
+    "set_owner_identity",
+]

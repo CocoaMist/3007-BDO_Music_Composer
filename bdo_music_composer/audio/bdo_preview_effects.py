@@ -16,8 +16,14 @@ import numpy as np
 
 
 PREVIEW_DELAY_SECONDS = 0.25
+PREVIEW_DELAY_MIN_REPEATS = 2
+PREVIEW_DELAY_MAX_REPEATS = 20
+PREVIEW_DELAY_WET_GAIN = 0.42
+PREVIEW_DELAY_AUDIBLE_GAIN = 0.01
 PREVIEW_REVERB_MIN_SECONDS = 0.2
 PREVIEW_REVERB_MAX_SECONDS = 8.0
+PREVIEW_CHORUS_MIN_FREQUENCY_HZ = 0.03
+PREVIEW_CHORUS_MAX_FREQUENCY_HZ = 0.30
 MAX_EFFECT_TAIL_SECONDS = 8.0
 PREVIEW_EFFECT_VECTOR_FRAMES = 4_096
 
@@ -65,6 +71,41 @@ def preview_send_gain(value: int | float) -> float:
     """Return the local linear Aux-send approximation for one authoring value."""
 
     return _authoring_fraction(value)
+
+
+def preview_delay_repeat_count(value: int | float) -> int:
+    """Map Delay Feedback to the game's documented approximate echo count."""
+
+    fraction = _authoring_fraction(value)
+    return round(
+        PREVIEW_DELAY_MIN_REPEATS
+        + (PREVIEW_DELAY_MAX_REPEATS - PREVIEW_DELAY_MIN_REPEATS) * fraction
+    )
+
+
+def preview_delay_feedback_gain(value: int | float) -> float:
+    """Return a stable feedback gain whose audible tail matches the guide.
+
+    The official authoring guide documents about two delayed sounds at 0 and
+    about twenty at 100, but does not publish the native Wwise taper.  Anchor
+    the local approximation to those endpoints using a conservative -40 dB
+    audibility boundary instead of the previous arbitrary linear coefficient.
+    """
+
+    repeats = preview_delay_repeat_count(value)
+    return (
+        PREVIEW_DELAY_AUDIBLE_GAIN / PREVIEW_DELAY_WET_GAIN
+    ) ** (1.0 / max(1, repeats - 1))
+
+
+def preview_chorus_frequency_hz(value: int | float) -> float:
+    """Map authoring frequency to a slow-but-moving 0 and bank-bounded 100."""
+
+    fraction = _authoring_fraction(value)
+    return PREVIEW_CHORUS_MIN_FREQUENCY_HZ + (
+        PREVIEW_CHORUS_MAX_FREQUENCY_HZ
+        - PREVIEW_CHORUS_MIN_FREQUENCY_HZ
+    ) * fraction
 
 
 class PreviewEffectProcessor:
@@ -174,7 +215,7 @@ class PreviewEffectProcessor:
                 (PREVIEW_EFFECT_VECTOR_FRAMES, 2),
                 dtype=np.float32,
             )
-            self._delay_feedback = 0.78 * _authoring_fraction(
+            self._delay_feedback = preview_delay_feedback_gain(
                 settings.delay_feedback
             )
         else:
@@ -238,7 +279,6 @@ class PreviewEffectProcessor:
                 dtype=np.float32,
             )
             depth = _authoring_fraction(settings.chorus_lfo_depth)
-            frequency = _authoring_fraction(settings.chorus_lfo_frequency)
             self._chorus_base_frames = self.sample_rate * 0.010
             # All 40 instrument banks point at the same init-bank Flanger
             # AuxBus: its RTPCs expose 30..100% depth, 0..0.3 Hz frequency and
@@ -247,7 +287,12 @@ class PreviewEffectProcessor:
             self._chorus_depth_frames = (
                 self._chorus_base_frames * (0.30 + 0.70 * depth)
             )
-            frequency_hz = 0.30 * frequency
+            # The official game guide describes value 0 as slow movement, not
+            # a stopped oscillator.  Keep a conservative non-zero floor while
+            # retaining the inspected bank's 0.3 Hz upper bound.
+            frequency_hz = preview_chorus_frequency_hz(
+                settings.chorus_lfo_frequency
+            )
             self._chorus_phase_step = (
                 2.0 * math.pi * frequency_hz / self.sample_rate
             )
@@ -314,10 +359,8 @@ class PreviewEffectProcessor:
                 * fraction
             )
         if self.delay_enabled:
-            feedback = self._delay_feedback
-            repeats = 1 if feedback <= 0.0 else max(
-                1,
-                math.ceil(math.log(0.001) / math.log(feedback)),
+            repeats = preview_delay_repeat_count(
+                self.settings.delay_feedback
             )
             tails.append(PREVIEW_DELAY_SECONDS * repeats)
         if self.chorus_enabled:
@@ -417,7 +460,7 @@ class PreviewEffectProcessor:
             scratch = self._delay_scratch[:count]
             output_slice = output[offset:offset + count]
             source_slice = source[offset:offset + count]
-            np.multiply(delayed, 0.42, out=scratch)
+            np.multiply(delayed, PREVIEW_DELAY_WET_GAIN, out=scratch)
             np.add(output_slice, scratch, out=output_slice)
             np.multiply(delayed, feedback, out=scratch)
             np.add(source_slice, scratch, out=delayed)
@@ -553,10 +596,19 @@ class PreviewEffectProcessor:
 
 __all__ = [
     "MAX_EFFECT_TAIL_SECONDS",
+    "PREVIEW_CHORUS_MAX_FREQUENCY_HZ",
+    "PREVIEW_CHORUS_MIN_FREQUENCY_HZ",
+    "PREVIEW_DELAY_AUDIBLE_GAIN",
+    "PREVIEW_DELAY_MAX_REPEATS",
+    "PREVIEW_DELAY_MIN_REPEATS",
     "PREVIEW_DELAY_SECONDS",
+    "PREVIEW_DELAY_WET_GAIN",
     "PREVIEW_REVERB_MAX_SECONDS",
     "PREVIEW_REVERB_MIN_SECONDS",
     "PreviewEffectProcessor",
     "PreviewEffectSettings",
+    "preview_chorus_frequency_hz",
+    "preview_delay_feedback_gain",
+    "preview_delay_repeat_count",
     "preview_send_gain",
 ]

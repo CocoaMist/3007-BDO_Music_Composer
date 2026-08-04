@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -43,6 +44,47 @@ SHAI_ENSEMBLE_MARK_IMAGE = ASSETS_DIR / "icons" / "shai_ensemble_mark.png"
 HOME_INSTRUMENT_IDS_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 
 
+class HomeLibrarySurface(QFrame):
+    """One quiet material layer for the complete home library."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("HomeLibrarySurface")
+        self.content_layout = QVBoxLayout(self)
+        self.content_layout.setContentsMargins(14, 12, 14, 10)
+        self.content_layout.setSpacing(10)
+
+
+class HomeHero(QWidget):
+    """Compact title block that anchors the home command column."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("HomeHero")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 0, 14, 0)
+        layout.setSpacing(2)
+        title = QLabel(tr("继续创作"))
+        title.setObjectName("HomeTitle")
+        subtitle = QLabel(tr("从最近工程继续，或开始一个新的编曲项目"))
+        subtitle.setObjectName("HomeSubtitle")
+        subtitle.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+
+class HomeLibraryTabs(QFrame):
+    """Fixed-height host that makes the two library tabs read as one control."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("HomeLibraryTabs")
+        self.setFixedHeight(36)
+        self.content_layout = QHBoxLayout(self)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setSpacing(0)
+
+
 class HomeFooter(QWidget):
     """Public privacy footer with a dormant internal release-notes hook."""
 
@@ -57,7 +99,7 @@ class HomeFooter(QWidget):
         self.version = str(version)
         self.setObjectName("HomeFooter")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(2, 7, 2, 0)
         layout.setSpacing(8)
         self.local_badge = QLabel()
         self.local_badge.setObjectName("HomeLocalBadge")
@@ -596,5 +638,8 @@ __all__ = [
     "HomeBackdrop",
     "HomeEntryDelegate",
     "HomeFooter",
+    "HomeHero",
     "HomeIdentityBadge",
+    "HomeLibrarySurface",
+    "HomeLibraryTabs",
 ]

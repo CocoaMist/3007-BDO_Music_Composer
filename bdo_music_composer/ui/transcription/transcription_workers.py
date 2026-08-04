@@ -52,10 +52,23 @@ from bdo_music_composer.transcription.bdo_transcription_instruments import (
 )
 from bdo_music_composer.transcription.bdo_transcription_timbre import (
     FramePitchEvidence,
+    TimbreAnalysisCancelled,
     TimbreProfileError,
     extract_group_timbre_profiles,
     load_or_build_timbre_profile_index,
     remap_group_timbre_profiles,
+)
+from bdo_music_composer.transcription.muscriptor_backend import (
+    MUSCRIPTOR_BACKEND_ID,
+    MuScriptorBackendError,
+    MuScriptorCancelled,
+    muscriptor_backend_status,
+    transcribe_muscriptor_events,
+)
+from bdo_music_composer.transcription.reference_timbre import (
+    ReferenceTimbreCancelled,
+    build_reference_timbre_analysis,
+    build_reference_timbre_prediction,
 )
 from bdo_music_composer.app.crash_logging import append_crash_log
 from bdo_music_composer.transcription.rhythm_cleanup import (
@@ -700,6 +713,160 @@ class TranscriptionAssistAnalysisWorker(QThread):
                         group_profile_revision,
                     )
                 )
+        finally:
+            _close_mapped_array(frame)
+            _close_mapped_array(times)
+
+
+class ReferenceTimbreAnalysisWorker(QThread):
+    """Build display-only timbre colours and optional generic labels."""
+
+    predicted = Signal(object)
+    succeeded = Signal(object)
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(
+        self,
+        *,
+        cache_key: str,
+        candidates: tuple[object, ...],
+        bpm: float,
+        midi_min: int,
+        reference_audio_path: str,
+        external_labels_enabled: bool = False,
+        muscriptor_executable: str = "",
+        parent: QObject | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.cache_key = str(cache_key)
+        self.candidates = tuple(candidates)
+        self.bpm = float(bpm)
+        self.midi_min = int(midi_min)
+        self.reference_audio_path = str(reference_audio_path or "")
+        self.external_labels_enabled = bool(external_labels_enabled)
+        self.muscriptor_executable = str(muscriptor_executable or "")
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancelled.set()
+
+    def run(self) -> None:
+        frame = None
+        times = None
+        try:
+            frame = load_transcription_evidence(self.cache_key, "frame")
+            times = load_transcription_frame_times(self.cache_key)
+            if frame is None or times is None:
+                raise TranscriptionError(
+                    "参考音色分析所需的音高证据已失效，请重新分析整首。"
+                )
+            if self._cancelled.is_set():
+                raise ReferenceTimbreCancelled()
+            groups = group_voice_candidates(
+                self.candidates,
+                beat_ms=60_000.0 / max(1.0, self.bpm),
+                cancelled=self._cancelled.is_set,
+            )
+            if self._cancelled.is_set():
+                raise ReferenceTimbreCancelled()
+            self.predicted.emit(
+                build_reference_timbre_prediction(
+                    cache_key=self.cache_key,
+                    candidates=self.candidates,
+                    voice_groups=groups,
+                    cancelled=self._cancelled.is_set,
+                )
+            )
+            profiles = extract_group_timbre_profiles(
+                self.reference_audio_path,
+                self.candidates,
+                groups,
+                frame_evidence=FramePitchEvidence(
+                    times,
+                    frame,
+                    self.midi_min,
+                    1,
+                ),
+                cancelled=self._cancelled.is_set,
+            )
+            candidate_profiles = getattr(profiles, "candidate_profiles", {})
+            if candidate_profiles:
+                refined = refine_voice_groups_by_timbre(
+                    groups,
+                    self.candidates,
+                    candidate_profiles,
+                    cancelled=self._cancelled.is_set,
+                )
+                if refined != groups:
+                    groups = refined
+                    profiles = remap_group_timbre_profiles(
+                        profiles,
+                        self.candidates,
+                        groups,
+                        cancelled=self._cancelled.is_set,
+                    )
+            instrument_events = ()
+            label_backend = ""
+            label_status = "disabled"
+            if self.external_labels_enabled:
+                available, _reason = muscriptor_backend_status(
+                    self.muscriptor_executable
+                )
+                label_backend = MUSCRIPTOR_BACKEND_ID
+                if not available:
+                    label_status = "unavailable"
+                else:
+                    try:
+                        instrument_events = transcribe_muscriptor_events(
+                            self.reference_audio_path,
+                            executable=self.muscriptor_executable,
+                            cancelled=self._cancelled.is_set,
+                        )
+                        label_status = "ready"
+                    except MuScriptorCancelled:
+                        raise ReferenceTimbreCancelled() from None
+                    except MuScriptorBackendError:
+                        # Anonymous colours remain useful when the optional
+                        # external process fails.  Do not expose command output
+                        # or a local path through project/UI state.
+                        label_status = "failed"
+            analysis = build_reference_timbre_analysis(
+                cache_key=self.cache_key,
+                candidates=self.candidates,
+                voice_groups=groups,
+                group_profiles=profiles,
+                candidate_profiles=candidate_profiles,
+                instrument_events=instrument_events,
+                label_backend=label_backend,
+                label_status=label_status,
+                cancelled=self._cancelled.is_set,
+            )
+        except (
+            InstrumentAnalysisCancelled,
+            TimbreAnalysisCancelled,
+            ReferenceTimbreCancelled,
+        ):
+            self.cancelled.emit()
+        except TranscriptionError as exc:
+            self.failed.emit(str(exc))
+        except (OSError, TypeError, ValueError, TimbreProfileError):
+            self.failed.emit(
+                "音色分组失败；候选音符和正式轨道均未被修改。"
+            )
+        except Exception:
+            append_crash_log(
+                "Reference timbre analysis failed",
+                traceback.format_exc(),
+            )
+            self.failed.emit(
+                "音色分组失败；候选音符和正式轨道均未被修改。"
+            )
+        else:
+            if self._cancelled.is_set():
+                self.cancelled.emit()
+            else:
+                self.succeeded.emit(analysis)
         finally:
             _close_mapped_array(frame)
             _close_mapped_array(times)

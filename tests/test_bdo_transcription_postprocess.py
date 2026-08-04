@@ -120,6 +120,32 @@ class FragmentPostprocessTests(unittest.TestCase):
             )
         )
 
+    def test_preserve_marks_false_split_continuity_without_merging(self) -> None:
+        frame, onset = evidence()
+        sustain(frame, 60, 5, 22)
+        events = (
+            FrameNoteEvent(5, 12, 60, 0.72, ("split-left",)),
+            FrameNoteEvent(14, 22, 60, 0.64, ("split-right",)),
+        )
+
+        result = postprocess_frame_events(
+            events,
+            frame,
+            onset,
+            profile="preserve",
+        )
+
+        self.assertEqual(result.events, events)
+        self.assertEqual(result.stats.automatic_merge_count, 0)
+        self.assertFalse(result.automatic_actions_enabled)
+        self.assertTrue(
+            all(
+                "cleanup_candidate" in item.flags
+                for item in result.audit
+                if item.action == "kept"
+            )
+        )
+
     def test_preserve_sorts_deduplicates_and_only_labels_short_notes(
         self,
     ) -> None:

@@ -178,6 +178,7 @@ class FluentSymbol(str, Enum):
     OPEN = "open"
     PROJECT = "project"
     OPTIMIZE = "optimize"
+    NETWORK = "network"
     INFO = "info"
     SETTINGS = "settings"
     EXPORT = "export"
@@ -235,6 +236,13 @@ def _draw_fluent_symbol(symbol: FluentSymbol, color: str, size: int = 16) -> QPi
         painter.drawArc(round(2 * scale), round(2 * scale), round(12 * scale), round(12 * scale), 35 * 16, 255 * 16)
         line(11.5, 2.5, 14, 3)
         line(14, 3, 13.2, 5.4)
+    elif symbol == FluentSymbol.NETWORK:
+        painter.drawEllipse(round(6 * scale), round(1.5 * scale), round(4 * scale), round(4 * scale))
+        painter.drawEllipse(round(1.5 * scale), round(10.5 * scale), round(4 * scale), round(4 * scale))
+        painter.drawEllipse(round(10.5 * scale), round(10.5 * scale), round(4 * scale), round(4 * scale))
+        line(7, 5.2, 4.5, 10.8)
+        line(9, 5.2, 11.5, 10.8)
+        line(5.5, 12.5, 10.5, 12.5)
     elif symbol == FluentSymbol.INFO:
         painter.drawEllipse(round(2.5 * scale), round(2.5 * scale), round(11 * scale), round(11 * scale))
         line(8, 7, 8, 11)

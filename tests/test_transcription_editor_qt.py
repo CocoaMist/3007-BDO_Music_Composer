@@ -114,6 +114,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
     def test_panel_exposes_practical_reliable_workflow(self) -> None:
         completed = _run_offscreen(
             """
+            from types import SimpleNamespace
             from PySide6.QtWidgets import QApplication
 
             from bdo_music_composer.ui.transcription.transcription_editor_qt import TranscriptionEditorPanel
@@ -131,17 +132,43 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             assert panel.cleanup_profile == "preserve"
             assert panel.workspace_title_label.text() == "音频扒谱"
             assert panel.audio_button.text() == "载入音频"
-            assert panel.analyze_button.text() == "开始扒谱"
+            assert panel.analyze_button.text() == "分析"
             assert panel.write_current_track_button.text() == "采纳为草稿"
             assert panel.reject_button.text() == "忽略所选"
             assert panel.restore_button.text() == "恢复忽略"
+            assert panel.candidate_layer_popup.minimumWidth() == 420
+            assert panel.candidate_display_title.text() == "显示强度"
+            assert panel.candidate_filter_title.text() == "筛选与节奏"
+            assert panel.candidate_timbre_title.text() == "乐器区分"
+            assert (
+                panel.candidate_opacity_caption.parentWidget()
+                is panel.confidence_caption.parentWidget()
+            )
+            assert (
+                panel.timbre_grouping_checkbox.parentWidget()
+                is panel.timbre_legend_label.parentWidget()
+            )
             assert panel.candidate_layer_button.isVisible()
-            assert panel.candidate_layer_button.text() == "参考音块 · 52%"
+            assert panel.candidate_layer_button.text() == "分析音块 · 52%"
             assert panel.pitch_guide_button.isVisible()
-            assert panel.pitch_guide_button.text() == "音高轨迹"
-            assert panel.pitch_only_button.isVisible()
-            assert panel.contour_denoise_combo.isVisible()
+            assert panel.pitch_guide_button.text() == "音高线"
+            assert panel.candidate_layer_menu is not panel.pitch_guide_menu
+            assert not panel.pitch_only_button.isVisible()
+            assert not panel.contour_denoise_combo.isVisible()
+            assert (
+                panel.pitch_only_button.parentWidget()
+                is panel.contour_denoise_combo.parentWidget()
+            )
+            assert panel.pitch_mode_description.text().endswith(
+                "与分析音块独立显示"
+            )
+            assert panel.pitch_timbre_caption.text() == "乐器颜色：自动分类"
+            assert "乐器颜色显示音高线" in panel.pitch_timbre_legend_label.text()
             assert panel.contour_denoise == "standard"
+            assert panel.contour_opacity == 0.82
+            assert panel.contour_opacity_label.text() == "82%"
+            assert not panel.melody_guidance_enabled
+            assert panel.melody_guidance_status_label.text() == "旋律引导已关闭"
             assert not panel.melody_lines_visible
             assert not panel.advanced_toggle_button.isVisible()
             assert not panel.advanced_panel.isVisible()
@@ -223,12 +250,48 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             assert not panel.contour_denoise_combo.isEnabled()
 
             denoise_events = []
+            opacity_events = []
+            guidance_events = []
             panel.contour_denoise_changed.connect(denoise_events.append)
+            panel.contour_opacity_changed.connect(opacity_events.append)
+            panel.melody_guidance_changed.connect(guidance_events.append)
             panel.contour_denoise_combo.setCurrentIndex(
                 panel.contour_denoise_combo.findData("high")
             )
             assert panel.contour_denoise == "high"
             assert denoise_events == ["high"]
+            panel.contour_opacity_slider.setValue(67)
+            assert panel.contour_opacity == 0.67
+            assert panel.contour_opacity_label.text() == "67%"
+            assert opacity_events == [0.67]
+            panel.melody_guidance_checkbox.setChecked(True)
+            assert panel.melody_guidance_enabled
+            assert guidance_events == [True]
+            panel.set_melody_guidance_enabled(False)
+            assert not panel.melody_guidance_enabled
+            assert guidance_events == [True]
+            panel.set_melody_guidance_enabled(True)
+            guided_group = SimpleNamespace(
+                group_id="timbre-a",
+                candidate_ids=("a", "b"),
+                confidence=0.73,
+                color="#4AA3DF",
+                label_family="guitar",
+                label_confidence=0.91,
+            )
+            guidance = SimpleNamespace(
+                groups=(SimpleNamespace(window_count=3, hit_count=5),),
+                focus_group_id="timbre-a",
+                target_instrument_label="长笛",
+            )
+            panel.set_melody_guidance_analysis(guidance)
+            panel.set_timbre_analysis(SimpleNamespace(
+                groups=(guided_group,),
+                label_status="ready",
+            ))
+            assert "长笛 · 引导优先 · 2 个" in panel.timbre_legend_label.text()
+            assert "疑似吉他" not in panel.timbre_legend_label.text()
+            assert "最高优先：长笛" in panel.melody_guidance_status_label.text()
 
             panel.close()
             app.processEvents()
@@ -285,7 +348,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             assert panel.confidence_floor == 0.30
             assert panel.candidate_layer_visible
             assert panel.candidate_opacity == 0.72
-            assert panel.candidate_layer_button.text() == "识别音块 · 72%"
+            assert panel.candidate_layer_button.text() == "分析音块 · 72%"
             assert panel.reference_background_opacity == 0.60
             assert panel.reference_opacity_caption.text() == "参考层"
             assert panel.reference_opacity_label.text() == "60%"
@@ -450,7 +513,7 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             assert signals["reference_opacity"] == [0.42]
             panel.candidate_opacity_slider.setValue(54)
             assert panel.candidate_opacity == 0.54
-            assert panel.candidate_layer_button.text() == "识别音块 · 54%"
+            assert panel.candidate_layer_button.text() == "分析音块 · 54%"
             assert signals["candidate_opacity"] == [0.54]
             panel.candidate_layer_button.setChecked(False)
             assert signals["candidate_visibility"] == [False]
@@ -893,9 +956,30 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             assert candidate_position[:2] == (0, 1), candidate_position
             assert guide_position[:2] == (1, 0), guide_position
 
+            assert panel._review_layout_wide is True
+            review_display_position = panel._review_layout.getItemPosition(
+                panel._review_layout.indexOf(panel.review_display_group)
+            )
+            review_action_position = panel._review_layout.getItemPosition(
+                panel._review_layout.indexOf(panel.review_action_group)
+            )
+            assert review_display_position[:2] == (0, 0)
+            assert review_action_position[:2] == (0, 2)
+
+            panel.resize(920, panel.sizeHint().height())
+            app.processEvents()
+            assert panel._review_layout_wide is False
+            review_action_position = panel._review_layout.getItemPosition(
+                panel._review_layout.indexOf(panel.review_action_group)
+            )
+            assert review_action_position[:2] == (1, 0)
+
             localizer.set_language("en_US")
             panel.set_audio_loaded(False)
-            assert panel.analyze_button.text() == "Start Transcription"
+            assert panel.analyze_button.text() == "Analyze"
+            assert panel.candidate_display_title.text() == "Display intensity"
+            assert panel.candidate_filter_title.text() == "Filters & rhythm"
+            assert panel.candidate_timbre_title.text() == "Instrument distinction"
             assert panel.cleanup_profile_caption.text() == "Fragment cleanup"
             assert panel.cleanup_profile_combo.itemText(0) == "Keep"
             assert panel.melody_lines_button.text() == "Voice hints"

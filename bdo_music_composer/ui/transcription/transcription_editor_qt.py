@@ -9,6 +9,7 @@ transcription state.
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
+import html
 import math
 from typing import Iterable, Mapping, Sequence
 
@@ -39,6 +40,17 @@ from PySide6.QtWidgets import (
 )
 
 from bdo_music_composer.ui.i18n import defer_tr, tr, trf, trfv, tr_joinv, trv
+
+
+def _alpha_label(index: int) -> str:
+    """Return compact A..Z, AA.. labels for anonymous timbre groups."""
+
+    value = max(1, int(index))
+    parts: list[str] = []
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        parts.append(chr(ord("A") + remainder))
+    return "".join(reversed(parts))
 
 
 def _responsive_control_width(
@@ -1314,7 +1326,11 @@ class TranscriptionEditorPanel(QWidget):
     confidence_changed = Signal(float)
     candidate_visibility_changed = Signal(bool)
     candidate_opacity_changed = Signal(float)
+    timbre_grouping_changed = Signal(bool)
+    external_instrument_labels_changed = Signal(bool)
     contour_denoise_changed = Signal(str)
+    contour_opacity_changed = Signal(float)
+    melody_guidance_changed = Signal(bool)
     show_rejected_changed = Signal(bool)
     show_suppressed_changed = Signal(bool)
     select_fragments_requested = Signal()
@@ -1330,6 +1346,7 @@ class TranscriptionEditorPanel(QWidget):
     beat_origin_requested = Signal()
     rhythm_diagnostic_requested = Signal()
     rhythm_projection_enabled_changed = Signal(bool)
+    rhythm_profile_changed = Signal(str)
     clear_range_requested = Signal()
     review_undo_requested = Signal()
     review_redo_requested = Signal()
@@ -1381,9 +1398,15 @@ class TranscriptionEditorPanel(QWidget):
         self._copy_allowed = False
         self._assist_available = False
         self._melody_lines_available = False
+        self._external_instrument_labels_available = False
+        self._melody_guidance_analysis: object | None = None
+        self._last_timbre_analysis: object | None = None
+        self._last_timbre_busy = False
+        self._last_timbre_error = False
         self._advanced_controls_expanded = False
         self._review_tools_expanded = False
         self._advanced_layout_wide: bool | None = None
+        self._review_layout_wide: bool | None = None
         self._suspected_fragment_count = 0
         self._candidate_count = 0
         self._draft_note_count = 0
@@ -1395,7 +1418,7 @@ class TranscriptionEditorPanel(QWidget):
         self._review_redo_available = False
         self._review_tools_available = False
         self._pitch_only_previous: tuple[bool, bool, bool] | None = None
-        self._idle_status = trv("载入音频，然后开始扒谱")
+        self._idle_status = trv("载入音频，然后分析")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -1436,10 +1459,10 @@ class TranscriptionEditorPanel(QWidget):
         self.remove_audio_button.clicked.connect(self.unload_audio_requested)
         self.remove_audio_button.hide()
 
-        self.analyze_button = QPushButton(tr("开始扒谱"), self.analysis_bar)
+        self.analyze_button = QPushButton(tr("分析"), self.analysis_bar)
         self.analyze_button.setObjectName("TranscriptionAnalyzeButton")
         self.analyze_button.setProperty("kind", "primary")
-        self.analyze_button.setAccessibleName(tr("开始扒谱"))
+        self.analyze_button.setAccessibleName(tr("分析"))
         _responsive_control_width(self.analyze_button, 64, 104)
         self.analyze_button.clicked.connect(self.analyze_requested)
         analysis.addWidget(self.remove_audio_button, 0, 2)
@@ -1562,11 +1585,11 @@ class TranscriptionEditorPanel(QWidget):
             "TranscriptionCandidateLayerButton"
         )
         self.candidate_layer_button.setText(
-            trf("参考音块 · {opacity}%", opacity=52)
+            trf("分析音块 · {opacity}%", opacity=52)
         )
-        self.candidate_layer_button.setAccessibleName(tr("参考识别音块"))
+        self.candidate_layer_button.setAccessibleName(tr("分析音块"))
         self.candidate_layer_button.setToolTip(
-            tr("线框表示识别建议，底部短线表示置信度；箭头可调整透明度")
+            tr("离散识别结果；可框选、筛选并采纳为可编辑草稿")
         )
         self.candidate_layer_button.setCheckable(True)
         self.candidate_layer_button.setChecked(True)
@@ -1652,13 +1675,16 @@ class TranscriptionEditorPanel(QWidget):
         self.pitch_guide_button.setObjectName(
             "TranscriptionPitchGuideButton"
         )
-        self.pitch_guide_button.setText(tr("音高轨迹"))
-        self.pitch_guide_button.setAccessibleName(tr("音高轨迹"))
+        self.pitch_guide_button.setText(tr("音高线"))
+        self.pitch_guide_button.setAccessibleName(tr("音高线"))
         self.pitch_guide_button.setToolTip(
-            tr("显示蓝色音高细线；不确定或跨度过大的位置会自动断开")
+            tr("连续音高证据；用于观察滑音、颤音和音准变化")
         )
         self.pitch_guide_button.setCheckable(True)
         self.pitch_guide_button.setChecked(False)
+        self.pitch_guide_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.MenuButtonPopup
+        )
         _responsive_control_width(self.pitch_guide_button, 84, 120)
         self.pitch_guide_button.toggled.connect(
             self._pitch_guide_button_toggled
@@ -1667,10 +1693,10 @@ class TranscriptionEditorPanel(QWidget):
         self.pitch_only_button.setObjectName(
             "TranscriptionPitchOnlyButton"
         )
-        self.pitch_only_button.setText(tr("仅看轨迹"))
-        self.pitch_only_button.setAccessibleName(tr("仅看音高轨迹"))
+        self.pitch_only_button.setText(tr("专注音高线"))
+        self.pitch_only_button.setAccessibleName(tr("专注音高线"))
         self.pitch_only_button.setToolTip(
-            tr("临时隐藏参考音块和旋律连线，只查看音高轨迹")
+            tr("临时隐藏分析音块和声部提示，只查看连续音高线")
         )
         self.pitch_only_button.setCheckable(True)
         _responsive_control_width(self.pitch_only_button, 78, 112)
@@ -1696,6 +1722,110 @@ class TranscriptionEditorPanel(QWidget):
         self.contour_denoise_combo.currentIndexChanged.connect(
             self._contour_denoise_changed
         )
+
+        self.pitch_guide_menu = QMenu(self.pitch_guide_button)
+        self.pitch_guide_popup = QWidget(self.pitch_guide_menu)
+        self.pitch_guide_popup.setMinimumWidth(340)
+        pitch_popup_layout = QVBoxLayout(self.pitch_guide_popup)
+        pitch_popup_layout.setContentsMargins(10, 9, 10, 9)
+        pitch_popup_layout.setSpacing(7)
+        self.pitch_mode_title = QLabel(
+            tr("音高线"),
+            self.pitch_guide_popup,
+        )
+        self.pitch_mode_title.setObjectName(
+            "TranscriptionPopupSectionTitle"
+        )
+        pitch_popup_layout.addWidget(self.pitch_mode_title)
+        self.pitch_mode_description = QLabel(
+            tr("连续音高证据，用于观察滑音、颤音和音准变化；与分析音块独立显示"),
+            self.pitch_guide_popup,
+        )
+        self.pitch_mode_description.setObjectName(
+            "TranscriptionPopupDescription"
+        )
+        self.pitch_mode_description.setWordWrap(True)
+        pitch_popup_layout.addWidget(self.pitch_mode_description)
+        pitch_settings = QFrame(self.pitch_guide_popup)
+        pitch_settings.setObjectName("TranscriptionPopupSection")
+        pitch_settings_layout = QGridLayout(pitch_settings)
+        pitch_settings_layout.setContentsMargins(10, 8, 10, 9)
+        pitch_settings_layout.setHorizontalSpacing(10)
+        pitch_settings_layout.setVerticalSpacing(7)
+        self.pitch_denoise_caption = QLabel(
+            tr("去噪强度"),
+            pitch_settings,
+        )
+        self.pitch_denoise_caption.setObjectName(
+            "TranscriptionPopupFieldLabel"
+        )
+        self.pitch_denoise_caption.setBuddy(self.contour_denoise_combo)
+        pitch_settings_layout.addWidget(self.pitch_denoise_caption, 0, 0)
+        pitch_settings_layout.addWidget(self.contour_denoise_combo, 0, 1)
+        self.contour_opacity_caption = QLabel(
+            tr("线条透明度"), pitch_settings
+        )
+        self.contour_opacity_slider = QSlider(Qt.Horizontal, pitch_settings)
+        self.contour_opacity_slider.setObjectName(
+            "TranscriptionContourOpacitySlider"
+        )
+        self.contour_opacity_slider.setRange(0, 100)
+        self.contour_opacity_slider.setValue(82)
+        self.contour_opacity_slider.setAccessibleName(tr("音高线透明度"))
+        self.contour_opacity_slider.setToolTip(
+            tr("只调整音高线，不影响分析音块和其他参考证据")
+        )
+        self.contour_opacity_caption.setBuddy(self.contour_opacity_slider)
+        self.contour_opacity_label = QLabel("82%", pitch_settings)
+        self.contour_opacity_label.setFixedWidth(38)
+        contour_opacity_row = QHBoxLayout()
+        contour_opacity_row.setContentsMargins(0, 0, 0, 0)
+        contour_opacity_row.setSpacing(6)
+        contour_opacity_row.addWidget(self.contour_opacity_slider, 1)
+        contour_opacity_row.addWidget(self.contour_opacity_label)
+        pitch_settings_layout.addWidget(self.contour_opacity_caption, 1, 0)
+        pitch_settings_layout.addLayout(contour_opacity_row, 1, 1)
+        self.melody_guidance_checkbox = QCheckBox(
+            tr("旋律引导（弱证据）"), pitch_settings
+        )
+        self.melody_guidance_checkbox.setObjectName(
+            "TranscriptionMelodyGuidanceCheckBox"
+        )
+        self.melody_guidance_checkbox.setToolTip(
+            tr("按时间段统计当前轨道手工音符命中的音色组；稳定后最高优先标记为当前轨道乐器，不修改声学识别或导出")
+        )
+        pitch_settings_layout.addWidget(
+            self.melody_guidance_checkbox, 2, 0, 1, 2
+        )
+        pitch_settings_layout.addWidget(self.pitch_only_button, 3, 0, 1, 2)
+        pitch_settings_layout.setColumnStretch(1, 1)
+        pitch_popup_layout.addWidget(pitch_settings)
+        self.melody_guidance_status_label = QLabel(
+            tr("旋律引导已关闭"), self.pitch_guide_popup
+        )
+        self.melody_guidance_status_label.setObjectName("Muted")
+        self.melody_guidance_status_label.setWordWrap(True)
+        pitch_popup_layout.addWidget(self.melody_guidance_status_label)
+        self.pitch_timbre_caption = QLabel(
+            tr("乐器颜色：自动分类"),
+            self.pitch_guide_popup,
+        )
+        self.pitch_timbre_caption.setObjectName(
+            "TranscriptionPopupSectionTitle"
+        )
+        pitch_popup_layout.addWidget(self.pitch_timbre_caption)
+        self.pitch_timbre_legend_label = QLabel(
+            tr("完成分析后自动按乐器颜色显示音高线"),
+            self.pitch_guide_popup,
+        )
+        self.pitch_timbre_legend_label.setObjectName("Muted")
+        self.pitch_timbre_legend_label.setTextFormat(Qt.RichText)
+        self.pitch_timbre_legend_label.setWordWrap(True)
+        pitch_popup_layout.addWidget(self.pitch_timbre_legend_label)
+        pitch_guide_action = QWidgetAction(self.pitch_guide_menu)
+        pitch_guide_action.setDefaultWidget(self.pitch_guide_popup)
+        self.pitch_guide_menu.addAction(pitch_guide_action)
+        self.pitch_guide_button.setMenu(self.pitch_guide_menu)
         self.spectrogram_checkbox = QCheckBox(
             tr("声谱"),
             self.analysis_bar,
@@ -1712,7 +1842,7 @@ class TranscriptionEditorPanel(QWidget):
             trf("参考层 · {opacity}%", opacity=60)
         )
         self.reference_opacity_button.setToolTip(
-            tr("旋律线、Frame、Onset、Contour 与声谱透明度")
+            tr("旋律线、Frame、Onset 与声谱透明度；音高线在其菜单内单独调整")
         )
         _responsive_control_width(self.reference_opacity_button, 64, 104)
         self.reference_opacity_button.setPopupMode(
@@ -1732,7 +1862,7 @@ class TranscriptionEditorPanel(QWidget):
             self.reference_opacity_popup,
         )
         self.reference_opacity_caption.setToolTip(
-            tr("旋律线、Frame、Onset、Contour 与声谱透明度")
+            tr("旋律线、Frame、Onset 与声谱透明度；音高线在其菜单内单独调整")
         )
         _responsive_control_width(self.reference_opacity_caption, 36, 104)
         self.reference_opacity_slider = QSlider(
@@ -1815,6 +1945,11 @@ class TranscriptionEditorPanel(QWidget):
             tr("严格 1/64"),
             "strict_1_64",
         )
+        self.rhythm_profile_combo.currentIndexChanged.connect(
+            lambda _index: self.rhythm_profile_changed.emit(
+                self.rhythm_alignment_profile
+            )
+        )
         self.rhythm_profile_combo.setToolTip(
             tr("自动网格优先选择能解释乐句的最粗网格；严格模式将起止点统一投影到1/64")
         )
@@ -1822,42 +1957,145 @@ class TranscriptionEditorPanel(QWidget):
 
         self.candidate_layer_menu = QMenu(self.candidate_layer_button)
         self.candidate_layer_popup = QWidget(self.candidate_layer_menu)
+        self.candidate_layer_popup.setMinimumWidth(420)
         candidate_popup_layout = QVBoxLayout(self.candidate_layer_popup)
-        candidate_popup_layout.setContentsMargins(10, 7, 10, 7)
-        candidate_popup_layout.setSpacing(7)
+        candidate_popup_layout.setContentsMargins(10, 9, 10, 9)
+        candidate_popup_layout.setSpacing(8)
 
-        candidate_opacity_row = QHBoxLayout()
-        candidate_opacity_row.setContentsMargins(0, 0, 0, 0)
-        candidate_opacity_row.setSpacing(6)
+        self.candidate_mode_title = QLabel(
+            tr("分析音块"),
+            self.candidate_layer_popup,
+        )
+        self.candidate_mode_title.setObjectName(
+            "TranscriptionPopupSectionTitle"
+        )
+        candidate_popup_layout.addWidget(self.candidate_mode_title)
+        self.candidate_mode_description = QLabel(
+            tr("分析后的离散音块，用于框选、筛选并采纳为可编辑草稿"),
+            self.candidate_layer_popup,
+        )
+        self.candidate_mode_description.setObjectName(
+            "TranscriptionPopupDescription"
+        )
+        self.candidate_mode_description.setWordWrap(True)
+        candidate_popup_layout.addWidget(self.candidate_mode_description)
+
+        display_section = QFrame(self.candidate_layer_popup)
+        display_section.setObjectName("TranscriptionPopupSection")
+        display_section_layout = QVBoxLayout(display_section)
+        display_section_layout.setContentsMargins(10, 8, 10, 9)
+        display_section_layout.setSpacing(6)
+        display_controls = QWidget(display_section)
+        display_layout = QGridLayout(display_controls)
+        display_layout.setContentsMargins(0, 0, 0, 0)
+        display_layout.setHorizontalSpacing(8)
+        display_layout.setVerticalSpacing(6)
+        self.candidate_display_title = QLabel(
+            tr("显示强度"),
+            display_section,
+        )
+        self.candidate_display_title.setObjectName(
+            "TranscriptionPopupSectionTitle"
+        )
+        self.candidate_display_title.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        display_section_layout.addWidget(self.candidate_display_title)
         self.candidate_opacity_caption = QLabel(
             tr("全部候选"),
-            self.candidate_layer_popup,
+            display_section,
         )
         self.candidate_opacity_caption.setBuddy(
             self.candidate_opacity_slider
         )
-        candidate_opacity_row.addWidget(self.candidate_opacity_caption)
-        candidate_opacity_row.addWidget(self.candidate_opacity_slider)
-        candidate_opacity_row.addWidget(self.candidate_opacity_label)
-        candidate_popup_layout.addLayout(candidate_opacity_row)
+        display_layout.addWidget(self.candidate_opacity_caption, 0, 0)
+        display_layout.addWidget(self.candidate_opacity_slider, 0, 1)
+        display_layout.addWidget(self.candidate_opacity_label, 0, 2)
+        display_layout.addWidget(self.confidence_caption, 1, 0)
+        display_layout.addWidget(self.confidence_slider, 1, 1)
+        display_layout.addWidget(self.confidence_label, 1, 2)
+        display_layout.setColumnStretch(1, 1)
+        display_section_layout.addWidget(display_controls)
+        candidate_popup_layout.addWidget(display_section)
 
-        low_confidence_row = QHBoxLayout()
-        low_confidence_row.setContentsMargins(0, 0, 0, 0)
-        low_confidence_row.setSpacing(6)
-        low_confidence_row.addWidget(self.confidence_caption)
-        low_confidence_row.addWidget(self.confidence_slider)
-        low_confidence_row.addWidget(self.confidence_label)
-        candidate_popup_layout.addLayout(low_confidence_row)
+        filter_section = QFrame(self.candidate_layer_popup)
+        filter_section.setObjectName("TranscriptionPopupSection")
+        filter_layout = QGridLayout(filter_section)
+        filter_layout.setContentsMargins(10, 8, 10, 9)
+        filter_layout.setHorizontalSpacing(12)
+        filter_layout.setVerticalSpacing(7)
+        self.candidate_filter_title = QLabel(
+            tr("筛选与节奏"),
+            filter_section,
+        )
+        self.candidate_filter_title.setObjectName(
+            "TranscriptionPopupSectionTitle"
+        )
+        filter_layout.addWidget(self.candidate_filter_title, 0, 0, 1, 3)
+        filter_layout.addWidget(self.show_rejected_checkbox, 1, 0)
+        filter_layout.addWidget(self.show_suppressed_checkbox, 1, 1, 1, 2)
+        self.rhythm_grid_caption = QLabel(tr("节奏网格"), filter_section)
+        self.rhythm_grid_caption.setObjectName(
+            "TranscriptionPopupFieldLabel"
+        )
+        self.rhythm_grid_caption.setBuddy(self.rhythm_profile_combo)
+        filter_layout.addWidget(self.rhythm_grid_caption, 2, 0)
+        filter_layout.addWidget(self.rhythm_profile_combo, 2, 1)
+        filter_layout.addWidget(self.rhythm_projection_checkbox, 2, 2)
+        filter_layout.setColumnStretch(2, 1)
+        candidate_popup_layout.addWidget(filter_section)
 
-        candidate_filter_row = QHBoxLayout()
-        candidate_filter_row.setContentsMargins(0, 0, 0, 0)
-        candidate_filter_row.setSpacing(10)
-        candidate_filter_row.addWidget(self.show_rejected_checkbox)
-        candidate_filter_row.addWidget(self.show_suppressed_checkbox)
-        candidate_filter_row.addWidget(self.rhythm_profile_combo)
-        candidate_filter_row.addWidget(self.rhythm_projection_checkbox)
-        candidate_filter_row.addStretch(1)
-        candidate_popup_layout.addLayout(candidate_filter_row)
+        timbre_section = QFrame(self.candidate_layer_popup)
+        timbre_section.setObjectName("TranscriptionPopupSection")
+        timbre_layout = QVBoxLayout(timbre_section)
+        timbre_layout.setContentsMargins(10, 8, 10, 9)
+        timbre_layout.setSpacing(6)
+        self.candidate_timbre_title = QLabel(
+            tr("乐器区分"),
+            timbre_section,
+        )
+        self.candidate_timbre_title.setObjectName(
+            "TranscriptionPopupSectionTitle"
+        )
+        timbre_layout.addWidget(self.candidate_timbre_title)
+        self.timbre_grouping_checkbox = QCheckBox(
+            tr("按音色分组着色（实验）"),
+            timbre_section,
+        )
+        self.timbre_grouping_checkbox.setChecked(True)
+        self.timbre_grouping_checkbox.setToolTip(
+            tr(
+                "从低重叠片段提取音色特征并稳定着色；"
+                "结果只用于参考显示，不会修改候选音符或正式轨道"
+            )
+        )
+        self.timbre_grouping_checkbox.toggled.connect(
+            self._timbre_grouping_toggled
+        )
+        timbre_layout.addWidget(self.timbre_grouping_checkbox)
+        self.external_instrument_labels_checkbox = QCheckBox(
+            tr("通用乐器标签（可选）"),
+            timbre_section,
+        )
+        self.external_instrument_labels_checkbox.setChecked(False)
+        self.external_instrument_labels_checkbox.setEnabled(False)
+        self.external_instrument_labels_checkbox.setToolTip(
+            tr("需要单独安装 MuScriptor；模型不随应用打包，首次运行可能由 MuScriptor 下载；不会写入分轨")
+        )
+        self.external_instrument_labels_checkbox.toggled.connect(
+            self.external_instrument_labels_changed
+        )
+        timbre_layout.addWidget(self.external_instrument_labels_checkbox)
+        self.timbre_legend_label = QLabel(
+            tr("完成分析后自动按乐器颜色显示分析音块"),
+            timbre_section,
+        )
+        self.timbre_legend_label.setObjectName("Muted")
+        self.timbre_legend_label.setTextFormat(Qt.RichText)
+        self.timbre_legend_label.setWordWrap(True)
+        timbre_layout.addWidget(self.timbre_legend_label)
+        candidate_popup_layout.addWidget(timbre_section)
         candidate_layer_action = QWidgetAction(self.candidate_layer_menu)
         candidate_layer_action.setDefaultWidget(self.candidate_layer_popup)
         self.candidate_layer_menu.addAction(candidate_layer_action)
@@ -2053,22 +2291,21 @@ class TranscriptionEditorPanel(QWidget):
             "TranscriptionReviewContext"
         )
         self.review_context_label.setAlignment(Qt.AlignCenter)
-        self.review_context_label.setMinimumWidth(74)
+        self.review_context_label.setMinimumWidth(72)
+        self.review_context_label.setMaximumWidth(96)
+        self.review_context_label.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Preferred,
+        )
         review.addWidget(self.review_context_label)
 
         self.review_rows = QFrame(self.review_bar)
         self.review_rows.setObjectName("TranscriptionReviewRows")
-        review_rows_layout = QVBoxLayout(self.review_rows)
+        review_rows_layout = QGridLayout(self.review_rows)
+        self._review_layout = review_rows_layout
         review_rows_layout.setContentsMargins(0, 0, 0, 0)
-        review_rows_layout.setSpacing(4)
-        review_top = QHBoxLayout()
-        review_top.setContentsMargins(0, 0, 0, 0)
-        review_top.setSpacing(6)
-        review_bottom = QHBoxLayout()
-        review_bottom.setContentsMargins(0, 0, 0, 0)
-        review_bottom.setSpacing(6)
-        review_rows_layout.addLayout(review_top)
-        review_rows_layout.addLayout(review_bottom)
+        review_rows_layout.setHorizontalSpacing(6)
+        review_rows_layout.setVerticalSpacing(4)
         review.addWidget(self.review_rows, 1)
 
         self.review_display_group = QFrame(self.review_bar)
@@ -2081,11 +2318,9 @@ class TranscriptionEditorPanel(QWidget):
         for widget in (
             self.candidate_layer_button,
             self.pitch_guide_button,
-            self.contour_denoise_combo,
-            self.pitch_only_button,
         ):
             review_display.addWidget(widget)
-        review_top.addWidget(self.review_display_group)
+        review_rows_layout.addWidget(self.review_display_group, 0, 0)
 
         self.review_undo_button = QPushButton(
             "↶",
@@ -2135,7 +2370,7 @@ class TranscriptionEditorPanel(QWidget):
         review_actions.setSpacing(4)
         review_actions.addWidget(self.reject_button)
         review_actions.addWidget(self.restore_button)
-        review_bottom.addWidget(self.review_action_group)
+        review_rows_layout.addWidget(self.review_action_group, 0, 2)
         self.status_label = _ElidedStatusLabel(
             str(self._idle_status),
             self.review_bar,
@@ -2143,7 +2378,7 @@ class TranscriptionEditorPanel(QWidget):
         self.status_label.setText(str(self._idle_status))
         self.status_label.setObjectName("Muted")
         self.status_label.setMinimumWidth(96)
-        review_top.addWidget(self.status_label, 1)
+        review_rows_layout.addWidget(self.status_label, 0, 1)
 
         self.review_commit_group = QFrame(self.review_bar)
         self.review_commit_group.setObjectName(
@@ -2152,7 +2387,7 @@ class TranscriptionEditorPanel(QWidget):
         review_commit = QHBoxLayout(self.review_commit_group)
         review_commit.setContentsMargins(4, 2, 4, 2)
         review_commit.setSpacing(4)
-        review_bottom.addWidget(self.review_commit_group, 1)
+        review_rows_layout.addWidget(self.review_commit_group, 0, 3)
 
         self.staging_label = QLabel(
             trf("暂存 {count}", count=0),
@@ -2208,7 +2443,7 @@ class TranscriptionEditorPanel(QWidget):
         self.review_tools_toggle_button.toggled.connect(
             self.set_review_tools_expanded,
         )
-        review_bottom.addWidget(self.review_tools_toggle_button)
+        review_rows_layout.addWidget(self.review_tools_toggle_button, 0, 4)
 
         self.copy_to_track_button = QToolButton(self.review_bar)
         self.copy_to_track_button.setText(tr("复制到…"))
@@ -2260,6 +2495,12 @@ class TranscriptionEditorPanel(QWidget):
         self.reference_opacity_slider.valueChanged.connect(
             self._reference_opacity_slider_changed,
         )
+        self.contour_opacity_slider.valueChanged.connect(
+            self._contour_opacity_slider_changed,
+        )
+        self.melody_guidance_checkbox.toggled.connect(
+            self.melody_guidance_changed,
+        )
         for checkbox in (
             self.frame_checkbox,
             self.onset_checkbox,
@@ -2273,6 +2514,7 @@ class TranscriptionEditorPanel(QWidget):
             self.show_suppressed_changed,
         )
         self._apply_advanced_responsive_layout()
+        self._apply_review_responsive_layout(force=True)
         self.set_advanced_controls_expanded(False)
         self.set_review_tools_expanded(False)
         self.set_diagnostic_evidence_expanded(False)
@@ -2323,6 +2565,54 @@ class TranscriptionEditorPanel(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._apply_advanced_responsive_layout()
+        self._apply_review_responsive_layout()
+
+    def _apply_review_responsive_layout(
+        self,
+        *,
+        force: bool = False,
+    ) -> None:
+        """Keep review commands on one rail until the panel is genuinely narrow."""
+
+        if not hasattr(self, "_review_layout"):
+            return
+        wide = self.width() >= 1120
+        if not force and self._review_layout_wide == wide:
+            return
+        self._review_layout_wide = wide
+        widgets = (
+            self.review_display_group,
+            self.status_label,
+            self.review_action_group,
+            self.review_commit_group,
+            self.review_tools_toggle_button,
+        )
+        for widget in widgets:
+            self._review_layout.removeWidget(widget)
+        for column in range(5):
+            self._review_layout.setColumnStretch(column, 0)
+        if wide:
+            self._review_layout.addWidget(self.review_display_group, 0, 0)
+            self._review_layout.addWidget(self.status_label, 0, 1)
+            self._review_layout.addWidget(self.review_action_group, 0, 2)
+            self._review_layout.addWidget(self.review_commit_group, 0, 3)
+            self._review_layout.addWidget(
+                self.review_tools_toggle_button,
+                0,
+                4,
+            )
+            self._review_layout.setColumnStretch(1, 1)
+            return
+        self._review_layout.addWidget(self.review_display_group, 0, 0)
+        self._review_layout.addWidget(self.status_label, 0, 1, 1, 2)
+        self._review_layout.addWidget(self.review_action_group, 1, 0)
+        self._review_layout.addWidget(self.review_commit_group, 1, 1)
+        self._review_layout.addWidget(
+            self.review_tools_toggle_button,
+            1,
+            2,
+        )
+        self._review_layout.setColumnStretch(1, 1)
 
     def _apply_advanced_responsive_layout(self) -> None:
         """Use one grouped row on desktop and a readable stack when narrow."""
@@ -2487,8 +2777,277 @@ class TranscriptionEditorPanel(QWidget):
         return self.candidate_opacity_slider.value() / 100.0
 
     @property
+    def timbre_grouping_enabled(self) -> bool:
+        return self.timbre_grouping_checkbox.isChecked()
+
+    @property
+    def external_instrument_labels_enabled(self) -> bool:
+        return self.external_instrument_labels_checkbox.isChecked()
+
+    def set_timbre_grouping_enabled(self, enabled: bool) -> None:
+        blocked = self.timbre_grouping_checkbox.blockSignals(True)
+        self.timbre_grouping_checkbox.setChecked(bool(enabled))
+        self.timbre_grouping_checkbox.blockSignals(blocked)
+        self.external_instrument_labels_checkbox.setEnabled(
+            bool(enabled) and self._external_instrument_labels_available
+        )
+
+    def set_external_instrument_labels_enabled(self, enabled: bool) -> None:
+        blocked = self.external_instrument_labels_checkbox.blockSignals(True)
+        self.external_instrument_labels_checkbox.setChecked(bool(enabled))
+        self.external_instrument_labels_checkbox.blockSignals(blocked)
+
+    def set_external_instrument_labels_available(
+        self,
+        available: bool,
+    ) -> None:
+        self._external_instrument_labels_available = bool(available)
+        self.external_instrument_labels_checkbox.setEnabled(
+            self.timbre_grouping_enabled and bool(available)
+        )
+        self.external_instrument_labels_checkbox.setToolTip(
+            tr("由已安装的 MuScriptor small 提供通用乐器标签；结果不会自动分轨")
+            if available
+            else tr("需要单独安装 MuScriptor；模型不随应用打包，首次运行可能由 MuScriptor 下载；不会写入分轨")
+        )
+
+    def set_timbre_analysis(
+        self,
+        analysis: object | None,
+        *,
+        busy: bool = False,
+        error: bool = False,
+    ) -> None:
+        self._last_timbre_analysis = analysis
+        self._last_timbre_busy = bool(busy)
+        self._last_timbre_error = bool(error)
+        self.timbre_legend_label.setToolTip("")
+        self.pitch_timbre_legend_label.setToolTip("")
+        groups = tuple(getattr(analysis, "groups", ()) or ())
+        if busy and not groups:
+            self.timbre_legend_label.setText(
+                tr("正在提取低污染音色片段…")
+            )
+            self.pitch_timbre_legend_label.setText(
+                tr("正在自动分类并生成音高线颜色…")
+            )
+            return
+        if error and not groups:
+            self.timbre_legend_label.setText(
+                tr("音色分组不可用；候选音符未受影响")
+            )
+            self.pitch_timbre_legend_label.setText(
+                tr("乐器颜色不可用；音高线保持中性色")
+            )
+            return
+        if not groups:
+            completed_empty = analysis is not None
+            self.timbre_legend_label.setText(
+                tr("分析完成 · 未找到可分类音色；分析音块保持中性色")
+                if completed_empty
+                else tr("完成分析后自动按乐器颜色显示分析音块")
+            )
+            self.pitch_timbre_legend_label.setText(
+                tr("分析完成 · 未找到可分类音色；音高线保持中性色")
+                if completed_empty
+                else tr("完成分析后自动按乐器颜色显示音高线")
+            )
+            return
+        family_sources = {
+            "piano": "钢琴",
+            "chromatic_percussion": "键盘打击乐",
+            "organ": "风琴",
+            "guitar": "吉他类",
+            "bass": "贝斯类",
+            "strings": "弦乐组",
+            "ensemble": "合奏",
+            "brass": "铜管",
+            "reed": "簧管",
+            "pipe": "吹管",
+            "synth_lead": "合成器主音",
+            "synth_pad": "合成器铺底",
+            "synth_effect": "合成器效果",
+            "ethnic": "民族乐器",
+            "percussive": "打击乐",
+            "percussion": "鼓组",
+            "sound_effect": "声音效果",
+        }
+        total_count = sum(
+            len(tuple(getattr(group, "candidate_ids", ()) or ()))
+            for group in groups
+        )
+        known_groups = tuple(
+            group
+            for group in groups
+            if str(getattr(group, "group_id", "")) != "timbre-unknown"
+        )
+        classified_count = sum(
+            len(tuple(getattr(group, "candidate_ids", ()) or ()))
+            for group in known_groups
+        )
+        confidence_total = sum(
+            float(getattr(group, "confidence", 0.0))
+            * len(tuple(getattr(group, "candidate_ids", ()) or ()))
+            for group in known_groups
+        )
+        average_confidence = round(
+            confidence_total * 100.0 / max(1, classified_count)
+        )
+        summary = trf(
+            "已分为 {groups} 组 · 覆盖 {classified}/{total} · 平均可信 {confidence}%",
+            groups=len(known_groups),
+            classified=classified_count,
+            total=total_count,
+            confidence=average_confidence,
+        )
+        entries: list[str] = [
+            f'<b style="color:#d8d4ca">{html.escape(summary)}</b>'
+        ]
+        evidence_stage = str(
+            getattr(analysis, "evidence_stage", "acoustic") or "acoustic"
+        )
+        if evidence_stage == "predictive":
+            prediction_status = (
+                tr("预测中 · 正在用音频校正")
+                if busy
+                else tr("预测结果 · 音频校正不可用")
+                if error
+                else tr("预测结果 · 等待更多音频证据")
+            )
+            entries.append(
+                f'<span style="color:#d4a72c">'
+                f'{html.escape(prediction_status)}'
+                f'</span>'
+            )
+        elif evidence_stage == "hybrid":
+            entries.append(
+                f'<span style="color:#d4a72c">'
+                f'{html.escape(tr("声学已确认 · 少量片段仍为预测"))}'
+                f'</span>'
+            )
+        else:
+            entries.append(
+                f'<span style="color:#7fba83">'
+                f'{html.escape(tr("声学已确认"))}'
+                f'</span>'
+            )
+        visible_index = 0
+        guidance = self._melody_guidance_analysis
+        focus_group_id = str(
+            getattr(guidance, "focus_group_id", "") or ""
+        )
+        guided_instrument = str(
+            getattr(guidance, "target_instrument_label", "") or ""
+        )
+        group_labels: dict[str, str] = {}
+        for group in known_groups:
+            visible_index += 1
+            group_labels[str(getattr(group, "group_id", "") or "")] = trf(
+                "音色 {name}",
+                name=_alpha_label(visible_index),
+            )
+        ranked_groups = sorted(
+            known_groups,
+            key=lambda group: (
+                str(getattr(group, "group_id", "") or "")
+                == focus_group_id,
+                bool(str(getattr(group, "label_family", "") or "")),
+                float(getattr(group, "confidence", 0.0)),
+                len(tuple(getattr(group, "candidate_ids", ()) or ())),
+            ),
+            reverse=True,
+        )
+        for group in ranked_groups[:6]:
+            candidate_ids = tuple(getattr(group, "candidate_ids", ()) or ())
+            group_id = str(getattr(group, "group_id", "") or "")
+            guided = bool(
+                guided_instrument
+                and focus_group_id
+                and group_id == focus_group_id
+            )
+            group_label = group_labels[group_id]
+            classification_confidence = round(
+                float(getattr(group, "confidence", 0.0)) * 100.0
+            )
+            family = str(getattr(group, "label_family", "") or "")
+            if guided:
+                label = trf(
+                    "{group} · {instrument} · 引导优先 · {count} 个",
+                    group=group_label,
+                    instrument=guided_instrument,
+                    count=len(candidate_ids),
+                )
+            elif family:
+                family_label = tr(family_sources.get(family, family))
+                label = trf(
+                    "{group} · 疑似{family} {confidence}% · {count} 个",
+                    group=group_label,
+                    family=family_label,
+                    confidence=round(
+                        float(getattr(group, "label_confidence", 0.0))
+                        * 100.0
+                    ),
+                    count=len(candidate_ids),
+                )
+            else:
+                label = trf(
+                    "{group} · {confidence}% · {count} 个",
+                    group=group_label,
+                    confidence=classification_confidence,
+                    count=len(candidate_ids),
+                )
+            color = html.escape(str(getattr(group, "color", "#7B8492")))
+            entries.append(
+                f'<span style="color:{color}">●</span> {html.escape(label)}'
+            )
+        if len(ranked_groups) > 6:
+            entries.append(
+                f'<span style="color:#89919d">'
+                f'{html.escape(trf("另有 {count} 组", count=len(ranked_groups) - 6))}'
+                f'</span>'
+            )
+        unknown_count = total_count - classified_count
+        if unknown_count:
+            entries.append(
+                f'<span style="color:#7B8492">●</span> '
+                f'{html.escape(trf("未分类 · {count} 个", count=unknown_count))}'
+            )
+        label_status = str(getattr(analysis, "label_status", "disabled"))
+        diagnostic = ""
+        if label_status == "unavailable":
+            diagnostic = tr("外部标签不可用；仅显示匿名音色")
+        elif label_status == "failed":
+            diagnostic = tr("外部标签分析失败；仅显示匿名音色")
+        elif (
+            label_status == "ready"
+            and not any(
+                str(getattr(group, "label_family", "") or "")
+                for group in groups
+            )
+        ):
+            diagnostic = tr("外部标签未通过一致性门槛；仅显示匿名音色")
+        entries.append(
+            f'<span style="color:#89919d">'
+            f'{html.escape(tr("颜色越鲜明，判断越可靠"))}'
+            f'</span>'
+        )
+        legend_html = "<br>".join(entries)
+        self.timbre_legend_label.setText(legend_html)
+        self.pitch_timbre_legend_label.setText(legend_html)
+        self.timbre_legend_label.setToolTip(diagnostic)
+        self.pitch_timbre_legend_label.setToolTip(diagnostic)
+
+    @property
     def reference_background_opacity(self) -> float:
         return self.reference_opacity_slider.value() / 100.0
+
+    @property
+    def contour_opacity(self) -> float:
+        return self.contour_opacity_slider.value() / 100.0
+
+    @property
+    def melody_guidance_enabled(self) -> bool:
+        return self.melody_guidance_checkbox.isChecked()
 
     @property
     def contour_denoise(self) -> str:
@@ -2570,12 +3129,17 @@ class TranscriptionEditorPanel(QWidget):
         normalized = max(0, min(100, int(value)))
         self.candidate_opacity_label.setText(f"{normalized}%")
         self.candidate_layer_button.setText(
-            trf("参考音块 · {opacity}%", opacity=normalized)
+            trf("分析音块 · {opacity}%", opacity=normalized)
         )
         self.candidate_opacity_changed.emit(normalized / 100.0)
 
     def _contour_denoise_changed(self, _index: int) -> None:
         self.contour_denoise_changed.emit(self.contour_denoise)
+
+    def _contour_opacity_slider_changed(self, value: int) -> None:
+        normalized = max(0, min(100, int(value)))
+        self.contour_opacity_label.setText(f"{normalized}%")
+        self.contour_opacity_changed.emit(normalized / 100.0)
 
     def _leave_pitch_only_without_restore(self) -> None:
         if not self.pitch_only_button.isChecked():
@@ -2589,6 +3153,12 @@ class TranscriptionEditorPanel(QWidget):
         if visible:
             self._leave_pitch_only_without_restore()
         self.candidate_visibility_changed.emit(bool(visible))
+
+    def _timbre_grouping_toggled(self, enabled: bool) -> None:
+        self.external_instrument_labels_checkbox.setEnabled(
+            bool(enabled) and self._external_instrument_labels_available
+        )
+        self.timbre_grouping_changed.emit(bool(enabled))
 
     def _melody_lines_toggled(self, visible: bool) -> None:
         if visible:
@@ -2738,7 +3308,7 @@ class TranscriptionEditorPanel(QWidget):
         self.candidate_opacity_slider.blockSignals(blocked)
         self.candidate_opacity_label.setText(f"{slider_value}%")
         self.candidate_layer_button.setText(
-            trf("参考音块 · {opacity}%", opacity=slider_value)
+            trf("分析音块 · {opacity}%", opacity=slider_value)
         )
 
     def set_reference_background_opacity(self, value: float) -> None:
@@ -2750,6 +3320,96 @@ class TranscriptionEditorPanel(QWidget):
         self.reference_opacity_label.setText(f"{slider_value}%")
         self.reference_opacity_button.setText(
             trf("参考层 · {opacity}%", opacity=slider_value)
+        )
+
+    def set_contour_opacity(self, value: float) -> None:
+        normalized = max(0.0, min(1.0, _finite_float(value, 0.82)))
+        slider_value = round(normalized * 100.0)
+        blocked = self.contour_opacity_slider.blockSignals(True)
+        self.contour_opacity_slider.setValue(slider_value)
+        self.contour_opacity_slider.blockSignals(blocked)
+        self.contour_opacity_label.setText(f"{slider_value}%")
+
+    def set_melody_guidance_enabled(self, enabled: bool) -> None:
+        blocked = self.melody_guidance_checkbox.blockSignals(True)
+        self.melody_guidance_checkbox.setChecked(bool(enabled))
+        self.melody_guidance_checkbox.blockSignals(blocked)
+        if not enabled:
+            self.melody_guidance_status_label.setText(
+                tr("旋律引导已关闭")
+            )
+
+    def set_melody_guidance_analysis(self, analysis: object | None) -> None:
+        self._melody_guidance_analysis = analysis
+        if not self.melody_guidance_enabled:
+            self.melody_guidance_status_label.setText(
+                tr("旋律引导已关闭")
+            )
+            self.set_timbre_analysis(
+                self._last_timbre_analysis,
+                busy=self._last_timbre_busy,
+                error=self._last_timbre_error,
+            )
+            return
+        if analysis is None or not bool(getattr(analysis, "groups", ())):
+            note_count = int(getattr(analysis, "manual_note_count", 0))
+            self.melody_guidance_status_label.setText(
+                trf(
+                    "引导开启 · {notes} 个可用音符 · 尚未形成稳定音色倾向",
+                    notes=note_count,
+                )
+            )
+            self.set_timbre_analysis(
+                self._last_timbre_analysis,
+                busy=self._last_timbre_busy,
+                error=self._last_timbre_error,
+            )
+            return
+        groups = tuple(getattr(analysis, "groups", ()) or ())
+        window_count = max(
+            (int(getattr(group, "window_count", 0)) for group in groups),
+            default=0,
+        )
+        hit_count = sum(int(getattr(group, "hit_count", 0)) for group in groups)
+        focus = str(getattr(analysis, "focus_group_id", "") or "")
+        prediction = str(
+            getattr(analysis, "predicted_group_id", "") or ""
+        )
+        prediction_confidence = round(
+            float(getattr(analysis, "prediction_confidence", 0.0)) * 100.0
+        )
+        target_instrument = str(
+            getattr(analysis, "target_instrument_label", "") or ""
+        )
+        self.melody_guidance_status_label.setText(
+            trf(
+                "引导开启 · {windows} 个时间段 · {hits} 个去重命中 · {state}{target}",
+                windows=window_count,
+                hits=hit_count,
+                state=(
+                    tr("已形成渐进突出")
+                    if focus
+                    else trf(
+                        "已形成少样本预测 {confidence}%",
+                        confidence=prediction_confidence,
+                    )
+                    if prediction
+                    else tr("证据仍在累积")
+                ),
+                target=(
+                    trf(
+                        " · 最高优先：{instrument}",
+                        instrument=target_instrument,
+                    )
+                    if focus and target_instrument
+                    else ""
+                ),
+            )
+        )
+        self.set_timbre_analysis(
+            self._last_timbre_analysis,
+            busy=self._last_timbre_busy,
+            error=self._last_timbre_error,
         )
 
     def set_contour_denoise(self, value: str) -> None:
@@ -3191,7 +3851,7 @@ class TranscriptionEditorPanel(QWidget):
         else:
             disabled_reason = ""
         self.analyze_button.setToolTip(
-            disabled_reason or tr("开始扒谱")
+            disabled_reason or tr("分析")
         )
         self.redecode_button.setToolTip(
             disabled_reason or tr("重新分析区间")

@@ -23,7 +23,10 @@ from bdo_midi import Note
 from bdo_music_composer.ui.transcription.bdo_spectrogram_qt import SpectrogramTileController
 from bdo_music_composer.audio.reference_audio_format import ReferenceAudioFormatError
 from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
-from bdo_music_composer.ui.transcription.bdo_transcription_evidence_qt import EvidenceTileController
+from bdo_music_composer.ui.transcription.bdo_transcription_evidence_qt import (
+    ContourColorSpan,
+    EvidenceTileController,
+)
 from bdo_music_composer.transcription.bdo_transcription_melody_lines import (
     BASS_ROLE as MELODY_LINE_BASS_ROLE,
     CHORD_SPAN_KIND as MELODY_LINE_CHORD_SPAN_KIND,
@@ -93,6 +96,7 @@ class PianoRollCanvas(QWidget):
     MIN_PITCH = 0
     MAX_PITCH = 127
     CANDIDATE_QUERY_BLOCK_SIZE = 128
+    MAX_CANDIDATE_CONTINUITY_GAP_MS = 80.0
     MAX_MELODY_LINE_SOURCE_CANDIDATES = 2048
     _MELODY_LINE_FEATURES_PER_BLOCK = 5
 
@@ -119,6 +123,7 @@ class PianoRollCanvas(QWidget):
         self._duplicate_candidate_ids: set[str] = set()
         self._staged_candidate_ids: set[str] = set()
         self._fragment_candidate_ids: set[str] = set()
+        self._continuity_candidate_ids: set[str] = set()
         self._suppressed_candidate_ids: set[str] = set()
         self._confidence_floor = 0.30
         self._show_rejected_only = False
@@ -139,6 +144,7 @@ class PianoRollCanvas(QWidget):
         self._evidence.tile_ready.connect(self._evidence_tile_ready)
         self._show_spectrogram = False
         self._reference_background_opacity = 0.45
+        self._contour_opacity = 0.82
         self._spectrogram_audio_path = ""
         self._spectrogram = SpectrogramTileController(self)
         self._spectrogram.tile_ready.connect(self._evidence_tile_ready)
@@ -154,6 +160,22 @@ class PianoRollCanvas(QWidget):
         self._last_melody_line_query_inspections = 0
         self._candidate_group_colors: dict[str, str] = {}
         self._candidate_group_ids: dict[str, str] = {}
+        self._candidate_group_confidences: dict[str, float] = {}
+        self._candidate_group_class_confidences: dict[str, float] = {}
+        self._candidate_group_emphases: dict[str, float] = {}
+        self._candidate_guided_instrument_labels: dict[str, str] = {}
+        self._candidate_source_timings: dict[str, tuple[float, float]] = {}
+        self._candidate_source_timing_object: object | None = None
+        self._candidate_time_warps: dict[
+            str,
+            tuple[float, float, float, float],
+        ] = {}
+        self._contour_color_spans: tuple[ContourColorSpan, ...] = ()
+        self._contour_color_revision = 0
+        self._melody_guidance: object | None = None
+        self._contour_default_emphasis = 1.0
+        self._candidate_continuity_pairs: tuple[tuple[int, int], ...] = ()
+        self._candidate_continuity_starts: tuple[float, ...] = ()
         self._candidate_chord_roles: dict[str, str] = {}
         self._voice_groups: tuple[object, ...] = ()
         self._assist_candidate_source_object: object | None = None
@@ -165,6 +187,7 @@ class PianoRollCanvas(QWidget):
         self._candidate_marquee_origin: QPointF | None = None
         self._candidate_marquee_additive = False
         self._candidate_press_selected: set[str] = set()
+        self._candidate_press_hit_ids: set[str] = set()
         self._ruler_range_anchor: float | None = None
         self._ruler_range_endpoint = ""
         self._ruler_range_moved = False
@@ -177,6 +200,11 @@ class PianoRollCanvas(QWidget):
         self.ROW_H = float(type(self).ROW_H)
         self.scroll_ms = 0.0
         self.pitch_top = 84
+        # Pitch rows are integer-addressed, while precision touchpads often
+        # send sub-row deltas. Retain the fractional movement so a sequence of
+        # small gestures remains responsive without making the paint/hit-test
+        # coordinate model fractional.
+        self._touchpad_pitch_remainder_rows = 0.0
         self.drag_mode = ""
         self.press_pos = QPointF()
         self.press_notes: list = []
@@ -291,7 +319,15 @@ class PianoRollCanvas(QWidget):
         self.update()
 
     def _editable_note_base_color(self) -> QColor:
-        color = QColor(str(getattr(self.editor.track, "color", "")))
+        color = QColor(
+            str(
+                getattr(
+                    getattr(self.editor, "track", None),
+                    "color",
+                    "",
+                )
+            )
+        )
         return color if color.isValid() else QColor("#718c3d")
 
     @staticmethod
@@ -398,6 +434,7 @@ class PianoRollCanvas(QWidget):
         voice_groups=(),
         harmony_analysis=None,
         group_colors: dict[str, str] | None = None,
+        melody_guidance=None,
     ) -> None:
         """Project Qt-free harmony/group sidecars into visible block styling."""
 
@@ -415,10 +452,13 @@ class PianoRollCanvas(QWidget):
             and self._candidate_source_object
             is self._assist_candidate_source_object
             and color_key == self._assist_group_color_key
+            and melody_guidance == self._melody_guidance
         ):
             return
         candidate_groups: dict[str, str] = {}
         candidate_colors: dict[str, str] = {}
+        candidate_group_confidences: dict[str, float] = {}
+        candidate_group_class_confidences: dict[str, float] = {}
         for group in groups:
             group_id = str(getattr(group, "group_id", "") or "")
             color = str(
@@ -426,10 +466,21 @@ class PianoRollCanvas(QWidget):
                 or getattr(group, "color", "")
                 or self._group_palette_color(group_id)
             )
+            group_confidence = float(getattr(group, "confidence", 0.0))
+            candidate_confidence_lookup = dict(
+                getattr(group, "candidate_confidences", ()) or ()
+            )
             for candidate_id in getattr(group, "candidate_ids", ()) or ():
                 normalized = str(candidate_id)
                 candidate_groups[normalized] = group_id
                 candidate_colors[normalized] = color
+                candidate_group_confidences[normalized] = float(
+                    candidate_confidence_lookup.get(
+                        normalized,
+                        group_confidence,
+                    )
+                )
+                candidate_group_class_confidences[normalized] = group_confidence
         # Voice analysis intentionally receives only the primary of a folded
         # same-pitch hypothesis cluster.  Its alternatives remain reviewable
         # and inherit the primary block's phrase colour without becoming
@@ -444,6 +495,40 @@ class PianoRollCanvas(QWidget):
                     alternative_id,
                     candidate_colors[primary_id],
                 )
+                candidate_group_confidences.setdefault(
+                    alternative_id,
+                    candidate_group_confidences.get(primary_id, 0.0),
+                )
+                candidate_group_class_confidences.setdefault(
+                    alternative_id,
+                    candidate_group_class_confidences.get(primary_id, 0.0),
+                )
+
+        group_emphasis = getattr(
+            melody_guidance,
+            "group_emphasis",
+            lambda _group_id: 1.0,
+        )
+        highest_priority = getattr(
+            melody_guidance,
+            "is_highest_priority_group",
+            lambda _group_id: False,
+        )
+        guided_label = str(
+            getattr(melody_guidance, "target_instrument_label", "") or ""
+        )
+        candidate_group_emphases = {
+            candidate_id: max(
+                0.35,
+                min(1.35, float(group_emphasis(group_id))),
+            )
+            for candidate_id, group_id in candidate_groups.items()
+        }
+        candidate_guided_labels = {
+            candidate_id: guided_label
+            for candidate_id, group_id in candidate_groups.items()
+            if guided_label and highest_priority(group_id)
+        }
 
         chord_roles: dict[str, str] = {}
         segments = tuple(
@@ -505,15 +590,25 @@ class PianoRollCanvas(QWidget):
         projection = (
             groups,
             harmony_analysis,
+            melody_guidance,
             candidate_groups,
             candidate_colors,
+            candidate_group_confidences,
+            candidate_group_class_confidences,
+            candidate_group_emphases,
+            candidate_guided_labels,
             chord_roles,
         )
         current = (
             self._voice_groups,
             self._harmony_analysis,
+            self._melody_guidance,
             self._candidate_group_ids,
             self._candidate_group_colors,
+            self._candidate_group_confidences,
+            self._candidate_group_class_confidences,
+            self._candidate_group_emphases,
+            self._candidate_guided_instrument_labels,
             self._candidate_chord_roles,
         )
         if projection == current:
@@ -521,10 +616,18 @@ class PianoRollCanvas(QWidget):
         (
             self._voice_groups,
             self._harmony_analysis,
+            self._melody_guidance,
             self._candidate_group_ids,
             self._candidate_group_colors,
+            self._candidate_group_confidences,
+            self._candidate_group_class_confidences,
+            self._candidate_group_emphases,
+            self._candidate_guided_instrument_labels,
             self._candidate_chord_roles,
         ) = projection
+        self._contour_default_emphasis = float(
+            getattr(melody_guidance, "default_emphasis", 1.0)
+        )
         self._harmony_segment_starts = [
             float(getattr(segment, "start_audio_ms", 0.0))
             for segment in segments
@@ -539,8 +642,268 @@ class PianoRollCanvas(QWidget):
         )
         self._assist_candidate_source_object = self._candidate_source_object
         self._assist_group_color_key = color_key
+        self._rebuild_candidate_continuity_projection()
+        self._rebuild_contour_color_projection()
         self._rebuild_melody_line_projection()
         self.update()
+
+    def _rebuild_candidate_continuity_projection(self) -> None:
+        """Index evidence-backed false-split bridges outside paint paths."""
+
+        by_pitch: dict[int, list[int]] = defaultdict(list)
+        for index, (candidate_id, candidate) in enumerate(
+            zip(
+                self._transcription_candidate_ids,
+                self.transcription_candidates,
+            )
+        ):
+            if candidate_id in self._continuity_candidate_ids:
+                by_pitch[int(candidate.pitch)].append(index)
+        pairs: list[tuple[int, int]] = []
+        for pitch_indices in by_pitch.values():
+            for left_index, right_index in zip(
+                pitch_indices,
+                pitch_indices[1:],
+            ):
+                left = self.transcription_candidates[left_index]
+                right = self.transcription_candidates[right_index]
+                gap_ms = float(right.start_ms) - (
+                    float(left.start_ms) + float(left.duration_ms)
+                )
+                if not 0.0 < gap_ms <= self.MAX_CANDIDATE_CONTINUITY_GAP_MS:
+                    continue
+                left_id = self._transcription_candidate_ids[left_index]
+                right_id = self._transcription_candidate_ids[right_index]
+                left_group = self._candidate_group_ids.get(left_id, "")
+                right_group = self._candidate_group_ids.get(right_id, "")
+                if left_group and right_group and left_group != right_group:
+                    continue
+                pairs.append((left_index, right_index))
+        pairs.sort(
+            key=lambda pair: (
+                float(self.transcription_candidates[pair[0]].start_ms)
+                + float(self.transcription_candidates[pair[0]].duration_ms),
+                int(self.transcription_candidates[pair[0]].pitch),
+                pair,
+            )
+        )
+        projection = tuple(pairs)
+        if projection == self._candidate_continuity_pairs:
+            return
+        self._candidate_continuity_pairs = projection
+        self._candidate_continuity_starts = tuple(
+            float(self.transcription_candidates[left_index].start_ms)
+            + float(self.transcription_candidates[left_index].duration_ms)
+            for left_index, _right_index in projection
+        )
+        self._candidate_visual_revision += 1
+        self._contour_clip_cache_key = None
+
+    def _visible_candidate_continuity_rects(
+        self,
+        project_left_ms: float,
+        project_right_ms: float,
+    ) -> tuple[tuple[str, QRectF], ...]:
+        if not self._candidate_continuity_pairs:
+            return ()
+        audio_left = float(project_left_ms) - self._audio_offset_ms
+        audio_right = float(project_right_ms) - self._audio_offset_ms
+        first = bisect_left(
+            self._candidate_continuity_starts,
+            audio_left - self.MAX_CANDIDATE_CONTINUITY_GAP_MS,
+        )
+        last = bisect_right(self._candidate_continuity_starts, audio_right)
+        bridges: list[tuple[str, QRectF]] = []
+        blocked_ids = (
+            self._rejected_candidate_ids
+            | self._suppressed_candidate_ids
+            | self._invalid_candidate_ids
+        )
+        for left_index, right_index in self._candidate_continuity_pairs[
+            first:last
+        ]:
+            left_id = self._transcription_candidate_ids[left_index]
+            right_id = self._transcription_candidate_ids[right_index]
+            if left_id in blocked_ids or right_id in blocked_ids:
+                continue
+            left_rect = self.candidate_rect(
+                self.transcription_candidates[left_index]
+            )
+            right_rect = self.candidate_rect(
+                self.transcription_candidates[right_index]
+            )
+            if right_rect.left() <= left_rect.right():
+                continue
+            color = self._candidate_group_colors.get(
+                left_id,
+                self._candidate_group_colors.get(right_id, "#5baaa4"),
+            )
+            bridges.append(
+                (
+                    color,
+                    QRectF(
+                        left_rect.right(),
+                        max(left_rect.top(), right_rect.top()),
+                        right_rect.left() - left_rect.right(),
+                        min(left_rect.height(), right_rect.height()),
+                    ),
+                )
+            )
+        return tuple(bridges)
+
+    def _rebuild_contour_color_projection(self) -> None:
+        """Build candidate-owned colour spans outside the paint path."""
+
+        guidance = self._melody_guidance
+        group_emphasis = getattr(
+            guidance,
+            "group_emphasis",
+            lambda _group_id: 1.0,
+        )
+        highest_priority = getattr(
+            guidance,
+            "is_highest_priority_group",
+            lambda _group_id: False,
+        )
+        target_instrument_id = getattr(
+            guidance,
+            "target_instrument_id",
+            None,
+        )
+        target_instrument_label = str(
+            getattr(guidance, "target_instrument_label", "") or ""
+        )
+        focused_color = self._editable_note_base_color().name()
+
+        def source_timing(candidate_id: str, candidate) -> tuple[float, float]:
+            return self._candidate_source_timings.get(
+                candidate_id,
+                (
+                    float(candidate.start_ms),
+                    float(candidate.duration_ms),
+                ),
+            )
+
+        def span_for(
+            candidate_id: str,
+            candidate,
+            start_ms: float,
+            end_ms: float,
+        ) -> ContourColorSpan:
+            group_id = self._candidate_group_ids.get(candidate_id, "")
+            focused = bool(highest_priority(group_id))
+            return ContourColorSpan(
+                start_ms,
+                end_ms,
+                float(candidate.pitch) - 1.75,
+                float(candidate.pitch) + 1.75,
+                (
+                    focused_color
+                    if focused
+                    else self._candidate_group_colors[candidate_id]
+                ),
+                float(group_emphasis(group_id)),
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        self._candidate_group_class_confidences.get(
+                            candidate_id,
+                            0.0,
+                        ),
+                    ),
+                ),
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        self._candidate_group_confidences.get(
+                            candidate_id,
+                            0.0,
+                        ),
+                    ),
+                ),
+                focused=focused,
+                target_instrument_id=(
+                    target_instrument_id if focused else None
+                ),
+                target_instrument_label=(
+                    target_instrument_label if focused else ""
+                ),
+            )
+
+        spans: list[ContourColorSpan] = []
+        for candidate_id, candidate in zip(
+            self._transcription_candidate_ids,
+            self.transcription_candidates,
+        ):
+            if candidate_id not in self._candidate_group_colors:
+                continue
+            source_start, source_duration = source_timing(
+                candidate_id,
+                candidate,
+            )
+            spans.append(
+                span_for(
+                    candidate_id,
+                    candidate,
+                    source_start,
+                    source_start + source_duration,
+                )
+            )
+        for left_index, right_index in self._candidate_continuity_pairs:
+            left_id = self._transcription_candidate_ids[left_index]
+            right_id = self._transcription_candidate_ids[right_index]
+            left_color = self._candidate_group_colors.get(left_id, "")
+            if not left_color or left_color != self._candidate_group_colors.get(
+                right_id,
+                "",
+            ):
+                continue
+            left = self.transcription_candidates[left_index]
+            right = self.transcription_candidates[right_index]
+            left_start, left_duration = source_timing(left_id, left)
+            right_start, _right_duration = source_timing(right_id, right)
+            if right_start <= left_start + left_duration:
+                continue
+            bridge = span_for(
+                left_id,
+                left,
+                left_start + left_duration,
+                right_start,
+            )
+            spans.append(
+                ContourColorSpan(
+                    bridge.start_ms,
+                    bridge.end_ms,
+                    bridge.pitch_min,
+                    bridge.pitch_max,
+                    bridge.color,
+                    bridge.emphasis,
+                    min(
+                        self._candidate_group_class_confidences.get(
+                            left_id,
+                            0.0,
+                        ),
+                        self._candidate_group_class_confidences.get(
+                            right_id,
+                            0.0,
+                        ),
+                    ),
+                    min(
+                        self._candidate_group_confidences.get(left_id, 0.0),
+                        self._candidate_group_confidences.get(right_id, 0.0),
+                    ),
+                    focused=bridge.focused,
+                    target_instrument_id=bridge.target_instrument_id,
+                    target_instrument_label=bridge.target_instrument_label,
+                )
+            )
+        spans_value = tuple(spans)
+        if spans_value == self._contour_color_spans:
+            return
+        self._contour_color_spans = spans_value
+        self._contour_color_revision += 1
 
     def _rebuild_melody_line_projection(self) -> None:
         """Rebuild advisory paths outside ``paintEvent`` and audio callbacks."""
@@ -824,6 +1187,8 @@ class PianoRollCanvas(QWidget):
             self._transcription_candidate_ids
         )
         self.transcription_candidates_visible = bool(visible)
+        self._rebuild_candidate_continuity_projection()
+        self._rebuild_contour_color_projection()
         self._rebuild_melody_line_projection()
         self._recalculate_content_end()
         self.update()
@@ -833,6 +1198,7 @@ class PianoRollCanvas(QWidget):
         candidates,
         candidate_id,
         *,
+        source_candidates=None,
         selected_ids=(),
         rejected_ids=(),
         pending_routes=(),
@@ -841,6 +1207,7 @@ class PianoRollCanvas(QWidget):
         duplicate_ids=(),
         staged_ids=(),
         fragment_ids=(),
+        continuity_ids=(),
         suppressed_ids=(),
         confidence_floor: float = 0.30,
         show_rejected_only: bool = False,
@@ -848,6 +1215,23 @@ class PianoRollCanvas(QWidget):
         visible: bool = True,
     ) -> None:
         candidate_values = tuple(candidates)
+        source_candidate_values = (
+            candidate_values
+            if source_candidates is None
+            else tuple(source_candidates)
+        )
+        source_timing_changed = (
+            source_candidate_values is not self._candidate_source_timing_object
+        )
+        if source_timing_changed:
+            self._candidate_source_timings = {
+                str(candidate_id(candidate)): (
+                    float(candidate.start_ms),
+                    float(candidate.duration_ms),
+                )
+                for candidate in source_candidate_values
+            }
+            self._candidate_source_timing_object = source_candidate_values
         source_changed = (
             candidate_values is not self._candidate_source_object
         )
@@ -858,6 +1242,39 @@ class PianoRollCanvas(QWidget):
                 candidate_id_resolver=candidate_id,
             )
             self._candidate_source_object = candidate_values
+        if source_changed or source_timing_changed:
+            self._candidate_time_warps = {}
+            for displayed_id, displayed in zip(
+                self._transcription_candidate_ids,
+                self.transcription_candidates,
+            ):
+                source_timing = self._candidate_source_timings.get(
+                    displayed_id
+                )
+                if source_timing is None:
+                    continue
+                source_start, source_duration = source_timing
+                projected_start = float(displayed.start_ms)
+                projected_duration = float(displayed.duration_ms)
+                if (
+                    math.isclose(
+                        source_start,
+                        projected_start,
+                        abs_tol=0.5,
+                    )
+                    and math.isclose(
+                        source_duration,
+                        projected_duration,
+                        abs_tol=0.5,
+                    )
+                ):
+                    continue
+                self._candidate_time_warps[displayed_id] = (
+                    source_start,
+                    source_start + source_duration,
+                    projected_start,
+                    projected_start + projected_duration,
+                )
         selected_values = frozenset(str(value) for value in selected_ids)
         rejected_values = frozenset(str(value) for value in rejected_ids)
         pending_values = frozenset(
@@ -876,6 +1293,9 @@ class PianoRollCanvas(QWidget):
         fragment_values = frozenset(
             str(value) for value in fragment_ids
         )
+        continuity_values = frozenset(
+            str(value) for value in continuity_ids
+        )
         suppressed_values = frozenset(
             str(value) for value in suppressed_ids
         )
@@ -886,6 +1306,7 @@ class PianoRollCanvas(QWidget):
         normalized_offset = float(audio_offset_ms)
         projection_key = (
             id(candidate_values),
+            id(source_candidate_values),
             selected_values,
             rejected_values,
             pending_values,
@@ -894,6 +1315,7 @@ class PianoRollCanvas(QWidget):
             duplicate_values,
             staged_values,
             fragment_values,
+            continuity_values,
             suppressed_values,
             normalized_confidence,
             bool(show_rejected_only),
@@ -902,6 +1324,7 @@ class PianoRollCanvas(QWidget):
         )
         if (
             not source_changed
+            and not source_timing_changed
             and projection_key == self._review_projection_key
         ):
             return
@@ -916,6 +1339,7 @@ class PianoRollCanvas(QWidget):
         self._duplicate_candidate_ids = set(duplicate_values)
         self._staged_candidate_ids = set(staged_values)
         self._fragment_candidate_ids = set(fragment_values)
+        self._continuity_candidate_ids = set(continuity_values)
         self._suppressed_candidate_ids = set(suppressed_values)
         self._confidence_floor = normalized_confidence
         self._show_rejected_only = bool(show_rejected_only)
@@ -923,6 +1347,8 @@ class PianoRollCanvas(QWidget):
         self.transcription_candidates_visible = bool(visible)
         self._candidate_visual_revision += 1
         self._contour_clip_cache_key = None
+        self._rebuild_candidate_continuity_projection()
+        self._rebuild_contour_color_projection()
         self._recalculate_content_end()
         self.update()
 
@@ -1041,6 +1467,18 @@ class PianoRollCanvas(QWidget):
         ):
             return
         self._reference_background_opacity = normalized
+        self.update()
+
+    def set_contour_opacity(self, opacity: float) -> None:
+        try:
+            normalized = max(0.0, min(1.0, float(opacity)))
+        except (TypeError, ValueError, OverflowError):
+            normalized = 0.82
+        if not math.isfinite(normalized):
+            normalized = 0.82
+        if math.isclose(normalized, self._contour_opacity, abs_tol=0.001):
+            return
+        self._contour_opacity = normalized
         self.update()
 
     def set_melody_lines_visible(self, visible: bool) -> None:
@@ -1502,6 +1940,31 @@ class PianoRollCanvas(QWidget):
             rect.top() + lane * lane_height,
             max(4.0, rect.width() - overflow_rank * 4.0),
             max(3.0, lane_height - 1.0),
+        )
+
+    def _candidate_is_displayed_in_fold(
+        self,
+        candidate_id: str,
+        expanded_primaries: set[str],
+    ) -> bool:
+        """Match folded-candidate hit testing to what the painter exposes."""
+
+        folded_primary = self._folded_candidate_primary.get(candidate_id)
+        if folded_primary is None or folded_primary in expanded_primaries:
+            return True
+        return any(
+            candidate_id in candidate_ids
+            for candidate_ids in (
+                self._selected_candidate_ids,
+                self._rejected_candidate_ids,
+                self._pending_candidate_ids,
+                self._applied_candidate_ids,
+                self._invalid_candidate_ids,
+                self._duplicate_candidate_ids,
+                self._staged_candidate_ids,
+                self._fragment_candidate_ids,
+                self._suppressed_candidate_ids,
+            )
         )
 
     def candidate_at(self, pos: QPointF) -> str | None:
@@ -2043,6 +2506,100 @@ class PianoRollCanvas(QWidget):
         if not dirty.isEmpty():
             self.update(dirty.adjusted(-1, -1, 1, 1).toAlignedRect())
 
+    def _visible_contour_time_warps(
+        self,
+        project_start_ms: float,
+        project_end_ms: float,
+    ) -> tuple[
+        tuple[
+            str,
+            TranscriptionCandidate,
+            tuple[float, float, float, float],
+        ],
+        ...,
+    ]:
+        if not self._candidate_time_warps:
+            return ()
+        return tuple(
+            (candidate_id, candidate, self._candidate_time_warps[candidate_id])
+            for candidate_id, candidate in self._visible_candidate_pairs(
+                project_start_ms,
+                project_end_ms,
+            )
+            if candidate_id in self._candidate_time_warps
+        )
+
+    def _contour_warp_segments_for_tile(
+        self,
+        tile,
+        warps: tuple[
+            tuple[
+                str,
+                TranscriptionCandidate,
+                tuple[float, float, float, float],
+            ],
+            ...,
+        ],
+    ) -> tuple[tuple[QRectF, QRectF, QRectF], ...]:
+        """Map raw contour image slices onto projected candidate time."""
+
+        tile_start = float(tile.time_start_ms)
+        tile_end = float(tile.time_end_ms)
+        tile_duration = max(1e-9, tile_end - tile_start)
+        image_width = max(1, int(tile.image.width()))
+        image_height = max(1, int(tile.image.height()))
+        tile_target = self._evidence_tile_rect(tile)
+        segments: list[tuple[QRectF, QRectF, QRectF]] = []
+        for _candidate_id, candidate, warp in warps:
+            source_start, source_end, projected_start, projected_end = warp
+            overlap_start = max(source_start, tile_start)
+            overlap_end = min(source_end, tile_end)
+            if overlap_end <= overlap_start or source_end <= source_start:
+                continue
+            source_fraction_start = (
+                overlap_start - source_start
+            ) / (source_end - source_start)
+            source_fraction_end = (
+                overlap_end - source_start
+            ) / (source_end - source_start)
+            target_start = projected_start + source_fraction_start * (
+                projected_end - projected_start
+            )
+            target_end = projected_start + source_fraction_end * (
+                projected_end - projected_start
+            )
+            source_rect = QRectF(
+                (overlap_start - tile_start)
+                / tile_duration
+                * image_width,
+                0.0,
+                max(
+                    1.0,
+                    (overlap_end - overlap_start)
+                    / tile_duration
+                    * image_width,
+                ),
+                float(image_height),
+            )
+            target_rect = QRectF(
+                self.x_at_time(target_start + self._audio_offset_ms),
+                tile_target.top(),
+                max(
+                    1.0,
+                    self.x_at_time(target_end + self._audio_offset_ms)
+                    - self.x_at_time(target_start + self._audio_offset_ms),
+                ),
+                tile_target.height(),
+            )
+            candidate_clip = self.candidate_rect(candidate).adjusted(
+                -2.0,
+                -self.ROW_H * 2.0,
+                2.0,
+                self.ROW_H * 2.0,
+            )
+            segments.append((candidate_clip, target_rect, source_rect))
+        return tuple(segments)
+
     def _paint_transcription_evidence(
         self,
         painter: QPainter,
@@ -2054,7 +2611,13 @@ class PianoRollCanvas(QWidget):
         if (
             descriptor is None
             or not self.transcription_candidates_visible
-            or self._reference_background_opacity <= 0.0
+            or (
+                self._reference_background_opacity <= 0.0
+                and (
+                    not self._show_contour_evidence
+                    or self._contour_opacity <= 0.0
+                )
+            )
             or not (
                 self._show_frame_evidence
                 or self._show_onset_evidence
@@ -2073,6 +2636,20 @@ class PianoRollCanvas(QWidget):
         audio_end = project_end - self._audio_offset_ms
         if audio_end <= 0.0:
             return
+        contour_warps = (
+            self._visible_contour_time_warps(project_start, project_end)
+            if self._show_contour_evidence
+            else ()
+        )
+        if contour_warps:
+            audio_start = min(
+                audio_start,
+                *(warp[0] for _candidate_id, _candidate, warp in contour_warps),
+            )
+            audio_end = max(
+                audio_end,
+                *(warp[1] for _candidate_id, _candidate, warp in contour_warps),
+            )
         visible_rows = max(
             1, math.ceil(max(0.0, grid.height()) / self.ROW_H)
         )
@@ -2101,6 +2678,9 @@ class PianoRollCanvas(QWidget):
             layers=layers,
             include_contour=self._show_contour_evidence,
             contour_denoise=self._contour_denoise_profile,
+            contour_color_revision=str(self._contour_color_revision),
+            contour_color_spans=self._contour_color_spans,
+            contour_default_emphasis=self._contour_default_emphasis,
             update_viewport=(
                 project_end - project_start
                 >= (
@@ -2111,7 +2691,6 @@ class PianoRollCanvas(QWidget):
         )
         painter.save()
         painter.setClipRect(grid)
-        painter.setOpacity(self._reference_background_opacity)
         contour_clip = (
             self._transcription_contour_clip_path(
                 grid,
@@ -2121,20 +2700,71 @@ class PianoRollCanvas(QWidget):
             if self._show_contour_evidence
             else QPainterPath()
         )
+        warped_clip = QPainterPath()
+        for _candidate_id, candidate, _warp in contour_warps:
+            warped_clip.addRect(
+                self.candidate_rect(candidate).adjusted(
+                    -2.0,
+                    -self.ROW_H * 2.0,
+                    2.0,
+                    self.ROW_H * 2.0,
+                ).intersected(grid)
+            )
+        normal_contour_clip = (
+            contour_clip.subtracted(warped_clip)
+            if not warped_clip.isEmpty()
+            else contour_clip
+        )
         for tile in tiles:
             target = self._evidence_tile_rect(tile)
-            if target.intersects(grid):
-                if tile.layer == "contour" and contour_clip.isEmpty():
+            if tile.layer == "contour":
+                warp_segments = self._contour_warp_segments_for_tile(
+                    tile,
+                    contour_warps,
+                )
+                draw_normal = (
+                    target.intersects(grid)
+                    and not normal_contour_clip.isEmpty()
+                )
+                draw_warped = any(
+                    target_rect.intersects(grid)
+                    for _candidate_clip, target_rect, _source_rect
+                    in warp_segments
+                )
+                if not draw_normal and not draw_warped:
                     continue
                 painter.save()
-                if tile.layer == "contour":
-                    painter.setClipPath(
-                        contour_clip,
-                        Qt.ClipOperation.IntersectClip,
-                    )
+                painter.setOpacity(self._contour_opacity)
                 painter.setRenderHint(
                     QPainter.RenderHint.SmoothPixmapTransform,
-                    tile.layer == "contour",
+                    True,
+                )
+                if draw_normal:
+                    painter.save()
+                    painter.setClipPath(
+                        normal_contour_clip,
+                        Qt.ClipOperation.IntersectClip,
+                    )
+                    painter.drawImage(target, tile.image)
+                    painter.restore()
+                for candidate_clip, target_rect, source_rect in warp_segments:
+                    if not target_rect.intersects(grid):
+                        continue
+                    painter.save()
+                    painter.setClipRect(
+                        candidate_clip,
+                        Qt.ClipOperation.IntersectClip,
+                    )
+                    painter.drawImage(target_rect, tile.image, source_rect)
+                    painter.restore()
+                painter.restore()
+                continue
+            if target.intersects(grid):
+                painter.save()
+                painter.setOpacity(self._reference_background_opacity)
+                painter.setRenderHint(
+                    QPainter.RenderHint.SmoothPixmapTransform,
+                    False,
                 )
                 painter.drawImage(target, tile.image)
                 painter.restore()
@@ -2173,6 +2803,18 @@ class PianoRollCanvas(QWidget):
                 -2.0,
                 -self.ROW_H * 2.0,
                 2.0,
+                self.ROW_H * 2.0,
+            ).intersected(grid)
+            if not clipped.isEmpty():
+                path.addRect(clipped)
+        for _color, bridge in self._visible_candidate_continuity_rects(
+            paint_left_ms,
+            paint_right_ms,
+        ):
+            clipped = bridge.adjusted(
+                0.0,
+                -self.ROW_H * 2.0,
+                0.0,
                 self.ROW_H * 2.0,
             ).intersected(grid)
             if not clipped.isEmpty():
@@ -2603,6 +3245,18 @@ class PianoRollCanvas(QWidget):
         painter.save()
         painter.setOpacity(self._transcription_candidate_opacity)
 
+        # A bridge is presentation-only: individual onset caps, hit targets,
+        # IDs and draft adoption remain unchanged.  It simply prevents an
+        # evidence-backed false split from looking like unrelated blocks.
+        if not self._show_rejected_only:
+            for color_name, bridge in self._visible_candidate_continuity_rects(
+                paint_left_ms,
+                paint_right_ms,
+            ):
+                color = QColor(color_name)
+                color.setAlpha(96)
+                painter.fillRect(bridge, color)
+
         groups: dict[
             tuple[bool, str, int, str, int, float, object],
             list[QRectF],
@@ -2616,8 +3270,11 @@ class PianoRollCanvas(QWidget):
         ] = defaultdict(list)
         pending_markers: list[QRectF] = []
         fragment_markers: list[QRectF] = []
+        guidance_markers: list[QRectF] = []
         role_markers: dict[str, list[QRectF]] = defaultdict(list)
-        labels: list[tuple[QRectF, int, float, str]] = []
+        labels: list[
+            tuple[QRectF, int, float, float | None, str, str]
+        ] = []
         beat_width = float(self.px_per_beat)
         show_detail = (
             beat_width > 160.0
@@ -2629,21 +3286,9 @@ class PianoRollCanvas(QWidget):
             paint_left_ms,
             paint_right_ms,
         ):
-            folded_primary = self._folded_candidate_primary.get(
-                candidate_id
-            )
-            if (
-                folded_primary is not None
-                and folded_primary not in expanded_fold_primaries
-                and candidate_id not in self._selected_candidate_ids
-                and candidate_id not in self._rejected_candidate_ids
-                and candidate_id not in self._pending_candidate_ids
-                and candidate_id not in self._applied_candidate_ids
-                and candidate_id not in self._invalid_candidate_ids
-                and candidate_id not in self._duplicate_candidate_ids
-                and candidate_id not in self._staged_candidate_ids
-                and candidate_id not in self._fragment_candidate_ids
-                and candidate_id not in self._suppressed_candidate_ids
+            if not self._candidate_is_displayed_in_fold(
+                candidate_id,
+                expanded_fold_primaries,
             ):
                 continue
             rect = self._candidate_display_rect(
@@ -2672,6 +3317,14 @@ class PianoRollCanvas(QWidget):
                 candidate_id,
                 "#5baaa4",
             )
+            group_emphasis = self._candidate_group_emphases.get(
+                candidate_id,
+                1.0,
+            )
+            guided_instrument = self._candidate_guided_instrument_labels.get(
+                candidate_id,
+                "",
+            )
             opacity_confidence = round(confidence * 7.0) / 7.0
             # Confidence is an opacity channel only.  The slider controls how
             # strongly weak evidence remains visible; it never filters it.
@@ -2689,6 +3342,11 @@ class PianoRollCanvas(QWidget):
                 fill_alpha = min(fill_alpha, 18)
             elif beat_width < 40.0:
                 fill_alpha = min(fill_alpha, 38)
+            if not selected and not hovered:
+                fill_alpha = max(
+                    6,
+                    min(255, round(fill_alpha * group_emphasis)),
+                )
 
             if selected:
                 outline_name = "#fff1c8"
@@ -2709,6 +3367,11 @@ class PianoRollCanvas(QWidget):
             outline_alpha = 255 if selected else 104 + round(
                 opacity_confidence * 92
             )
+            if not selected and not hovered:
+                outline_alpha = max(
+                    52,
+                    min(255, round(outline_alpha * group_emphasis)),
+                )
             line_style = (
                 Qt.DashLine
                 if rejected or fragment or suppressed
@@ -2780,6 +3443,15 @@ class PianoRollCanvas(QWidget):
                         3,
                     )
                 )
+            if guided_instrument and not rejected and not suppressed:
+                guidance_markers.append(
+                    QRectF(
+                        rect.left() + 2.0,
+                        rect.top() + 1.0,
+                        max(1.0, rect.width() - 4.0),
+                        2.0,
+                    )
+                )
             role = self._candidate_chord_roles.get(candidate_id, "")
             if show_detail and role and rect.width() >= 5:
                 role_markers[role].append(
@@ -2796,7 +3468,14 @@ class PianoRollCanvas(QWidget):
                 and (selected or hovered)
             ):
                 labels.append(
-                    (rect, int(candidate.pitch), confidence, candidate_id)
+                    (
+                        rect,
+                        int(candidate.pitch),
+                        confidence,
+                        self._candidate_group_confidences.get(candidate_id),
+                        candidate_id,
+                        guided_instrument,
+                    )
                 )
 
         # Selected blocks paint last so their neutral outline remains legible
@@ -2851,6 +3530,11 @@ class PianoRollCanvas(QWidget):
         if fragment_markers:
             painter.setBrush(QColor("#f0ae42"))
             painter.drawRects(fragment_markers)
+        if guidance_markers:
+            # A non-colour cue marks the user-guided instrument assignment on
+            # both low- and high-confidence reference blocks.
+            painter.setBrush(QColor("#f5d08a"))
+            painter.drawRects(guidance_markers)
         if invalid_lines:
             painter.setPen(QPen(QColor("#e88479"), 1))
             for start, end in invalid_lines:
@@ -2859,16 +3543,38 @@ class PianoRollCanvas(QWidget):
             painter.setPen(QPen(QColor(180, 138, 132, 190), 1))
             for start, end in rejected_lines:
                 painter.drawLine(start, end)
-        for rect, pitch, confidence, _candidate_id in labels:
+        for (
+            rect,
+            pitch,
+            confidence,
+            classification_confidence,
+            _candidate_id,
+            guided_instrument,
+        ) in labels:
             painter.setPen(QColor("#f0eee8"))
             alternatives = self._fold_alternative_counts.get(
                 _candidate_id, 0
             )
+            confidence_text = f"{confidence:.0%}"
+            if classification_confidence is not None:
+                confidence_text = trf(
+                    "识别 {recognition}% · 分类 {classification}%",
+                    recognition=round(confidence * 100.0),
+                    classification=round(
+                        max(0.0, min(1.0, classification_confidence))
+                        * 100.0
+                    ),
+                )
             painter.drawText(
                 rect.adjusted(6, 0, -3, 0),
                 Qt.AlignLeft | Qt.AlignVCenter,
                 (
-                    f"{note_name(pitch)} · {confidence:.0%}"
+                    (
+                        trf("引导：{instrument} · ", instrument=guided_instrument)
+                        if guided_instrument
+                        else ""
+                    )
+                    + f"{note_name(pitch)} · {confidence_text}"
                     + (f" · +{alternatives}" if alternatives else "")
                 ),
             )
@@ -3175,7 +3881,13 @@ class PianoRollCanvas(QWidget):
                 and rect.height() >= self.NOTE_TEXT_MIN_HEIGHT
             ):
                 painter.save()
-                painter.setClipRect(rect.adjusted(2, 1, -2, -1))
+                # Preserve the outer time-grid clip. Replacing it here lets a
+                # partially visible note paint its pitch label over the fixed
+                # piano keyboard after horizontal scrolling.
+                painter.setClipRect(
+                    rect.adjusted(2, 1, -2, -1),
+                    Qt.ClipOperation.IntersectClip,
+                )
                 label_font = painter.font()
                 label_font.setPointSize(
                     max(
@@ -3405,13 +4117,26 @@ class PianoRollCanvas(QWidget):
         self.clone_base_notes = []
         index, mode = self.note_at(event.position())
         mods = event.modifiers()
-        if index is not None:
+        candidate_review_active = (
+            self.editor.transcription_mode_enabled
+            and self.transcription_candidates_visible
+            and self._transcription_candidate_layer_visible
+            and bool(self.transcription_candidates)
+            and not self.editor.draw_mode_button.isChecked()
+        )
+        candidate_id = None
+        guide = None
+        if candidate_review_active:
+            candidate_id = self.candidate_at(event.position())
+            if candidate_id is None:
+                guide = self.melody_guide_at(event.position())
+        reference_hit = candidate_id is not None or guide is not None
+        if index is not None and not reference_hit:
             if self._selected_candidate_ids:
                 self._selected_candidate_ids.clear()
                 self.candidate_selection_changed.emit(frozenset())
             touched = self.notes[index]
-            self.editor.default_note_velocity = int(touched.vel)
-            self.editor.last_note_duration_ms = float(touched.dur)
+            self.editor.remember_note_creation_properties(touched)
             self.set_edit_cursor(float(touched.start))
             if mods & Qt.ControlModifier:
                 # Delay the toggle until release so a Ctrl-drag can clone the
@@ -3435,61 +4160,32 @@ class PianoRollCanvas(QWidget):
             if self.editor.draft_playback_state == "stopped":
                 self.editor.audition_note(self.notes[index])
             return
-        if self.editor.transcription_mode_enabled and not self.editor.draw_mode_button.isChecked():
-            candidate_id = self.candidate_at(event.position())
+        if candidate_review_active:
             additive = bool(mods & Qt.ControlModifier)
+            hit_ids: set[str] = set()
             if candidate_id is not None:
-                selected = set(self._selected_candidate_ids) if additive else set()
-                if additive and candidate_id in selected:
-                    selected.remove(candidate_id)
-                else:
-                    selected.add(candidate_id)
-                self._selected_candidate_ids = selected
-                self.selected.clear()
-                self.anchor_index = None
-                self.candidate_selection_changed.emit(frozenset(selected))
-                self.selection_changed.emit()
-                self.update()
-                self.ruler_seek_requested.emit(
-                    self.time_at(event.position().x())
-                )
-                event.accept()
-                return
-            guide = self.melody_guide_at(event.position())
+                hit_ids.add(candidate_id)
             if guide is not None:
-                guide_ids = {
+                hit_ids.update({
                     candidate_id
                     for candidate_id in guide.source_candidate_ids
                     if candidate_id in self._candidate_id_set
-                }
-                selected = (
-                    set(self._selected_candidate_ids) if additive else set()
-                )
-                if additive and guide_ids and guide_ids.issubset(selected):
-                    selected.difference_update(guide_ids)
-                else:
-                    selected.update(guide_ids)
-                self._selected_candidate_ids = selected
-                self.selected.clear()
-                self.anchor_index = None
-                self.candidate_selection_changed.emit(frozenset(selected))
-                self.selection_changed.emit()
-                raw_start = self.time_at(event.position().x())
-                self.set_edit_cursor(raw_start)
-                self.ruler_seek_requested.emit(raw_start)
-                self.update()
-                event.accept()
-                return
+                })
             self._candidate_marquee_origin = event.position()
             self._candidate_marquee_additive = additive
-            self._candidate_press_selected = set(self._selected_candidate_ids)
+            self._candidate_press_selected = set(
+                self._selected_candidate_ids
+            )
+            self._candidate_press_hit_ids = hit_ids
             self.marquee = QRectF(event.position(), event.position())
             self.drag_mode = "candidate_marquee_pending"
             if not additive:
                 self._selected_candidate_ids.clear()
-                self.candidate_selection_changed.emit(frozenset())
             self.selected.clear()
             self.anchor_index = None
+            if guide is not None:
+                raw_start = self.time_at(event.position().x())
+                self.set_edit_cursor(raw_start)
             raw_start = self.time_at(event.position().x())
             cursor_start = (
                 raw_start
@@ -3511,17 +4207,74 @@ class PianoRollCanvas(QWidget):
         if self.editor.draw_mode_button.isChecked():
             self.creation_anchor_ms = cursor_start
             self.creation_anchor_pitch = self.pitch_at(event.position().y())
-            self.creation_preview = Note(
-                self.creation_anchor_pitch,
-                self.editor.default_note_velocity,
-                cursor_start,
-                self.editor.default_note_duration(),
-                self.editor.current_articulation(),
+            self.creation_preview = self.editor.build_created_note(
+                pitch=self.creation_anchor_pitch,
+                start_ms=cursor_start,
             )
             self.drag_mode = "draw_create"
         else:
             self.drag_mode = "pending_marquee"
         self.selection_changed.emit()
+        self.update()
+
+    def _update_candidate_marquee(self, pos: QPointF) -> None:
+        origin = self._candidate_marquee_origin
+        if origin is None:
+            return
+        if (
+            self.drag_mode == "candidate_marquee_pending"
+            and math.hypot(pos.x() - origin.x(), pos.y() - origin.y()) > 4.0
+        ):
+            self.drag_mode = "candidate_marquee"
+        if self.drag_mode != "candidate_marquee":
+            return
+
+        self.marquee = QRectF(origin, pos).normalized()
+        selected = (
+            set(self._candidate_press_selected)
+            if self._candidate_marquee_additive
+            else set()
+        )
+        marquee_left_ms = self.time_at(
+            max(float(self.KEY_W), self.marquee.left())
+        )
+        marquee_right_ms = self.time_at(
+            max(float(self.KEY_W), self.marquee.right())
+        )
+        expanded_primaries = self._expanded_fold_primaries()
+        for candidate_id, candidate in self._visible_candidate_pairs(
+            marquee_left_ms,
+            marquee_right_ms,
+        ):
+            if not self._candidate_is_displayed_in_fold(
+                candidate_id,
+                expanded_primaries,
+            ):
+                continue
+            if self._candidate_display_rect(
+                candidate_id,
+                candidate,
+                expanded_primaries=expanded_primaries,
+            ).intersects(self.marquee):
+                selected.add(candidate_id)
+        if selected != self._selected_candidate_ids:
+            self._selected_candidate_ids = selected
+        note_hits = {
+            index
+            for index in self.visible_note_indices(
+                marquee_left_ms,
+                marquee_right_ms,
+            )
+            if self.note_rect(self.notes[index]).intersects(self.marquee)
+        }
+        note_selection = (
+            self.press_selected.union(note_hits)
+            if self._candidate_marquee_additive
+            else note_hits
+        )
+        if note_selection != self.selected:
+            self.selected = note_selection
+            self.selection_changed.emit()
         self.update()
 
     def mouseMoveEvent(self, event) -> None:
@@ -3564,7 +4317,11 @@ class PianoRollCanvas(QWidget):
             event.accept()
             return
         self.hover_changed.emit(self.time_at(pos.x()), self.pitch_at(pos.y()))
-        if not (event.buttons() & Qt.LeftButton):
+        candidate_marquee_active = self.drag_mode in {
+            "candidate_marquee_pending",
+            "candidate_marquee",
+        }
+        if not (event.buttons() & Qt.LeftButton) and not candidate_marquee_active:
             hovered_candidate_id = ""
             candidate_hit = None
             if (
@@ -3637,45 +4394,18 @@ class PianoRollCanvas(QWidget):
         dx, dy = pos.x() - self.press_pos.x(), pos.y() - self.press_pos.y()
         if self.drag_mode in {"candidate_marquee_pending", "candidate_marquee"}:
             if not self._transcription_candidate_layer_visible:
+                self._selected_candidate_ids = set(
+                    self._candidate_press_selected
+                )
                 self.drag_mode = None
-                self.marquee = None
+                self._candidate_marquee_origin = None
+                self._candidate_marquee_additive = False
+                self._candidate_press_selected.clear()
+                self._candidate_press_hit_ids.clear()
+                self.marquee = QRectF()
                 self.update()
                 return
-            if (
-                self._candidate_marquee_origin is not None
-                and math.hypot(dx, dy) > 4
-            ):
-                self.drag_mode = "candidate_marquee"
-            if (
-                self.drag_mode == "candidate_marquee"
-                and self._candidate_marquee_origin is not None
-            ):
-                self.marquee = QRectF(
-                    self._candidate_marquee_origin, pos
-                ).normalized()
-                selected = (
-                    set(self._candidate_press_selected)
-                    if self._candidate_marquee_additive
-                    else set()
-                )
-                marquee_left_ms = self.time_at(
-                    max(float(self.KEY_W), self.marquee.left())
-                )
-                marquee_right_ms = self.time_at(
-                    max(float(self.KEY_W), self.marquee.right())
-                )
-                for candidate_id, candidate in self._visible_candidate_pairs(
-                    marquee_left_ms,
-                    marquee_right_ms,
-                ):
-                    if self.candidate_rect(candidate).intersects(
-                        self.marquee
-                    ):
-                        selected.add(candidate_id)
-                if selected != self._selected_candidate_ids:
-                    self._selected_candidate_ids = selected
-                    self.candidate_selection_changed.emit(frozenset(selected))
-                self.update()
+            self._update_candidate_marquee(pos)
             return
         if self.drag_mode == "draw_create" and self.creation_preview is not None:
             current = self.time_at(pos.x())
@@ -3788,12 +4518,52 @@ class PianoRollCanvas(QWidget):
             event.accept()
             return
         if self.drag_mode in {"candidate_marquee_pending", "candidate_marquee"}:
+            if self._transcription_candidate_layer_visible:
+                # Precision touchpads may coalesce the final move or report it
+                # without a held-button flag.  The release position is the
+                # authoritative final corner of the selection rectangle.
+                self._update_candidate_marquee(event.position())
+            else:
+                self._selected_candidate_ids = set(
+                    self._candidate_press_selected
+                )
+            if (
+                self._transcription_candidate_layer_visible
+                and self.drag_mode == "candidate_marquee_pending"
+                and self._candidate_press_hit_ids
+            ):
+                selected = (
+                    set(self._candidate_press_selected)
+                    if self._candidate_marquee_additive
+                    else set()
+                )
+                if (
+                    self._candidate_marquee_additive
+                    and self._candidate_press_hit_ids.issubset(selected)
+                ):
+                    selected.difference_update(
+                        self._candidate_press_hit_ids
+                    )
+                else:
+                    selected.update(self._candidate_press_hit_ids)
+                self._selected_candidate_ids = selected
+            final_candidate_selection = frozenset(
+                self._selected_candidate_ids
+            )
+            previous_candidate_selection = frozenset(
+                self._candidate_press_selected
+            )
             self._candidate_marquee_origin = None
             self._candidate_marquee_additive = False
             self._candidate_press_selected.clear()
+            self._candidate_press_hit_ids.clear()
             self.marquee = QRectF()
             self.drag_mode = ""
             self.update()
+            if final_candidate_selection != previous_candidate_selection:
+                self.candidate_selection_changed.emit(
+                    final_candidate_selection
+                )
             event.accept()
             return
         if self.drag_mode == "draw_create" and self.creation_preview is not None:
@@ -3861,6 +4631,12 @@ class PianoRollCanvas(QWidget):
         ):
             candidate_id = self.candidate_at(event.position())
             if candidate_id is not None:
+                self._candidate_marquee_origin = None
+                self._candidate_marquee_additive = False
+                self._candidate_press_selected.clear()
+                self._candidate_press_hit_ids.clear()
+                self.marquee = QRectF()
+                self.drag_mode = ""
                 self.editor.promote_transcription_candidate(candidate_id)
                 event.accept()
                 return
@@ -3879,13 +4655,12 @@ class PianoRollCanvas(QWidget):
             )
             self.set_edit_cursor(start)
             self.editor.push_snapshot()
-            self.notes.append(Note(
-                self.pitch_at(event.position().y()),
-                self.editor.default_note_velocity,
-                start,
-                self.editor.default_note_duration(),
-                self.editor.current_articulation(),
-            ))
+            self.notes.append(
+                self.editor.build_created_note(
+                    pitch=self.pitch_at(event.position().y()),
+                    start_ms=start,
+                )
+            )
             self.selected = {len(self.notes) - 1}
             self.anchor_index = len(self.notes) - 1
             self.set_edit_cursor(start + self.notes[-1].dur)
@@ -3897,13 +4672,92 @@ class PianoRollCanvas(QWidget):
             return
         super().mouseDoubleClickEvent(event)
 
+    def _pan_from_wheel_pixels(
+        self,
+        horizontal_pixels: float,
+        vertical_pixels: float,
+    ) -> tuple[bool, bool]:
+        """Pan both piano-roll axes using screen-oriented wheel distances."""
+
+        old_scroll_ms = float(self.scroll_ms)
+        old_pitch_top = int(self.pitch_top)
+        if not math.isclose(horizontal_pixels, 0.0, abs_tol=1e-9):
+            self.scroll_ms = max(
+                0.0,
+                self.scroll_ms - horizontal_pixels / self.px_per_ms,
+            )
+
+        if not math.isclose(vertical_pixels, 0.0, abs_tol=1e-9):
+            pending_rows = (
+                self._touchpad_pitch_remainder_rows
+                + vertical_pixels / max(1.0, float(self.ROW_H))
+            )
+            row_delta = math.trunc(pending_rows)
+            self._touchpad_pitch_remainder_rows = pending_rows - row_delta
+            if row_delta:
+                pitch_min, pitch_max = self.editor.pitch_top_bounds()
+                requested_pitch_top = self.pitch_top + row_delta
+                self.pitch_top = max(
+                    pitch_min,
+                    min(pitch_max, requested_pitch_top),
+                )
+                if self.pitch_top != requested_pitch_top:
+                    self._touchpad_pitch_remainder_rows = 0.0
+
+        return (
+            not math.isclose(old_scroll_ms, self.scroll_ms, abs_tol=1e-6),
+            old_pitch_top != self.pitch_top,
+        )
+
     def wheelEvent(self, event) -> None:
         angle_delta = event.angleDelta()
+        pixel_delta = event.pixelDelta()
+        modifiers = event.modifiers()
+
+        if modifiers == Qt.NoModifier:
+            pixel_x = float(pixel_delta.x())
+            pixel_y = float(pixel_delta.y())
+            if not (
+                math.isclose(pixel_x, 0.0, abs_tol=1e-9)
+                and math.isclose(pixel_y, 0.0, abs_tol=1e-9)
+            ):
+                horizontal_pixels = pixel_x
+                vertical_pixels = pixel_y
+            else:
+                # Windows precision touchpads may report fine-grained angle
+                # deltas instead of pixelDelta. Preserve both axes and scale
+                # one conventional wheel notch to the legacy pan distance.
+                horizontal_steps = max(
+                    -8.0,
+                    min(8.0, float(angle_delta.x()) / 120.0),
+                )
+                vertical_steps = max(
+                    -8.0,
+                    min(8.0, float(angle_delta.y()) / 120.0),
+                )
+                horizontal_pixels = horizontal_steps * self.px_per_beat
+                vertical_pixels = vertical_steps * 3.0 * self.ROW_H
+            if not (
+                math.isclose(horizontal_pixels, 0.0, abs_tol=1e-9)
+                and math.isclose(vertical_pixels, 0.0, abs_tol=1e-9)
+            ):
+                time_changed, _pitch_changed = self._pan_from_wheel_pixels(
+                    horizontal_pixels,
+                    vertical_pixels,
+                )
+                self.update()
+                self.editor.update_scrollbars()
+                if time_changed:
+                    self.editor.velocity_lane.update()
+                    self.editor.transcription_waveform.refresh()
+                event.accept()
+                return
+            return super().wheelEvent(event)
+
         raw_delta = angle_delta.y() or angle_delta.x()
         if raw_delta:
             wheel_steps = float(raw_delta) / 120.0
         else:
-            pixel_delta = event.pixelDelta()
             raw_delta = pixel_delta.y() or pixel_delta.x()
             # Smooth touchpads report pixels instead of the conventional
             # 120-unit wheel notch. Fifty pixels is a restrained one-notch
@@ -3912,7 +4766,8 @@ class PianoRollCanvas(QWidget):
         if math.isclose(wheel_steps, 0.0, abs_tol=1e-9):
             return super().wheelEvent(event)
         wheel_steps = max(-8.0, min(8.0, wheel_steps))
-        if event.modifiers() & Qt.ControlModifier:
+        time_changed = False
+        if modifiers & Qt.ControlModifier:
             anchor_x = max(self.KEY_W, min(self.width(), event.position().x()))
             anchor_time = self.time_at(anchor_x)
             new_zoom = max(
@@ -3927,10 +4782,11 @@ class PianoRollCanvas(QWidget):
                 0.0,
                 anchor_time - (anchor_x - self.KEY_W) / self.px_per_ms,
             )
+            time_changed = True
             self.editor.editor_zoom.blockSignals(True)
             self.editor.editor_zoom.setValue(round(new_zoom))
             self.editor.editor_zoom.blockSignals(False)
-        elif event.modifiers() & Qt.AltModifier:
+        elif modifiers & Qt.AltModifier:
             anchor_y = max(
                 float(self.RULER_H),
                 min(float(self.height()), float(event.position().y())),
@@ -3952,11 +4808,12 @@ class PianoRollCanvas(QWidget):
             self.editor.status.setText(
                 trf("音块高度：{height}px", height=round(self.ROW_H))
             )
-        elif event.modifiers() & Qt.ShiftModifier:
+        elif modifiers & Qt.ShiftModifier:
             self.scroll_ms = max(
                 0.0,
                 self.scroll_ms - wheel_steps * self.beat_ms,
             )
+            time_changed = True
         else:
             pitch_min, pitch_max = self.editor.pitch_top_bounds()
             self.pitch_top = max(
@@ -3968,6 +4825,9 @@ class PianoRollCanvas(QWidget):
             )
         self.update()
         self.editor.update_scrollbars()
+        if time_changed:
+            self.editor.velocity_lane.update()
+            self.editor.transcription_waveform.refresh()
         event.accept()
 
     def keyPressEvent(self, event) -> None:

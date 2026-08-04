@@ -37,9 +37,9 @@ CONTOUR_HORIZONTAL_SUPERSAMPLING = 2
 CONTOUR_DENOISE_PROFILES = {
     # threshold, maximum simultaneous ridges, minimum persistence ms,
     # bridgeable gap ms, maximum one-step movement in 1/3-semitone bins.
-    "low": (0.10, 6, 25.0, 20.0, 6),
-    "standard": (0.18, 4, 50.0, 20.0, 4),
-    "high": (0.28, 2, 90.0, 10.0, 3),
+    "low": (0.10, 6, 25.0, 60.0, 6),
+    "standard": (0.18, 4, 50.0, 45.0, 4),
+    "high": (0.28, 2, 90.0, 28.0, 3),
 }
 
 _DEFAULT_SAMPLE_RATE = 22_050.0
@@ -67,6 +67,25 @@ class EvidenceTileKey:
     output_columns_hint: int
     intensity_percent: int = 100
     contour_denoise: str = "standard"
+    contour_color_revision: str = ""
+    contour_default_emphasis_percent: int = 100
+
+
+@dataclass(frozen=True)
+class ContourColorSpan:
+    """One candidate-owned region used to colour contour ridges."""
+
+    start_ms: float
+    end_ms: float
+    pitch_min: float
+    pitch_max: float
+    color: str
+    emphasis: float = 1.0
+    saturation: float = 1.0
+    opacity: float = 1.0
+    focused: bool = False
+    target_instrument_id: int | None = None
+    target_instrument_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -167,6 +186,7 @@ class _TileSpec:
     viewport_generation: int
     time_start_ms: float
     time_end_ms: float
+    contour_color_spans: tuple[ContourColorSpan, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -646,10 +666,45 @@ def _quantized_intensity_percent(intensity: float) -> int:
     return int(math.floor(value * EVIDENCE_INTENSITY_QUANTIZATION + 0.5))
 
 
+def _constrained_bezier_controls(
+    previous: tuple[float, float] | None,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    following: tuple[float, float] | None,
+    *,
+    maximum_y_overshoot: float,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    """Return Catmull-Rom-like controls bounded around both endpoints."""
+
+    previous = start if previous is None else previous
+    following = end if following is None else following
+    control_1 = (
+        start[0] + (end[0] - previous[0]) / 6.0,
+        start[1] + (end[1] - previous[1]) / 6.0,
+    )
+    control_2 = (
+        end[0] - (following[0] - start[0]) / 6.0,
+        end[1] - (following[1] - start[1]) / 6.0,
+    )
+    low = min(start[1], end[1]) - max(0.0, maximum_y_overshoot)
+    high = max(start[1], end[1]) + max(0.0, maximum_y_overshoot)
+    return (
+        (control_1[0], max(low, min(high, control_1[1]))),
+        (control_2[0], max(low, min(high, control_2[1]))),
+    )
+
+
 def _contour_rgba_image(
     matrix: np.ndarray,
     intensity: float,
     denoise_profile: str = "standard",
+    *,
+    time_start_ms: float = 0.0,
+    time_end_ms: float = 0.0,
+    pitch_min: float = 0.0,
+    bins_per_semitone: int = 1,
+    color_spans: tuple[ContourColorSpan, ...] = (),
+    default_emphasis: float = 1.0,
 ) -> QImage:
     """Render polyphonic contour evidence as restrained ridge lines.
 
@@ -697,7 +752,12 @@ def _contour_rgba_image(
     # Build short-lived ridge tracks first.  Rendering only after persistence
     # is known removes isolated one/two-frame peaks without mutating analysis
     # evidence or inventing pitch values through heavy smoothing.
-    local_maxima = values >= threshold
+    # Hysteresis keeps an established ridge alive through a brief posterior
+    # dip, while a weak peak cannot start a new line by itself.  This mirrors
+    # the observation/transition split used by probabilistic pitch trackers
+    # without turning the display worker into a second note decoder.
+    continuation_threshold = threshold * 0.72
+    local_maxima = values >= continuation_threshold
     if pitch_bins > 1:
         local_maxima[:, 1:] &= values[:, 1:] >= values[:, :-1]
         local_maxima[:, :-1] &= values[:, :-1] > values[:, 1:]
@@ -741,19 +801,102 @@ def _contour_rgba_image(
                 )
                 tracks[track_id].append((x, pitch_bin, strength))
                 unused_tracks.remove(track_id)
-            else:
+            elif strength >= threshold:
                 track_id = len(tracks)
                 tracks.append([(x, pitch_bin, strength)])
                 active_track_ids.append(track_id)
 
-    path_buckets = tuple(QPainterPath() for _index in range(8))
+    owners_by_column: list[list[ContourColorSpan]] = [
+        [] for _column in range(width)
+    ]
+    duration_ms = max(1e-9, float(time_end_ms) - float(time_start_ms))
+    for span in color_spans:
+        first = max(
+            0,
+            min(
+                width - 1,
+                math.floor(
+                    (float(span.start_ms) - float(time_start_ms))
+                    / duration_ms
+                    * width
+                ),
+            ),
+        )
+        last = max(
+            first,
+            min(
+                width - 1,
+                math.ceil(
+                    (float(span.end_ms) - float(time_start_ms))
+                    / duration_ms
+                    * width
+                ),
+            ),
+        )
+        for column in range(first, last + 1):
+            owners_by_column[column].append(span)
+
+    def ridge_style(
+        column: int,
+        pitch_bin: int,
+    ) -> tuple[str, float, float, float]:
+        pitch = float(pitch_min) + float(pitch_bin) / max(
+            1,
+            int(bins_per_semitone),
+        )
+        owners = tuple(
+            span
+            for span in owners_by_column[
+                max(0, min(width - 1, int(column)))
+            ]
+            if float(span.pitch_min) <= pitch <= float(span.pitch_max)
+        )
+        colors = {str(span.color) for span in owners}
+        if len(colors) == 1:
+            return (
+                next(iter(colors)),
+                max(
+                    0.0,
+                    min(
+                        1.35,
+                        max(float(span.emphasis) for span in owners),
+                    ),
+                ),
+                max(
+                    0.0,
+                    min(1.0, max(float(span.saturation) for span in owners)),
+                ),
+                max(
+                    0.0,
+                    min(1.0, max(float(span.opacity) for span in owners)),
+                ),
+            )
+        if len(colors) > 1:
+            return (
+                "#7B8492",
+                max(0.0, min(1.0, default_emphasis)),
+                0.0,
+                0.42,
+            )
+        return (
+            "#54ADEB",
+            max(0.0, min(1.0, default_emphasis)),
+            0.72,
+            0.62,
+        )
+
+    path_buckets: dict[
+        tuple[str, int, int, int],
+        tuple[QPainterPath, ...],
+    ] = {}
     for track in tracks:
         if (
             len(track) < 2
             or track[-1][0] - track[0][0] + 1 < minimum_run_columns
         ):
             continue
-        for previous, current in zip(track, track[1:]):
+        points = [image_point(item[0], item[1]) for item in track]
+        for index, (previous, current) in enumerate(zip(track, track[1:])):
             previous_x, previous_bin, previous_strength = previous
             current_x, current_bin, current_strength = current
             if current_x - previous_x > maximum_gap_columns + 1:
@@ -761,13 +904,50 @@ def _contour_rgba_image(
             strength = min(previous_strength, current_strength)
             bucket = max(
                 0,
-                min(len(path_buckets) - 1, round(strength * 7.0)),
+                min(7, round(strength * 7.0)),
             )
-            path = path_buckets[bucket]
-            start_x, start_y = image_point(previous_x, previous_bin)
-            end_x, end_y = image_point(current_x, current_bin)
+            color_name, emphasis, saturation, opacity = ridge_style(
+                round((previous_x + current_x) * 0.5),
+                round((previous_bin + current_bin) * 0.5),
+            )
+            emphasis_percent = max(0, min(135, round(emphasis * 100.0)))
+            saturation_percent = max(
+                0,
+                min(100, round(saturation * 100.0)),
+            )
+            opacity_percent = max(0, min(100, round(opacity * 100.0)))
+            buckets = path_buckets.setdefault(
+                (
+                    color_name,
+                    emphasis_percent,
+                    saturation_percent,
+                    opacity_percent,
+                ),
+                tuple(QPainterPath() for _index in range(8)),
+            )
+            path = buckets[bucket]
+            start_x, start_y = points[index]
+            end_x, end_y = points[index + 1]
+            control_1, control_2 = _constrained_bezier_controls(
+                points[index - 1] if index > 0 else None,
+                (start_x, start_y),
+                (end_x, end_y),
+                points[index + 2] if index + 2 < len(points) else None,
+                maximum_y_overshoot=(
+                    0.08
+                    * max(1, int(bins_per_semitone))
+                    * CONTOUR_VERTICAL_SUPERSAMPLING
+                ),
+            )
             path.moveTo(start_x, start_y)
-            path.lineTo(end_x, end_y)
+            path.cubicTo(
+                control_1[0],
+                control_1[1],
+                control_2[0],
+                control_2[1],
+                end_x,
+                end_y,
+            )
 
     image = QImage(
         render_width,
@@ -778,22 +958,72 @@ def _contour_rgba_image(
     painter = QPainter(image)
     try:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        for bucket, path in enumerate(path_buckets):
-            if path.isEmpty():
-                continue
-            strength = bucket / max(1, len(path_buckets) - 1)
-            alpha = round(
-                min(
-                    255.0,
-                    (88.0 + 136.0 * strength) * float(intensity),
+        for (
+            color_name,
+            emphasis_percent,
+            saturation_percent,
+            opacity_percent,
+        ), buckets in sorted(
+            path_buckets.items()
+        ):
+            for bucket, path in enumerate(buckets):
+                if path.isEmpty():
+                    continue
+                strength = bucket / max(1, len(buckets) - 1)
+                alpha = round(
+                    min(
+                        255.0,
+                        (88.0 + 136.0 * strength)
+                        * float(intensity)
+                        * (emphasis_percent / 100.0)
+                        * (
+                            0.32
+                            + 0.68
+                            * math.sqrt(opacity_percent / 100.0)
+                        ),
+                    )
                 )
-            )
-            color = QColor(84, 173, 235, max(0, alpha))
-            pen = QPen(color, 1.35)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            painter.setPen(pen)
-            painter.drawPath(path)
+                color = QColor(color_name)
+                if not color.isValid():
+                    color = QColor("#54ADEB")
+                if color.hsvSaturation() >= 16:
+                    color.setHsv(
+                        color.hue(),
+                        max(
+                            42,
+                            round(
+                                color.hsvSaturation()
+                                * (
+                                    0.30
+                                    + 0.70
+                                    * saturation_percent
+                                    / 100.0
+                                )
+                            ),
+                        ),
+                        color.value(),
+                    )
+                halo = (
+                    QColor(color)
+                    if color.hsvSaturation() < 64
+                    else QColor.fromHsv(
+                        color.hue(),
+                        255,
+                        max(160, color.value()),
+                    )
+                )
+                halo.setAlpha(max(0, round(alpha * 0.30)))
+                halo_pen = QPen(halo, 3.2)
+                halo_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                halo_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(halo_pen)
+                painter.drawPath(path)
+                color.setAlpha(max(0, alpha))
+                pen = QPen(color, 1.6)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(pen)
+                painter.drawPath(path)
     finally:
         painter.end()
     return image
@@ -804,12 +1034,25 @@ def _rgba_image(
     layer: str,
     intensity: float = DEFAULT_EVIDENCE_INTENSITY,
     contour_denoise: str = "standard",
+    *,
+    contour_time_start_ms: float = 0.0,
+    contour_time_end_ms: float = 0.0,
+    contour_pitch_min: float = 0.0,
+    contour_bins_per_semitone: int = 1,
+    contour_color_spans: tuple[ContourColorSpan, ...] = (),
+    contour_default_emphasis: float = 1.0,
 ) -> QImage:
     if layer == "contour":
         return _contour_rgba_image(
             matrix,
             intensity,
             contour_denoise,
+            time_start_ms=contour_time_start_ms,
+            time_end_ms=contour_time_end_ms,
+            pitch_min=contour_pitch_min,
+            bins_per_semitone=contour_bins_per_semitone,
+            color_spans=contour_color_spans,
+            default_emphasis=contour_default_emphasis,
         )
 
     values = np.nan_to_num(matrix, nan=0.0, posinf=1.0, neginf=0.0)
@@ -931,6 +1174,17 @@ class _EvidenceTileRunnable(QRunnable):
                 self.spec.key.intensity_percent
                 / EVIDENCE_INTENSITY_QUANTIZATION,
                 self.spec.key.contour_denoise,
+                contour_time_start_ms=self.spec.time_start_ms,
+                contour_time_end_ms=self.spec.time_end_ms,
+                contour_pitch_min=(
+                    metadata.midi_min
+                    + bin_lo / metadata.bins_per_semitone
+                ),
+                contour_bins_per_semitone=metadata.bins_per_semitone,
+                contour_color_spans=self.spec.contour_color_spans,
+                contour_default_emphasis=(
+                    self.spec.key.contour_default_emphasis_percent / 100.0
+                ),
             )
             tile = EvidenceTile(
                 self.spec.key,
@@ -1053,6 +1307,9 @@ class EvidenceTileController(QObject):
         include_contour: bool = False,
         intensity: float = DEFAULT_EVIDENCE_INTENSITY,
         contour_denoise: str = "standard",
+        contour_color_revision: str = "",
+        contour_color_spans: tuple[ContourColorSpan, ...] = (),
+        contour_default_emphasis: float = 1.0,
         update_viewport: bool = True,
     ) -> tuple[EvidenceTile, ...]:
         """Return cached visible tiles and schedule missing ones.
@@ -1106,6 +1363,10 @@ class EvidenceTileController(QObject):
             self._set_viewport(frozenset())
             return ()
         intensity_percent = _quantized_intensity_percent(intensity)
+        default_emphasis_percent = max(
+            0,
+            min(135, round(float(contour_default_emphasis) * 100.0)),
+        )
         denoise_profile = str(contour_denoise)
         if denoise_profile not in CONTOUR_DENOISE_PROFILES:
             denoise_profile = "standard"
@@ -1140,6 +1401,12 @@ class EvidenceTileController(QObject):
                     columns_hint,
                     intensity_percent,
                     denoise_profile if layer == "contour" else "standard",
+                    (
+                        str(contour_color_revision)
+                        if layer == "contour"
+                        else ""
+                    ),
+                    default_emphasis_percent if layer == "contour" else 100,
                 )
                 for tile_index in range(first_tile, last_tile + 1)
             )
@@ -1178,6 +1445,17 @@ class EvidenceTileController(QObject):
                 self._viewport_generation,
                 key.tile_index * TILE_DURATION_MS,
                 (key.tile_index + 1) * TILE_DURATION_MS,
+                tuple(
+                    span
+                    for span in contour_color_spans
+                    if key.layer == "contour"
+                    and float(span.end_ms)
+                    >= key.tile_index * TILE_DURATION_MS
+                    and float(span.start_ms)
+                    <= (key.tile_index + 1) * TILE_DURATION_MS
+                    and float(span.pitch_max) >= key.pitch_min
+                    and float(span.pitch_min) <= key.pitch_max
+                ),
             )
             worker = _EvidenceTileRunnable(
                 self._descriptor,
@@ -1259,6 +1537,7 @@ __all__ = [
     "DEFAULT_EVIDENCE_INTENSITY",
     "DEFAULT_IMAGE_CACHE_BYTES",
     "EVIDENCE_INTENSITY_QUANTIZATION",
+    "ContourColorSpan",
     "EvidenceDescriptorLike",
     "EvidenceImageCache",
     "EvidenceTile",

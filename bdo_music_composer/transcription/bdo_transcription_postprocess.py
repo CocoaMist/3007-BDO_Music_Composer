@@ -21,7 +21,7 @@ from typing import Iterable, Literal, Sequence, TypeAlias
 import numpy as np
 
 
-POSTPROCESS_VERSION = "fragment-cleanup-v3-explicit-opt-in"
+POSTPROCESS_VERSION = "fragment-cleanup-v4-display-continuity"
 
 PRESERVE_CLEANUP_PROFILE = "preserve"
 BALANCED_CLEANUP_PROFILE = "balanced"
@@ -1298,13 +1298,22 @@ def _run_frame_event_postprocess(
         if automatic_merge_count == 0:
             reusable_chord_support = premerge_chord_support
             reusable_pitch_flicker = premerge_pitch_flicker
-    elif profile != PRESERVE_CLEANUP_PROFILE and working:
+    elif working:
+        # Preserve remains non-mutating, but the UI still benefits from the
+        # exact same evidence gate as the balanced profile.  Mark only the
+        # lineage that balanced would merge/deduplicate so presentation can
+        # connect false-split fragments without changing candidate identity.
+        preview_profile = (
+            BALANCED_CLEANUP_PROFILE
+            if profile == PRESERVE_CLEANUP_PROFILE
+            else profile
+        )
         (
             cleanup_candidate_lineage,
             annotation_context,
         ) = _preview_automatic_action_lineage(
             working,
-            profile=profile,
+            profile=preview_profile,
             frame=frame,
             onset=onset,
             midi_min=midi_min,

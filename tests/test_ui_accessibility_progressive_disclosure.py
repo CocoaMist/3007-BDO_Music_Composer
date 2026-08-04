@@ -151,7 +151,7 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
 
             assert panel.workspace_title_label.text() == "音频扒谱"
             assert panel.audio_button.accessibleName()
-            assert panel.analyze_button.accessibleName() == "开始扒谱"
+            assert panel.analyze_button.accessibleName() == "分析"
             assert not panel.advanced_toggle_button.isVisible()
             assert not panel.advanced_panel.isVisible()
             assert not panel.redecode_button.isVisible()
@@ -187,7 +187,7 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
             localizer.set_language("en_US")
             app.processEvents()
             assert panel.workspace_title_label.text() == "Audio Transcription"
-            assert panel.analyze_button.text() == "Start Transcription"
+            assert panel.analyze_button.text() == "Analyze"
 
             panel.close()
             app.processEvents()

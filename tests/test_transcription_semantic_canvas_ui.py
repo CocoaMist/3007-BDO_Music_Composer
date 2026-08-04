@@ -12,6 +12,577 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TranscriptionSemanticCanvasUiTests(unittest.TestCase):
+    def test_focus_projection_indexes_group_confidence_once(self) -> None:
+        script = textwrap.dedent(
+            """
+            from types import SimpleNamespace
+            from PySide6.QtWidgets import QApplication
+
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.ui.main_window import MidiNoteEditorDialog, MidiToBdoWindow, TrackState
+
+            class CountingPairs:
+                def __init__(self, values):
+                    self.values = values
+                    self.iterations = 0
+
+                def __iter__(self):
+                    self.iterations += 1
+                    return iter(self.values)
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            track = TrackState(1, [], 0, False, "target", 0x0B)
+            window.tracks = [track]
+            editor = MidiNoteEditorDialog(window, track, 120, 4)
+            candidates = tuple(
+                TranscriptionCandidate(
+                    48 + index % 24,
+                    90,
+                    index * 50.0,
+                    45.0,
+                    0.8,
+                    candidate_id=f"candidate-{index}",
+                )
+                for index in range(500)
+            )
+            editor.canvas.set_transcription_review(
+                candidates,
+                lambda candidate: candidate.candidate_id,
+            )
+            confidences = CountingPairs(tuple(
+                (candidate.candidate_id, 0.75)
+                for candidate in candidates
+            ))
+            group = SimpleNamespace(
+                group_id="focus",
+                candidate_ids=tuple(
+                    candidate.candidate_id for candidate in candidates
+                ),
+                candidate_confidences=confidences,
+                confidence=0.72,
+                color="#4AA3DF",
+            )
+            editor.canvas.set_transcription_assist_projection(
+                voice_groups=(group,),
+            )
+            assert confidences.iterations == 1, confidences.iterations
+            assert len(editor.canvas._candidate_group_confidences) == 500
+
+            editor.close(); window.close(); app.processEvents(); app.quit()
+            """
+        )
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_hybrid_unknowns_reach_two_window_guidance_focus(self) -> None:
+        script = textwrap.dedent(
+            """
+            from PySide6.QtWidgets import QApplication
+
+            from bdo_midi import Note
+            from bdo_music_composer.project.project_schema import normalize_reference_layer_settings
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate, TranscriptionResult
+            from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionSession
+            from bdo_music_composer.transcription.reference_timbre import ReferenceTimbreAnalysis, ReferenceTimbreGroup
+            from bdo_music_composer.ui.main_window import MidiNoteEditorDialog, MidiToBdoWindow, TrackState
+
+            app = QApplication([])
+            candidates = (
+                TranscriptionCandidate(60, 90, 0.0, 420.0, 0.92, candidate_id="a"),
+                TranscriptionCandidate(62, 90, 4_100.0, 420.0, 0.92, candidate_id="b"),
+            )
+            window = MidiToBdoWindow()
+            window.transcription_session = TranscriptionSession(candidates, cache_key="cache")
+            window.transcription_result = TranscriptionResult(candidates, "cache")
+            window.reference_layer_settings = normalize_reference_layer_settings({
+                "timbre_grouping_enabled": True,
+                "melody_guidance_enabled": True,
+            })
+            window.reference_timbre_prediction = ReferenceTimbreAnalysis(
+                "cache",
+                (ReferenceTimbreGroup(
+                    "voice-melody", ("a", "b"), 0.0, 4_520.0,
+                    0.48, "#4AA3DF",
+                    candidate_confidences=(("a", 0.46), ("b", 0.45)),
+                ),),
+                0,
+                evidence_stage="predictive",
+            )
+            window.reference_timbre_analysis = ReferenceTimbreAnalysis(
+                "cache",
+                (ReferenceTimbreGroup(
+                    "timbre-unknown", ("a", "b"), 0.0, 4_520.0,
+                    0.0, "#7B8492",
+                ),),
+                0,
+            )
+            track = TrackState(
+                1,
+                [
+                    Note(60, 90, 0.0, 420.0, 0),
+                    Note(62, 90, 4_100.0, 420.0, 0),
+                ],
+                0, False, "target", 0x0B,
+            )
+            window.tracks = [track]
+            editor = MidiNoteEditorDialog(
+                window, track, 120, 4, transcription_mode=True
+            )
+            editor.refresh_transcription_projection()
+
+            guidance = editor.canvas._melody_guidance
+            assert guidance.focus_group_id == "voice-melody", guidance
+            assert guidance.is_highest_priority_group("voice-melody")
+            assert "最高优先" in editor.transcription_panel.melody_guidance_status_label.text()
+            assert "少量片段仍为预测" in editor.transcription_panel.pitch_timbre_legend_label.text()
+            assert editor.canvas._candidate_group_ids == {
+                "a": "voice-melody", "b": "voice-melody"
+            }
+
+            editor.close()
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_timbre_worker_publishes_prediction_before_acoustic_failure(
+        self,
+    ) -> None:
+        script = textwrap.dedent(
+            """
+            from unittest.mock import patch
+            import numpy as np
+            from PySide6.QtWidgets import QApplication
+
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_timbre import TimbreProfileError
+            from bdo_music_composer.ui.transcription.transcription_workers import ReferenceTimbreAnalysisWorker
+
+            app = QApplication([])
+            candidate = TranscriptionCandidate(
+                60, 90, 0.0, 420.0, 0.9, candidate_id="candidate-a"
+            )
+            worker = ReferenceTimbreAnalysisWorker(
+                cache_key="cache",
+                candidates=(candidate,),
+                bpm=120.0,
+                midi_min=21,
+                reference_audio_path="unused.wav",
+            )
+            events = []
+            worker.predicted.connect(
+                lambda value: events.append(("predicted", value))
+            )
+            worker.failed.connect(
+                lambda message: events.append(("failed", message))
+            )
+
+            def fail_acoustic_profiles(*_args, **_kwargs):
+                assert events and events[0][0] == "predicted"
+                raise TimbreProfileError("expected test failure")
+
+            with patch(
+                "bdo_music_composer.ui.transcription.transcription_workers.load_transcription_evidence",
+                return_value=np.ones((4, 88), dtype=np.float32),
+            ), patch(
+                "bdo_music_composer.ui.transcription.transcription_workers.load_transcription_frame_times",
+                return_value=np.arange(4, dtype=np.float32) * 10.0,
+            ), patch(
+                "bdo_music_composer.ui.transcription.transcription_workers.extract_group_timbre_profiles",
+                side_effect=fail_acoustic_profiles,
+            ):
+                worker.run()
+
+            assert [kind for kind, _value in events] == ["predicted", "failed"], events
+            prediction = events[0][1]
+            assert prediction.evidence_stage == "predictive"
+            assert prediction.groups[0].candidate_ids == ("candidate-a",)
+            worker.deleteLater()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_false_split_bridge_is_display_only_and_instrument_coloured(self) -> None:
+        script = textwrap.dedent(
+            """
+            from types import SimpleNamespace
+            from PySide6.QtWidgets import QApplication
+            from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
+            from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionSession
+            from bdo_music_composer.ui.main_window import MidiNoteEditorDialog, MidiToBdoWindow, TrackState
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            candidates = (
+                TranscriptionCandidate(60, 90, 100.0, 180.0, 0.82, candidate_id="left"),
+                TranscriptionCandidate(60, 88, 310.0, 190.0, 0.78, candidate_id="right"),
+            )
+            session = TranscriptionSession(candidates, cache_key="bridge")
+            window.transcription_session = session
+            track = TrackState(1, [], 0, False, "target", 0x0B)
+            window.tracks = [track]
+            editor = MidiNoteEditorDialog(window, track, 120, 4, transcription_mode=True)
+            canvas = editor.canvas
+            canvas.set_transcription_review(
+                candidates,
+                session.candidate_id,
+                continuity_ids={"left", "right"},
+                visible=True,
+            )
+            canvas.set_transcription_assist_projection(
+                voice_groups=(SimpleNamespace(
+                    group_id="timbre-a",
+                    candidate_ids=("left", "right"),
+                    color="#4AA3DF",
+                    confidence=0.72,
+                    candidate_confidences=(("left", 0.76), ("right", 0.68)),
+                ),),
+                melody_guidance=SimpleNamespace(
+                    default_emphasis=0.42,
+                    target_instrument_id=0x0B,
+                    target_instrument_label="长笛",
+                    group_emphasis=lambda group_id: (
+                        1.35 if group_id == "timbre-a" else 0.42
+                    ),
+                    is_highest_priority_group=lambda group_id: (
+                        group_id == "timbre-a"
+                    ),
+                ),
+            )
+
+            assert canvas._candidate_continuity_pairs == ((0, 1),)
+            bridges = canvas._visible_candidate_continuity_rects(0.0, 1_000.0)
+            assert len(bridges) == 1
+            assert bridges[0][0] == "#4AA3DF"
+            assert bridges[0][1].width() > 0.0
+            assert len(canvas._contour_color_spans) == 3
+            assert canvas._candidate_group_emphases == {
+                "left": 1.35,
+                "right": 1.35,
+            }
+            assert canvas._candidate_guided_instrument_labels == {
+                "left": "长笛",
+                "right": "长笛",
+            }
+            assert all(
+                span.emphasis == 1.35
+                for span in canvas._contour_color_spans
+            )
+            assert all(
+                span.focused
+                and span.target_instrument_id == 0x0B
+                and span.color == track.color
+                for span in canvas._contour_color_spans
+            )
+            assert candidates == session.candidates
+
+            editor.close(); window.close(); app.processEvents(); app.quit()
+            """
+        )
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_candidate_marquee_can_start_on_a_reference_note(self) -> None:
+        script = textwrap.dedent(
+            """
+            from PySide6.QtCore import QEvent, QPointF, Qt
+            from PySide6.QtGui import QMouseEvent
+            from PySide6.QtWidgets import QApplication
+
+            from bdo_music_composer.transcription.bdo_transcription import (
+                TranscriptionCandidate,
+            )
+            from bdo_music_composer.transcription.bdo_transcription_session import (
+                TranscriptionSession,
+            )
+            from bdo_midi.model import Note
+            from bdo_music_composer.ui.main_window import (
+                MidiNoteEditorDialog,
+                MidiToBdoWindow,
+                TrackState,
+            )
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            autosaves = []
+            window._autosave_project = (
+                lambda reason, *_args, **_kwargs: autosaves.append(reason)
+            )
+            candidates = (
+                TranscriptionCandidate(
+                    64, 90, 120.0, 120.0, 0.91,
+                    candidate_id="marquee-a",
+                ),
+                TranscriptionCandidate(
+                    58, 86, 420.0, 140.0, 0.84,
+                    candidate_id="marquee-b",
+                ),
+            )
+            session = TranscriptionSession(candidates, cache_key="marquee")
+            window.transcription_session = session
+            track = TrackState(1, [], 0, False, "target", 0x0B)
+            window.tracks = [track]
+            editor = MidiNoteEditorDialog(
+                window, track, 120, 4, transcription_mode=True
+            )
+            window.active_transcription_editor = editor
+            editor.resize(980, 700)
+            editor.show()
+            app.processEvents()
+            canvas = editor.canvas
+            canvas.set_transcription_review(
+                candidates,
+                session.candidate_id,
+                visible=True,
+            )
+            canvas.set_transcription_candidate_layer_visible(True)
+            # A visible reference block remains selectable when an editable
+            # draft note occupies the same piano-roll coordinates.
+            canvas.set_notes([Note(64, 76, 120.0, 120.0, 0)])
+            app.processEvents()
+            autosaves.clear()
+            emissions = []
+            canvas.candidate_selection_changed.connect(emissions.append)
+
+            start = canvas.candidate_rect(candidates[0]).center()
+            end = canvas.candidate_rect(candidates[1]).bottomRight() + QPointF(3, 3)
+            for event in (
+                QMouseEvent(
+                    QEvent.MouseButtonPress,
+                    start,
+                    start,
+                    Qt.LeftButton,
+                    Qt.LeftButton,
+                    Qt.NoModifier,
+                ),
+                QMouseEvent(
+                    QEvent.MouseMove,
+                    end,
+                    end,
+                    Qt.NoButton,
+                    Qt.NoButton,
+                    Qt.NoModifier,
+                ),
+            ):
+                QApplication.sendEvent(canvas, event)
+            assert emissions == [], emissions
+            assert canvas.drag_mode == "candidate_marquee"
+            assert canvas.selected_candidate_ids == {
+                "marquee-a", "marquee-b"
+            }
+            assert canvas.selected == {0}
+            QApplication.sendEvent(
+                canvas,
+                QMouseEvent(
+                    QEvent.MouseButtonRelease,
+                    end,
+                    end,
+                    Qt.LeftButton,
+                    Qt.NoButton,
+                    Qt.NoModifier,
+                ),
+            )
+            app.processEvents()
+            assert emissions == [frozenset({"marquee-a", "marquee-b"})]
+            assert session.state.selected_candidate_ids == {
+                "marquee-a", "marquee-b"
+            }
+            assert canvas.selected == {0}
+            assert autosaves == ["transcription selection"], autosaves
+            assert canvas.marquee.isNull()
+
+            # The same marquee also selects editable notes, so the velocity
+            # lane remains a real editor while reference evidence is visible.
+            assert editor.velocity_toggle.isEnabled()
+            editor.velocity_toggle.click()
+            app.processEvents()
+            lane = editor.velocity_lane
+            assert lane.isVisible()
+            velocity_position = QPointF(
+                canvas.x_at_time(120.0),
+                lane._y_for_velocity(110),
+            )
+            QApplication.sendEvent(
+                lane,
+                QMouseEvent(
+                    QEvent.MouseButtonPress,
+                    velocity_position,
+                    velocity_position,
+                    Qt.LeftButton,
+                    Qt.LeftButton,
+                    Qt.NoModifier,
+                ),
+            )
+            QApplication.sendEvent(
+                lane,
+                QMouseEvent(
+                    QEvent.MouseButtonRelease,
+                    velocity_position,
+                    velocity_position,
+                    Qt.LeftButton,
+                    Qt.NoButton,
+                    Qt.NoModifier,
+                ),
+            )
+            assert canvas.notes[0].vel == 110
+
+            # Some precision-touchpad stacks coalesce the drag into press and
+            # release events.  The release position must still complete the
+            # marquee and commit the visible reference blocks.
+            session.clear_selection()
+            editor._sync_shared_transcription_projection()
+            emissions.clear()
+            autosaves.clear()
+            QApplication.sendEvent(
+                canvas,
+                QMouseEvent(
+                    QEvent.MouseButtonPress,
+                    start,
+                    start,
+                    Qt.LeftButton,
+                    Qt.LeftButton,
+                    Qt.NoModifier,
+                ),
+            )
+            QApplication.sendEvent(
+                canvas,
+                QMouseEvent(
+                    QEvent.MouseButtonRelease,
+                    end,
+                    end,
+                    Qt.LeftButton,
+                    Qt.NoButton,
+                    Qt.NoModifier,
+                ),
+            )
+            app.processEvents()
+            assert canvas.selected_candidate_ids == {
+                "marquee-a", "marquee-b"
+            }
+            assert session.state.selected_candidate_ids == {
+                "marquee-a", "marquee-b"
+            }
+            assert emissions == [frozenset({"marquee-a", "marquee-b"})]
+            assert autosaves == ["transcription selection"], autosaves
+
+            # Hiding the candidate layer in Music Reference mode restores the
+            # ordinary draft-note marquee instead of swallowing the gesture.
+            canvas.set_transcription_candidate_layer_visible(False)
+            canvas.set_notes([Note(70, 88, 160.0, 180.0, 0)])
+            note_rect = canvas.note_rect(canvas.notes[0])
+            note_start = note_rect.topLeft() - QPointF(5, 5)
+            note_end = note_rect.bottomRight() + QPointF(5, 5)
+            for event in (
+                QMouseEvent(
+                    QEvent.MouseButtonPress,
+                    note_start,
+                    note_start,
+                    Qt.LeftButton,
+                    Qt.LeftButton,
+                    Qt.NoModifier,
+                ),
+                QMouseEvent(
+                    QEvent.MouseMove,
+                    note_end,
+                    note_end,
+                    Qt.NoButton,
+                    Qt.LeftButton,
+                    Qt.NoModifier,
+                ),
+                QMouseEvent(
+                    QEvent.MouseButtonRelease,
+                    note_end,
+                    note_end,
+                    Qt.LeftButton,
+                    Qt.NoButton,
+                    Qt.NoModifier,
+                ),
+            ):
+                QApplication.sendEvent(canvas, event)
+            assert canvas.selected == {0}, canvas.selected
+
+            editor.close()
+            window.active_transcription_editor = None
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
     def test_mixed_review_undo_order_and_top3_confirmation_are_fail_closed(
         self,
     ) -> None:
@@ -569,6 +1140,12 @@ class TranscriptionSemanticCanvasUiTests(unittest.TestCase):
                 "c-third": "voice-1",
             }
             assert canvas._candidate_group_colors["c-root"] == "#6f9fd8"
+            assert canvas._candidate_group_confidences["c-root"] == 0.86
+            assert canvas._contour_color_spans
+            assert {
+                span.color for span in canvas._contour_color_spans
+            } == {"#6f9fd8"}
+            assert canvas._contour_color_revision > 0
             assert canvas._candidate_chord_roles["c-root"] == "root"
             assert canvas._candidate_chord_roles["c-third"] == "third"
             assert canvas._folded_candidate_primary["c-alt"] == "c-root"

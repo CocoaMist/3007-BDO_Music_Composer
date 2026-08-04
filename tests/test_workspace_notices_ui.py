@@ -20,7 +20,7 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
             import tempfile
             from PySide6.QtCore import Qt
             from PySide6.QtTest import QTest
-            from PySide6.QtWidgets import QApplication
+            from PySide6.QtWidgets import QApplication, QMessageBox
             import bdo_music_composer.ui.main_window as gui
             from bdo_music_composer.ui.main_window import MidiToBdoWindow, Note, TrackState
 
@@ -65,12 +65,71 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
             assert "Owner ID 已绑定" in logo.toolTip()
             assert "Hidden Shai" not in logo.toolTip()
             autosave.assert_called_once_with("owner id")
+            saved_config = gui.load_config()
+            assert saved_config["owner_identity"] == {
+                "owner_id": 456,
+                "character_name": "Hidden Shai",
+            }
+
+            # The local binding is used for a fresh session, while the
+            # settings dialog offers an explicit, confirmed unlink operation.
+            reloaded = MidiToBdoWindow()
+            assert reloaded.owner_id == 456
+            assert reloaded.char_name == "Hidden Shai"
+            identity_dialog = gui.SettingsDialog(reloaded)
+            assert identity_dialog.owner_clear_button.isEnabled()
+            QMessageBox.question = lambda *_args, **_kwargs: QMessageBox.Yes
+            identity_dialog._clear_owner_id()
+            assert identity_dialog.owner_id == 0
+            assert identity_dialog.owner_identity_changed
+            assert not identity_dialog.owner_clear_button.isEnabled()
+            identity_dialog.close()
+            reloaded.close()
+            app.processEvents()
 
             window.char_name = "Shai"
             window.owner_id = 123
             window._refresh_home_identity()
             assert logo.property("ownerIdMissing") is False
             assert "Shai" not in logo.toolTip()
+
+            # Multi-track controls create a fresh lane and delete only the
+            # selected lane after confirmation.
+            window._create_new_project("Track lifecycle")
+            initial_track = window.tracks[0]
+            window._create_track(0x0B)
+            created_track = window.tracks[-1]
+            assert len(window.tracks) == 2
+            assert created_track is not initial_track
+            assert created_track.notes == []
+            window._select_track(created_track)
+            QMessageBox.question = lambda *_args, **_kwargs: QMessageBox.Yes
+            window._delete_selected_track()
+            assert window.tracks == [initial_track]
+
+            # Reordering changes only the mixer-lane order. Stable IDs and
+            # notes remain intact, and the selected lane stays selected.
+            window._create_track(0x0B)
+            middle_track = window.tracks[-1]
+            window._create_track(0x0F)
+            lower_track = window.tracks[-1]
+            original_ids = [track.track_id for track in window.tracks]
+            window._select_track(lower_track)
+            window.timeline.move_track_requested.emit(lower_track, -1)
+            assert window.tracks == [initial_track, lower_track, middle_track]
+            assert [track.track_id for track in window.tracks] == [
+                original_ids[0], original_ids[2], original_ids[1]
+            ]
+            assert window.selected_track is lower_track
+            window.timeline.move_track_requested.emit(lower_track, 1)
+            assert window.tracks == [initial_track, middle_track, lower_track]
+
+            # The timeline's left-rail creation request is wired to the same
+            # safe track factory as the toolbar menu.
+            track_count = len(window.tracks)
+            window.timeline.create_track_requested.emit(0x11)
+            assert len(window.tracks) == track_count + 1
+            assert window.tracks[-1].bdo_instrument_id == 0x11
 
             first = TrackState(
                 1, [Note(60, 90, 0.0, 300.0, 0)], 0, False, "one", 0x0B

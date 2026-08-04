@@ -68,6 +68,7 @@ from bdo_common.bdo_track_effects import (
     decode_track_effects,
     track_volume_preview_gain,
 )
+from bdo_midi.instruments import instrument_supports_composer_effects
 from bdo_music_composer.audio.bdo_preview_effects import (
     PreviewEffectProcessor,
     PreviewEffectSettings,
@@ -1296,14 +1297,19 @@ class BdoRealtimeAudioEngine(QObject):
             track_gain = track_volume_preview_gain(
                 getattr(track, "bdo_track_volume", DEFAULT_TRACK_VOLUME)
             )
-            try:
-                track_sends, _track_master = decode_track_effects(
-                    getattr(track, "bdo_track_settings", (0,) * 8)
-                )
-                reverb_send = preview_send_gain(track_sends.reverb)
-                delay_send = preview_send_gain(track_sends.delay)
-                chorus_send = preview_send_gain(track_sends.chorus)
-            except ValueError:
+            if instrument_supports_composer_effects(instrument_id):
+                try:
+                    track_sends, _track_master = decode_track_effects(
+                        getattr(track, "bdo_track_settings", (0,) * 8)
+                    )
+                    reverb_send = preview_send_gain(track_sends.reverb)
+                    delay_send = preview_send_gain(track_sends.delay)
+                    chorus_send = preview_send_gain(track_sends.chorus)
+                except ValueError:
+                    reverb_send = delay_send = chorus_send = 0.0
+            else:
+                # Preserve unsupported/imported bytes for export, but do not
+                # claim that the game's beginner instruments route AuxSend.
                 reverb_send = delay_send = chorus_send = 0.0
             has_track_effect_sends = has_track_effect_sends or any((
                 reverb_send,
@@ -1483,24 +1489,27 @@ class BdoRealtimeAudioEngine(QObject):
             track_preview_gain = track_volume_preview_gain(
                 getattr(track, "bdo_track_volume", DEFAULT_TRACK_VOLUME)
             )
-            try:
-                track_sends, _track_master = decode_track_effects(
-                    getattr(track, "bdo_track_settings", (0,) * 8)
-                )
-                reverb_send = preview_send_gain(track_sends.reverb)
-                delay_send = preview_send_gain(track_sends.delay)
-                chorus_send = preview_send_gain(track_sends.chorus)
-                has_track_effect_sends = has_track_effect_sends or any((
-                    reverb_send,
-                    delay_send,
-                    chorus_send,
-                ))
-            except ValueError:
-                reverb_send = delay_send = chorus_send = 0.0
-                unverified.add(
-                    f"track {track_id}: invalid effect settings; preview ignored them"
-                )
             instrument_id = int(track.bdo_instrument_id)
+            if instrument_supports_composer_effects(instrument_id):
+                try:
+                    track_sends, _track_master = decode_track_effects(
+                        getattr(track, "bdo_track_settings", (0,) * 8)
+                    )
+                    reverb_send = preview_send_gain(track_sends.reverb)
+                    delay_send = preview_send_gain(track_sends.delay)
+                    chorus_send = preview_send_gain(track_sends.chorus)
+                    has_track_effect_sends = has_track_effect_sends or any((
+                        reverb_send,
+                        delay_send,
+                        chorus_send,
+                    ))
+                except ValueError:
+                    reverb_send = delay_send = chorus_send = 0.0
+                    unverified.add(
+                        f"track {track_id}: invalid effect settings; preview ignored them"
+                    )
+            else:
+                reverb_send = delay_send = chorus_send = 0.0
             synth_mode = str(getattr(track, "marnian_synth_mode", "basic") or "basic")
             bank = bank_for_instrument(instrument_id, synth_mode)
             if not bank or bank not in banks:

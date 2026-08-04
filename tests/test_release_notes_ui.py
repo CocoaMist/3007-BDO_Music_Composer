@@ -70,7 +70,7 @@ class ReleaseNotesDialogTests(unittest.TestCase):
                     },
                 },
                 "releases": [{
-                    "version": "1.0.0",
+                    "version": "1.1.0",
                     "date": "2026-07-29",
                     "status": "stable",
                     "locales": {

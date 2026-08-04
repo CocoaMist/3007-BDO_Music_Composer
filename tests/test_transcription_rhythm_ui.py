@@ -5,13 +5,62 @@ from pathlib import Path
 import subprocess
 import sys
 import textwrap
+from types import SimpleNamespace
 import unittest
+
+from bdo_music_composer.ui.transcription_rhythm_diagnostic import (
+    TranscriptionRhythmDiagnosticMixin,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class TranscriptionRhythmUiTests(unittest.TestCase):
+    def test_diagnostic_start_reads_profile_from_active_editor(self) -> None:
+        class Runner:
+            busy = False
+
+            def __init__(self) -> None:
+                self.request = None
+
+            def start_diagnostic(self, **request) -> bool:
+                self.request = request
+                return True
+
+        host = object.__new__(TranscriptionRhythmDiagnosticMixin)
+        host.transcription_session = SimpleNamespace(
+            state=SimpleNamespace(cache_key="evidence-key"),
+            candidates=(SimpleNamespace(start=0.0),),
+        )
+        host.workspace_transcription_worker = None
+        host.transcription_rhythm_runner = Runner()
+        host.transcription_rhythm_sidecar = object()
+        host.active_transcription_editor = SimpleNamespace(
+            transcription_panel=SimpleNamespace(
+                rhythm_alignment_profile="strict_1_64"
+            )
+        )
+        host.bpm_override = 0
+        host.bpm = 120
+        host.beat_origin_ms = 0.0
+        host.reference_audio_offset_ms = 0.0
+        host.time_sig = 4
+        statuses = []
+        host._set_transcription_status = statuses.append
+        host.show_toast = lambda *_args, **_kwargs: None
+
+        host._start_transcription_rhythm_diagnostic()
+
+        request = host.transcription_rhythm_runner.request
+        self.assertIsNotNone(request)
+        self.assertEqual(
+            request["alignment_config"].profile,
+            "strict_1_64",
+        )
+        self.assertIsNone(host.transcription_rhythm_sidecar)
+        self.assertTrue(statuses)
+
     def test_explicit_button_emits_once_and_renders_sidecar_state(self) -> None:
         env = dict(os.environ)
         env["QT_QPA_PLATFORM"] = "offscreen"

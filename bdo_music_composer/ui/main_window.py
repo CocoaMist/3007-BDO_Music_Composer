@@ -43,8 +43,6 @@ AUTO_SAVE_DIR = WRITABLE_ROOT / "auto_save"
 EXAMPLE_PROJECTS_DIR = USER_DATA_DIR / "examples"
 BDO_SAMPLE_MAP_PATH = WWISE_MIDI_MAP_PATH
 AUDIO_VALIDATION_PATH = DEFAULT_OUTDIR / "bdo_audio_validation_matrix.json"
-REFERENCE_AUDIO_RESYNC_THRESHOLD_MS = 1250.0
-REFERENCE_AUDIO_RESYNC_COOLDOWN_S = 5.0
 TRANSCRIPTION_REVIEW_QUEUE_LIMIT = 240
 # The product surface is intentionally a practical note-extraction workflow.
 # Harmony, phrase, voice-group, and timbre suggestion code remains readable for
@@ -104,6 +102,7 @@ try:
         QMessageBox,
         QProgressDialog,
         QPushButton,
+        QSizePolicy,
         QSlider,
         QSpinBox,
         QStackedWidget,
@@ -263,8 +262,10 @@ from bdo_music_composer.ui.dialogs.application_settings_dialog import (  # noqa:
 )
 from bdo_music_composer.app.application_config import (  # noqa: E402
     load_config as _load_application_config,
+    owner_identity,
     safe_filename,
     save_config as _save_application_config,
+    set_owner_identity,
 )
 from bdo_music_composer.ui.dialogs.track_settings_dialogs import (  # noqa: E402
     MARNIAN_SYNTH_MODES,
@@ -272,6 +273,9 @@ from bdo_music_composer.ui.dialogs.track_settings_dialogs import (  # noqa: E402
     TrackFxDialog,
     TrackPitchDialog,
 )
+from bdo_music_composer.ui.track_ordering import TrackOrderingMixin  # noqa: E402
+from bdo_music_composer.ui.timeline_velocity_curve_host import TimelineVelocityCurveHostMixin  # noqa: E402
+from bdo_music_composer.ui.workspace_tempo_qt import WorkspaceTempoHostMixin  # noqa: E402
 from bdo_music_composer.ui.ui_controls import (  # noqa: E402
     ElidedLabel,
     PillButton,
@@ -290,7 +294,10 @@ from bdo_music_composer.ui.dialogs.optimizer_dialog import (  # noqa: E402
     _optimizer_diagnostic_value,
     _optimizer_host_message_value,
 )
-from bdo_music_composer.audio.reference_audio_controller import ReferenceAudioController  # noqa: E402
+from bdo_music_composer.audio.reference_audio_controller import (  # noqa: E402
+    ReferenceAudioController,
+    synchronize_reference_audio,
+)
 from bdo_music_composer.ui.transcription.transcription_workers import (  # noqa: E402
     SamplePackPrepareWorker,
     TranscriptionAnalysisWorker,
@@ -299,10 +306,16 @@ from bdo_music_composer.ui.transcription.transcription_workers import (  # noqa:
     TranscriptionCacheLoadWorker,
     TranscriptionRedecodeWorker,
 )
+from bdo_music_composer.ui.reference_timbre_qt import ReferenceTimbreHostMixin  # noqa: E402
+from bdo_music_composer.ui.project_autosave_qt import (  # noqa: E402
+    AutosaveWriteWorker,
+    ProjectAutosaveHostMixin,
+)
 from bdo_music_composer.ui.transcription_rhythm_diagnostic import (  # noqa: E402
     TranscriptionRhythmDiagnosticMixin,
 )
 from bdo_music_composer.ui.theme.main_window_style import MainWindowStyleMixin  # noqa: E402
+from bdo_music_composer.ui.ui_preferences_qt import WorkspaceUiPreferenceBinding  # noqa: E402
 from bdo_music_composer.ui.editor.editor_articulation_data import (  # noqa: E402
     BDO_ARTICULATIONS,
     articulation_display_value,
@@ -340,8 +353,12 @@ from bdo_music_composer.ui.home_widgets import (  # noqa: E402
     HomeBackdrop,
     HomeEntryDelegate,
     HomeFooter,
+    HomeHero,
     HomeIdentityBadge,
+    HomeLibrarySurface,
+    HomeLibraryTabs,
 )
+from bdo_music_composer.ui.page_transition_qt import StackedPageCrossfade  # noqa: E402
 from bdo_music_composer.ui.startup_widgets import StartupReveal as _StartupReveal  # noqa: E402
 from bdo_music_composer.project.project_persistence import (  # noqa: E402
     AutosaveRequest,
@@ -350,7 +367,6 @@ from bdo_music_composer.project.project_persistence import (  # noqa: E402
     new_project_id,
     normalize_project_id,
     rename_project,
-    write_autosave,
 )
 from bdo_music_composer.audio.bdo_sample_renderer import (  # noqa: E402
     BdoSampleMap,
@@ -599,10 +615,6 @@ def merge_home_project_entries(
     )
 
 
-
-
-
-
 def game_pitch_range_label(
     instrument_id: int, synth_mode: str = "basic"
 ) -> str:
@@ -641,14 +653,10 @@ def copy_export_to_game(out_path: Path, game_dir: Path) -> Path:
 
 
 def load_config() -> dict:
-    """Compatibility wrapper using the current writable config location."""
-
     return _load_application_config(CONFIG_PATH)
 
 
 def save_config(config: dict) -> None:
-    """Compatibility wrapper using the current writable config location."""
-
     _save_application_config(CONFIG_PATH, config)
 
 
@@ -679,37 +687,6 @@ class ConvertWorker(QThread):
             self.conversion_finished.emit(*execute_export(self.params))
         except BaseException as exc:
             self.failed.emit(f"{exc}\n\n{traceback.format_exc()}")
-
-
-class AutosaveWriteWorker(QThread):
-    succeeded = Signal(str)
-    failed = Signal(str)
-
-    def __init__(self, request: AutosaveRequest):
-        super().__init__()
-        self.request = request
-
-    def run(self) -> None:
-        try:
-            self.succeeded.emit(str(write_autosave(self.request)))
-        except BaseException as exc:
-            self.failed.emit(f"{exc}\n\n{traceback.format_exc()}")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _instrument_preferred_roles(instrument_id: int) -> frozenset[str]:
@@ -764,7 +741,12 @@ def bdo_transcription_instrument_descriptors() -> tuple[BdoInstrumentDescriptor,
 
 
 class MidiToBdoWindow(
+    ProjectAutosaveHostMixin,
     TranscriptionRhythmDiagnosticMixin,
+    ReferenceTimbreHostMixin,
+    TrackOrderingMixin,
+    TimelineVelocityCurveHostMixin,
+    WorkspaceTempoHostMixin,
     MainWindowStyleMixin,
     QMainWindow,
 ):
@@ -1060,8 +1042,9 @@ class MidiToBdoWindow(
         self.setMinimumSize(1160, 720)
 
         self.config = load_config()
+        configured_owner_id, configured_character_name = owner_identity(self.config)
         self.language = str(self.config.get("language", "auto"))
-        self.owner_id = 0
+        self.owner_id = configured_owner_id
         self.source_format = "midi"
         self.bdo_source_snapshot = None
         self.bdo_source_document = None
@@ -1081,6 +1064,11 @@ class MidiToBdoWindow(
             tuple[int, str, str] | None
         ) = None
         self.transcription_assist_worker: QThread | None = None
+        self.reference_timbre_worker = None
+        self.reference_timbre_analysis = None
+        self.reference_timbre_prediction = None
+        self.reference_timbre_analysis_busy = False
+        self.reference_timbre_analysis_error = False
         self.sample_pack_worker: SamplePackPrepareWorker | None = None
         self.automatic_harmony_analysis: HarmonyAnalysis | None = None
         self.automatic_instrument_match_analysis: InstrumentMatchAnalysis | None = None
@@ -1102,7 +1090,7 @@ class MidiToBdoWindow(
         self.transcription_analysis_busy = False
         self.transcription_analysis_progress: int | None = None
         self._transcription_ui_status_spec = trv(
-            "载入音频，然后开始扒谱"
+            "载入音频，然后分析"
         )
         self.transcription_ui_status = str(self._transcription_ui_status_spec)
         self.pending_transcription_review_payload: dict = {}
@@ -1167,10 +1155,12 @@ class MidiToBdoWindow(
         self.pending_autosave_reason = ""
         self.autosave_worker: AutosaveWriteWorker | None = None
         self.pending_autosave_request: AutosaveRequest | None = None
+        self._autosave_retry_request: AutosaveRequest | None = None
+        self._autosave_retry_count = 0
         saved_settings = self.config.get("conversion_settings", {})
         if not isinstance(saved_settings, dict):
             saved_settings = {}
-        self.char_name = saved_settings.get("char_name", "MIDI")
+        self.char_name = saved_settings.get("char_name", configured_character_name or "MIDI")
         self._set_conversion_settings(
             ConversionSettings.from_preferences(saved_settings),
             preserve_pitch_overrides=False,
@@ -1182,6 +1172,7 @@ class MidiToBdoWindow(
         self.chorus = None
 
         self._build_ui()
+        self.ui_preference_binding = WorkspaceUiPreferenceBinding(self, self.config, self.persist_ui_config)
         self._apply_responsive_density()
         self.project_undo_shortcut = QShortcut(QKeySequence.Undo, self)
         self.project_undo_shortcut.activated.connect(self._undo_project)
@@ -1220,6 +1211,7 @@ class MidiToBdoWindow(
         workspace_layout.addWidget(self._build_performance_strip())
         self.page_stack.addWidget(self.home_page)
         self.page_stack.addWidget(self.workspace_page)
+        self.main_page_transition = StackedPageCrossfade(self.page_stack)
         root.addWidget(self.page_stack, stretch=1)
         self._refresh_home()
         self._set_home_toolbar_mode(True)
@@ -1227,9 +1219,9 @@ class MidiToBdoWindow(
     def _build_toolbar(self) -> QWidget:
         bar = QFrame()
         bar.setObjectName("Toolbar")
-        bar.setFixedHeight(50)
+        bar.setFixedHeight(44)
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(8, 4, 12, 4)
+        layout.setContentsMargins(8, 3, 12, 3)
         layout.setSpacing(8)
 
         self.ensemble_capacity_badge = EnsembleCapacityBadge(parent=bar)
@@ -1287,6 +1279,14 @@ class MidiToBdoWindow(
         self.toolbar_optimize_btn = PillButton(tr("MIDI 优化"), "secondary", FluentSymbol.OPTIMIZE)
         self.toolbar_optimize_btn.clicked.connect(lambda: self._open_midi_optimizer(None))
         score_command_layout.addWidget(self.toolbar_optimize_btn)
+
+        self.toolbar_multiplayer_sync_btn = PillButton(tr("多人同步器"), "secondary", FluentSymbol.NETWORK)
+        self.toolbar_multiplayer_sync_btn.clicked.connect(self._open_multiplayer_synchronizer)
+        self.toolbar_multiplayer_sync_btn.setEnabled(False)
+        self.toolbar_multiplayer_sync_btn.setToolTip(
+            tr("多人同步器暂未开放；网络房间功能仍在开发中")
+        )
+        score_command_layout.addWidget(self.toolbar_multiplayer_sync_btn)
 
         self.toolbar_master_effects_btn = PillButton(
             tr("全局效果"), "secondary", FluentSymbol.CURVE
@@ -1398,30 +1398,20 @@ class MidiToBdoWindow(
         overlay = QFrame()
         overlay.setObjectName("HomeOverlay")
         overlay.setFixedWidth(584)
+        overlay.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self.home_sidebar = overlay
         overlay_layout = QVBoxLayout(overlay)
         overlay_layout.setContentsMargins(32, 20, 22, 16)
         overlay_layout.setSpacing(0)
 
-        hero = QWidget()
-        hero.setObjectName("HomeHero")
-        hero_layout = QVBoxLayout(hero)
-        hero_layout.setContentsMargins(0, 2, 0, 2)
-        hero_layout.setSpacing(2)
-        title = QLabel(tr("继续创作"))
-        title.setObjectName("HomeTitle")
-        subtitle = QLabel(tr("从最近工程继续，或开始一个新的编曲项目"))
-        subtitle.setObjectName("HomeSubtitle")
-        subtitle.setWordWrap(True)
-        hero_layout.addWidget(title)
-        hero_layout.addWidget(subtitle)
-        overlay_layout.addWidget(hero)
-        overlay_layout.addSpacing(16)
+        self.home_hero = HomeHero()
+        overlay_layout.addWidget(self.home_hero)
+        overlay_layout.addSpacing(14)
 
         command_deck = QFrame()
         command_deck.setObjectName("HomeCommandDeck")
         quick_actions = QHBoxLayout(command_deck)
-        quick_actions.setContentsMargins(0, 0, 0, 0)
+        quick_actions.setContentsMargins(14, 0, 14, 0)
         quick_actions.setSpacing(8)
         self.home_new_btn = PillButton(
             tr("新建项目"),
@@ -1446,25 +1436,30 @@ class MidiToBdoWindow(
         for action_button, description in action_descriptions:
             action_button.setObjectName("HomeQuickAction")
             action_button.setProperty("homeAction", True)
-            action_button.setFixedHeight(42)
+            action_button.setFixedHeight(44)
             action_button.setToolTip(tr(description).replace("\n", " · "))
             action_button.setAccessibleDescription(tr(description))
         self.home_new_btn.setProperty("actionTone", "accent")
-        quick_actions.addWidget(self.home_new_btn, stretch=1)
-        quick_actions.addWidget(self.home_import_btn, stretch=1)
-        quick_actions.addWidget(self.home_open_btn, stretch=1)
+        quick_actions.addWidget(self.home_new_btn, stretch=6)
+        quick_actions.addWidget(self.home_import_btn, stretch=5)
+        quick_actions.addWidget(self.home_open_btn, stretch=5)
         self.home_new_btn.clicked.connect(self._new_project)
         self.home_import_btn.clicked.connect(self._browse_midi)
         self.home_open_btn.clicked.connect(self._open_project)
         overlay_layout.addWidget(command_deck)
         overlay_layout.addSpacing(14)
 
+        library_surface = HomeLibrarySurface()
+        self.home_library_surface = library_surface
+        library_surface_layout = library_surface.content_layout
         library_bar = QFrame()
         library_bar.setObjectName("HomeLibraryBar")
         library_layout = QHBoxLayout(library_bar)
         library_layout.setContentsMargins(0, 0, 0, 0)
-        library_layout.setSpacing(6)
+        library_layout.setSpacing(8)
 
+        library_tabs = HomeLibraryTabs()
+        library_tabs_layout = library_tabs.content_layout
         self.home_nav_group = QButtonGroup(self)
         self.home_nav_group.setExclusive(True)
         self.home_project_nav = QPushButton(tr("最近项目"))
@@ -1481,22 +1476,26 @@ class MidiToBdoWindow(
         )
         for nav_button in (self.home_project_nav, self.home_game_nav):
             nav_button.setCursor(Qt.PointingHandCursor)
+            nav_button.setFixedHeight(36)
             self.home_nav_group.addButton(nav_button)
-            library_layout.addWidget(nav_button)
+            library_tabs_layout.addWidget(nav_button)
         self.home_project_nav.setChecked(True)
+        library_layout.addWidget(library_tabs)
 
         self.home_search = QLineEdit()
         self.home_search.setObjectName("HomeSearch")
+        self.home_search.setFixedHeight(36)
         self.home_search.setPlaceholderText(tr("搜索项目或曲谱"))
         self.home_search.setClearButtonEnabled(True)
         self.home_search.textChanged.connect(self._apply_home_filter)
         library_layout.addWidget(self.home_search, stretch=1)
         self.home_refresh_btn = PillButton(tr("刷新"), "ghost")
+        self.home_refresh_btn.setObjectName("HomeRefreshButton")
         self.home_refresh_btn.setProperty("homeAction", True)
+        self.home_refresh_btn.setFixedSize(58, 36)
         self.home_refresh_btn.clicked.connect(self._refresh_home)
         library_layout.addWidget(self.home_refresh_btn)
-        overlay_layout.addWidget(library_bar)
-        overlay_layout.addSpacing(10)
+        library_surface_layout.addWidget(library_bar)
 
         self.home_library_stack = QStackedWidget()
         self.home_library_stack.setObjectName("HomeLibraryStack")
@@ -1519,14 +1518,16 @@ class MidiToBdoWindow(
         game_footer.clicked.connect(self._open_game_music_directory)
         self.home_library_stack.addWidget(project_card)
         self.home_library_stack.addWidget(game_card)
-        overlay_layout.addWidget(self.home_library_stack, stretch=1)
+        library_surface_layout.addWidget(self.home_library_stack, stretch=1)
 
         self.home_footer = HomeFooter(APP_VERSION)
         if RELEASE_NOTES_UI_ENABLED:
             self.home_footer.release_notes_requested.connect(
                 self._show_release_notes
             )
-        overlay_layout.addWidget(self.home_footer)
+        library_surface_layout.addWidget(self.home_footer)
+        overlay_layout.addWidget(library_surface, stretch=1)
+
         shell_layout.addWidget(overlay)
         shell_layout.addStretch(1)
 
@@ -1588,8 +1589,11 @@ class MidiToBdoWindow(
         card.setProperty("density", density)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(3)
-        card_header = QHBoxLayout()
+        layout.setSpacing(6)
+        card_header_frame = QFrame()
+        card_header_frame.setObjectName("HomeCardHeader")
+        card_header = QHBoxLayout(card_header_frame)
+        card_header.setContentsMargins(2, 0, 0, 0)
         card_header.setSpacing(8)
         title_label = QLabel(tr(title))
         title_label.setObjectName("HomeCardTitle")
@@ -1612,7 +1616,7 @@ class MidiToBdoWindow(
         item_list.setItemDelegate(
             HomeEntryDelegate(self.home_instrument_art, item_list)
         )
-        layout.addLayout(card_header)
+        layout.addWidget(card_header_frame)
         layout.addWidget(item_list, stretch=1)
         return card, item_list, action_button, count_label
 
@@ -1720,6 +1724,8 @@ class MidiToBdoWindow(
         self.owner_id, character_name = identity
         if character_name:
             self.char_name = character_name
+        set_owner_identity(self.config, self.owner_id, self.char_name)
+        save_config(self.config)
         self._refresh_home_identity()
         self._autosave_project("owner id")
         self.show_toast(
@@ -1794,8 +1800,10 @@ class MidiToBdoWindow(
         self._switch_main_page(self.workspace_page, home=False)
 
     def _switch_main_page(self, page: QWidget, *, home: bool) -> None:
-        """Commit page and toolbar visibility in one paint frame."""
+        """Commit synchronously, then crossfade the visual page snapshot."""
 
+        page_changed = self.page_stack.currentWidget() is not page
+        snapshot = self.main_page_transition.capture_current_page() if page_changed else None
         self.setUpdatesEnabled(False)
         try:
             self._set_home_toolbar_mode(home)
@@ -1804,6 +1812,8 @@ class MidiToBdoWindow(
             self.setUpdatesEnabled(True)
         self._update_ensemble_metric()
         self.update()
+        if page_changed:
+            self.main_page_transition.fade_from(snapshot, page)
 
     def _reference_audio_changed(self, path: str) -> None:
         previous_path = self.reference_audio_path
@@ -1873,6 +1883,7 @@ class MidiToBdoWindow(
                 cancel = getattr(self.transcription_assist_worker, "cancel", None)
                 if callable(cancel):
                     cancel()
+            self._clear_reference_timbre_analysis(cancel_worker=True)
             if editor is not None:
                 editor.release_transcription_resources()
             self.transcription_assist_previous_candidates = tuple(
@@ -1902,6 +1913,7 @@ class MidiToBdoWindow(
             self._clear_transcription_review_history()
         self.reference_audio_path = path
         self.reference_audio_relink_required = False
+        self._reference_bpm_audio_changed(path)
         self._refresh_transcription_workspace()
         if self.tracks and not self.loading_project:
             self._autosave_project("reference audio", immediate=True)
@@ -2011,10 +2023,11 @@ class MidiToBdoWindow(
     def _apply_home_responsive_density(self) -> None:
         if not hasattr(self, "home_sidebar"):
             return
-        compact = self.width() < 1360
         self.home_outer_layout.setContentsMargins(0, 0, 0, 0)
         self.home_shell_layout.setSpacing(0)
-        self.home_sidebar.setFixedWidth(584 if compact else 620)
+        width = self.width()
+        sidebar_width = 584 if width < 1360 else 632 if width < 1600 else 680
+        self.home_sidebar.setFixedWidth(sidebar_width)
 
     @staticmethod
     def _set_responsive_icon_button(
@@ -2042,11 +2055,15 @@ class MidiToBdoWindow(
             (self.toolbar_home_btn, "主页"),
             (self.toolbar_project_btn, "项目"),
             (self.toolbar_optimize_btn, "MIDI 优化"),
+            (self.toolbar_multiplayer_sync_btn, "多人同步器"),
             (self.toolbar_master_effects_btn, "全局效果"),
             (self.toolbar_thanks_btn, "致谢"),
             (self.toolbar_settings_btn, "设置"),
         ):
             self._set_responsive_icon_button(button, source, compact)
+        self.toolbar_multiplayer_sync_btn.setToolTip(
+            tr("多人同步器暂未开放；网络房间功能仍在开发中")
+        )
 
         self.output_name.setFixedWidth(148 if compact else 170)
 
@@ -2062,6 +2079,7 @@ class MidiToBdoWindow(
             self._set_responsive_icon_button(button, source, compact)
         self.timeline_loop_box.setAccessibleName(tr("循环区间"))
         self.timeline_loop_box.setText("" if compact else tr("循环区间"))
+        self._set_global_bpm_compact(compact)
         self.timeline_zoom_label.setVisible(not compact)
         self.timeline_pan_label.setVisible(not compact)
         self.timeline_zoom.setFixedWidth(80 if compact else 104)
@@ -2124,12 +2142,13 @@ class MidiToBdoWindow(
             self.automatic_instrument_match_analysis = None
             self.harmony_analysis = None
             self.instrument_match_analysis = None
+            self._clear_reference_timbre_analysis(cancel_worker=True)
             self.transcription_group_timbre_profiles = None
             self.transcription_group_timbre_revision = ""
             self._clear_transcription_review_history()
             self._clear_track_selection()
             self.reference_audio.set_audio_path(None, notify=False)
-            self.reference_audio.set_volume_percent(50, notify=False)
+            self.reference_audio.set_volume_percent(self.ui_preference_binding.reference_volume_percent, notify=False)
             self._set_reference_alignment(0.0, 0.0)
             self.reference_audio_path = ""
             self.reference_audio_relink_required = False
@@ -2140,7 +2159,8 @@ class MidiToBdoWindow(
             self.project_id = new_project_id()
             self.autosave_project_dir = project_dir
             self.autosave_source_copy = None
-            self.owner_id = 0
+            self.owner_id, configured_character_name = owner_identity(self.config)
+            self.char_name = configured_character_name or self.char_name
             self.bpm = 120
             self.time_sig = 4
             self.time_sig_denominator = 4
@@ -2387,8 +2407,9 @@ class MidiToBdoWindow(
 
         controls = QFrame()
         controls.setObjectName("TimelineControlBar")
+        controls.setFixedHeight(42)
         header = QHBoxLayout(controls)
-        header.setContentsMargins(12, 6, 12, 6)
+        header.setContentsMargins(12, 4, 12, 4)
         header.setSpacing(8)
         self.timeline_meta = ElidedLabel(
             tr("等待 MIDI"), maximum_hint_width=170
@@ -2436,18 +2457,11 @@ class MidiToBdoWindow(
         self.add_track_button = PillButton(tr("新建轨道"), "secondary", FluentSymbol.ADD_TRACK)
         self.add_track_button.clicked.connect(self._show_new_track_menu)
         self.track_actions_button = PillButton(tr("轨道"), "ghost")
-        track_actions = QMenu(self.track_actions_button)
-        delete_action = track_actions.addAction(tr("删除轨道"))
-        delete_action.triggered.connect(self._delete_selected_track)
-        track_actions.addSeparator()
-        clear_solo_action = track_actions.addAction(tr("清除 Solo"))
-        clear_solo_action.triggered.connect(self._clear_solo)
-        unmute_action = track_actions.addAction(tr("取消静音"))
-        unmute_action.triggered.connect(self._unmute_all)
-        self.track_actions_button.setMenu(track_actions)
+        self.track_actions_button.setMenu(self._build_track_actions_menu())
 
         header.addWidget(transport_group)
         header.addWidget(self.timeline_meta)
+        header.addWidget(self._build_global_bpm_control())
         separator = QFrame()
         separator.setObjectName("TimelineSeparator")
         separator.setFrameShape(QFrame.VLine)
@@ -2474,6 +2488,8 @@ class MidiToBdoWindow(
         self.timeline.mixer_unify_requested.connect(
             self._unify_game_instrument_mix
         )
+        self.timeline.create_track_requested.connect(self._create_track)
+        self.timeline.move_track_requested.connect(self._move_track)
         self.timeline.selected.connect(self._select_track)
         self.timeline.validation_requested.connect(
             self._open_track_conversion_check
@@ -2482,6 +2498,7 @@ class MidiToBdoWindow(
         self.timeline.pitch_requested.connect(self._show_track_pitch_dialog)
         self.timeline.midi_tools_requested.connect(self._open_midi_tool)
         self.timeline.note_editor_requested.connect(self._open_note_editor)
+        self.timeline.velocity_curve_committed.connect(self._commit_timeline_velocity_curve)
         self.timeline.seek_requested.connect(self._seek_preview)
         self.timeline.time_range_changed.connect(self._timeline_range_changed)
         self.timeline_zoom.valueChanged.connect(self.timeline.set_zoom_percent)
@@ -2500,7 +2517,6 @@ class MidiToBdoWindow(
         )
         self.timeline.set_reference_audio(self.reference_audio)
         return workspace
-
     def _build_performance_strip(self) -> QWidget:
         """Compact process/audio telemetry below the multitrack timeline."""
 
@@ -3007,6 +3023,7 @@ class MidiToBdoWindow(
         self.automatic_instrument_match_analysis = None
         self.harmony_analysis = None
         self.instrument_match_analysis = None
+        self._clear_reference_timbre_analysis(cancel_worker=True)
         self.transcription_group_timbre_profiles = None
         self.transcription_group_timbre_revision = ""
         self.transcription_assist_review = TranscriptionAssistReviewState()
@@ -4910,6 +4927,7 @@ class MidiToBdoWindow(
             self.automatic_instrument_match_analysis = None
             self.harmony_analysis = None
             self.instrument_match_analysis = None
+            self._clear_reference_timbre_analysis(cancel_worker=True)
             self.transcription_group_timbre_profiles = None
             self.transcription_group_timbre_revision = ""
             self.transcription_session = TranscriptionSession(
@@ -4951,6 +4969,10 @@ class MidiToBdoWindow(
             self.transcription_session.candidates
         )
         descriptor = result.evidence_descriptor
+        if descriptor is not None:
+            self.reference_audio.set_content_duration_ms(
+                float(descriptor.duration_ms)
+            )
         fingerprint = (
             descriptor.audio_fingerprint if descriptor is not None else ""
         )
@@ -5115,6 +5137,9 @@ class MidiToBdoWindow(
                 )
             )
         self._refresh_transcription_workspace()
+        self._maybe_start_reference_bpm_follow(interval=interval)
+        self._start_transcription_assist_analysis()
+        self._start_reference_timbre_analysis(force_restart=True)
         self._autosave_project(
             "transcription interval decode"
             if interval
@@ -5191,7 +5216,7 @@ class MidiToBdoWindow(
             self._set_transcription_status(reason)
         elif not self.reference_audio.audio_path:
             self._set_transcription_status(
-                tr("载入音频，然后开始扒谱")
+                tr("载入音频，然后分析")
             )
         elif orphaned_cleanup_switch:
             self._set_transcription_status(
@@ -5697,7 +5722,7 @@ class MidiToBdoWindow(
         self.transcription_session = TranscriptionSession()
         self.transcription_result = None
         self.reference_audio.set_audio_path(None, notify=False)
-        self.reference_audio.set_volume_percent(50, notify=False)
+        self.reference_audio.set_volume_percent(self.ui_preference_binding.reference_volume_percent, notify=False)
         self._set_reference_alignment(0.0, 0.0)
         self.reference_audio_path = ""
         self.reference_audio_relink_required = False
@@ -5811,7 +5836,6 @@ class MidiToBdoWindow(
             self._conversion_settings,
             self._pitch_transform_plan,
         )
-
     def _push_project_snapshot(self) -> None:
         self.project_commands.push(self._project_snapshot())
 
@@ -5881,6 +5905,7 @@ class MidiToBdoWindow(
             self._start_transcription_assist_analysis(
                 allow_review_recovery=allow_assist_review_recovery,
             )
+            self._start_reference_timbre_analysis(force_restart=True)
         self._mark_conversion_check_dirty()
         self._autosave_project(action, immediate=True)
         self.status_label.setText(tr("已撤销工程修改" if action == "project undo" else "已重做工程修改"))
@@ -6051,6 +6076,7 @@ class MidiToBdoWindow(
             self.automatic_instrument_match_analysis = None
             self.harmony_analysis = None
             self.instrument_match_analysis = None
+            self._clear_reference_timbre_analysis(cancel_worker=True)
             self.transcription_group_timbre_profiles = None
             self.transcription_group_timbre_revision = ""
             self.transcription_assist_previous_candidates = ()
@@ -6242,7 +6268,7 @@ class MidiToBdoWindow(
             request = AutosaveRequest(
                 project_dir=self.autosave_project_dir,
                 metadata=metadata,
-                tracks=freeze_project_tracks(self.tracks),
+                tracks=freeze_project_tracks(self._autosave_track_view()),
                 source_path=source_path,
                 source_copy=source_copy,
             )
@@ -6259,33 +6285,6 @@ class MidiToBdoWindow(
             self.pending_autosave_request = request
             return
         self._start_autosave_worker(request)
-
-    def _start_autosave_worker(self, request: AutosaveRequest) -> None:
-        worker = AutosaveWriteWorker(request)
-        self.autosave_worker = worker
-        worker.failed.connect(self._autosave_failed)
-        worker.finished.connect(
-            lambda current=worker: self._autosave_worker_finished(current)
-        )
-        worker.start()
-
-    def _autosave_failed(self, message: str) -> None:
-        append_crash_log("Autosave failed", message)
-        self.status_label.setText(
-            trf("自动保存失败：{error}", error=message.splitlines()[0])
-        )
-
-    def _autosave_worker_finished(self, worker: AutosaveWriteWorker) -> None:
-        if self.autosave_worker is not worker:
-            return
-        self.autosave_worker = None
-        worker.deleteLater()
-        pending = self.pending_autosave_request
-        self.pending_autosave_request = None
-        if pending is not None:
-            self._start_autosave_worker(pending)
-        elif self.workspace_close_pending:
-            QTimer.singleShot(0, self.close)
 
     def _wait_for_autosave_idle(self, timeout_ms: int = 30_000) -> bool:
         """Drain queued disk writes; used by tests and final process shutdown."""
@@ -6425,6 +6424,8 @@ class MidiToBdoWindow(
             dialog.refresh_fields()
         self.active_transcription_editor = dialog
         self._refresh_transcription_workspace()
+        if transcription_mode and self.transcription_session.candidates:
+            QTimer.singleShot(0, self._start_reference_timbre_analysis)
         if (
             transcription_mode
             and self.transcription_session.state.cache_key
@@ -6440,6 +6441,11 @@ class MidiToBdoWindow(
             if self.active_transcription_editor is dialog:
                 self.active_transcription_editor = None
             dialog.release_transcription_resources()
+            if dialog._draft_autosave_revision > 0:
+                # The editor may have been rejected after draft checkpoints.
+                # With no active overlay, this request restores the formal
+                # TrackState as the latest crash-recovery snapshot.
+                self._autosave_project("note editor close", immediate=True)
             if transcription_mode:
                 # A cancelled dialog may have launched a harmony snapshot from
                 # draft notes.  Recompute from formal tracks so discarded
@@ -6690,7 +6696,7 @@ class MidiToBdoWindow(
         self.transcription_session = TranscriptionSession()
         self.transcription_result = None
         self.reference_audio.set_audio_path(None, notify=False)
-        self.reference_audio.set_volume_percent(50, notify=False)
+        self.reference_audio.set_volume_percent(self.ui_preference_binding.reference_volume_percent, notify=False)
         self._set_reference_alignment(0.0, 0.0)
         self.reference_audio_path = ""
         self.reference_audio_relink_required = False
@@ -6722,7 +6728,6 @@ class MidiToBdoWindow(
         self.selected_track = None
         if hasattr(self, "timeline"):
             self.timeline.set_selected_track(None)
-
     def _refresh_tracks(self) -> None:
         self.timeline.set_tracks(self.tracks)
         self._on_track_changed()
@@ -6746,6 +6751,7 @@ class MidiToBdoWindow(
                     meter=self.time_sig,
                 )
             )
+        self._sync_global_bpm_control()
         if hasattr(self, "timeline_pan"):
             self.timeline_pan.blockSignals(True)
             self.timeline_pan.setValue(self.timeline.pan_percent())
@@ -7249,25 +7255,13 @@ class MidiToBdoWindow(
         self._on_track_filter_changed()
 
     def _fit_timeline(self) -> None:
-        self._reset_timeline_position()
+        self.ui_preference_binding.reset_timeline_position(fit=True)
         self._on_track_changed(model_changed=False)
 
     def _reset_timeline_position(self) -> None:
         if not hasattr(self, "timeline"):
             return
-        self.timeline.zoom_factor = 1.0
-        self.timeline.view_start_ms = 0.0
-        self.timeline.set_playhead(0.0, follow=True)
-        if hasattr(self, "timeline_zoom"):
-            self.timeline_zoom.blockSignals(True)
-            self.timeline_zoom.setValue(100)
-            self.timeline_zoom.blockSignals(False)
-        if hasattr(self, "timeline_pan"):
-            self.timeline_pan.blockSignals(True)
-            self.timeline_pan.setValue(0)
-            self.timeline_pan.setEnabled(False)
-            self.timeline_pan.blockSignals(False)
-        self.timeline.update()
+        self.ui_preference_binding.reset_timeline_position()
 
     def _sync_preview_state(self) -> None:
         tracks = list(preview_tracks(self.tracks))
@@ -7637,7 +7631,7 @@ class MidiToBdoWindow(
             # master, avoiding a silent Play button on first use.
             self.reference_audio.set_position(start_ms)
             audio_position = self.reference_audio.project_to_audio(start_ms)
-            if 0.0 <= audio_position < self.reference_audio.duration_ms:
+            if audio_position >= 0.0 and (not self.reference_audio.duration_ms or audio_position < self.reference_audio.duration_ms):
                 self.reference_audio.play()
                 self.reference_status_timer.start()
         self.status_label.setText(
@@ -7652,7 +7646,8 @@ class MidiToBdoWindow(
     def _start_reference_audio_from(self, start_ms: float) -> None:
         if not self.reference_audio.audio_path:
             return
-        if start_ms >= self.reference_audio.project_end_ms - 1:
+        reference_duration = self.reference_audio.duration_ms
+        if reference_duration > 0.0 and start_ms >= self.reference_audio.project_end_ms - 1:
             start_ms = 0.0
             self.timeline.set_playhead(0.0)
         if start_ms < self.reference_audio.project_start_ms:
@@ -7662,7 +7657,7 @@ class MidiToBdoWindow(
             self.timeline.set_playhead(start_ms)
         self.reference_audio.set_position(start_ms)
         audio_position = self.reference_audio.project_to_audio(start_ms)
-        if 0.0 <= audio_position < self.reference_audio.duration_ms:
+        if audio_position >= 0.0 and (not reference_duration or audio_position < reference_duration):
             self.reference_audio.play()
             self.reference_status_timer.start()
         self.status_label.setText(tr("参考音频播放"))
@@ -7677,21 +7672,10 @@ class MidiToBdoWindow(
     ) -> None:
         if not self.reference_audio.audio_path:
             return
-        now = time.monotonic()
-        audio_position = self.reference_audio.project_to_audio(position_ms)
-        inside_reference = 0.0 <= audio_position < self.reference_audio.duration_ms
-        drift = abs(self.reference_audio.project_position_ms - position_ms)
-        if force or (
-            not self.reference_audio.is_playing
-            and drift >= REFERENCE_AUDIO_RESYNC_THRESHOLD_MS
-            and now - self.reference_last_resync_at >= REFERENCE_AUDIO_RESYNC_COOLDOWN_S
-        ):
-            self.reference_audio.set_position(position_ms)
-            self.reference_last_resync_at = now
-        if play and inside_reference and not self.reference_audio.is_playing:
-            self.reference_audio.play()
-        elif (not play or not inside_reference) and self.reference_audio.is_playing:
-            self.reference_audio.pause()
+        self.reference_last_resync_at = synchronize_reference_audio(
+            self.reference_audio, position_ms, play=play, force=force,
+            last_resync_at=self.reference_last_resync_at,
+        )
 
     def _pause_preview(self) -> None:
         if self.realtime_preview_active:
@@ -7854,7 +7838,10 @@ class MidiToBdoWindow(
             self.reference_audio.duration_ms > 0
             and position >= self.reference_audio.project_end_ms - 1
         ):
+            # Stop at decoded content, not MP3 backend padding.
+            self.reference_audio.pause()
             self.reference_status_timer.stop()
+            self._sync_preview_state()
 
     def _seek_preview(self, ms: float) -> None:
         was_playing = self.realtime_preview_active and self.realtime_audio.status.state == "playing"
@@ -8072,6 +8059,8 @@ class MidiToBdoWindow(
         self.char_name = dialog.char_name.text().strip() or "MIDI"
         self.language = str(dialog.language.currentData() or "auto")
         self.owner_id = dialog.owner_id
+        if dialog.owner_identity_changed:
+            set_owner_identity(self.config, self.owner_id, self.char_name)
         selected_velocity_mode = dialog.selected_velocity_mode()
         selected_vel_range = None
         if selected_velocity_mode == "rescale":
@@ -8199,6 +8188,8 @@ class MidiToBdoWindow(
             )
         ):
             self._start_transcription_assist_analysis()
+            if effective_bpm_changed:
+                self._start_reference_timbre_analysis(force_restart=True)
         velocity_source = {
             "layered": "分层",
             "stepped": "阶梯",
@@ -8454,6 +8445,7 @@ class MidiToBdoWindow(
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
 
     def closeEvent(self, event) -> None:
+        self.main_page_transition.finish()
         self.autosave_timer.stop()
         self.transcription_assist_refresh_timer.stop()
         if not self._final_autosave_queued:
@@ -8476,11 +8468,22 @@ class MidiToBdoWindow(
             self.status_label.setText(tr("正在完成最终自动保存…"))
             event.ignore()
             return
+        # Reference-tempo decoding is cancellable only between bounded decode
+        # stages.  Give that worker a short drain window before the generic
+        # asynchronous close path so a just-detached reference file cannot
+        # leave a native decoder thread alive while Qt tears down the window.
+        tempo_worker = self.reference_tempo_worker
+        if tempo_worker is not None and tempo_worker.isRunning():
+            self._pending_reference_tempo_path = ""
+            tempo_worker.cancel()
+            tempo_worker.wait(3_000)
         running_workers = [
             worker
             for worker in (
                 self.workspace_transcription_worker,
                 self.transcription_assist_worker,
+                self.reference_timbre_worker,
+                self.reference_tempo_worker,
                 self.sample_pack_worker,
                 self.worker,
             )

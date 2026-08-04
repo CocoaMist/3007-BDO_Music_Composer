@@ -166,6 +166,11 @@ class MainWindowStyleMixin:
                 border: 0;
                 border-radius: 0;
             }
+            QFrame#HomeLibrarySurface {
+                background: rgba(10, 11, 11, 150);
+                border: 1px solid rgba(148, 128, 91, 48);
+                border-radius: 0;
+            }
             QPushButton#HomeOwnerIdButton {
                 background: transparent;
                 border: 0;
@@ -205,6 +210,7 @@ class MainWindowStyleMixin:
             QWidget#HomeFooter {
                 background: transparent;
                 border: 0;
+                border-top: 1px solid rgba(148, 128, 91, 38);
             }
             QPushButton#HomeReleaseNotesButton {
                 min-height: 20px;
@@ -245,11 +251,11 @@ class MainWindowStyleMixin:
                 border: 0;
             }
             QPushButton#HomeQuickAction {
-                min-height: 42px;
-                background: rgba(20, 22, 22, 72);
-                border: 1px solid rgba(151, 132, 98, 58);
+                min-height: 34px;
+                background: rgba(18, 20, 20, 92);
+                border: 1px solid rgba(151, 132, 98, 52);
                 border-radius: 0;
-                color: #b9b4ac;
+                color: #aaa59d;
                 padding: 4px 9px;
                 font-weight: 700;
             }
@@ -263,8 +269,8 @@ class MainWindowStyleMixin:
                 color: #f2e9da;
             }
             QPushButton#HomeQuickAction[actionTone="accent"] {
-                background: rgba(102, 76, 36, 148);
-                border: 1px solid rgba(190, 142, 62, 126);
+                background: rgba(104, 77, 35, 174);
+                border: 1px solid rgba(205, 157, 72, 150);
                 color: #f0e7d5;
             }
             QPushButton#HomeQuickAction[actionTone="accent"]:hover {
@@ -274,10 +280,15 @@ class MainWindowStyleMixin:
                 background: transparent;
                 border: 0;
             }
+            QFrame#HomeLibraryTabs {
+                background: rgba(17, 18, 18, 96);
+                border: 0;
+                border-radius: 0;
+            }
             QLineEdit#HomeSearch {
                 min-height: 34px;
-                background: rgba(9, 11, 12, 84);
-                border: 1px solid rgba(151, 143, 128, 54);
+                background: rgba(8, 10, 10, 132);
+                border: 1px solid rgba(151, 143, 128, 62);
                 border-radius: 0;
                 color: #dfd7ca;
                 padding: 0 8px;
@@ -289,9 +300,15 @@ class MainWindowStyleMixin:
             }
             QFrame#HomeLibraryBar QPushButton[homeAction="true"] {
                 min-height: 34px;
-                background: transparent;
-                border: 0;
+                background: rgba(17, 18, 18, 96);
+                border: 1px solid rgba(143, 131, 109, 38);
                 padding: 0 7px;
+            }
+            QPushButton#HomeRefreshButton:hover,
+            QPushButton#HomeRefreshButton:focus {
+                background: rgba(62, 54, 41, 126);
+                border-color: rgba(190, 151, 82, 112);
+                color: #eee3cf;
             }
             QFrame#HomeCard {
                 background: transparent;
@@ -301,6 +318,12 @@ class MainWindowStyleMixin:
             QFrame#HomeCard[density="primary"] {
                 background: transparent;
                 border: 0;
+            }
+            QFrame#HomeCardHeader {
+                min-height: 30px;
+                background: transparent;
+                border: 0;
+                border-bottom: 1px solid rgba(148, 128, 91, 30);
             }
             QLabel#HomeCardTitle {
                 color: #ded5c6;
@@ -316,9 +339,9 @@ class MainWindowStyleMixin:
             }
             QLabel#HomeCount {
                 min-width: 16px;
-                color: #a89872;
-                background: transparent;
-                border: 0;
+                color: #c2aa72;
+                background: rgba(77, 63, 37, 92);
+                border: 1px solid rgba(155, 126, 67, 52);
                 border-radius: 0;
                 padding: 0 2px;
                 font-size: 11px;
@@ -348,17 +371,17 @@ class MainWindowStyleMixin:
             }
             QListWidget#HomeList::item {
                 color: #ddd8cf;
-                background: rgba(16, 18, 19, 38);
+                background: rgba(16, 18, 19, 58);
                 border: 0;
-                border-bottom: 1px solid rgba(152, 139, 111, 26);
+                border-bottom: 1px solid rgba(152, 139, 111, 34);
                 border-radius: 0;
                 padding: 0;
             }
             QListWidget#HomeList::item:hover {
-                background: rgba(49, 48, 42, 72);
+                background: rgba(58, 53, 43, 104);
             }
             QListWidget#HomeList::item:selected {
-                background: rgba(108, 87, 45, 34);
+                background: rgba(112, 89, 45, 78);
                 border: 0;
                 border-left: 2px solid #9f7939;
                 color: #f1e9dc;
@@ -395,8 +418,8 @@ class MainWindowStyleMixin:
                 border-radius: 0;
             }
             QFrame#Toolbar QFrame#CommandGroup {
-                background: transparent;
-                border: 0;
+                background: rgba(31, 29, 26, 112);
+                border: 1px solid #2d2923;
                 border-radius: 0;
             }
             QFrame#Toolbar QFrame#ToolbarCommandCluster {
@@ -490,6 +513,57 @@ class MainWindowStyleMixin:
                 min-height: 25px;
                 padding: 2px 9px;
             }
+            QFrame#GlobalBpmControl {
+                background: #222326;
+                border: 1px solid #51452f;
+                border-radius: 5px;
+                min-height: 29px;
+                max-height: 29px;
+            }
+            QFrame#GlobalBpmControl QLabel#TimelineControlLabel {
+                color: #d9b96f;
+                font-size: 10px;
+                font-weight: 900;
+                padding: 0;
+            }
+            QSpinBox#GlobalBpmSpin {
+                background: #18191b;
+                border: 0;
+                border-left: 1px solid #4b4130;
+                border-right: 1px solid #4b4130;
+                border-radius: 0;
+                color: #f2d28d;
+                font-family: Consolas, monospace;
+                font-weight: 900;
+                min-height: 25px;
+                max-height: 25px;
+                padding: 0 5px;
+            }
+            QToolButton#ReferenceBpmFollow {
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 3px;
+                color: #c9b798;
+                font-size: 10px;
+                font-weight: 700;
+                min-height: 23px;
+                max-height: 23px;
+                padding: 0 5px;
+            }
+            QToolButton#ReferenceBpmFollow:hover {
+                background: #2b2924;
+                border-color: #5b4b31;
+            }
+            QToolButton#ReferenceBpmFollow:checked {
+                background: #4d3b1d;
+                border-color: #9f7837;
+                color: #f2d28d;
+            }
+            QToolButton#ReferenceBpmFollow:disabled {
+                background: transparent;
+                border-color: transparent;
+                color: #70695f;
+            }
             QLabel#TimelineMeta {
                 color: #c9b798;
                 padding: 0 5px;
@@ -572,9 +646,9 @@ class MainWindowStyleMixin:
             QFrame#TranscriptionReviewDisplayGroup,
             QFrame#TranscriptionReviewActionGroup,
             QFrame#TranscriptionReviewCommitGroup {
-                background: #1d2020;
-                border: 1px solid #303432;
-                border-radius: 6px;
+                background: transparent;
+                border: 0;
+                border-radius: 0;
             }
             QFrame#TranscriptionReviewMoreBar {
                 background: #181a1a;
@@ -591,12 +665,13 @@ class MainWindowStyleMixin:
                 padding: 2px 12px 2px 4px;
             }
             QLabel#TranscriptionReviewContext {
-                background: #24231f;
-                border: 1px solid #4a4438;
-                border-radius: 6px;
+                background: transparent;
+                border: 0;
+                border-right: 1px solid #4d4639;
+                border-radius: 0;
                 color: #e0c996;
                 font-weight: 700;
-                padding: 5px 9px;
+                padding: 2px 12px 2px 4px;
             }
             QFrame#TranscriptionReviewBar QLabel#Muted {
                 color: #a5aaa5;
@@ -611,6 +686,30 @@ class MainWindowStyleMixin:
                 font-size: 10px;
                 font-weight: 700;
                 padding: 1px 8px 1px 2px;
+            }
+            QFrame#TranscriptionPopupSection {
+                background: #1b1d1d;
+                border: 1px solid #343635;
+                border-radius: 4px;
+            }
+            QLabel#TranscriptionPopupSectionTitle {
+                background: transparent;
+                border: 0;
+                color: #dfc894;
+                font-weight: 700;
+                padding: 0 0 2px 0;
+            }
+            QLabel#TranscriptionPopupFieldLabel {
+                background: transparent;
+                border: 0;
+                color: #b9b7b1;
+                padding: 0;
+            }
+            QLabel#TranscriptionPopupDescription {
+                background: transparent;
+                border: 0;
+                color: #929892;
+                padding: 0 1px 2px 1px;
             }
             QFrame#TranscriptionAnalysisBar QPushButton,
             QFrame#TranscriptionAdvancedPanel QPushButton,
@@ -818,8 +917,8 @@ class MainWindowStyleMixin:
                 border-radius: 0;
             }
             QFrame#NoteInspectorTop QPushButton {
-                min-height: 18px;
-                max-height: 18px;
+                min-height: 16px;
+                max-height: 16px;
                 padding: 4px 8px;
             }
             QPushButton#InspectorMode:checked {
@@ -841,8 +940,8 @@ class MainWindowStyleMixin:
                 font-weight: 800;
             }
             QToolButton#TrackReferenceToggle {
-                min-height: 24px;
-                max-height: 24px;
+                min-height: 22px;
+                max-height: 22px;
                 padding: 0 7px;
             }
             QToolButton#TrackReferenceToggle:checked {
@@ -860,22 +959,22 @@ class MainWindowStyleMixin:
             }
             QFrame#NoteInspectorTop QLineEdit,
             QFrame#NoteInspectorTop QComboBox {
-                min-height: 20px;
+                min-height: 18px;
                 padding: 3px 6px;
             }
             QComboBox#ArticulationCombo {
                 border-color: #625337;
                 color: #cbbd9f;
                 font-weight: 700;
-                min-height: 19px;
-                max-height: 19px;
+                min-height: 18px;
+                max-height: 18px;
             }
             QPushButton#ArticulationPreview {
                 background: #262628;
                 border: 1px solid #4b4437;
                 border-radius: 0;
-                min-height: 26px;
-                max-height: 26px;
+                min-height: 24px;
+                max-height: 24px;
                 padding: 0;
             }
             QPushButton#ArticulationPreview:hover {
@@ -891,7 +990,7 @@ class MainWindowStyleMixin:
                 border: 1px solid #4b4437;
                 border-radius: 0;
                 color: #e1d4c1;
-                min-height: 24px;
+                min-height: 22px;
                 padding: 1px 6px;
             }
             QPushButton#ArticulationChip:hover { border-color: #8d7548; color: #d8cab0; }
@@ -935,9 +1034,11 @@ class MainWindowStyleMixin:
                 border-radius: 5px;
                 color: #d8d0c4;
                 font-weight: 800;
-                min-height: 26px;
-                max-height: 26px;
-                padding: 0 24px 0 9px;
+                min-height: 24px;
+                max-height: 24px;
+                /* The 20 px drop-down subcontrol already reserves the arrow.
+                   A second 24 px right inset clipped 1/16 and 1/32. */
+                padding: 0 4px 0 8px;
             }
             QDialog#MidiNoteEditorDialog QComboBox#QuantizeGridCombo:hover,
             QDialog#MidiNoteEditorDialog QComboBox#QuantizeGridCombo:focus {
@@ -959,6 +1060,54 @@ class MainWindowStyleMixin:
                 color: #f3f1ea;
                 font-size: 15px;
                 font-weight: 800;
+            }
+            QDialog#MultiplayerSyncDialog {
+                background: #151515;
+                color: #f3f1ea;
+            }
+            QDialog#MultiplayerSyncDialog QFrame#RoomSummaryCard,
+            QDialog#MultiplayerSyncDialog QFrame#RoomConnectionCard,
+            QDialog#MultiplayerSyncDialog QFrame#RoomProtocolCard {
+                background: #1d1d1f;
+                border: 1px solid #3f3a33;
+                border-radius: 7px;
+            }
+            QDialog#MultiplayerSyncDialog QFrame#RoomSummaryCard {
+                background: #201e1a;
+                border-color: #5b492c;
+            }
+            QDialog#MultiplayerSyncDialog QLabel#RoomMetricLabel {
+                color: #8f887e;
+                font-size: 10px;
+                font-weight: 700;
+            }
+            QDialog#MultiplayerSyncDialog QLabel#RoomMetricValue {
+                color: #f0d18e;
+                font-family: Consolas, "Microsoft YaHei UI";
+                font-size: 13px;
+                font-weight: 900;
+            }
+            QDialog#MultiplayerSyncDialog QLabel#RoomStateValue {
+                color: #c9b798;
+                font-size: 12px;
+                font-weight: 800;
+            }
+            QDialog#MultiplayerSyncDialog QLabel#RoomNetworkQuality {
+                color: #a9c477;
+                font-family: Consolas, "Microsoft YaHei UI";
+                font-size: 10px;
+                font-weight: 800;
+            }
+            QDialog#MultiplayerSyncDialog QLineEdit,
+            QDialog#MultiplayerSyncDialog QComboBox,
+            QDialog#MultiplayerSyncDialog QSpinBox,
+            QDialog#MultiplayerSyncDialog QDoubleSpinBox {
+                min-height: 27px;
+                padding: 2px 8px;
+            }
+            QDialog#MultiplayerSyncDialog QListWidget#NetworkRoomMembers {
+                background: #181819;
+                border-color: #35332f;
             }
             QLabel#SectionLabel {
                 color: #e4c17c;

@@ -28,6 +28,18 @@ Character identity and master effects deliberately remain outside this model.
 They have different ownership and compatibility rules: identity is a local
 export preference, while master effects belong to the open score.
 
+The multi-track workspace presents that optional override as the effective
+**Global BPM**. It is the only editable tempo authority shared by every track;
+the timeline grid, preview, tempo-dependent analysis, project autosave, BDO
+export, and network-room preview consume the same value. New projects enable
+reference-BPM following: audio attachment starts a bounded background estimate
+and full transcription refines it from cached onset evidence. Only reliable
+steady-tempo evidence changes the project; a direct BPM edit disables following
+so manual intent remains authoritative. Export compatibility remains `1..200`,
+while the current official Black Desert composing guide documents `180` as its
+authoring maximum. Advanced settings keep `0 = use MIDI` as the explicit
+operation for clearing the override.
+
 ## Source policies
 
 | Entry path | BPM | Transpose | Velocity | Reason |

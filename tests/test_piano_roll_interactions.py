@@ -12,6 +12,223 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PianoRollInteractionTests(unittest.TestCase):
+    def test_autosave_retries_transient_writer_failures(self) -> None:
+        script = textwrap.dedent(
+            """
+            import tempfile
+            from pathlib import Path
+            from unittest.mock import patch
+
+            from PySide6.QtWidgets import QApplication
+            import bdo_music_composer.ui.main_window as gui
+            import bdo_music_composer.ui.project_autosave_qt as autosave_qt
+
+            app = QApplication([])
+            with tempfile.TemporaryDirectory() as folder_name:
+                root = Path(folder_name)
+                with patch.object(gui, "AUTO_SAVE_DIR", root / "auto_save"):
+                    window = gui.MidiToBdoWindow()
+                    window.source_format = "project"
+                    window.output_name.setText("Retry Notes")
+                    window.tracks = [gui.TrackState(
+                        1,
+                        [gui.Note(60, 90, 0.0, 250.0, 0)],
+                        0, False, "lead", 0x0B,
+                    )]
+                    real_write = autosave_qt.write_autosave
+                    attempts = []
+
+                    def flaky_write(request):
+                        attempts.append(request)
+                        if len(attempts) < 3:
+                            raise OSError("temporary autosave failure")
+                        return real_write(request)
+
+                    with patch.object(
+                        autosave_qt, "write_autosave", flaky_write
+                    ):
+                        window._autosave_project(
+                            "note block edit", immediate=True
+                        )
+                        assert window._wait_for_autosave_idle()
+
+                    assert len(attempts) == 3, len(attempts)
+                    assert window._autosave_retry_count == 0
+                    assert next((root / "auto_save").glob("*/project.json")).is_file()
+                    window.close()
+                    app.processEvents()
+            app.quit()
+            """
+        )
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=40,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_each_note_transaction_autosaves_active_draft_and_undo(self) -> None:
+        script = textwrap.dedent(
+            """
+            import json
+            import tempfile
+            from pathlib import Path
+            from unittest.mock import patch
+
+            from PySide6.QtWidgets import QApplication
+            import bdo_music_composer.ui.main_window as gui
+
+            app = QApplication([])
+            with tempfile.TemporaryDirectory() as folder_name:
+                root = Path(folder_name)
+                with patch.object(gui, "AUTO_SAVE_DIR", root / "auto_save"):
+                    formal = gui.Note(60, 90, 0.0, 250.0, 0)
+                    track = gui.TrackState(
+                        1, [formal], 0, False, "lead", 0x0B
+                    )
+                    window = gui.MidiToBdoWindow()
+                    window.source_format = "project"
+                    window.output_name.setText("Reliable Notes")
+                    window.tracks = [track]
+                    editor = gui.MidiNoteEditorDialog(window, track, 120, 4)
+                    window.active_transcription_editor = editor
+
+                    editor.push_snapshot()
+                    editor.canvas.notes.append(
+                        gui.Note(62, 80, 500.0, 250.0, 1)
+                    )
+                    editor._notes_changed()
+                    editor.push_snapshot()
+                    editor.canvas.notes.append(
+                        gui.Note(64, 70, 1_000.0, 375.0, 2)
+                    )
+                    editor._notes_changed()
+                    assert track.notes == [formal], "draft leaked into TrackState"
+                    assert editor._draft_autosave_revision == 2
+                    assert window._wait_for_autosave_idle()
+
+                    project_path = next((root / "auto_save").glob("*/project.json"))
+                    payload = json.loads(project_path.read_text(encoding="utf-8"))
+                    assert payload["reason"] == "note block edit"
+                    assert payload["tracks"][0]["notes"] == [
+                        [60, 90, 0.0, 250.0, 0],
+                        [62, 80, 500.0, 250.0, 1],
+                        [64, 70, 1_000.0, 375.0, 2],
+                    ]
+
+                    editor.undo()
+                    assert window._wait_for_autosave_idle()
+                    payload = json.loads(project_path.read_text(encoding="utf-8"))
+                    assert payload["tracks"][0]["notes"] == [
+                        [60, 90, 0.0, 250.0, 0],
+                        [62, 80, 500.0, 250.0, 1],
+                    ]
+
+                    # Rejecting/closing the editor must replace the recovery
+                    # overlay with the still-formal track state.
+                    window.active_transcription_editor = None
+                    window._autosave_project("note editor close", immediate=True)
+                    assert window._wait_for_autosave_idle()
+                    payload = json.loads(project_path.read_text(encoding="utf-8"))
+                    assert payload["tracks"][0]["notes"] == [
+                        [60, 90, 0.0, 250.0, 0]
+                    ]
+
+                    editor.close()
+                    window.close()
+                    app.processEvents()
+            app.quit()
+            """
+        )
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=40,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_created_note_inherits_last_selected_creative_properties(self) -> None:
+        script = textwrap.dedent(
+            """
+            from PySide6.QtCore import QPoint, Qt
+            from PySide6.QtTest import QTest
+            from PySide6.QtWidgets import QApplication
+            from bdo_music_composer.ui.main_window import (
+                MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState,
+            )
+
+            app = QApplication([])
+            source = Note(60, 47, 0.0, 375.0, 3)
+            track = TrackState(1, [source], 0, False, "lead", 0x0B)
+            window = MidiToBdoWindow()
+            window.tracks = [track]
+            editor = MidiNoteEditorDialog(window, track, 120, 4)
+            editor.resize(1180, 720)
+            editor.show(); app.processEvents()
+
+            editor.canvas.selected = {0}
+            editor.canvas.anchor_index = 0
+            editor.refresh_fields()
+            target = QPoint(
+                round(editor.canvas.x_at_time(1000.0)),
+                round(
+                    editor.canvas.RULER_H
+                    + (editor.canvas.pitch_top - 67) * editor.canvas.ROW_H
+                    + 8
+                ),
+            )
+            QTest.mouseDClick(editor.canvas, Qt.LeftButton, pos=target)
+            created = editor.canvas.notes[-1]
+            assert created.pitch == 67
+            assert created.start == 1000.0
+            assert created.vel == source.vel
+            assert created.dur == source.dur
+            assert created.ntype == source.ntype
+
+            # Clearing selection does not erase the last creative template.
+            editor.canvas.selected.clear()
+            editor.canvas.anchor_index = None
+            editor.refresh_fields()
+            inherited = editor.build_created_note(pitch=69, start_ms=1500.0)
+            assert inherited == Note(69, 47, 1500.0, 375.0, 3)
+
+            editor.close(); window.close(); app.processEvents(); app.quit()
+            """
+        )
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
     def test_safe_creation_cursor_paste_and_ctrl_drag_clone(self) -> None:
         script = textwrap.dedent(
             """
@@ -146,9 +363,14 @@ class PianoRollInteractionTests(unittest.TestCase):
             editor.canvas.set_notes(initial_notes)
             editor.editor_zoom.setValue(30)
             editor.update_scrollbars()
-            assert editor.time_scroll.maximum() == 0
-            assert editor.time_scroll.value() == 0
-            assert editor.canvas.scroll_ms == 0
+            assert editor.time_scroll.maximum() > 0
+            visible_ms = (
+                editor.canvas.width() - editor.canvas.KEY_W
+            ) / editor.canvas.px_per_ms
+            assert editor.time_scroll.maximum() >= round(visible_ms * 0.45)
+            editor.set_time_scroll(editor.time_scroll.maximum())
+            assert editor.canvas.scroll_ms == editor.time_scroll.maximum()
+            editor.set_time_scroll(0)
             editor.editor_zoom.setValue(92)
             editor.canvas.set_notes(initial_notes)
             editor.update_scrollbars()
@@ -269,13 +491,20 @@ class PianoRollInteractionTests(unittest.TestCase):
 
             # A long note that begins before the horizontal viewport must be
             # clipped at the grid edge instead of painting through piano keys.
-            editor.canvas.notes = [Note(60, 91, 0.0, 3000.0, 0)]
-            editor.canvas.rebuild_note_index()
             editor.canvas.pitch_top = 72
             editor.set_time_scroll(1000)
+            partial_note_start = (
+                editor.canvas.scroll_ms
+                - 8.0 / editor.canvas.px_per_ms
+            )
+            editor.canvas.notes = [
+                Note(60, 91, partial_note_start, 1000.0, 0)
+            ]
+            editor.canvas.rebuild_note_index()
             editor.canvas.update()
             app.processEvents()
-            note_y = round(editor.canvas.note_rect(editor.canvas.notes[0]).center().y())
+            note_rect = editor.canvas.note_rect(editor.canvas.notes[0])
+            note_y = round(note_rect.center().y())
             with_note = editor.canvas.grab().toImage()
             editor.canvas.notes = []
             editor.canvas.rebuild_note_index()
@@ -288,6 +517,12 @@ class PianoRollInteractionTests(unittest.TestCase):
             assert with_note.pixelColor(editor.canvas.KEY_W + 5, note_y) != without_note.pixelColor(
                 editor.canvas.KEY_W + 5, note_y
             )
+            keyboard_text_leaks = sum(
+                with_note.pixelColor(x, y) != without_note.pixelColor(x, y)
+                for x in range(editor.canvas.KEY_W - 8, editor.canvas.KEY_W)
+                for y in range(round(note_rect.top()), round(note_rect.bottom()) + 1)
+            )
+            assert keyboard_text_leaks == 0, keyboard_text_leaks
             assert editor.canvas.note_at(QPointF(editor.canvas.KEY_W - 5, note_y))[0] is None
 
             editor.close()

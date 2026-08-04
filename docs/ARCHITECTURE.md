@@ -65,6 +65,10 @@ re-exports that rule. New code imports the focused owner directly, while a
 compatibility export must remain the exact same object rather than a copied
 implementation.
 
+`bdo_music_composer/ui/page_transition_qt.py` owns the short, interruptible
+snapshot crossfade between the home page and multitrack workspace. Page and
+toolbar state still commit synchronously before that visual transition starts.
+
 The intended production dependency direction is:
 
 ```text
@@ -165,7 +169,15 @@ that can start it.
 Note(pitch: int, vel: int, start: float ms, dur: float ms, ntype: int)
 ```
 
-Widgets mutate a draft list through `_replace()`. The note editor commits a sorted list back to its `TrackState` only on Apply/OK. Project autosave serializes all five note fields.
+Widgets mutate a draft list through `_replace()`. The note editor commits a
+sorted list back to its `TrackState` only on Apply/OK. Every completed note
+transaction (create, delete, move, resize, property edit, optimization,
+undo/redo, or candidate promotion) immediately captures an immutable recovery
+snapshot. While the modal editor is open, autosave overlays that draft only in
+the serialized track view; the live `TrackState`, preview/export model, and
+project command history remain formal until Apply. Closing or rejecting the
+editor queues a formal-track snapshot so a discarded draft cannot remain the
+latest recovery state. Project autosave serializes all five note fields.
 
 `bdo_music_composer/editor/game_score_model.py` defines the formal/monitoring split. Every `TrackState`
 belongs to the formal score regardless of Mute/Solo; those flags select local
@@ -212,7 +224,20 @@ conflicts fail closed and require the explicit “use this track to unify” act
   game-volume control directly into the canvas; it edits the shared
   game-instrument `bdo_track_volume` view, without creating per-row widgets or
   rewriting note velocities. The bottom strip contains telemetry only; output-folder
-  controls live in Settings.
+  controls live in Settings. The selected lane also exposes a non-destructive
+  free-point velocity envelope. Every row projects onset-average velocity
+  directly from the current `Note.vel` model, so piano-roll edits and timeline
+  refreshes share one source of truth. It targets A–B when that range contains
+  notes, otherwise the visible note-onset span; users can add, drag,
+  keyboard-nudge, and delete interior points while the formal notes remain
+  unchanged until Apply. Editing remains inside the original 68 px track row;
+  there is no sidecar window or lower automation panel. Only the selected point
+  exposes its independent left/right influence handles, preserving lane space.
+  Their weights scale only the adjacent Hermite tangent, and a monotonic limiter
+  prevents overshoot even at extreme weights. The envelope still passes through
+  every authored point. Apply publishes one `Note.vel`
+  transaction through project undo, immediate autosave, preview refresh,
+  validation, and the existing BDO export path.
 - Runtime telemetry: `bdo_music_composer/app/process_metrics.py` samples only
   the current process once per second. The fixed strip below the timeline shows
   normalized CPU, working set RAM, audio render load/XRUN count, and active logical voices. Native
@@ -231,22 +256,36 @@ conflicts fail closed and require the explicit “use this track to unify” act
   bounded 50 ms peak envelope off the paint path, and draws that waveform against
   their shared zoomed time scale. The row retains load, gain, and waveform-seek
   controls; play, pause, and stop belong exclusively to the global transport. The
-  main transport aligns Qt media playback with the real-time BDO engine at start,
-  resume, and explicit seek, but never re-seeks a reference stream while it is
-  actively playing. It falls back to the reference clock when game samples are
-  unavailable or the reference outlasts the MIDI preview. Reference gain defaults
+  main transport uses the rendered BDO position as the master clock in combined
+  mode. `reference_clock_sync.py` ignores sub-80 ms backend jitter, corrects
+  larger drift with a short cooldown, and immediately corrects drift above
+  250 ms even while the reference stream is playing. It falls back to the
+  reference clock when game samples are unavailable or the reference outlasts
+  the MIDI preview. Reference gain defaults
   to 50% and can be changed in 5% steps from
   the row; the project stores its path and gain but does not copy the audio into
   autosaves, exports, or builds. `reference_audio_offset_ms` maps project time
   to audio time (`audio_ms = project_ms - reference_audio_offset_ms`); project
   positions outside the audio extent leave the reference silent while BDO
-  preview continues.
+  preview continues. After analysis, the decoded sample-count duration is the
+  authoritative content boundary; the raw multimedia duration remains a seek
+  backend detail because MP3 encoder padding can extend it.
 - Shared time controls: the arrangement timeline and embedded note editor
   use the same transport, playhead, zoomed time domain, and A–B range. At B the
-  preview and reference return to A together; normal playback does not
-  continuously force a media re-seek. `beat_origin_ms` changes only measure
+  preview and reference return to A together; normal playback performs only
+  bounded drift correction, not per-frame forced seeks. `beat_origin_ms` changes only measure
   grid/quantization phase. It neither moves formal notes nor enters BDO v9
   output.
+- Interface preferences: `app/ui_preferences.py` validates the local,
+  non-musical preference schema and `ui/ui_preferences_qt.py` binds it to Qt
+  controls with debounced atomic saves. Workspace geometry, timeline view,
+  loop and reference-volume defaults plus piano-roll geometry, zoom, note-row
+  height, quantization, snap/audition, inspector, velocity-lane and
+  transcription-filter controls survive reopening. Project-owned reference
+  layers, analysis settings and the current reference volume remain in project
+  autosaves; changing reference volume also refreshes the local default used by
+  genuinely new projects. Offscreen automation uses clean defaults unless a
+  persistence test explicitly opts in, so tests never overwrite user settings.
 - Transcription audition: `Project + Original` is available before voice
   grouping and is the default editor source. An empty draft bypasses the
   real-time engine instead of creating a zero-event project clock. Positive
@@ -254,13 +293,28 @@ conflicts fail closed and require the explicit “use this track to unify” act
   issued before media-duration metadata arrives are retained until Qt publishes
   the duration. Candidate A/B paths remain exclusive and fail closed when a
   voice or game sample is unavailable.
+- Audio-time contract: decoded candidates, `times_ms.npy`, waveform/evidence
+  tiles, pitch contours, rhythm diagnostics, and QMediaPlayer source positions
+  use source-audio milliseconds. UI notes and playheads use project
+  milliseconds, related only by `project_ms = audio_ms +
+  reference_audio_offset_ms`. Rhythm alignment may move either note boundary by
+  at most `maximum_local_shift_ms`; it snaps on the detected source grid and
+  must never convert elapsed source beats through the project BPM. A project
+  tempo change is therefore grid metadata unless an explicit destructive note
+  retiming operation is introduced separately.
 - Project snapshots: blank projects and recovered MIDI/BDO projects use saved
   editor tracks as the source of truth. A missing or corrupt provenance file
   cannot resurrect deleted tracks, discard user-created lanes, or prevent the
   snapshot from opening. The original meter denominator is persisted; when an
   old source-less project has neither that field nor a readable MIDI, export
   fails closed instead of assuming `/4`.
-- Piano roll: draft note creation/deletion/movement/resizing, batch properties, articulations, undo/redo, and isolated track preview. It opens at a screen-aware large working size and uses flat pitch lanes, solid note blocks, octave guides, a direct velocity rail, and an empty-score creation prompt without changing hit testing. Selection mode uses an empty click to place the edit cursor, an empty drag to marquee-select, and a double-click to create; `Ctrl`-drag clones the grabbed selection and paste targets the edit cursor. Paste preserves the copied group as one unit and advances it to the nearest quantized position where no pasted note overlaps an existing note of the same pitch, preventing invisible stacked duplicates. Draw mode sets duration and initial velocity in one gesture; Alt temporarily bypasses snap, arrow keys edit selections, and `Ctrl+D` duplicates them. `editor_shortcuts.py` is the single registry for keyboard dispatch, the contextual HUD, and the complete F1 reference. Note-editing commands run only while the piano-roll canvas owns focus, so line edits keep their native editing keys; F1 remains window-wide. `EditorShortcutHud` switches between select/selection/draw context, dims and prompts when the canvas loses focus, and presents one shortcut/action pair per row on a quiet translucent, mouse-transparent surface above the grid. Clicking the piano ruler, creating, selecting, or repitching a note asynchronously auditions it with the current game instrument without doing sample I/O in the audio callback. Changing a selected note's articulation auditions one representative note with its updated `ntype`; the adjacent play control can force the same audition even when click-to-preview is disabled. The full articulation dropdown and compact shortcut chips share one explicit selection state, including techniques outside the visible shortcut set. Its ruler owns seeking, playhead display, and sample-preload progress; there is no separate editor timeline slider. Draw, note, articulation, view, quantize, and velocity controls share the fixed-height top switcher; normal desktop widths keep descriptive labels, while the minimum supported width uses translated short labels rather than mnemonic letters. Apply/discard/finish commands remain in the top command bar. The compact footer retains selection status, controls the shared reference-audio gain, and enables the embedded user-facing Music Reference mode. That mode reuses the same piano roll, adds a time-aligned waveform and transcription review controls, and temporarily hides the velocity lane without replacing the canvas. Disabling it releases heavy evidence and spectrogram tiles; the UI-side evidence identity is invalidated at the same time so re-enabling the unchanged analysis descriptor always reopens its background layers and reattaches the waveform. The collapsible velocity lane renders discrete stems instead of presenting note velocity as continuous automation. A faint trend line remains only as context; simultaneous notes use a min/max whisker and individual ticks. Point mode edits the clicked onset (or one already-selected chord note), while the explicit soft-brush mode applies the compact time-distance falloff to either the track or the current selection. Radius changes are available in the header and on the mouse wheel, affected notes show the falloff weight, and only indexed notes inside the brush window are updated during a drag. For one selected note, a background mapping query may add dashed Wwise velocity-zone transitions for the current instrument, pitch, articulation, and Marnian mode. Those lines are structural routing evidence, not measured in-game loudness or timbre proof. Each drag remains one undoable edit.
+- Piano roll: draft note creation/deletion/movement/resizing, batch properties, articulations, undo/redo, and isolated track preview. It opens at a screen-aware large working size and uses flat pitch lanes, solid note blocks, octave guides, a direct velocity rail, and an empty-score creation prompt without changing hit testing. Selection mode uses an empty click to place the edit cursor, an empty drag to marquee-select, and a double-click to create; `Ctrl`-drag clones the grabbed selection and paste targets the edit cursor. Paste preserves the copied group as one unit and advances it to the nearest quantized position where no pasted note overlaps an existing note of the same pitch, preventing invisible stacked duplicates. Draw mode sets duration and initial velocity in one gesture; Alt temporarily bypasses snap, arrow keys edit selections, and `Ctrl+D` duplicates them. Precision-touchpad two-finger scrolling pans time and pitch simultaneously from pixel deltas; fine-grained Windows angle deltas retain both axes, while ordinary wheel and Ctrl/Alt/Shift modifiers preserve their existing pitch-pan, zoom, row-height, and time-pan behavior. `editor_shortcuts.py` is the single registry for keyboard dispatch, the contextual HUD, and the complete F1 reference. Note-editing commands run only while the piano-roll canvas owns focus, so line edits keep their native editing keys; F1 remains window-wide. `EditorShortcutHud` switches between select/selection/draw context, dims and prompts when the canvas loses focus, and presents one shortcut/action pair per row on a quiet translucent, mouse-transparent surface above the grid. Clicking the piano ruler, creating, selecting, or repitching a note asynchronously auditions it with the current game instrument without doing sample I/O in the audio callback. Changing a selected note's articulation auditions one representative note with its updated `ntype`; the adjacent play control can force the same audition even when click-to-preview is disabled. The full articulation dropdown and compact shortcut chips share one explicit selection state, including techniques outside the visible shortcut set. Its ruler owns seeking, playhead display, and sample-preload progress; there is no separate editor timeline slider. Draw, note, articulation, view, quantize, and velocity controls share the fixed-height top switcher; normal desktop widths keep descriptive labels, while the minimum supported width uses translated short labels rather than mnemonic letters. Apply/discard/finish commands remain in the top command bar. The compact footer retains selection status, controls the shared reference-audio gain, and enables the embedded user-facing Music Reference mode. That mode reuses the same piano roll, adds a time-aligned waveform and transcription review controls, and keeps the shared velocity lane available without replacing the canvas. Its marquee selects both intersecting analysis candidates and intersecting editable draft notes, so candidate adoption and ordinary note adjustments remain available without changing modes. Disabling it releases heavy evidence and spectrogram tiles; the UI-side evidence identity is invalidated at the same time so re-enabling the unchanged analysis descriptor always reopens its background layers and reattaches the waveform. The collapsible velocity lane renders discrete stems instead of presenting note velocity as continuous automation. A faint trend line remains only as context; simultaneous notes use a min/max whisker and individual ticks. Point mode edits the clicked onset (or one already-selected chord note), while the explicit soft-brush mode applies the compact time-distance falloff to either the track or the current selection. Radius changes are available in the header and on the mouse wheel, affected notes show the falloff weight, and only indexed notes inside the brush window are updated during a drag. For one selected note, a background mapping query may add dashed Wwise velocity-zone transitions for the current instrument, pitch, articulation, and Marnian mode. Those lines are structural routing evidence, not measured in-game loudness or timbre proof. Each drag remains one undoable edit.
+- Note creation keeps a small editor-local creative-property template. A
+  single selected/touched note refreshes its velocity, duration, and
+  articulation; double-click and draw creation inherit those values while the
+  new gesture still owns pitch, start, and any dragged duration/velocity
+  override. Clearing selection keeps the template, but position and pitch are
+  never inherited.
 - Piano-roll navigation uses two independent wheel axes: `Ctrl`+wheel performs
   cursor-anchored time zoom across 8–1600 px/beat, while `Alt`+wheel changes
   pitch-row/note-block height across 10–72 px and retains the pitch beneath the
@@ -401,9 +455,12 @@ times are projected through persisted `times_ms.npy`. Initial inference decodes
 the float16 `frame`/`onset` values that will be published, so it cannot disagree
 with later cache-only decoding merely because of evidence quantization.
 Fragment postprocessing version
-`fragment-cleanup-v3-explicit-opt-in` is deterministic and evidence-gated:
+`fragment-cleanup-v4-display-continuity` is deterministic and evidence-gated:
 duration alone is only an annotation signal. `preserve` is the safe default and
-only sorts/removes exact duplicate events. Selecting the experimental
+only sorts/removes exact duplicate events. Its non-mutating balanced dry run
+may mark evidence-backed false-split lineage for display continuity. The piano
+roll paints a visible-range-indexed low-alpha bridge while retaining separate
+blocks, onset caps, hit targets, IDs, and draft actions. Selecting the experimental
 `balanced` profile directly executes same-pitch NMS and evidence-backed
 false-split merges; selecting experimental `clean` directly executes those
 actions plus reversible suppression of isolated, weak, severe fragments.
@@ -413,6 +470,29 @@ selected profile. A caller that needs non-mutating diagnostics uses
 postprocess report with lineage and audit flags and can be restored by
 re-decoding the same evidence. These actions affect transcription candidates
 only; `TrackState` changes still require Apply/OK.
+
+Pitch-line tiles use two-threshold hysteresis: a ridge must cross the normal
+profile threshold to start, but an established ridge may continue through a
+brief lower-confidence dip. Short profile-specific gaps may be bridged, while
+weak isolated peaks cannot start a line. Candidate continuity bridges extend
+the contour clip and colour ownership only across the already approved
+false-split interval; all image work remains in the bounded tile worker.
+The worker renders each continuous colour-owned run as a constrained cubic
+Bézier path with a dark halo and thin coloured core. Contour opacity is
+independent from Frame/Onset/spectrogram opacity and remains a lightweight
+reference-layer setting; no curve construction occurs in `paintEvent`.
+
+`reference_melody_guidance.py` provides opt-in, Qt-free weak supervision for
+the display projection. It excludes notes traceable to current-track
+candidate routes, matches remaining editable notes against anonymous groups,
+and deduplicates evidence by bounded time window and pitch. One unambiguous
+window can expose a weak, confidence-capped prediction; per-window and global
+influence caps plus a two-window focus gate prevent fragmented recognition from
+dominating. The result carries one highest-priority guided
+display assignment separately from acoustic grouping and generic-label
+confidence. The canvas consumes that same assignment while rebuilding both
+analyzed-note styling and pitch-line colour spans outside its paint path; it
+never changes the underlying analysis or editor model.
 
 Rhythm cleanup and alignment share one explicit, cache-only worker boundary.
 The Qt-free `rhythm_grid.py` still requires explicit project BPM/beat-origin
@@ -615,6 +695,26 @@ and path-free, contains no WAV/clip payloads, and is bounded to 16 MiB in-memory
 Feature extraction and audio decoding are forbidden in paint and real-time
 audio callback paths.
 
+`bdo_music_composer/transcription/reference_timbre.py` is the production,
+display-only consumer of those reference features. It keeps under-evidenced
+candidates neutral and applies deterministic complete-link clustering only to
+reliable voice prototypes. The focused `ReferenceTimbreAnalysisWorker` binds
+the result to the active evidence cache and candidate-ID set; the piano-roll
+paint path receives only ready group IDs and colours. While that worker is
+running, a confidence-capped structural prediction reuses the ready time/pitch
+voice groups so the UI does not block on acoustic profiling. The worker emits
+that prediction immediately after grouping and before audio profiling. Final
+acoustic groups override matching candidates while acoustic unknowns retain
+their provisional structural groups, preserving Melody Guidance voting. Hue identifies the
+anonymous group, saturation communicates group confidence, and span opacity
+communicates local acoustic evidence; the user opacity setting remains an
+independent master multiplier. The optional
+`muscriptor_backend.py` adapter is discovered rather than bundled. It parses a
+temporary standard-MIDI result and adds only generic family labels that agree
+with existing candidate pitch/onset/overlap evidence. It never replaces Basic
+Pitch candidates, creates a track, or performs BDO instrument matching. See
+[music-reference timbre grouping](REFERENCE_TIMBRE_GROUPING.md).
+
 `bdo_music_composer/transcription/bdo_transcription_assist.py` owns the second lightweight sidecar:
 `TranscriptionAssistReviewState`. It stores only the audio fingerprint, manual
 key decision, locked chord decisions, and manual voice/confirmed BDO instrument
@@ -705,6 +805,10 @@ export.
 
 The timeline reserves a compact 34 px reference row while no MP3/WAV is loaded
 and expands it to the standard lane height only for a loaded or loading source.
+The piano-roll horizontal range reserves four trailing beats with reference
+audio and, without reference audio, at least twelve trailing beats or one and a
+half viewports. This keeps blank-score composition available near the centre of
+the screen without changing note or export duration.
 Its left track header omits redundant pitch-range text; conversion validation is
 projected onto each affected lane. Red rails and `!` badges are reserved for hard
 export errors; amber rails and merge badges are non-blocking attention marks for
@@ -900,8 +1004,11 @@ account limit; the native composition UI receives `noteCount` dynamically.
   and atomically replaces `project.json` off-thread. `project.index.json`
   contains only the stable project UUID, display name, save time, and distinct
   BDO instrument IDs so the home page never has to parse multi-megabyte note
-  payloads. Final window close
-  drains the last writer.
+  payloads. Note transactions bypass the ordinary 700 ms metadata debounce but
+  still use the single latest-state coalescing writer; a drag writes once on
+  release, not once per mouse-move frame. Transient writer failures retry the
+  same immutable request up to three times, while a newer pending request takes
+  precedence. Final window close drains the last writer.
 - Personal/game files are never bundled.
 - `BDOMusicComposer.spec` is the sole Windows packaging boundary. It includes
   the Basic Pitch `nmp.onnx` model, ONNX Runtime CPU native libraries, required
@@ -1091,7 +1198,10 @@ artifact embedded in the executable.
 
 Application startup uses one `QMainWindow` at its final geometry. Before the
 brief reveal, `StartupReveal` captures the finished home surface and applies a
-dark readability veil to that same snapshot. The live central widget remains
+dark, subtly warm readability veil and faint score staff to that same snapshot.
+Its compact salon-style plaque uses a travelling gold score-line pulse instead
+of a generic radial spinner; completion resolves the pulse into one still
+diamond and hairline before the veil recedes. The live central widget remains
 visible underneath, so the exit animation only removes the veil and never
 crossfades unrelated character artwork or hands off between stale and live
 geometry. Completion stops the indeterminate spinner immediately, replaces it
@@ -1121,7 +1231,14 @@ lightweight tabs and separator-based rows instead of nested cards, matching the
 scope of a small desktop utility. Brown-gold accents and olive selection follow
 the game-inspired visual direction without changing those commands or the
 library interaction model; refresh, directory maintenance, rename, delete, and
-version management remain secondary actions. The project collection
+version management remain secondary actions. Tabs, search, rows, and the local-
+processing footer share one quiet charcoal library surface instead of floating
+as unrelated controls. That surface steps from 584 to 632 and 680 px at the
+supported desktop breakpoints, preserving the right-side artwork while avoiding
+a narrow-sidebar composition on wide windows. All library controls share a
+36 px baseline; the primary new-project action is slightly wider and warmer
+than the two secondary entry points, and selected rows use the application gold
+rail with a restrained warm wash. The project collection
 combines autosaved `project.json` files with the bounded recent-file list stored
 in local config.
 The brand row includes a compact custom-painted, one-line identity entry with a

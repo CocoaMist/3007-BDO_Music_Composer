@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+import time
 
 import numpy as np
 from PySide6.QtCore import QObject, QUrl, Signal
@@ -17,10 +18,59 @@ from PySide6.QtWidgets import QFileDialog, QWidget
 
 from bdo_music_composer.ui.i18n import tr, trf
 from bdo_music_composer.ui.ui_notifications import show_global_toast
+from .reference_clock_sync import reference_clock_decision
 from .reference_audio_format import (
     ReferenceAudioFormatError,
     validate_reference_audio_file,
 )
+
+
+def synchronize_reference_audio(
+    reference_audio: object,
+    master_project_ms: float,
+    *,
+    play: bool,
+    force: bool,
+    last_resync_at: float,
+) -> float:
+    """Apply the shared master-clock policy to a reference transport."""
+
+    now = time.monotonic()
+    offset_ms = float(
+        getattr(
+            reference_audio,
+            "project_offset_ms",
+            getattr(reference_audio, "offset_ms", 0.0),
+        )
+    )
+    converter = getattr(reference_audio, "project_to_audio", None)
+    audio_ms = (
+        float(converter(master_project_ms))
+        if callable(converter)
+        else float(master_project_ms) - offset_ms
+    )
+    project_position = getattr(reference_audio, "project_position_ms", None)
+    if project_position is None:
+        project_position = float(reference_audio.player.position()) + offset_ms
+    decision = reference_clock_decision(
+        master_project_ms=master_project_ms,
+        reference_project_ms=float(project_position),
+        reference_audio_ms=audio_ms,
+        reference_duration_ms=reference_audio.duration_ms,
+        reference_is_playing=reference_audio.is_playing,
+        want_playback=play,
+        force_seek=force,
+        now_seconds=now,
+        last_resync_seconds=last_resync_at,
+    )
+    if decision.seek:
+        reference_audio.set_position(master_project_ms)
+        last_resync_at = now
+    if decision.play:
+        reference_audio.play()
+    elif decision.pause:
+        reference_audio.pause()
+    return last_resync_at
 
 
 class ReferenceAudioController(QObject):
@@ -37,6 +87,7 @@ class ReferenceAudioController(QObject):
         self._audio_path: Path | None = None
         self._last_load_error = ""
         self._project_offset_ms = 0.0
+        self._content_duration_ms: float | None = None
         self.waveform: list[tuple[float, float, float]] = []
         self.waveform_starts: list[float] = []
         self.waveform_loading = False
@@ -67,6 +118,15 @@ class ReferenceAudioController(QObject):
 
     @property
     def duration_ms(self) -> float:
+        if self._content_duration_ms is not None:
+            return self._content_duration_ms
+        waveform_end = self.waveform[-1][1] if self.waveform else 0.0
+        return max(float(self.player.duration()), waveform_end)
+
+    @property
+    def backend_duration_ms(self) -> float:
+        """Raw multimedia duration before an analysed-content correction."""
+
         waveform_end = self.waveform[-1][1] if self.waveform else 0.0
         return max(float(self.player.duration()), waveform_end)
 
@@ -127,6 +187,7 @@ class ReferenceAudioController(QObject):
             self.decoder.setSource(QUrl())
             self.player.setSource(QUrl())
             self._audio_path = None
+            self._content_duration_ms = None
             self._pending_project_position_ms = None
             self.waveform = []
             self.waveform_starts = []
@@ -142,6 +203,7 @@ class ReferenceAudioController(QObject):
         self.stop()
         self.decoder.stop()
         self._audio_path = candidate.resolve()
+        self._content_duration_ms = None
         self._pending_project_position_ms = None
         source = QUrl.fromLocalFile(str(self._audio_path))
         self.player.setSource(source)
@@ -201,6 +263,46 @@ class ReferenceAudioController(QObject):
             self.offset_changed.emit(normalized)
         self.timeline_changed.emit()
         self.changed.emit()
+
+    def set_content_duration_ms(
+        self,
+        milliseconds: float | None,
+        *,
+        notify: bool = True,
+    ) -> None:
+        """Set the decoded-content duration shared by analysis and transport.
+
+        Compressed-media backends may expose encoder padding as playable
+        duration while the analysis decoder correctly removes it.  Once an
+        evidence descriptor is available, its sample-count duration becomes
+        the project boundary without changing QMediaPlayer's native seek API.
+        """
+
+        normalized: float | None
+        if milliseconds is None:
+            normalized = None
+        else:
+            value = float(milliseconds)
+            if not math.isfinite(value) or value <= 0.0:
+                return
+            normalized = value
+        if (
+            normalized == self._content_duration_ms
+            or (
+                normalized is not None
+                and self._content_duration_ms is not None
+                and math.isclose(
+                    normalized,
+                    self._content_duration_ms,
+                    abs_tol=0.001,
+                )
+            )
+        ):
+            return
+        self._content_duration_ms = normalized
+        if notify:
+            self.timeline_changed.emit()
+            self.changed.emit()
 
     def set_position(self, milliseconds: float) -> None:
         """Seek with a project-time position.

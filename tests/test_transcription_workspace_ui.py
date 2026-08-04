@@ -267,11 +267,6 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             assert not hasattr(window, "transcription_workspace")
             assert window.timeline.isVisible()
 
-            # Remember a visible velocity lane before entering transcription.
-            editor.velocity_toggle.setChecked(True)
-            app.processEvents()
-            assert editor.velocity_lane.isVisible()
-
             editor.transcription_mode_toggle.setChecked(True)
             app.processEvents()
             assert editor.canvas is canvas
@@ -279,12 +274,15 @@ class EmbeddedTranscriptionUiTests(unittest.TestCase):
             assert editor.transcription_panel.isVisible()
             assert editor.transcription_waveform.isVisible()
             assert editor.transcription_waveform.height() == 72
-            assert not editor.velocity_toggle.isEnabled()
-            assert not editor.velocity_lane.isVisible()
+            assert editor.velocity_toggle.isEnabled()
+            assert not editor.velocity_toggle.isChecked()
+            editor.velocity_toggle.click()
+            app.processEvents()
+            assert editor.velocity_toggle.isChecked()
+            assert editor.velocity_lane.isVisible()
             assert window.timeline.isVisible()
 
-            # Leaving the mode restores the previous editing layout without
-            # replacing the authoritative canvas.
+            # Leaving the mode preserves the same editing layout and canvas.
             editor.transcription_mode_toggle.setChecked(False)
             app.processEvents()
             assert editor.canvas is canvas

@@ -24,6 +24,27 @@ class DenseProjectUiTests(unittest.TestCase):
             )
 
             app = QApplication([])
+            editable_timeline = TimelineCanvas()
+            editable_track = TrackState(
+                777,
+                [Note(60, 90, 1_000.0, 250.0, 0)],
+                0,
+                False,
+                "editable",
+                0x0B,
+            )
+            editable_timeline.set_tracks([editable_track])
+            expected_tail = max(
+                editable_timeline.EDIT_TAIL_MIN_MS,
+                60_000.0
+                / editable_timeline.bpm
+                * editable_timeline.time_sig
+                * editable_timeline.EDIT_TAIL_MEASURES,
+            )
+            assert editable_timeline._timeline_end_ms() >= 1_250.0 + expected_tail
+            editable_timeline.set_zoom_percent(200)
+            editable_timeline.set_pan_percent(1000)
+            assert editable_timeline.view_start_ms > 0.0
             tracks = []
             for track_id in range(120):
                 notes = [
@@ -328,6 +349,55 @@ class DenseProjectUiTests(unittest.TestCase):
             assert smooth_touchpad_wheel.accepted
             assert editor.canvas.ROW_H > row_height_before_touchpad
             assert "px" in editor.status.text()
+
+            # An unmodified precision-touchpad gesture pans both axes from
+            # one event instead of collapsing the horizontal component into
+            # the legacy vertical wheel behavior.
+            pitch_min, pitch_max = editor.pitch_top_bounds()
+            editor.canvas.pitch_top = max(
+                pitch_min + 2,
+                min(pitch_max - 2, 92),
+            )
+            editor.canvas.scroll_ms = editor.canvas.beat_ms * 8.0
+            editor.canvas._touchpad_pitch_remainder_rows = 0.0
+            editor.update_scrollbars()
+            touchpad_scroll_before = editor.canvas.scroll_ms
+            touchpad_pitch_before = editor.canvas.pitch_top
+            two_axis_touchpad = WheelEvent(
+                anchor_x,
+                Qt.NoModifier,
+                anchor_y,
+                angle_delta=QPoint(0, 0),
+                pixel_delta=QPoint(
+                    -40,
+                    int(editor.canvas.ROW_H * 2.0) + 1,
+                ),
+            )
+            editor.canvas.wheelEvent(two_axis_touchpad)
+            assert two_axis_touchpad.accepted
+            assert editor.canvas.scroll_ms > touchpad_scroll_before
+            assert editor.canvas.pitch_top == touchpad_pitch_before + 2
+            assert editor.time_scroll.value() == round(
+                editor.canvas.scroll_ms
+            )
+
+            # Windows precision touchpads can provide small angle deltas with
+            # no pixel delta. Two quarter-notch events must accumulate rather
+            # than jumping three rows per event or dropping the x axis.
+            fine_scroll_before = editor.canvas.scroll_ms
+            fine_pitch_before = editor.canvas.pitch_top
+            for _index in range(2):
+                fine_angle_touchpad = WheelEvent(
+                    anchor_x,
+                    Qt.NoModifier,
+                    anchor_y,
+                    angle_delta=QPoint(-30, 30),
+                    pixel_delta=QPoint(0, 0),
+                )
+                editor.canvas.wheelEvent(fine_angle_touchpad)
+                assert fine_angle_touchpad.accepted
+            assert editor.canvas.scroll_ms > fine_scroll_before
+            assert editor.canvas.pitch_top == fine_pitch_before + 1
 
             for _index in range(80):
                 editor.canvas.wheelEvent(

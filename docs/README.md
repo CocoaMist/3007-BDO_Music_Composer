@@ -27,15 +27,22 @@ Tests and code override historical records.
   [`MIDI_TECHNIQUE_MODEL.md`](MIDI_TECHNIQUE_MODEL.md), and
   [`MUSIC_THEORY_KNOWLEDGE_BASE.md`](MUSIC_THEORY_KNOWLEDGE_BASE.md).
 - Transcription: [`TRANSCRIPTION_VOICE_GUIDES.md`](TRANSCRIPTION_VOICE_GUIDES.md),
+  [`TRANSCRIPTION_FRAGMENT_AND_TIMBRE_PLAN.md`](TRANSCRIPTION_FRAGMENT_AND_TIMBRE_PLAN.md),
+  [`REFERENCE_TIMBRE_GROUPING.md`](REFERENCE_TIMBRE_GROUPING.md),
   [`MARNIAN_MUSE_OPTIONAL_BOUNDARY.md`](MARNIAN_MUSE_OPTIONAL_BOUNDARY.md), and
   [`BASIC_PITCH_LICENSE_REVIEW.md`](BASIC_PITCH_LICENSE_REVIEW.md).
 - Audio and samples: [`AUDIO_SOURCE_STRATEGY.md`](AUDIO_SOURCE_STRATEGY.md) and
   [`BDO_SAMPLE_MAPPING_STATUS.md`](BDO_SAMPLE_MAPPING_STATUS.md).
 - Product operations: [`LOCALIZATION.md`](LOCALIZATION.md) and
   [`WINDOWS_PACKAGING.md`](WINDOWS_PACKAGING.md).
+- Rehearsal tools: [`MULTIPLAYER_SYNCHRONIZER.md`](MULTIPLAYER_SYNCHRONIZER.md)
+  documents the Global BPM authority, automatic reference-tempo following, and
+  the reserved network-room adapter boundary.
 
 ## Evidence and history
 
+- [`releases/RELEASE_NOTES_V1.1.0.md`](releases/RELEASE_NOTES_V1.1.0.md)
+  records the current v1.1.0 release scope and verification evidence.
 - [`benchmarks/`](benchmarks/) contains reproducible benchmark protocols and
   result snapshots.
 - [`reference/game-ui/README.md`](reference/game-ui/README.md) indexes

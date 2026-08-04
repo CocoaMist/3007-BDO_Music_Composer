@@ -19,7 +19,7 @@ from bdo_music_composer.editor.pitch_transform import PitchTransformPlan
 
 
 CURRENT_PROJECT_SCHEMA = 11
-REFERENCE_LAYER_SETTINGS_VERSION = 7
+REFERENCE_LAYER_SETTINGS_VERSION = 10
 
 
 DEFAULT_REFERENCE_LAYER_SETTINGS: dict[str, Any] = {
@@ -32,10 +32,24 @@ DEFAULT_REFERENCE_LAYER_SETTINGS: dict[str, Any] = {
     # independent from both editable notes and the other-track reference.
     "candidate_visible": True,
     "candidate_opacity_percent": 52,
+    # Anonymous timbre colours are a display-only analysis sidecar.  Generic
+    # instrument labels require a separately installed external backend and
+    # therefore remain opt-in.
+    "timbre_grouping_enabled": True,
+    "external_instrument_labels_enabled": False,
+    # Reference-audio analysis supplies the default project tempo only when
+    # its onset evidence is strong; a direct BPM edit turns this off.
+    "follow_reference_bpm": True,
     "background_opacity_percent": 45,
+    # Pitch contours are a foreground analysis guide, so their strength is
+    # independent from the frame/onset evidence background.
+    "contour_opacity_percent": 82,
     # Display-only pitch-guide cleanup.  This never changes recognition
     # candidates, editable notes or export data.
     "contour_denoise": "standard",
+    # Explicit opt-in weak supervision from editable melody notes.  It only
+    # changes the display emphasis of matching timbre groups.
+    "melody_guidance_enabled": False,
     # The derived melody connectors are optional context and can become noisy
     # on dense full-song recognition.  Keep the raw pitch guide discoverable
     # instead of covering new projects with inferred jumps.
@@ -53,6 +67,7 @@ LEGACY_REFERENCE_LAYER_SETTINGS: dict[str, Any] = {
     **DEFAULT_REFERENCE_LAYER_SETTINGS,
     "ghost_opacity_percent": 100,
     "background_opacity_percent": 100,
+    "contour_opacity_percent": 100,
 }
 
 
@@ -77,6 +92,10 @@ def normalize_reference_layer_settings(
     for key in (
         "ghost_visible",
         "candidate_visible",
+        "timbre_grouping_enabled",
+        "external_instrument_labels_enabled",
+        "follow_reference_bpm",
+        "melody_guidance_enabled",
         "melody_lines_visible",
         "frame_visible",
         "onset_visible",
@@ -95,6 +114,7 @@ def normalize_reference_layer_settings(
         "ghost_opacity_percent",
         "candidate_opacity_percent",
         "background_opacity_percent",
+        "contour_opacity_percent",
     ):
         try:
             candidate = float(source.get(key, defaults[key]))
@@ -102,6 +122,13 @@ def normalize_reference_layer_settings(
             continue
         if math.isfinite(candidate):
             result[key] = max(0, min(100, round(candidate)))
+    # Version 8 coupled contour strength to the shared evidence opacity.  Keep
+    # that effective strength for existing projects while new projects receive
+    # the clearer independent default above.
+    if source and source_version < 9 and "contour_opacity_percent" not in source:
+        result["contour_opacity_percent"] = int(
+            result["background_opacity_percent"]
+        )
     # Earlier versions shipped 70%, 40%, then 24% as their ghost defaults, plus
     # a 60% evidence-background default.  Migrate only those exact defaults;
     # deliberate custom values remain untouched.
@@ -424,6 +451,7 @@ __all__ = [
     "CURRENT_PROJECT_SCHEMA",
     "DEFAULT_REFERENCE_LAYER_SETTINGS",
     "LEGACY_REFERENCE_LAYER_SETTINGS",
+    "REFERENCE_LAYER_SETTINGS_VERSION",
     "migrate_project",
     "normalize_reference_layer_settings",
     "project_relative_file_reference",

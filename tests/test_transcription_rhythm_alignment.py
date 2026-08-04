@@ -95,6 +95,74 @@ class RhythmAlignmentTests(unittest.TestCase):
         self.assertEqual(projected.duration_ms, candidate.duration_ms)
         self.assertEqual(sidecar.aligned_count, 0)
 
+    def test_project_bpm_mismatch_never_time_stretches_source_audio(self) -> None:
+        times = np.arange(0.0, 30_000.0, 10.0, dtype=np.float64)
+        onset = np.zeros((len(times), 88), dtype=np.float32)
+        for value in range(0, 30_000, 600):
+            onset[value // 10, 60 - 21] = 1.0
+        candidates = (
+            _Candidate("near", 60, 6_000.0, 300.0, 0.9),
+            _Candidate("late", 64, 24_000.0, 300.0, 0.9),
+        )
+        config = RhythmAlignmentConfig(
+            profile="auto",
+            maximum_local_shift_ms=45.0,
+        )
+        sidecar = analyse_rhythm_alignment(
+            evidence_cache_key="d" * 24,
+            candidates=candidates,
+            settings=ProjectRhythmSettings(enabled=True, bpm=120.0),
+            frame_times_ms=times,
+            onset_evidence=onset,
+            config=config,
+        )
+
+        self.assertAlmostEqual(sidecar.estimate.detected_bpm, 100.0)
+        self.assertFalse(sidecar.estimate.used_project_fallback)
+        for candidate in candidates:
+            projected = sidecar.projection_for(candidate.candidate_id)
+            assert projected is not None
+            self.assertLessEqual(
+                abs(projected.start_ms - candidate.start_ms),
+                config.maximum_local_shift_ms,
+            )
+            self.assertLessEqual(
+                abs(
+                    projected.start_ms
+                    + projected.duration_ms
+                    - candidate.start_ms
+                    - candidate.duration_ms
+                ),
+                config.maximum_local_shift_ms,
+            )
+        self.assertLessEqual(
+            sidecar.max_abs_shift_ms,
+            config.maximum_local_shift_ms,
+        )
+
+    def test_raw_profile_preserves_colliding_notes_exactly(self) -> None:
+        times, onset = _regular_evidence()
+        candidates = (
+            _Candidate("a", 60, 500.0, 80.0, 0.9),
+            _Candidate("b", 60, 500.0, 80.0, 0.8),
+        )
+        sidecar = analyse_rhythm_alignment(
+            evidence_cache_key="e" * 24,
+            candidates=candidates,
+            settings=ProjectRhythmSettings(enabled=True, bpm=120.0),
+            frame_times_ms=times,
+            onset_evidence=onset,
+            config=RhythmAlignmentConfig(profile="raw"),
+        )
+        self.assertEqual(
+            tuple(
+                (item.start_ms, item.duration_ms)
+                for item in sidecar.projections
+            ),
+            ((500.0, 80.0), (500.0, 80.0)),
+        )
+        self.assertEqual(sidecar.aligned_count, 0)
+
     def test_same_pitch_collisions_are_shifted_to_the_next_1_64_slot(self) -> None:
         times, onset = _regular_evidence()
         candidates = (
@@ -113,7 +181,15 @@ class RhythmAlignmentTests(unittest.TestCase):
         second = sidecar.projection_for("b")
         assert first is not None and second is not None
         self.assertAlmostEqual(second.start_ms - first.start_ms, 31.25)
-        self.assertLessEqual(first.duration_ms, 31.25)
+        self.assertLessEqual(
+            abs(
+                first.start_ms
+                + first.duration_ms
+                - candidates[0].start_ms
+                - candidates[0].duration_ms
+            ),
+            45.0,
+        )
 
 
 class DenseShortRecoveryTests(unittest.TestCase):
