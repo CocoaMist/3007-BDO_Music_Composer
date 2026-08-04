@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -130,8 +131,39 @@ class BdoExportRoundTripTests(unittest.TestCase):
                 source_document=source_document,
             )
             prepared = prepare_export(request)
+            rebuilt = prepare_export(
+                replace(request, character_name="Complete RT Edited")
+            )
 
         self.assertEqual(prepared.data, source_data)
+        rebuilt_document = decode_score(rebuilt.data)
+        self.assertNotEqual(rebuilt.data, source_data)
+        self.assertEqual(
+            rebuilt_document.header.character_name_1,
+            "Complete RT Edited",
+        )
+        self.assertEqual(
+            [
+                (
+                    track.instrument_id,
+                    track.volume,
+                    track.settings.values,
+                    tuple(note.values() for note in track.notes),
+                )
+                for group in rebuilt_document.groups
+                for track in group.tracks
+            ],
+            [
+                (
+                    track.instrument_id,
+                    track.volume,
+                    track.settings.values,
+                    tuple(note.values() for note in track.notes),
+                )
+                for group in source_document.groups
+                for track in group.tracks
+            ],
+        )
 
     def test_free_point_velocity_envelope_survives_bdo_roundtrip(self) -> None:
         source = [
@@ -180,6 +212,32 @@ class BdoExportRoundTripTests(unittest.TestCase):
             sum(len(track.notes) for track in document.groups[0].tracks),
             2,
         )
+
+    def test_empty_game_instrument_keeps_identity_volume_and_settings(self) -> None:
+        settings = (11, 21, 31, 41, 51, 61, 71, 81)
+
+        data, summary = channel_groups_to_bdo(
+            120,
+            4,
+            [([], 0, False)],
+            instrument_map={0: 0x28},
+            preserve_note_types=True,
+            track_volumes={0: 83},
+            track_settings_map={0: settings},
+        )
+        document = decode_score(data)
+
+        self.assertEqual(summary["instruments"], 1)
+        self.assertEqual(summary["total_notes"], 0)
+        self.assertEqual(len(document.groups), 1)
+        self.assertEqual(len(document.groups[0].tracks), 2)
+        self.assertTrue(all(not track.notes for track in document.groups[0].tracks))
+        self.assertTrue(all(
+            track.instrument_id == 0x28
+            and track.volume == 83
+            and track.settings.values == settings
+            for track in document.groups[0].tracks
+        ))
 
     def test_soft_10k_review_threshold_never_truncates_editor_notes(self) -> None:
         notes = [

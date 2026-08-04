@@ -8,6 +8,7 @@ they are baked into visible note velocities at compatibility boundaries.
 
 from __future__ import annotations
 
+from collections import defaultdict, deque
 from dataclasses import dataclass
 import math
 from typing import Callable, Iterable, Sequence
@@ -193,6 +194,153 @@ def normalize_legacy_track_velocity(track: object) -> bool:
     )
     setattr(track, "volume_scale", 1.0)
     return True
+
+
+def _game_note_key(note: object) -> tuple[object, ...]:
+    return (
+        int(getattr(note, "pitch")),
+        int(getattr(note, "vel")),
+        float(getattr(note, "start")),
+        float(getattr(note, "dur")),
+        int(getattr(note, "ntype")),
+    )
+
+
+def _bound_previous_velocity_b(
+    notes: Sequence[object],
+    records: Sequence[Sequence[object]],
+) -> tuple[int, ...]:
+    record_lookup: dict[tuple[object, ...], deque[int]] = defaultdict(deque)
+    for record in records:
+        if len(record) < 6:
+            continue
+        key = (
+            int(record[0]),
+            int(record[1]),
+            float(record[2]),
+            float(record[3]),
+            int(record[4]),
+        )
+        velocity_b = int(record[5])
+        if 0 <= velocity_b <= GAME_VELOCITY_MAX:
+            record_lookup[key].append(velocity_b)
+    values: list[int] = []
+    for note in notes:
+        candidates = record_lookup.get(_game_note_key(note))
+        values.append(
+            candidates.popleft()
+            if candidates
+            else int(getattr(note, "vel"))
+        )
+    return tuple(values)
+
+
+def _pair_velocity_matches(
+    old_notes: Sequence[object],
+    new_notes: Sequence[object],
+    old_velocity_b: Sequence[int],
+    unmatched_old: set[int],
+    unmatched_new: set[int],
+    assigned: dict[int, int],
+    key: Callable[[object], tuple[object, ...]],
+    *,
+    velocity_edited: bool = False,
+    unique_only: bool = False,
+) -> None:
+    old_groups: dict[tuple[object, ...], list[int]] = defaultdict(list)
+    new_groups: dict[tuple[object, ...], list[int]] = defaultdict(list)
+    for index in sorted(unmatched_old):
+        old_groups[key(old_notes[index])].append(index)
+    for index in sorted(unmatched_new):
+        new_groups[key(new_notes[index])].append(index)
+    for value in old_groups.keys() & new_groups.keys():
+        old_indices, new_indices = old_groups[value], new_groups[value]
+        if unique_only and (len(old_indices) != 1 or len(new_indices) != 1):
+            continue
+        for old_index, new_index in zip(old_indices, new_indices):
+            assigned[new_index] = (
+                int(getattr(new_notes[new_index], "vel"))
+                if velocity_edited
+                else old_velocity_b[old_index]
+            )
+            unmatched_old.discard(old_index)
+            unmatched_new.discard(new_index)
+
+
+def reconcile_game_velocity_records(
+    previous_notes: Iterable[object],
+    previous_records: Iterable[Sequence[object]],
+    next_notes: Iterable[object],
+) -> tuple[tuple[object, ...], ...]:
+    """Keep game off-velocity attached across non-velocity note edits."""
+
+    records = tuple(tuple(record) for record in previous_records)
+    if not records:
+        return ()
+    old_notes, new_notes = tuple(previous_notes), tuple(next_notes)
+    old_velocity_b = _bound_previous_velocity_b(old_notes, records)
+    unmatched_old, unmatched_new = set(range(len(old_notes))), set(range(len(new_notes)))
+    assigned: dict[int, int] = {}
+
+    def pair(key, *, velocity_edited=False, unique_only=False) -> None:
+        _pair_velocity_matches(
+            old_notes, new_notes, old_velocity_b,
+            unmatched_old, unmatched_new, assigned, key,
+            velocity_edited=velocity_edited, unique_only=unique_only,
+        )
+
+    pair(_game_note_key)
+    # Editing visible Velocity intentionally makes both game velocity bytes
+    # follow the new value.
+    pair(
+        lambda note: (note.pitch, note.start, note.dur, note.ntype),
+        velocity_edited=True,
+    )
+    # Preserve B for common one-field block edits.
+    for key in (
+        lambda note: (note.pitch, note.vel, note.start, note.dur),
+        lambda note: (note.pitch, note.vel, note.start, note.ntype),
+        lambda note: (note.pitch, note.vel, note.dur, note.ntype),
+        lambda note: (note.vel, note.start, note.dur, note.ntype),
+    ):
+        pair(key)
+    # A drag may change pitch and time together. Carry B only when the
+    # remaining identity is unique, avoiding cross-note misbinding.
+    for key in (
+        lambda note: (note.vel, note.dur, note.ntype),
+        lambda note: (note.pitch, note.vel, note.ntype),
+        lambda note: (note.vel, note.start, note.ntype),
+    ):
+        pair(key, unique_only=True)
+    # A single block can be edited through several inspector fields before one
+    # Apply. A unique unchanged Velocity is the final conservative lineage
+    # signal for that case.
+    pair(lambda note: (note.vel,), unique_only=True)
+
+    return tuple(
+        (
+            int(getattr(note, "pitch")),
+            int(getattr(note, "vel")),
+            float(getattr(note, "start")),
+            float(getattr(note, "dur")),
+            int(getattr(note, "ntype")),
+            int(assigned.get(index, getattr(note, "vel"))),
+        )
+        for index, note in enumerate(new_notes)
+    )
+
+
+def reconcile_track_game_velocity_records(
+    track: object,
+    next_notes: Iterable[object],
+) -> None:
+    """Update one track's dual-velocity sidecar before replacing its notes."""
+
+    setattr(track, "bdo_source_note_records", reconcile_game_velocity_records(
+        getattr(track, "notes", ()),
+        getattr(track, "bdo_source_note_records", ()),
+        next_notes,
+    ))
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,6 +531,8 @@ __all__ = [
     "normalize_legacy_track_velocity",
     "preview_tracks",
     "propagate_game_instrument_mix",
+    "reconcile_game_velocity_records",
+    "reconcile_track_game_velocity_records",
     "scaled_game_velocity",
     "serialized_game_instrument_id",
 ]

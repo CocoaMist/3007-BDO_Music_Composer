@@ -297,6 +297,11 @@ def channel_groups_to_bdo(
             )
         instrument_id = bounded_int(instrument_id, 0, 0xFFFF, "instrument id")
         drum_track = bool(is_percussion or instrument_id == drum_id)
+        # A logical editor lane still selects a game instrument even when it
+        # contains no notes.  Materialize the group before note projection so
+        # canonical rebuilds retain that instrument's Volume/Aux state instead
+        # of falling back to DEFAULT_INSTRUMENT after an unrelated header edit.
+        notes_by_instrument.setdefault(instrument_id, [])
         velocity_b_records = (
             velocity_b_maps.get(channel_index)
             if velocity_b_maps else None
