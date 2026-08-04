@@ -6,6 +6,15 @@
 
 BDO Music Composer は、非公式の PySide6 MIDI エディター、ローカル音声採譜ワークベンチ、決定論的オプティマイザー、ゲームサンプル試聴、Black Desert v9 楽譜エクスポーターです。メンテナーと友人向けの小規模な楽譜ラボであり、汎用 DAW ではありません。Pearl Abyss とは関係ありません。
 
+<!-- section:screenshots -->
+## インターフェースプレビュー
+
+![ローカルプロジェクトとゲーム楽譜のホーム](docs/images/readme-home.png)
+
+| マルチトラックタイムライン | ピアノロール音符エディター |
+|---|---|
+| ![マルチトラック編曲タイムライン](docs/images/readme-timeline.png) | ![ベロシティレーンとショートカット HUD を備えたピアノロール](docs/images/readme-piano-roll.png) |
+
 <!-- section:status -->
 ## 状態と免責事項
 

@@ -6,6 +6,15 @@
 
 BDO Music Composer 是非官方 PySide6 MIDI 编辑器、本地音频扒谱工作台、确定性优化器、游戏采样试听器和 Black Desert v9 曲谱导出工具。它面向维护者和朋友的小型曲谱实验室，不是通用 DAW，也不隶属于 Pearl Abyss。
 
+<!-- section:screenshots -->
+## 界面预览
+
+![本地项目与游戏曲谱主页](docs/images/readme-home.png)
+
+| 多轨编曲时间线 | 钢琴卷帘音符编辑器 |
+|---|---|
+| ![多轨编曲时间线](docs/images/readme-timeline.png) | ![包含力度通道和快捷键 HUD 的钢琴卷帘](docs/images/readme-piano-roll.png) |
+
 <!-- section:status -->
 ## 状态与免责声明
 

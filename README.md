@@ -2,6 +2,14 @@
 
 Unofficial PySide6 MIDI editor, local transcription workbench, optimizer, sample preview, and Black Desert v9 music-score exporter.
 
+## Interface preview
+
+![Project home with local projects and game scores](docs/images/readme-home.png)
+
+| Multitrack timeline | Piano-roll note editor |
+|---|---|
+| ![Multitrack arrangement timeline](docs/images/readme-timeline.png) | ![Piano-roll editor with velocity lane and shortcut HUD](docs/images/readme-piano-roll.png) |
+
 ## Choose your language / 选择语言
 
 Each link opens a complete, standalone project guide with features, setup, workflow, architecture, testing, packaging, privacy, limitations, and licensing.
