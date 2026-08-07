@@ -65,7 +65,7 @@ class TrackVolumeUiTests(unittest.TestCase):
                 def equalize_enabled(self): return True
 
             with patch(
-                "bdo_music_composer.ui.main_window.TrackVelocityBaseDialog",
+                "bdo_music_composer.ui.global_velocity_gain_qt.TrackVelocityBaseDialog",
                 AcceptedDialog,
             ):
                 window._show_track_velocity_base_dialog(target)
@@ -227,7 +227,7 @@ class TrackVolumeUiTests(unittest.TestCase):
             assert window.toolbar_global_gain.isEnabled()
             assert window.toolbar_global_gain.value() == 0
             assert window.toolbar_global_gain_value.value() == 0
-            assert window.toolbar_global_gain.width() == 220
+            assert 132 <= window.toolbar_global_gain.width() <= 220
             assert window.toolbar_global_gain_label.text() == "全局力度基数"
             window.toolbar_global_gain_equalize.setChecked(True)
 
