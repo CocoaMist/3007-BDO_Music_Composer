@@ -343,6 +343,46 @@ def reconcile_track_game_velocity_records(
     ))
 
 
+def bound_game_velocity_b_values(
+    notes: Iterable[object],
+    records: Iterable[Sequence[object]],
+) -> tuple[int, ...]:
+    """Return each note's attached BDO secondary velocity in note order."""
+
+    note_values = tuple(notes)
+    record_values = tuple(tuple(record) for record in records)
+    if not record_values:
+        return tuple(int(getattr(note, "vel")) for note in note_values)
+    return _bound_previous_velocity_b(note_values, record_values)
+
+
+def transform_game_velocity_records(
+    previous_notes: Iterable[object],
+    previous_records: Iterable[Sequence[object]],
+    next_notes: Iterable[object],
+    transform: Callable[[int], int],
+) -> tuple[tuple[object, ...], ...]:
+    """Transform imported dual velocities alongside a score-wide A edit."""
+
+    old_notes = tuple(previous_notes)
+    records = tuple(tuple(record) for record in previous_records)
+    new_notes = tuple(next_notes)
+    if not records:
+        return ()
+    velocity_b = _bound_previous_velocity_b(old_notes, records)
+    return tuple(
+        (
+            int(getattr(note, "pitch")),
+            int(getattr(note, "vel")),
+            float(getattr(note, "start")),
+            float(getattr(note, "dur")),
+            int(getattr(note, "ntype")),
+            int(transform(velocity_b[index])),
+        )
+        for index, note in enumerate(new_notes)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class GameInstrumentMix:
     """The mixer fields owned by one serialized BDO instrument."""

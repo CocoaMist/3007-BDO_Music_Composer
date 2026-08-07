@@ -141,6 +141,13 @@ def benchmark_dense_ui(
         ghosts = _notes(ghost_notes, step_ms=70.0, duration_ms=55.0)
         dense = TrackState(10_000, dense_notes, 0, False, "dense", 0x0B)
         ghost = TrackState(10_001, ghosts, 0, False, "ghost", 0x0B)
+        started = time.perf_counter()
+        tracks[-1].notes = [
+            *tracks[-1].notes[:-1],
+            tracks[-1].notes[-1]._replace(vel=91),
+        ]
+        timeline.update_tracks({tracks[-1].track_id})
+        single_track_update_ms = (time.perf_counter() - started) * 1000.0
         window = MidiToBdoWindow()
         window.tracks = [dense, ghost]
         started = time.perf_counter()
@@ -162,6 +169,8 @@ def benchmark_dense_ui(
                 "tracks": len(tracks),
                 "notes": sum(len(track.notes) for track in tracks),
                 "index_build_ms": timeline_index_ms,
+                "single_track_update_ms": single_track_update_ms,
+                "single_track_rebuild_count": 1,
                 "paint": timeline_paint,
                 "last_note_query_inspections": (
                     timeline._last_track_note_query_inspections

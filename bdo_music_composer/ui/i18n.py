@@ -8204,6 +8204,57 @@ for _source, (
 
 del _source, _english, _japanese, _korean
 
+_TRACK_GLOBAL_GAIN_TRANSLATIONS = {
+    "轨道力度基数…": ("Track Velocity Base…", "トラックベロシティ基数…", "트랙 벨로시티 기준값…"),
+    "轨道力度基数": ("Track Velocity Base", "トラックベロシティ基数", "트랙 벨로시티 기준값"),
+    "力度基数": ("Velocity Base", "ベロシティ基数", "벨로시티 기준값"),
+    "均化到 0–127": ("Normalize to 0–127", "0～127に均一化", "0–127로 균등화"),
+    "只调整当前轨道；基数从该轨道现有的原始主、副力度重新计算，不影响其他轨道或轨道音量。": (
+        "Adjust only this track. The base is calculated from its current original primary and secondary velocities without affecting other tracks or mixer volume.",
+        "現在のトラックだけを調整します。このトラックの現在の元の主・副ベロシティから基数を計算し、他のトラックやミキサー音量には影響しません。",
+        "현재 트랙만 조절합니다. 이 트랙의 현재 원본 주·보조 벨로시티에서 기준값을 계산하며 다른 트랙이나 믹서 볼륨에는 영향을 주지 않습니다.",
+    ),
+    "全局力度基数": ("Global Velocity Base", "グローバルベロシティ基数", "전역 벨로시티 기준값"),
+    "均化": ("Normalize", "均一化", "균등화"),
+    "自由设置整首曲谱的力度基数；勾选均化后，先加基数，再把整组力度统一按比例映射到 0–127。": (
+        "Set a free score-wide velocity base. With Normalize enabled, add the base first and then proportionally map the group into 0–127.",
+        "曲全体のベロシティ基数を自由に設定します。均一化を有効にすると、基数を加算してからグループ全体を0～127へ比例マッピングします。",
+        "전체 악보의 벨로시티 기준값을 자유롭게 설정합니다. 균등화를 켜면 기준값을 먼저 더한 뒤 전체 그룹을 0–127로 비례 매핑합니다.",
+    ),
+    "按整首曲谱的原始力度关系统一缩放，使调整后的力度落在 0–127。": (
+        "Scale the whole score uniformly from its original velocity relationships so adjusted values fit within 0–127.",
+        "曲全体の元の強弱関係を保って一括スケーリングし、調整後の値を0～127に収めます。",
+        "전체 악보의 원래 강약 관계를 기준으로 함께 스케일링하여 조정값을 0–127에 맞춥니다.",
+    ),
+    "dB 全局增益": ("Global Gain (dB)", "dBグローバルゲイン", "dB 글로벌 게인"),
+    "将同一个增益数值直接加到整首曲谱的每个音符力度；保持音符之间的力度差，并反映到试听和导出。": (
+        "Add the same gain value directly to every note velocity in the score, preserving the differences between notes in preview and export.",
+        "同じゲイン値を曲全体の各ノートベロシティに直接加算し、ノート間の強弱差を保ったまま試聴と書き出しに反映します。",
+        "같은 게인 값을 전체 악보의 각 음표 벨로시티에 직접 더해 음표 사이의 강약 차이를 유지한 채 미리 듣기와 내보내기에 반영합니다.",
+    ),
+    "以力度中点为轴调整整首曲谱的动态范围：数值增大时低力度上抬、高力度下降；保留强弱轮廓并反映到试听和导出。": (
+        "Adjust the score-wide dynamic range around its velocity midpoint: higher values raise quiet notes and lower loud notes while preserving the dynamic contour in preview and export.",
+        "ベロシティの中点を軸に曲全体のダイナミックレンジを調整します。値を上げると弱い音を持ち上げ、強い音を下げ、強弱の輪郭を試聴と書き出しに反映します。",
+        "벨로시티 중간값을 축으로 전체 악보의 다이내믹 레인지를 조절합니다. 값을 높이면 약한 음은 올리고 강한 음은 낮추며 강약 윤곽을 미리 듣기와 내보내기에 반영합니다.",
+    ),
+    "以 Base 百分比统一缩放曲谱中每个音符的力度；保持相对比例，并直接反映到试听和导出。": (
+        "Scale every note velocity in the score by one Base percentage, preserving relative dynamics and applying directly to preview and export.",
+        "楽譜内の全ノートのベロシティを同じBaseパーセントで拡大縮小し、相対的な強弱を保ったまま試聴と書き出しへ直接反映します。",
+        "악보의 모든 음표 벨로시티를 하나의 Base 백분율로 조절해 상대적인 셈여림을 유지하고 미리듣기와 내보내기에 직접 반영합니다.",
+    ),
+}
+
+for _source, (
+    _english,
+    _japanese,
+    _korean,
+) in _TRACK_GLOBAL_GAIN_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
 # These feature-local catalog additions are declared after ``Localizer`` to
 # keep the existing generated catalog blocks untouched. Refresh the derived
 # lookup tables so live language switching sees the new source keys too.

@@ -49,6 +49,8 @@ class DenseUiBenchmarkTests(unittest.TestCase):
         self.assertEqual(result["piano_roll"]["notes"], 256)
         self.assertEqual(result["piano_roll"]["ghost_notes"], 128)
         self.assertEqual(set(result["piano_roll"]["queries"]), {"128", "512"})
+        self.assertEqual(result["timeline"]["single_track_rebuild_count"], 1)
+        self.assertGreaterEqual(result["timeline"]["single_track_update_ms"], 0.0)
         self.assertGreaterEqual(result["timeline"]["paint"]["p95_ms"], 0.0)
         self.assertGreaterEqual(result["piano_roll"]["paint"]["p95_ms"], 0.0)
 

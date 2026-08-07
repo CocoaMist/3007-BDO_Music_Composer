@@ -42,6 +42,7 @@ root remains a future direction.
 ## Quick links
 
 - [Documentation index](docs/README.md)
+- [Developer SDK and reusable UI](docs/DEVELOPER_SDK.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [AI change-routing context](docs/AI_CONTEXT.md)
 - [Agent handoff guide](docs/AGENT_HANDOFF.md)

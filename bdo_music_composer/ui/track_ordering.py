@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QMenu
 
 from bdo_music_composer.editor.editor_models import TrackState
+from bdo_music_composer.editor.model_change import ModelChange
 from bdo_music_composer.ui.i18n import tr
 
 
@@ -47,9 +48,8 @@ class TrackOrderingMixin:
             self.tracks[destination_index],
             self.tracks[source_index],
         )
-        self.timeline.set_tracks(self.tracks)
+        self._apply_workspace_change(ModelChange.structure())
         self._select_track(track)
-        self._on_track_changed()
         self._mark_conversion_check_dirty()
         self._autosave_project("move track", immediate=True)
 

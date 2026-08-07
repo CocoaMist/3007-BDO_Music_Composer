@@ -513,6 +513,89 @@ class MainWindowStyleMixin:
                 min-height: 25px;
                 padding: 2px 9px;
             }
+            QFrame#ToolbarGlobalGainGroup {
+                background: #222326;
+                border: 1px solid #51452f;
+                border-radius: 6px;
+                min-height: 29px;
+                max-height: 29px;
+            }
+            QLabel#ToolbarGlobalGainTitle {
+                color: #e0bf76;
+                font-size: 10px;
+                font-weight: 800;
+                padding: 0 2px;
+            }
+            QCheckBox#ToolbarGlobalGainEqualize {
+                color: #d7c18b;
+                font-size: 10px;
+                font-weight: 700;
+                spacing: 4px;
+            }
+            QCheckBox#ToolbarGlobalGainEqualize::indicator {
+                width: 13px;
+                height: 13px;
+            }
+            QCheckBox#ToolbarGlobalGainEqualize::indicator:unchecked {
+                background: #171819;
+                border: 1px solid #66583b;
+                border-radius: 3px;
+            }
+            QCheckBox#ToolbarGlobalGainEqualize::indicator:checked {
+                background: #9ebd50;
+                border: 1px solid #c7e274;
+                border-radius: 3px;
+            }
+            QSpinBox#ToolbarGlobalGainValue {
+                background: #171819;
+                border: 1px solid #4b4130;
+                border-radius: 4px;
+                color: #f2d28d;
+                font-family: Consolas, monospace;
+                font-size: 10px;
+                font-weight: 900;
+                padding: 1px 4px;
+                selection-background-color: #9ebd50;
+                selection-color: #11130d;
+            }
+            QSlider#ToolbarGlobalGainSlider {
+                min-height: 24px;
+                max-height: 24px;
+            }
+            QSlider#ToolbarGlobalGainSlider::groove:horizontal {
+                height: 7px;
+                background: #151617;
+                border: 1px solid #49443a;
+                border-radius: 4px;
+            }
+            QSlider#ToolbarGlobalGainSlider::sub-page:horizontal {
+                background: #9ebd50;
+                border: 1px solid #b8d96a;
+                border-radius: 4px;
+            }
+            QSlider#ToolbarGlobalGainSlider::add-page:horizontal {
+                background: #303238;
+                border: 1px solid #49443a;
+                border-radius: 4px;
+            }
+            QSlider#ToolbarGlobalGainSlider::handle:horizontal {
+                width: 16px;
+                height: 16px;
+                margin: -6px 0;
+                background: #f4b33f;
+                border: 2px solid #ffe0a0;
+                border-radius: 8px;
+            }
+            QSlider#ToolbarGlobalGainSlider::handle:horizontal:hover {
+                background: #ffc45a;
+                border-color: #fff0c7;
+            }
+            QSlider#ToolbarGlobalGainSlider:disabled,
+            QSpinBox#ToolbarGlobalGainValue:disabled,
+            QCheckBox#ToolbarGlobalGainEqualize:disabled,
+            QLabel#ToolbarGlobalGainTitle:disabled {
+                color: #6f6c65;
+            }
             QFrame#GlobalBpmControl {
                 background: #222326;
                 border: 1px solid #51452f;

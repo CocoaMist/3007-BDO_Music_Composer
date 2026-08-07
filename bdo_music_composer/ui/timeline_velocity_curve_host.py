@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from bdo_music_composer.editor.editor_models import TrackState
+from bdo_music_composer.editor.model_change import ModelChange
 from bdo_music_composer.editor.game_score_model import (
     reconcile_track_game_velocity_records,
 )
@@ -32,10 +33,11 @@ class TimelineVelocityCurveHostMixin:
         self._push_project_snapshot()
         reconcile_track_game_velocity_records(track, next_notes)
         track.notes = next_notes
-        self.timeline.set_tracks(self.tracks)
         self._select_track(track)
         self._mark_conversion_check_dirty()
-        self._restart_preview_after_timeline_change()
+        self._restart_preview_after_timeline_change(
+            ModelChange.notes(track.track_id)
+        )
         self._autosave_project("velocity envelope", immediate=True)
         self._schedule_transcription_assist_refresh()
         self.show_toast(

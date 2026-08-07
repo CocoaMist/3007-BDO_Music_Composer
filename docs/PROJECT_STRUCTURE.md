@@ -36,6 +36,8 @@ than adding aggregate imports or recreating root compatibility shims.
   `bdo_export`.
 - `project/` — project schema, lifecycle, persistence, and migrations.
 - `research/` — privacy-safe local experiment metadata only.
+- `sdk/` — stable Qt-free integration API plus lazy optional UI helpers. Its
+  package initializer stays inert; consumers import `core_api` or `ui_api`.
 - `transcription/` — analysis, evidence policy, post-processing, harmony,
   instruments, timbre, sessions, and formal commit planning.
 - `ui/` — the main-window composition root, runtime localization, and reusable Qt presentation.
@@ -73,6 +75,8 @@ application package.
 - `assets/` and `data/` — packaged resources and mappings.
 - `docs/` — current contracts, evidence, and historical records.
 - `packaging/windows/` — reproducible PyInstaller configuration.
+- `packaging/developer_sdk/` — deterministic, privacy-filtered source SDK
+  builder and its packaging contract.
 
 The retired root optimizer and transcription-widget facades are intentionally
 gone. Import `optimization` and

@@ -8,6 +8,7 @@ __pycache__/
 .nox/
 .ruff_cache/
 .tox/
+/.hermes/
 
 # Per-user editor state and recovery copies
 .pyside_bdo_gui.json

@@ -223,6 +223,7 @@ git grep -n -I -E "(C:\\Users\\|OPENAI_API_KEY|api[_-]?key|password)"
 ## Documentation and collaboration
 
 - [Agent handoff and collaboration guide](docs/AGENT_HANDOFF.md)
+- [Developer SDK and reusable UI](docs/DEVELOPER_SDK.md)
 - [Architecture](docs/ARCHITECTURE.md) / [AI change routing](docs/AI_CONTEXT.md)
 - [Decoupling, performance, and extension roadmap](docs/OPTIMIZATION_EXTENSION_ROADMAP.md)
 - [Localization policy](docs/LOCALIZATION.md)

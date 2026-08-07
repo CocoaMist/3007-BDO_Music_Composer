@@ -10,6 +10,8 @@ Tests and code override historical records.
 - [`AI_CONTEXT.md`](AI_CONTEXT.md) — task routing and minimum validation matrix.
 - [`AI_EDITING_GUIDE.md`](AI_EDITING_GUIDE.md) — owner and dependency rules.
 - [`PROJECT_STRUCTURE.md`](PROJECT_STRUCTURE.md) — directory and entry-point index.
+- [`DEVELOPER_SDK.md`](DEVELOPER_SDK.md) — stable core API, optional reusable UI,
+  examples, and deterministic source-SDK packaging.
 - [`OPTIMIZATION_EXTENSION_ROADMAP.md`](OPTIMIZATION_EXTENSION_ROADMAP.md) —
   remaining structural work and performance gates.
 

@@ -219,6 +219,7 @@ git grep -n -I -E "(C:\\Users\\|OPENAI_API_KEY|api[_-]?key|password)"
 ## ドキュメントと協力
 
 - [Agent 引き継ぎ・連携ガイド](docs/AGENT_HANDOFF.md)
+- [開発 SDK と再利用可能な UI](docs/DEVELOPER_SDK.md)
 - [Architecture](docs/ARCHITECTURE.md) / [AI change routing](docs/AI_CONTEXT.md)
 - [分離・性能・拡張ロードマップ](docs/OPTIMIZATION_EXTENSION_ROADMAP.md)
 - [Localization policy](docs/LOCALIZATION.md)

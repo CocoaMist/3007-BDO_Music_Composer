@@ -158,6 +158,7 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
                 notice = window.timeline.track_validation_notices[track_id]
                 assert not notice["errors"]
                 assert notice["attentions"]
+                assert not notice["invalid_note_keys"]
                 assert "合并" in notice["attentions"][0]
 
             first.notes = [Note(1, 90, 0.0, 300.0, 0)]
@@ -170,8 +171,12 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
             assert "错误" in toast_calls[-1][0]
             assert window.timeline.track_validation_notices[1]["errors"]
             assert window.timeline.track_validation_notices[1]["attentions"]
+            assert window.timeline.track_validation_notices[1]["invalid_note_keys"] == (
+                window.timeline._validation_note_key(first.notes[0]),
+            )
             assert not window.timeline.track_validation_notices[2]["errors"]
             assert window.timeline.track_validation_notices[2]["attentions"]
+            assert not window.timeline.track_validation_notices[2]["invalid_note_keys"]
 
             window.resize(1400, 900)
             window._show_workspace()
