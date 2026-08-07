@@ -43,8 +43,10 @@ Tests and code override historical records.
 
 ## Evidence and history
 
+- [`releases/RELEASE_NOTES_V1.1.2.md`](releases/RELEASE_NOTES_V1.1.2.md)
+  records the current v1.1.2 release scope and verification evidence.
 - [`releases/RELEASE_NOTES_V1.1.1.md`](releases/RELEASE_NOTES_V1.1.1.md)
-  records the current v1.1.1 release scope and verification evidence.
+  records the historical v1.1.1 release scope and verification evidence.
 - [`releases/RELEASE_NOTES_V1.1.0.md`](releases/RELEASE_NOTES_V1.1.0.md)
   records the historical v1.1.0 release scope and verification evidence.
 - [`benchmarks/`](benchmarks/) contains reproducible benchmark protocols and
