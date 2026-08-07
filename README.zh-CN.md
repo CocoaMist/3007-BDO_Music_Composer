@@ -237,6 +237,7 @@ git grep -n -I -E "(C:\\Users\\|OPENAI_API_KEY|api[_-]?key|password)"
 ## 文档与协作
 
 - [Agent 接手与协作手册](docs/AGENT_HANDOFF.md)
+- [二次开发 SDK 与可复用 UI](docs/DEVELOPER_SDK.md)
 - [架构](docs/ARCHITECTURE.md) / [AI 任务路由](docs/AI_CONTEXT.md) / [AI 编辑与结构演进指南](docs/AI_EDITING_GUIDE.md)
 - [解耦、性能与扩展路线图](docs/OPTIMIZATION_EXTENSION_ROADMAP.md)
 - [本地化与地区术语](docs/LOCALIZATION.md)

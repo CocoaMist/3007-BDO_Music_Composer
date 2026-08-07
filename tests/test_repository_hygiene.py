@@ -24,6 +24,27 @@ class RepositoryHygieneTests(unittest.TestCase):
     def test_current_source_tree_is_clean_and_discoverable(self) -> None:
         self.assertEqual(validate_repository(ROOT), [])
 
+    def test_ci_compile_targets_use_canonical_existing_modules(self) -> None:
+        workflow = (ROOT / ".github/workflows/windows-ci.yml").read_text(
+            encoding="utf-8"
+        )
+        compile_line = next(
+            line.strip()
+            for line in workflow.splitlines()
+            if " -m py_compile " in line
+        )
+        targets = compile_line.split(" -m py_compile ", 1)[1].split()
+        self.assertEqual(
+            targets,
+            [
+                "main.py",
+                "bdo_music_composer\\core\\project_paths.py",
+                "bdo_music_composer\\ui\\main_window.py",
+                "bdo_music_composer\\ui\\i18n.py",
+            ],
+        )
+        self.assertTrue(all((ROOT / target).is_file() for target in targets))
+
     def test_private_and_generated_artifacts_are_rejected(self) -> None:
         errors = forbidden_path_errors(
             (

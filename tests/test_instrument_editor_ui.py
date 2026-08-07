@@ -58,11 +58,11 @@ class InstrumentEditorUiTests(unittest.TestCase):
 
             app = QApplication([])
             canonical = TrackState(
-                1, [Note(62, 96, 0.0, 120.0, 99)], 0, True,
+                1, [Note(62, 96, 0.0, 120.0, 99), Note(65, 96, 120.0, 120.0, 99)], 0, True,
                 "BDO drums", 0x0D, bdo_source_group_index=0,
             )
             imported = TrackState(
-                2, [Note(36, 96, 0.0, 120.0, 0)], 0, True,
+                2, [Note(36, 96, 0.0, 120.0, 0), Note(62, 96, 120.0, 120.0, 0)], 0, True,
                 "GM drums", 0x0D,
             )
             assert track_uses_canonical_drum_lanes(canonical)
@@ -70,10 +70,14 @@ class InstrumentEditorUiTests(unittest.TestCase):
 
             timeline = TimelineCanvas()
             timeline.set_tracks([canonical, imported])
-            assert not timeline._note_has_conversion_problem(canonical, 62)
-            assert timeline._note_has_conversion_problem(canonical, 65)
-            assert not timeline._note_has_conversion_problem(imported, 36)
-            assert timeline._note_has_conversion_problem(imported, 62)
+            timeline.set_validation_notices({
+                1: {"errors": ("bad",), "attentions": (), "invalid_note_keys": (timeline._validation_note_key(canonical.notes[1]),)},
+                2: {"errors": ("bad",), "attentions": (), "invalid_note_keys": (timeline._validation_note_key(imported.notes[1]),)},
+            })
+            assert not timeline._note_has_conversion_problem(canonical, canonical.notes[0])
+            assert timeline._note_has_conversion_problem(canonical, canonical.notes[1])
+            assert not timeline._note_has_conversion_problem(imported, imported.notes[0])
+            assert timeline._note_has_conversion_problem(imported, imported.notes[1])
             timeline.close()
             app.processEvents()
             app.quit()

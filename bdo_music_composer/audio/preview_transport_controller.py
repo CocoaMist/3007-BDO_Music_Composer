@@ -26,6 +26,7 @@ class PreviewTransportCoordinator:
     start_ms: float = 0.0
     tracks: list[object] = field(default_factory=list)
     validation_state: str = "approximate"
+    pause_requested: bool = False
 
     def play_action(self) -> PreviewPlayAction:
         if self.loading:
@@ -33,6 +34,13 @@ class PreviewTransportCoordinator:
         if self.active:
             return PreviewPlayAction.RESUME
         return PreviewPlayAction.START_SESSION
+
+    def request_pause(self) -> None:
+        if self.active:
+            self.pause_requested = True
+
+    def request_play(self) -> None:
+        self.pause_requested = False
 
     def invalidate(self) -> int:
         self.generation += 1
@@ -57,6 +65,7 @@ class PreviewTransportCoordinator:
         self.start_ms = float(start_ms)
         self.tracks = list(tracks)
         self.validation_state = "approximate"
+        self.pause_requested = False
         return self.generation
 
     def mark_ready(self, validation_state: str) -> None:
@@ -69,6 +78,7 @@ class PreviewTransportCoordinator:
         self.active = False
         self.loading = False
         self.tracks = []
+        self.pause_requested = False
         return self.generation
 
 

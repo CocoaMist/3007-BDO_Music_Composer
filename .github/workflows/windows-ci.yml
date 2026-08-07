@@ -52,8 +52,8 @@ jobs:
       - name: Compile primary entry points
         shell: pwsh
         run: |
-          .\.venv\Scripts\python.exe -m py_compile main.py project_paths.py pyside_bdo_gui.py i18n.py
-          .\.venv\Scripts\python.exe -m compileall -q bdo_music_composer
+          .\.venv\Scripts\python.exe -m py_compile main.py bdo_music_composer\core\project_paths.py bdo_music_composer\ui\main_window.py bdo_music_composer\ui\i18n.py
+          .\.venv\Scripts\python.exe -m compileall -q bdo_common bdo_codec bdo_export bdo_midi optimization bdo_music_composer
 
       - name: Run headless lifecycle gate
         shell: pwsh

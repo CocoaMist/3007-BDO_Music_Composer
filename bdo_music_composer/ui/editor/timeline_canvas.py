@@ -18,18 +18,11 @@ from bdo_music_composer.ui.editor.bdo_instrument_lane_art_qt import (
     instrument_header_background_rect,
     paint_instrument_header_background,
 )
-from bdo_midi import BDO_NOTE_MAX, BDO_NOTE_MIN, _GM_TO_BDO_DRUM
 from bdo_midi.instruments import (
     localized_bdo_instrument_name,
     localized_bdo_instrument_names,
 )
-from bdo_music_composer.editor.editor_models import (
-    BDO_DRUM_MAX,
-    BDO_DRUM_MIN,
-    TrackState,
-    game_supported_pitches,
-    track_uses_canonical_drum_lanes,
-)
+from bdo_music_composer.editor.editor_models import TrackState
 from .editor_ui_helpers import (
     add_instrument_submenus,
     articulation_color,
@@ -115,6 +108,7 @@ class TimelineCanvas(QWidget):
     effects_requested = Signal(object)
     pitch_requested = Signal(object)
     midi_tools_requested = Signal(object)
+    velocity_base_requested = Signal(object)
     note_editor_requested = Signal(object)
     seek_requested = Signal(float)
     time_range_changed = Signal(object)
@@ -136,9 +130,7 @@ class TimelineCanvas(QWidget):
         super().__init__()
         self.tracks: list[TrackState] = []
         self.hit_regions: list[tuple[QRectF, str, object]] = []
-        self.track_validation_notices: dict[
-            int, dict[str, tuple[str, ...]]
-        ] = {}
+        self.track_validation_notices: dict[int, dict[str, tuple]] = {}
         self._validation_hover_track_id: int | None = None
         self.reference_audio: ReferenceAudioView | None = None
         self.zoom_factor = 1.0
@@ -242,14 +234,37 @@ class TimelineCanvas(QWidget):
         self._update_accessible_track_state()
         self.update()
 
+    def update_tracks(self, track_ids: object) -> None:
+        """Rebuild only changed track indexes after a non-structural commit."""
+
+        requested = {int(track_id) for track_id in track_ids}
+        if not requested:
+            return
+        tracks_by_id = {int(track.track_id): track for track in self.tracks}
+        missing = requested - tracks_by_id.keys()
+        if missing:
+            raise ValueError(f"unknown timeline track IDs: {sorted(missing)}")
+        self.velocity_curve_overlay.synchronize_tracks(self.tracks)
+        for track_id in requested:
+            track = tracks_by_id[track_id]
+            self._track_note_indexes[id(track)] = self._build_track_index(track)
+        self._conversion_problem_cache.clear()
+        self._conversion_problem_masks.clear()
+        self._refresh_timeline_end_cache()
+        self.playhead_ms = min(self.playhead_ms, self._timeline_end_ms())
+        self._clamp_view()
+        self._update_track_scrollbar()
+        self._static_timeline_cache_key = None
+        self.update()
+
     def set_validation_notices(
         self,
-        notices: dict[int, dict[str, tuple[str, ...]]],
+        notices: dict[int, dict[str, tuple]],
     ) -> None:
         """Apply export errors and non-blocking attention marks by track ID."""
 
         valid_track_ids = {int(track.track_id) for track in self.tracks}
-        normalized: dict[int, dict[str, tuple[str, ...]]] = {}
+        normalized: dict[int, dict[str, tuple]] = {}
         for raw_track_id, raw_notice in notices.items():
             track_id = int(raw_track_id)
             if track_id not in valid_track_ids:
@@ -264,14 +279,23 @@ class TimelineCanvas(QWidget):
                 for message in raw_notice.get("attentions", ())
                 if str(message).strip()
             )
-            if errors or attentions:
+            invalid_note_keys = tuple(
+                tuple(value)
+                for value in raw_notice.get("invalid_note_keys", ())
+                if isinstance(value, (tuple, list)) and len(value) == 5
+            )
+            if errors or attentions or invalid_note_keys:
                 normalized[track_id] = {
                     "errors": errors,
                     "attentions": attentions,
+                    "invalid_note_keys": invalid_note_keys,
                 }
         if normalized == self.track_validation_notices:
             return
         self.track_validation_notices = normalized
+        self._conversion_problem_cache.clear()
+        self._conversion_problem_masks.clear()
+        self._static_timeline_cache_key = None
         self._validation_hover_track_id = None
         self.setToolTip(tr(self.KEYBOARD_SHORTCUT_HINT))
         self._update_accessible_track_state()
@@ -280,10 +304,10 @@ class TimelineCanvas(QWidget):
     def _track_validation_notice(
         self,
         track: TrackState,
-    ) -> dict[str, tuple[str, ...]]:
+    ) -> dict[str, tuple]:
         return self.track_validation_notices.get(
             int(track.track_id),
-            {"errors": (), "attentions": ()},
+            {"errors": (), "attentions": (), "invalid_note_keys": ()},
         )
 
     def _track_validation_tooltip(self, track: TrackState) -> str:
@@ -348,34 +372,39 @@ class TimelineCanvas(QWidget):
             max(0.0, area.height() - ruler_h),
         ).toAlignedRect())
 
+    def _build_track_index(
+        self,
+        track: TrackState,
+    ) -> _TimelineTrackNoteIndex:
+        duration_scale = float(track.duration_scale)
+        intervals = IntervalIndex.build(
+            track.notes,
+            start_of=lambda note: float(note.start),
+            duration_of=lambda note: float(note.dur) * duration_scale,
+            block_size=self.TRACK_NOTE_QUERY_BLOCK_SIZE,
+        )
+        return _TimelineTrackNoteIndex(
+            intervals=intervals,
+            pitch_min=min(
+                (int(note.pitch) for note in intervals.items),
+                default=0,
+            ),
+            pitch_max=max(
+                (int(note.pitch) for note in intervals.items),
+                default=0,
+            ),
+            # Dense overview bins are only needed for tracks that are actually
+            # painted. Building them lazily avoids blocking the workspace when
+            # a large project contains many offscreen tracks.
+            overview_levels=(),
+        )
+
     def _rebuild_track_indexes(self) -> None:
         self._track_note_indexes = {}
         self._conversion_problem_cache.clear()
         self._conversion_problem_masks.clear()
         for track in self.tracks:
-            duration_scale = float(track.duration_scale)
-            intervals = IntervalIndex.build(
-                track.notes,
-                start_of=lambda note: float(note.start),
-                duration_of=lambda note: float(note.dur) * duration_scale,
-                block_size=self.TRACK_NOTE_QUERY_BLOCK_SIZE,
-            )
-            self._track_note_indexes[id(track)] = _TimelineTrackNoteIndex(
-                intervals=intervals,
-                pitch_min=min(
-                    (int(note.pitch) for note in intervals.items),
-                    default=0,
-                ),
-                pitch_max=max(
-                    (int(note.pitch) for note in intervals.items),
-                    default=0,
-                ),
-                # Dense overview bins are only needed for tracks that are
-                # actually painted. Building them lazily avoids blocking the
-                # workspace when a large project contains many offscreen
-                # tracks.
-                overview_levels=(),
-            )
+            self._track_note_indexes[id(track)] = self._build_track_index(track)
         self._refresh_timeline_end_cache()
 
     def _refresh_timeline_end_cache(self) -> None:
@@ -681,73 +710,38 @@ class TimelineCanvas(QWidget):
         measure_width = grid_width * measure_ms / max(1.0, visible_duration)
         return measure_width >= self.MEASURE_BANDING_MIN_WIDTH_PX
 
-    def _note_has_conversion_problem(self, track: TrackState, pitch: int) -> bool:
-        canonical_drum_lanes = track_uses_canonical_drum_lanes(track)
-        effective_transpose = self.pitch_transform_plan.effective_track_semitones(
-            track
+    @staticmethod
+    def _validation_note_key(note: object) -> tuple[object, ...]:
+        return (
+            int(getattr(note, "pitch")),
+            int(getattr(note, "vel")),
+            float(getattr(note, "start")),
+            float(getattr(note, "dur")),
+            int(getattr(note, "ntype")),
         )
-        cache_key = (
-            int(track.bdo_instrument_id),
-            str(track.marnian_synth_mode),
-            int(pitch),
-            effective_transpose,
-            canonical_drum_lanes,
+
+    def _note_has_conversion_problem(
+        self,
+        track: TrackState,
+        note: object,
+    ) -> bool:
+        invalid_keys = self._track_validation_notice(track).get(
+            "invalid_note_keys",
+            (),
         )
-        cached = self._conversion_problem_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        if track.bdo_instrument_id == 0x0d:
-            if canonical_drum_lanes:
-                supported = game_supported_pitches(
-                    track.bdo_instrument_id, track.marnian_synth_mode
-                )
-                result = not (
-                    BDO_DRUM_MIN <= int(pitch) <= BDO_DRUM_MAX
-                    and (supported is None or int(pitch) in supported)
-                )
-            else:
-                mapped_pitch = _GM_TO_BDO_DRUM.get(pitch)
-                if (
-                    mapped_pitch is None
-                    or mapped_pitch < BDO_DRUM_MIN
-                    or mapped_pitch > BDO_DRUM_MAX
-                ):
-                    result = True
-                else:
-                    supported = game_supported_pitches(
-                        track.bdo_instrument_id, track.marnian_synth_mode
-                    )
-                    result = (
-                        supported is not None
-                        and mapped_pitch not in supported
-                    )
-        else:
-            converted_pitch = pitch + effective_transpose
-            supported = game_supported_pitches(
-                track.bdo_instrument_id, track.marnian_synth_mode
-            )
-            if supported is not None:
-                result = converted_pitch not in supported
-            else:
-                result = converted_pitch < BDO_NOTE_MIN or converted_pitch > BDO_NOTE_MAX
-        self._conversion_problem_cache[cache_key] = result
-        return result
+        if isinstance(note, int):
+            return any(int(key[0]) == int(note) for key in invalid_keys)
+        return self._validation_note_key(note) in invalid_keys
 
     def _conversion_problem_mask(self, track: TrackState) -> int:
-        cache_key = (
-            int(track.bdo_instrument_id),
-            str(track.marnian_synth_mode),
-            self.pitch_transform_plan.effective_track_semitones(track),
-            track_uses_canonical_drum_lanes(track),
-        )
-        cached = self._conversion_problem_masks.get(cache_key)
-        if cached is not None:
-            return cached
         mask = 0
-        for pitch in range(128):
-            if self._note_has_conversion_problem(track, pitch):
+        for key in self._track_validation_notice(track).get(
+            "invalid_note_keys",
+            (),
+        ):
+            pitch = int(key[0])
+            if 0 <= pitch < 128:
                 mask |= 1 << pitch
-        self._conversion_problem_masks[cache_key] = mask
         return mask
 
     def resizeEvent(self, event) -> None:
@@ -1592,7 +1586,7 @@ class TimelineCanvas(QWidget):
                 + 6
                 + (1.0 - pitch_pos) * (region.height() - 14)
             )
-            has_problem = self._note_has_conversion_problem(track, note.pitch)
+            has_problem = self._note_has_conversion_problem(track, note)
             ntype = int(getattr(note, "ntype", 0))
 
             note_rect = QRectF(x, note_y, width, 5.0)
@@ -2368,6 +2362,7 @@ class TimelineCanvas(QWidget):
         )
         menu.addSeparator()
         optimize_action = menu.addAction(tr("优化此轨道"))
+        self._add_velocity_base_action(menu, track)
         unify_mixer_action = menu.addAction(
             tr("以此轨统一同乐器音量和 FX")
         )
@@ -2404,6 +2399,17 @@ class TimelineCanvas(QWidget):
         track.bdo_instrument_id = int(inst_id)
         self.instrument_changed.emit(track, previous_instrument_id)
         self.update()
+
+    def _add_velocity_base_action(
+        self,
+        menu: QMenu,
+        track: TrackState,
+    ) -> QAction:
+        action = menu.addAction(tr("轨道力度基数…"))
+        action.triggered.connect(
+            lambda _checked=False: self.velocity_base_requested.emit(track)
+        )
+        return action
 
     def _add_track_move_actions(
         self,

@@ -236,12 +236,14 @@ from bdo_music_composer.core.conversion_settings import (  # noqa: E402
 )
 from bdo_music_composer.editor.game_score_model import (  # noqa: E402
     bake_game_velocity_transform,
+    bound_game_velocity_b_values,
     decode_serialized_game_instrument_id,
     formal_score_tracks,
     inherit_game_instrument_mix,
     preview_tracks,
     propagate_game_instrument_mix,
     reconcile_track_game_velocity_records,
+    transform_game_velocity_records,
 )
 from bdo_music_composer.editor.pitch_transform import (  # noqa: E402
     PitchTransformPlan,
@@ -273,6 +275,7 @@ from bdo_music_composer.ui.dialogs.track_settings_dialogs import (  # noqa: E402
     MasterEffectsDialog,
     TrackFxDialog,
     TrackPitchDialog,
+    TrackVelocityBaseDialog,
 )
 from bdo_music_composer.ui.track_ordering import TrackOrderingMixin  # noqa: E402
 from bdo_music_composer.ui.timeline_velocity_curve_host import TimelineVelocityCurveHostMixin  # noqa: E402
@@ -481,6 +484,14 @@ from bdo_music_composer.app.conversion_validation_controller import (  # noqa: E
     ConversionValidationController,
 )
 from bdo_music_composer.editor.model_revision import ModelRevision  # noqa: E402
+from bdo_music_composer.editor.global_velocity_gain import (  # noqa: E402
+    base_velocity_map,
+)
+from bdo_music_composer.editor.model_change import ModelChange  # noqa: E402
+from bdo_music_composer.app.workspace_refresh_controller import (  # noqa: E402
+    RefreshPlan,
+    WorkspaceRefreshController,
+)
 from bdo_music_composer.audio.preview_transport_controller import (  # noqa: E402
     PreviewPlayAction,
     PreviewTransportCoordinator,
@@ -1021,6 +1032,7 @@ class MidiToBdoWindow(
     def __init__(self) -> None:
         super().__init__()
         self.model_revision = ModelRevision()
+        self.workspace_refresh_controller = WorkspaceRefreshController()
         self.conversion_validation_controller = (
             ConversionValidationController(validate_tracks)
         )
@@ -2470,6 +2482,68 @@ class MidiToBdoWindow(
         header.addWidget(separator)
         header.addWidget(self.add_track_button)
         header.addWidget(self.track_actions_button)
+        self.toolbar_global_gain_group = QFrame()
+        self.toolbar_global_gain_group.setObjectName("ToolbarGlobalGainGroup")
+        gain_layout = QHBoxLayout(self.toolbar_global_gain_group)
+        gain_layout.setContentsMargins(10, 0, 10, 0)
+        gain_layout.setSpacing(7)
+        self.toolbar_global_gain_label = QLabel(tr("全局力度基数"))
+        self.toolbar_global_gain_label.setObjectName("ToolbarGlobalGainTitle")
+        self.toolbar_global_gain = QSlider(Qt.Horizontal)
+        self.toolbar_global_gain.setObjectName("ToolbarGlobalGainSlider")
+        self.toolbar_global_gain.setRange(-127, 127)
+        self.toolbar_global_gain.setFixedWidth(220)
+        self.toolbar_global_gain.setEnabled(False)
+        self.toolbar_global_gain.setToolTip(
+            tr(
+                "自由设置整首曲谱的力度基数；勾选均化后，先加基数，再把整组力度统一按比例映射到 0–127。"
+            )
+        )
+        self.toolbar_global_gain.setAccessibleName(tr("全局力度基数"))
+        self.toolbar_global_gain_value = QSpinBox()
+        self.toolbar_global_gain_value.setObjectName("ToolbarGlobalGainValue")
+        self.toolbar_global_gain_value.setRange(-127, 127)
+        self.toolbar_global_gain_value.setValue(0)
+        self.toolbar_global_gain_value.setButtonSymbols(QSpinBox.NoButtons)
+        self.toolbar_global_gain_value.setKeyboardTracking(False)
+        self.toolbar_global_gain_value.setAlignment(Qt.AlignCenter)
+        self.toolbar_global_gain_value.setFixedWidth(52)
+        self.toolbar_global_gain_equalize = QCheckBox(tr("均化"))
+        self.toolbar_global_gain_equalize.setObjectName(
+            "ToolbarGlobalGainEqualize"
+        )
+        self.toolbar_global_gain_equalize.setToolTip(
+            tr("按整首曲谱的原始力度关系统一缩放，使调整后的力度落在 0–127。")
+        )
+        self._toolbar_global_gain_initial_value = 0
+        self._toolbar_global_gain_reference = 0
+        self._toolbar_global_gain_track_signature: tuple[object, ...] = ()
+        self._toolbar_global_gain_origin_notes: list[
+            tuple[TrackState, list[Note], tuple[tuple, ...]]
+        ] | None = None
+        self._toolbar_global_gain_initial_notes: list[
+            tuple[TrackState, list[Note], tuple[tuple, ...]]
+        ] | None = None
+        self.toolbar_global_gain.sliderPressed.connect(
+            self._begin_toolbar_global_gain_drag
+        )
+        self.toolbar_global_gain.valueChanged.connect(
+            self._preview_toolbar_global_gain
+        )
+        self.toolbar_global_gain.sliderReleased.connect(
+            self._commit_toolbar_global_gain
+        )
+        self.toolbar_global_gain_value.editingFinished.connect(
+            self._commit_toolbar_global_gain_input
+        )
+        self.toolbar_global_gain_equalize.toggled.connect(
+            self._on_toolbar_global_gain_equalize_toggled
+        )
+        gain_layout.addWidget(self.toolbar_global_gain_label)
+        gain_layout.addWidget(self.toolbar_global_gain)
+        gain_layout.addWidget(self.toolbar_global_gain_value)
+        gain_layout.addWidget(self.toolbar_global_gain_equalize)
+        header.addWidget(self.toolbar_global_gain_group)
         header.addStretch(1)
 
         header.addWidget(self.timeline_zoom_label)
@@ -2499,6 +2573,9 @@ class MidiToBdoWindow(
         self.timeline.effects_requested.connect(self._show_effects_placeholder)
         self.timeline.pitch_requested.connect(self._show_track_pitch_dialog)
         self.timeline.midi_tools_requested.connect(self._open_midi_tool)
+        self.timeline.velocity_base_requested.connect(
+            self._show_track_velocity_base_dialog
+        )
         self.timeline.note_editor_requested.connect(self._open_note_editor)
         self.timeline.velocity_curve_committed.connect(self._commit_timeline_velocity_curve)
         self.timeline.seek_requested.connect(self._seek_preview)
@@ -5434,12 +5511,8 @@ class MidiToBdoWindow(
         current_track: TrackState,
     ) -> None:
         try:
-            self.timeline.set_tracks(self.tracks)
-        except Exception:
-            self._log_transcription_commit_failure("timeline refresh")
-        try:
             self._select_track(current_track)
-            self._on_track_changed()
+            self._apply_workspace_change(ModelChange.structure())
         except Exception:
             self._log_transcription_commit_failure("track refresh")
         try:
@@ -6635,17 +6708,24 @@ class MidiToBdoWindow(
                 trf("全局移调设为 {transpose:+d}", transpose=self.transpose)
             )
         cleared_fx = 0
+        cleared_track_ids: list[int] = []
         for track in self.tracks:
             if track.articulation_type is None:
                 continue
             supported = {ntype for ntype, _label in BDO_ARTICULATIONS.get(track.bdo_instrument_id, [])}
             if track.articulation_type not in supported:
                 track.articulation_type = None
+                cleared_track_ids.append(int(track.track_id))
                 cleared_fx += 1
         if cleared_fx:
             fixed.append(trf("清空 {count} 条无效 FX", count=cleared_fx))
         if fixed:
-            self._on_track_changed()
+            if cleared_fx:
+                self._apply_workspace_change(
+                    ModelChange.notes(*cleared_track_ids)
+                )
+            else:
+                self._on_track_changed()
             if transpose_changed and self.transcription_result is not None:
                 self.automatic_instrument_match_analysis = None
                 self.instrument_match_analysis = None
@@ -6733,21 +6813,32 @@ class MidiToBdoWindow(
         self.selected_track = None
         if hasattr(self, "timeline"):
             self.timeline.set_selected_track(None)
+        self._sync_toolbar_global_gain()
     def _refresh_tracks(self) -> None:
-        self.timeline.set_tracks(self.tracks)
-        self._on_track_changed()
+        self._apply_workspace_change(ModelChange.structure())
 
-    def _on_track_changed(self, *, model_changed: bool = True) -> None:
-        if model_changed:
-            self._advance_model_revision("track state")
-        self.timeline.set_pitch_transform_plan(self._pitch_transform_plan)
-        self.timeline.set_musical_grid(
-            self.bpm_override or self.bpm,
-            self.time_sig,
-            self.beat_origin_ms,
+    def _apply_workspace_change(self, change: ModelChange) -> None:
+        self._apply_workspace_refresh(
+            self.workspace_refresh_controller.plan((change,))
         )
-        self.timeline.update()
-        if hasattr(self, "timeline_meta"):
+
+    def _apply_workspace_refresh(self, plan: RefreshPlan) -> None:
+        if plan.advance_revision:
+            self._advance_model_revision("track state")
+        if plan.rebuild_timeline:
+            self.timeline.set_tracks(self.tracks)
+        elif plan.changed_track_ids:
+            self.timeline.update_tracks(plan.changed_track_ids)
+        if plan.refresh_grid:
+            self.timeline.set_pitch_transform_plan(self._pitch_transform_plan)
+            self.timeline.set_musical_grid(
+                self.bpm_override or self.bpm,
+                self.time_sig,
+                self.beat_origin_ms,
+            )
+        if plan.refresh_view:
+            self.timeline.update()
+        if plan.refresh_metadata and hasattr(self, "timeline_meta"):
             self.timeline_meta.setText(
                 trf(
                     "{count} 轨 · BPM {bpm} · {meter}/4",
@@ -6756,15 +6847,33 @@ class MidiToBdoWindow(
                     meter=self.time_sig,
                 )
             )
-        self._sync_global_bpm_control()
+            self._sync_global_bpm_control()
+            self._sync_toolbar_global_gain()
         if hasattr(self, "timeline_pan"):
             self.timeline_pan.blockSignals(True)
             self.timeline_pan.setValue(self.timeline.pan_percent())
             self.timeline_pan.setEnabled(self.timeline.zoom_factor > 1.0)
             self.timeline_pan.blockSignals(False)
-        self._update_ensemble_metric()
-        self._refresh_transcription_workspace()
-        self._schedule_timeline_validation_refresh()
+        if plan.refresh_ensemble:
+            self._update_ensemble_metric()
+        if plan.refresh_transcription:
+            self._refresh_transcription_workspace()
+        if plan.refresh_validation:
+            self._schedule_timeline_validation_refresh()
+
+    def _on_track_changed(self, *, model_changed: bool = True) -> None:
+        """Compatibility adapter for callers not yet carrying track scope."""
+
+        self._apply_workspace_refresh(RefreshPlan(
+            advance_revision=model_changed,
+            refresh_view=True,
+            refresh_grid=True,
+            refresh_metadata=True,
+            refresh_ensemble=True,
+            refresh_transcription=True,
+            refresh_validation=True,
+            refresh_preview=model_changed,
+        ))
 
     def _schedule_timeline_validation_refresh(self) -> None:
         if hasattr(self, "timeline_validation_timer"):
@@ -6780,7 +6889,8 @@ class MidiToBdoWindow(
         issues = self._validation_issues()
         errors = [item for item in issues if item.severity == "error"]
         merges = [item for item in issues if item.code == "tracks.merge"]
-        track_notices: dict[int, dict[str, list[str]]] = {}
+        tracks_by_id = {int(track.track_id): track for track in self.tracks}
+        track_notices: dict[int, dict[str, list]] = {}
         for issue in issues:
             if issue.severity != "error" and issue.code != "tracks.merge":
                 continue
@@ -6798,14 +6908,32 @@ class MidiToBdoWindow(
             for track_id in track_ids:
                 notice = track_notices.setdefault(
                     track_id,
-                    {"errors": [], "attentions": []},
+                    {"errors": [], "attentions": [], "invalid_note_keys": []},
                 )
                 if message not in notice[category]:
                     notice[category].append(message)
+                if (
+                    issue.severity == "error"
+                    and issue.track_id is not None
+                    and int(issue.track_id) == track_id
+                    and issue.note_indices
+                ):
+                    track = tracks_by_id.get(track_id)
+                    if track is not None:
+                        for note_index in issue.note_indices:
+                            index = int(note_index)
+                            if not 0 <= index < len(track.notes):
+                                continue
+                            key = self.timeline._validation_note_key(
+                                track.notes[index]
+                            )
+                            if key not in notice["invalid_note_keys"]:
+                                notice["invalid_note_keys"].append(key)
         self.timeline.set_validation_notices({
             track_id: {
                 "errors": tuple(notice["errors"]),
                 "attentions": tuple(notice["attentions"]),
+                "invalid_note_keys": tuple(notice["invalid_note_keys"]),
             }
             for track_id, notice in track_notices.items()
         })
@@ -6860,12 +6988,15 @@ class MidiToBdoWindow(
             duration_ms=4600 if toast_kind == "error" else 3600,
         )
 
-    def _restart_preview_after_timeline_change(self) -> None:
+    def _restart_preview_after_timeline_change(
+        self,
+        change: ModelChange | None = None,
+    ) -> None:
         was_playing = self.realtime_preview_active and self.realtime_audio.status.state == "playing"
         current_ms = self.timeline.playhead_ms
         if self.realtime_preview_active:
             self._stop_preview(reset_playhead=False)
-        self._on_track_changed()
+        self._apply_workspace_change(change or ModelChange.structure())
         if was_playing:
             self._start_preview_from(current_ms)
 
@@ -6894,6 +7025,7 @@ class MidiToBdoWindow(
         except (TypeError, ValueError) as exc:
             track.bdo_track_volume = int(previous_volume)
             self.timeline.update()
+            self._sync_toolbar_global_gain(track)
             self.show_toast(
                 trf("无法同步游戏乐器音量：{error}", error=exc),
                 kind="error",
@@ -6910,6 +7042,200 @@ class MidiToBdoWindow(
                 ),
                 kind="success",
             )
+        self._sync_toolbar_global_gain(track)
+
+    def _sync_toolbar_global_gain(self, track: TrackState | None = None) -> None:
+        del track
+        if not hasattr(self, "toolbar_global_gain"):
+            return
+        velocities: list[int] = []
+        has_notes = any(item.notes for item in self.tracks)
+        for item in self.tracks:
+            velocities.extend(
+                int(note.vel) for note in item.notes
+            )
+            if item.bdo_source_note_records:
+                velocities.extend(
+                    value
+                    for value in bound_game_velocity_b_values(
+                        item.notes,
+                        item.bdo_source_note_records,
+                    )
+                )
+        signature = self._toolbar_global_gain_model_signature()
+        if signature != self._toolbar_global_gain_track_signature:
+            self._toolbar_global_gain_track_signature = signature
+            self._toolbar_global_gain_reference = 0
+            self._toolbar_global_gain_origin_notes = [
+                (
+                    item,
+                    list(item.notes),
+                    tuple(item.bdo_source_note_records),
+                )
+                for item in self.tracks
+            ]
+        enabled = has_notes
+        self.toolbar_global_gain.blockSignals(True)
+        self.toolbar_global_gain_value.blockSignals(True)
+        self.toolbar_global_gain.setEnabled(enabled)
+        self.toolbar_global_gain_value.setEnabled(enabled)
+        self.toolbar_global_gain_equalize.setEnabled(enabled)
+        if enabled:
+            reference = self._toolbar_global_gain_reference
+            self.toolbar_global_gain.setRange(-127, 127)
+            self.toolbar_global_gain_value.setRange(-127, 127)
+            self.toolbar_global_gain.setValue(reference)
+            self.toolbar_global_gain_value.setValue(reference)
+        else:
+            self.toolbar_global_gain.setRange(-127, 127)
+            self.toolbar_global_gain_value.setRange(-127, 127)
+            self.toolbar_global_gain.setValue(0)
+            self.toolbar_global_gain_value.setValue(0)
+        self.toolbar_global_gain.blockSignals(False)
+        self.toolbar_global_gain_value.blockSignals(False)
+
+    def _toolbar_global_gain_model_signature(self) -> tuple[object, ...]:
+        return tuple(
+            (
+                id(item),
+                tuple(item.notes),
+                tuple(item.bdo_source_note_records),
+            )
+            for item in self.tracks
+        )
+
+    def _begin_toolbar_global_gain_drag(self) -> None:
+        if not self.toolbar_global_gain.isEnabled() or not self.tracks:
+            return
+        if self._toolbar_global_gain_initial_notes is not None:
+            return
+        self._toolbar_global_gain_initial_value = int(
+            self.toolbar_global_gain.value()
+        )
+        self._toolbar_global_gain_initial_notes = [
+            (
+                track,
+                list(track.notes),
+                tuple(track.bdo_source_note_records),
+            )
+            for track in self.tracks
+        ]
+
+    def _preview_toolbar_global_gain(self, value: int) -> None:
+        baseline = self._toolbar_global_gain_initial_notes
+        if baseline is None:
+            if not self.toolbar_global_gain.isEnabled() or not self.tracks:
+                return
+            # A groove click changes QSlider.value before sliderPressed fires.
+            # Capture the real committed reference, not that premature value.
+            self._toolbar_global_gain_initial_value = int(
+                self._toolbar_global_gain_reference
+            )
+            self._toolbar_global_gain_initial_notes = [
+                (
+                    track,
+                    list(track.notes),
+                    tuple(track.bdo_source_note_records),
+                )
+                for track in self.tracks
+            ]
+            baseline = self._toolbar_global_gain_initial_notes
+        source = self._toolbar_global_gain_origin_notes or baseline
+        baseline_velocities = [
+            int(item)
+            for _track, initial_notes, initial_records in source
+            for item in (
+                *(note.vel for note in initial_notes),
+                *bound_game_velocity_b_values(initial_notes, initial_records),
+            )
+        ]
+        velocity_map = base_velocity_map(
+            baseline_velocities,
+            int(value),
+            0,
+            equalize=self.toolbar_global_gain_equalize.isChecked(),
+        )
+        for track, initial_notes, initial_records in source:
+            next_notes = [
+                note._replace(
+                    vel=velocity_map[int(note.vel)]
+                )
+                for note in initial_notes
+            ]
+            track.bdo_source_note_records = transform_game_velocity_records(
+                initial_notes,
+                initial_records,
+                next_notes,
+                lambda velocity: velocity_map[int(velocity)],
+            )
+            track.notes = next_notes
+        self.toolbar_global_gain_value.blockSignals(True)
+        self.toolbar_global_gain_value.setValue(int(value))
+        self.toolbar_global_gain_value.blockSignals(False)
+        self.timeline.update()
+
+    def _on_toolbar_global_gain_equalize_toggled(self, _checked: bool) -> None:
+        if not self.toolbar_global_gain.isEnabled():
+            return
+        self._begin_toolbar_global_gain_drag()
+        self._preview_toolbar_global_gain(self.toolbar_global_gain.value())
+        self._commit_toolbar_global_gain()
+
+    def _commit_toolbar_global_gain_input(self) -> None:
+        if not self.toolbar_global_gain_value.isEnabled():
+            return
+        selected = int(self.toolbar_global_gain_value.value())
+        if selected == int(self.toolbar_global_gain.value()):
+            return
+        self._begin_toolbar_global_gain_drag()
+        self.toolbar_global_gain.blockSignals(True)
+        self.toolbar_global_gain.setValue(selected)
+        self.toolbar_global_gain.blockSignals(False)
+        self._preview_toolbar_global_gain(selected)
+        self._commit_toolbar_global_gain()
+
+    def _commit_toolbar_global_gain(self) -> None:
+        baseline = self._toolbar_global_gain_initial_notes
+        self._toolbar_global_gain_initial_notes = None
+        if baseline is None:
+            self._sync_toolbar_global_gain()
+            return
+        selected_percent = int(self.toolbar_global_gain.value())
+        final_notes = [
+            (track, list(track.notes), tuple(track.bdo_source_note_records))
+            for track, _initial_notes, _initial_records in baseline
+        ]
+        has_changes = any(
+            notes != initial_notes or records != initial_records
+            for (
+                (_track, notes, records),
+                (_initial_track, initial_notes, initial_records),
+            ) in zip(final_notes, baseline)
+        )
+        if not has_changes:
+            self._sync_toolbar_global_gain()
+            return
+        for track, initial_notes, initial_records in baseline:
+            track.notes = initial_notes
+            track.bdo_source_note_records = initial_records
+        self._push_project_snapshot()
+        changed_track_ids: list[int] = []
+        for track, notes, records in final_notes:
+            if notes != track.notes or records != track.bdo_source_note_records:
+                track.notes = notes
+                track.bdo_source_note_records = records
+                changed_track_ids.append(int(track.track_id))
+        self._toolbar_global_gain_reference = selected_percent
+        self._toolbar_global_gain_track_signature = (
+            self._toolbar_global_gain_model_signature()
+        )
+        self._mark_conversion_check_dirty()
+        if changed_track_ids:
+            self._restart_preview_after_timeline_change(
+                ModelChange.notes(*changed_track_ids)
+            )
+        self._autosave_project("global note base gain")
+        self._sync_toolbar_global_gain()
 
     def _on_preview_mapping_changed(self) -> None:
         self._restart_preview_after_timeline_change()
@@ -7062,10 +7388,8 @@ class MidiToBdoWindow(
             return
         self._push_project_snapshot()
         self.tracks.append(track)
-        self.timeline.set_tracks(self.tracks)
         self._select_track(track)
-        self._refresh_transcription_workspace()
-        self._on_track_changed()
+        self._apply_workspace_change(ModelChange.structure())
         self._mark_conversion_check_dirty()
         self._autosave_project("create track", immediate=True)
         self.status_label.setText(trf(
@@ -7107,9 +7431,7 @@ class MidiToBdoWindow(
             track.track_id
         )
         self._clear_track_selection()
-        self.timeline.set_tracks(self.tracks)
-        self._refresh_transcription_workspace()
-        self._on_track_changed()
+        self._apply_workspace_change(ModelChange.structure())
         self._mark_conversion_check_dirty()
         self._autosave_project("delete track", immediate=True)
         if track.notes:
@@ -7181,6 +7503,53 @@ class MidiToBdoWindow(
             ),
             kind="success",
         )
+
+    def _show_track_velocity_base_dialog(self, track: TrackState) -> None:
+        if track not in self.tracks or not track.notes:
+            return
+        self.selected_track = track
+        dialog = TrackVelocityBaseDialog(self, track)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        base = dialog.selected_velocity_base()
+        equalize = dialog.equalize_enabled()
+        if base == 0:
+            return
+
+        initial_notes = list(track.notes)
+        initial_records = tuple(track.bdo_source_note_records)
+        velocities = [int(note.vel) for note in initial_notes]
+        velocities.extend(
+            bound_game_velocity_b_values(initial_notes, initial_records)
+        )
+        velocity_map = base_velocity_map(
+            velocities,
+            base,
+            0,
+            equalize=equalize,
+        )
+        next_notes = [
+            note._replace(vel=velocity_map[int(note.vel)])
+            for note in initial_notes
+        ]
+        next_records = transform_game_velocity_records(
+            initial_notes,
+            initial_records,
+            next_notes,
+            lambda velocity: velocity_map[int(velocity)],
+        )
+        if next_notes == initial_notes and next_records == initial_records:
+            return
+
+        self._push_project_snapshot()
+        track.notes = next_notes
+        track.bdo_source_note_records = next_records
+        self._mark_conversion_check_dirty()
+        self._restart_preview_after_timeline_change(
+            ModelChange.notes(int(track.track_id))
+        )
+        self._autosave_project("track velocity base", immediate=True)
+        self._select_track(track)
 
     def _show_effects_placeholder(self, track: TrackState) -> None:
         self.selected_track = track
@@ -7261,7 +7630,7 @@ class MidiToBdoWindow(
 
     def _fit_timeline(self) -> None:
         self.ui_preference_binding.reset_timeline_position(fit=True)
-        self._on_track_changed(model_changed=False)
+        self._apply_workspace_change(ModelChange.view())
 
     def _reset_timeline_position(self) -> None:
         if not hasattr(self, "timeline"):
@@ -7274,12 +7643,17 @@ class MidiToBdoWindow(
         source_mode = preview_source_mode(self.audio_sources)
         has_reference = bool(self.reference_audio.audio_path)
         bdo_running = self.realtime_preview_active
+        bdo_loading = self.realtime_preview_loading
         reference_state = self.reference_audio.player.playbackState()
         reference_running = reference_state != QMediaPlayer.PlaybackState.StoppedState
         running = bdo_running or reference_running
         paused = running and (
-            (not bdo_running or self.realtime_audio.status.state != "playing")
-            and not self.reference_audio.is_playing
+            self.preview_transport_coordinator.pause_requested
+            if bdo_loading
+            else (
+                (not bdo_running or self.realtime_audio.status.state != "playing")
+                and not self.reference_audio.is_playing
+            )
         )
         can_play = bool(tracks) or has_reference
         self.play_button.setEnabled(can_play and (not running or paused))
@@ -7522,6 +7896,7 @@ class MidiToBdoWindow(
     def _play_preview(self) -> None:
         action = self.preview_transport_coordinator.play_action()
         if action is PreviewPlayAction.WAIT_FOR_LOAD:
+            self.preview_transport_coordinator.request_play()
             self.status_label.setText(
                 tr(
                     "正在准备通用 MIDI 预览…"
@@ -7531,6 +7906,7 @@ class MidiToBdoWindow(
             )
             return
         if action is PreviewPlayAction.RESUME:
+            self.preview_transport_coordinator.request_play()
             try:
                 self.realtime_audio.play()
             except AudioEngineError as exc:
@@ -7683,7 +8059,8 @@ class MidiToBdoWindow(
         )
 
     def _pause_preview(self) -> None:
-        if self.realtime_preview_active:
+        self.preview_transport_coordinator.request_pause()
+        if self.realtime_preview_active and not self.realtime_preview_loading:
             try:
                 self.realtime_audio.pause()
             except AudioEngineError as exc:
@@ -7747,6 +8124,13 @@ class MidiToBdoWindow(
                     )
                     if abs(resume_position - self.realtime_preview_start_ms) > 1.0:
                         self.realtime_audio.seek(resume_position)
+                if self.preview_transport_coordinator.pause_requested:
+                    self.reference_audio.pause()
+                    self.reference_status_timer.stop()
+                    self.timeline.set_buffer_progress(1.0, False)
+                    self.status_label.setText(tr("试听暂停"))
+                    self._sync_preview_state()
+                    return
                 self.realtime_audio.play()
                 self.reference_status_timer.stop()
                 self._sync_reference_to_position(

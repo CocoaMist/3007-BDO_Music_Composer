@@ -11,6 +11,7 @@ from typing import Protocol
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -155,6 +156,58 @@ class TrackPitchDialog(QDialog):
 
     def selected_octave_offset(self) -> int:
         return int(self.octave_offset.currentData() or 0)
+
+
+class TrackVelocityBaseDialog(QDialog):
+    """One-shot velocity-base mapping for a single logical track."""
+
+    def __init__(self, parent: QWidget, track: TrackDialogState) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(tr("轨道力度基数"))
+        self.setModal(True)
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        title = QLabel(track.display_name)
+        title.setProperty("i18nSkip", True)
+        title.setObjectName("TrackTitle")
+        layout.addWidget(title)
+
+        hint = QLabel(
+            tr(
+                "只调整当前轨道；基数从该轨道现有的原始主、副力度重新计算，不影响其他轨道或轨道音量。"
+            )
+        )
+        hint.setObjectName("Muted")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        self.velocity_base = QSpinBox()
+        self.velocity_base.setObjectName("TrackVelocityBase")
+        self.velocity_base.setRange(-127, 127)
+        self.velocity_base.setValue(0)
+        form.addRow(tr("力度基数"), self.velocity_base)
+
+        self.equalize = QCheckBox(tr("均化到 0–127"))
+        self.equalize.setObjectName("TrackVelocityEqualize")
+        form.addRow("", self.equalize)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selected_velocity_base(self) -> int:
+        return int(self.velocity_base.value())
+
+    def equalize_enabled(self) -> bool:
+        return bool(self.equalize.isChecked())
 
 
 class TrackFxDialog(QDialog):
