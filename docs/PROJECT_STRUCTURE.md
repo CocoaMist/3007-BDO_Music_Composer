@@ -43,6 +43,9 @@ than adding aggregate imports or recreating root compatibility shims.
 - `ui/` — the main-window composition root, runtime localization, and reusable Qt presentation.
   `ui/dialogs/`, `ui/editor/`, `ui/theme/`, and `ui/transcription/` contain
   focused widgets, styling, transcription views, and background Qt workers.
+  `ui/global_velocity_gain_qt.py` and `ui/timeline_validation_host.py` keep
+  velocity transactions and exact-note validation presentation out of the
+  composition root.
 
 The desktop composition root is
 `bdo_music_composer/ui/main_window.py`. It may re-export implementation owners

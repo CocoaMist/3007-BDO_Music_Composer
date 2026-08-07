@@ -132,9 +132,23 @@ class LocaleResponsiveUiTests(unittest.TestCase):
                     == cached_statuses[language]
                 )
 
-                assert toolbar.minimumSizeHint().width() <= window.width()
-                assert timeline_bar.minimumSizeHint().width() <= window.width()
-                assert editor.minimumSizeHint().width() <= editor.width()
+                assert toolbar.minimumSizeHint().width() <= window.width(), (
+                    "toolbar",
+                    language,
+                    toolbar.minimumSizeHint().width(),
+                    window.width(),
+                )
+                assert timeline_bar.minimumSizeHint().width() <= window.width(), (
+                    "timeline",
+                    language,
+                    timeline_bar.minimumSizeHint().width(),
+                    window.width(),
+                )
+                assert editor.minimumSizeHint().width() <= editor.width(), (
+                    language,
+                    editor.minimumSizeHint().width(),
+                    editor.width(),
+                )
                 assert editor_toolbar.minimumSizeHint().width() <= editor.width()
                 assert inspector.minimumSizeHint().width() <= editor.width()
                 assert (
