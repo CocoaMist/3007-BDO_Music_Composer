@@ -6155,6 +6155,51 @@ _RELEASE_UPDATE_TRANSLATIONS = {
         "このバージョンの詳細はありません。",
         "이 버전에 대한 자세한 설명이 없습니다.",
     ),
+    "更新来源：{source}": (
+        "Update source: {source}",
+        "更新元：{source}",
+        "업데이트 소스: {source}",
+    ),
+    "本次更新": (
+        "What's new",
+        "今回の更新",
+        "이번 업데이트",
+    ),
+    "稍后": (
+        "Later",
+        "後で",
+        "나중에",
+    ),
+    "正在后台下载更新…": (
+        "Downloading the update in the background…",
+        "更新をバックグラウンドでダウンロードしています…",
+        "백그라운드에서 업데이트를 다운로드하고 있습니다…",
+    ),
+    "下载进度：{percent}%": (
+        "Download progress: {percent}%",
+        "ダウンロード進捗：{percent}%",
+        "다운로드 진행률: {percent}%",
+    ),
+    "更新包已通过验证；将在下次启动时自动安装。": (
+        "The update package is verified and will install automatically on the next launch.",
+        "更新パッケージの検証が完了しました。次回起動時に自動インストールされます。",
+        "업데이트 패키지 검증이 완료되었으며 다음 실행 시 자동으로 설치됩니다.",
+    ),
+    "已发现新版本；可在软件更新设置中启用后台下载。": (
+        "A new version is available; background download can be enabled in Software Update settings.",
+        "新しいバージョンがあります。ソフトウェア更新設定でバックグラウンドダウンロードを有効にできます。",
+        "새 버전이 있습니다. 소프트웨어 업데이트 설정에서 백그라운드 다운로드를 활성화할 수 있습니다.",
+    ),
+    "准备完成": (
+        "Ready",
+        "準備完了",
+        "준비 완료",
+    ),
+    "等待下载": (
+        "Waiting to download",
+        "ダウンロード待ち",
+        "다운로드 대기",
+    ),
 }
 
 for _source, (_english, _japanese, _korean) in _RELEASE_UPDATE_TRANSLATIONS.items():

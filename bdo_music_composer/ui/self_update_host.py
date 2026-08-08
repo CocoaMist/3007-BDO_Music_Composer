@@ -6,6 +6,7 @@ import os
 
 from bdo_music_composer.app.application_metadata import APP_VERSION
 from bdo_music_composer.app.crash_logging import append_crash_log
+from bdo_music_composer.ui.dialogs.self_update_dialog import SelfUpdateDialog
 from bdo_music_composer.ui.i18n import tr, trf
 from bdo_music_composer.ui.self_update_qt import PreparedUpdate
 from bdo_music_composer.update.preferences import update_preferences
@@ -58,10 +59,29 @@ class SelfUpdateHostMixin:
             version=str(manifest.version),
         )
         self.show_toast(message, duration_ms=4200)
+        dialog = getattr(self, "_self_update_dialog", None)
+        if dialog is not None:
+            dialog.close()
+        self._self_update_dialog = SelfUpdateDialog(
+            manifest,
+            _source,
+            auto_download=bool(preferences["auto_download"]),
+            parent=self,
+        )
+        self._self_update_dialog.show()
+        self._self_update_dialog.raise_()
         if not preferences["auto_download"]:
             self._manual_update_check = False
 
+    def _on_update_progress(self, downloaded: int, total: int) -> None:
+        dialog = getattr(self, "_self_update_dialog", None)
+        if dialog is not None:
+            dialog.set_progress(downloaded, total)
+
     def _on_update_ready(self, prepared: PreparedUpdate) -> None:
+        dialog = getattr(self, "_self_update_dialog", None)
+        if dialog is not None:
+            dialog.set_ready()
         self.show_toast(
             trf(
                 "v{version} 已准备好，将在下次启动时更新",

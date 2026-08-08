@@ -1216,6 +1216,7 @@ class MidiToBdoWindow(
         self.self_update_controller.available.connect(
             self._on_update_available
         )
+        self.self_update_controller.progress.connect(self._on_update_progress)
         self.self_update_controller.ready.connect(self._on_update_ready)
         self.self_update_controller.current.connect(self._on_update_current)
         self.self_update_controller.failed.connect(self._on_update_failed)

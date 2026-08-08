@@ -77,7 +77,12 @@ class UpdateManifest:
 
     def localized_notes(self, locale: str) -> str:
         notes = dict(self.release_notes)
-        return notes.get(locale) or notes.get("zh_CN") or notes.get("en_US") or ""
+        exact = notes.get(locale)
+        if exact:
+            return exact
+        if str(locale).startswith("zh"):
+            return notes.get("zh_CN") or notes.get("en_US") or ""
+        return notes.get("en_US") or notes.get("zh_CN") or ""
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

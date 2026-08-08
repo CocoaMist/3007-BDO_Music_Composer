@@ -367,12 +367,20 @@ class ReleaseNotesDialog(QDialog):
             self._render_unavailable()
             return
         keys = [item[0] for item in self._display_entries]
+        latest_release_key = next(
+            (
+                key
+                for key, _entry, is_development in self._display_entries
+                if not is_development
+            ),
+            keys[0],
+        )
         target = (
             selected_key
             if selected_key in keys
             else APP_VERSION
             if APP_VERSION in keys
-            else keys[0]
+            else latest_release_key
         )
         target_index = keys.index(target)
         self.version_selector.setCurrentIndex(target_index)

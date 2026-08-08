@@ -15,7 +15,7 @@ class MainWindowStyleMixin:
             QDialog QLabel { color: #ddd7cf; }
             QDialog#SettingsDialog, QDialog#MasterEffectsDialog,
             QDialog#ThanksDialog, QDialog#ReleaseNotesDialog,
-            QDialog#MidiNoteEditorDialog {
+            QDialog#SelfUpdateDialog, QDialog#MidiNoteEditorDialog {
                 background: #151515;
                 color: #f3f1ea;
             }
