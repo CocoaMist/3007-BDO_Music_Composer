@@ -7,6 +7,9 @@ from bdo_music_composer.app.application_metadata import (
     APP_VERSION,
     GITHUB_LATEST_RELEASE_API_URL,
     GITHUB_RELEASES_URL,
+    GITHUB_UPDATE_CHANNEL_URL,
+    GITEE_REPOSITORY_URL,
+    GITEE_UPDATE_CHANNEL_URL,
     RELEASE_NOTES_UI_ENABLED,
     WINDOWS_APP_USER_MODEL_ID,
 )
@@ -99,6 +102,21 @@ class UpdatePayloadTests(unittest.TestCase):
         self.assertEqual(
             GITHUB_RELEASES_URL,
             "https://github.com/CocoaMist/3007-BDO_Music_Composer/releases",
+        )
+        self.assertEqual(
+            GITHUB_UPDATE_CHANNEL_URL,
+            "https://raw.githubusercontent.com/CocoaMist/"
+            "3007-BDO_Music_Composer/master/updates/stable/"
+            "update-manifest-v1.json",
+        )
+        self.assertEqual(
+            GITEE_REPOSITORY_URL,
+            "https://gitee.com/raionnyan/3007-BDO_Music_Composer",
+        )
+        self.assertEqual(
+            GITEE_UPDATE_CHANNEL_URL,
+            "https://gitee.com/raionnyan/3007-BDO_Music_Composer/"
+            "raw/master/updates/stable/update-manifest-v1.json",
         )
 
     def test_parses_stable_release_and_ignores_untrusted_url(self) -> None:
