@@ -361,7 +361,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             nav = settings.findChild(QListWidget, "SettingsNav")
             pages = settings.findChild(QStackedWidget, "SettingsPages")
             assert nav is not None and pages is not None
-            assert nav.count() == pages.count() == 3
+            assert nav.count() == pages.count() == 4
             settings_header = settings.findChild(QFrame, "SettingsHeader")
             assert settings_header is not None
             assert settings_header.property("uiRole") == "dialogHeader"
@@ -387,7 +387,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
                 for section in settings_sections
             )
             assert [nav.item(index).text() for index in range(nav.count())] == [
-                "通用与导出", "MIDI 与力度", "音源与外观"
+                "通用与导出", "MIDI 与力度", "音源与外观", "软件更新"
             ]
             for index in range(nav.count()):
                 nav.setCurrentRow(index)

@@ -93,15 +93,24 @@ from .editor_shortcuts import editor_shortcut_spec
 from bdo_music_composer.editor.editor_models import (
     BDO_DRUM_MAX,
     BDO_DRUM_MIN,
+    BDO_DRUM_PITCH_NAMES,
+    BDO_DRUM_PITCH_TRANSLATION_KEYS,
+    GM_DRUM_PITCH_NAMES,
+    GM_DRUM_PITCH_TRANSLATION_KEYS,
     GhostNoteProjection,
     TrackState,
     game_supported_pitches,
     note_name,
     same_onset_articulation_indices,
     track_uses_canonical_drum_lanes,
+    track_uses_drum_lane_mode,
 )
 from bdo_music_composer.editor.editor_commands import (
     next_non_overlapping_paste_origin,
+)
+from bdo_music_composer.editor.editor_roll_modes import (
+    EditorRollMode,
+    default_roll_mode,
 )
 from bdo_music_composer.ui.theme.fluent_theme import (
     FluentSymbol,
@@ -221,6 +230,20 @@ class MidiNoteEditorDialog(QDialog):
             int(track.bdo_instrument_id)
         )
         self.canonical_drum_lanes = track_uses_canonical_drum_lanes(track)
+        self.drum_lane_mode = track_uses_drum_lane_mode(track)
+        self.drum_lane_labels = (
+            BDO_DRUM_PITCH_NAMES
+            if self.canonical_drum_lanes
+            else GM_DRUM_PITCH_NAMES
+        )
+        self.drum_lane_translation_keys = (
+            BDO_DRUM_PITCH_TRANSLATION_KEYS
+            if self.canonical_drum_lanes
+            else GM_DRUM_PITCH_TRANSLATION_KEYS
+        )
+        self.roll_mode_spec = default_roll_mode(
+            int(track.bdo_instrument_id)
+        )
         self.default_articulation_ntype = (
             99 if self.canonical_drum_lanes else 0
         )
@@ -5328,10 +5351,43 @@ class MidiNoteEditorDialog(QDialog):
 
     def _update_track_meta(self) -> None:
         if hasattr(self, "track_meta"):
+            drum_mode = ""
+            if (
+                self.drum_lane_mode
+                and self.roll_mode_spec.mode is EditorRollMode.PERCUSSION
+            ):
+                drum_mode = tr(
+                    "鼓组模式 · BDO 鼓件"
+                    if self.canonical_drum_lanes
+                    else "鼓组模式 · GM 鼓键"
+                ) + "   ·   "
             self.track_meta.setText(
-                f"♫ {len(self.canvas.notes) if hasattr(self, 'canvas') else len(self.track.notes)}"
+                f"{drum_mode}♫ {len(self.canvas.notes) if hasattr(self, 'canvas') else len(self.track.notes)}"
                 f"   ·   {self.bpm} BPM   ·   {self.time_sig}/4"
             )
+
+    def drum_lane_label(self, pitch: int) -> str | None:
+        """Expose source-space drum labels to the shared piano-roll canvas."""
+
+        if not self.drum_lane_mode:
+            return None
+        raw_label = self.drum_lane_labels.get(int(pitch))
+        if raw_label is None:
+            active_pitches = (
+                self.canvas.note_pitch_set
+                if hasattr(self, "canvas")
+                else frozenset(int(note.pitch) for note in self.track.notes)
+            )
+            if int(pitch) in active_pitches:
+                return trf(
+                    "MIDI {pitch} · 未映射鼓键",
+                    pitch=int(pitch),
+                )
+            return None
+        translation_key = self.drum_lane_translation_keys.get(int(pitch))
+        if translation_key is None:
+            return raw_label
+        return f"{raw_label} · {tr(translation_key)}"
 
     def edited_notes(self) -> list:
         return sorted(self.canvas.notes, key=lambda n: (n.start, n.pitch, n.dur))

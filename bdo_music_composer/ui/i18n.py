@@ -1362,6 +1362,53 @@ EN.update({
     ),
 })
 
+_DRUM_LANE_TRANSLATIONS = {
+    "底鼓": ("Kick", "バスドラム", "베이스 드럼"),
+    "原声底鼓": ("Acoustic kick", "アコースティックバスドラム", "어쿠스틱 베이스 드럼"),
+    "小军鼓边击": ("Snare side hit", "スネアサイド", "스네어 사이드 히트"),
+    "鼓边轻击": ("Side stick", "サイドスティック", "사이드 스틱"),
+    "小军鼓": ("Snare", "スネア", "스네어"),
+    "鼓边重击": ("Drum rim shot", "ドラム・リムショット", "드럼 림 샷"),
+    "小军鼓复击": ("Snare flam", "スネアフラム", "스네어 플램"),
+    "拍手": ("Hand clap", "ハンドクラップ", "핸드 클랩"),
+    "电子小军鼓": ("Electric snare", "エレクトリックスネア", "일렉트릭 스네어"),
+    "嗵鼓 1": ("Tom 1", "タム 1", "탐 1"),
+    "嗵鼓 2": ("Tom 2", "タム 2", "탐 2"),
+    "嗵鼓 3": ("Tom 3", "タム 3", "탐 3"),
+    "嗵鼓 4": ("Tom 4", "タム 4", "탐 4"),
+    "嗵鼓 5": ("Tom 5", "タム 5", "탐 5"),
+    "低音落地嗵鼓": ("Low floor tom", "ロー・フロアタム", "로우 플로어 탐"),
+    "高音落地嗵鼓": ("High floor tom", "ハイ・フロアタム", "하이 플로어 탐"),
+    "低音嗵鼓": ("Low tom", "ロータム", "로우 탐"),
+    "中低音嗵鼓": ("Low-mid tom", "ロー・ミッドタム", "로우 미드 탐"),
+    "中高音嗵鼓": ("Hi-mid tom", "ハイ・ミッドタム", "하이 미드 탐"),
+    "高音嗵鼓": ("High tom", "ハイタム", "하이 탐"),
+    "闭合踩镲": ("Closed hi-hat", "クローズド・ハイハット", "드럼 클로즈드 하이햇"),
+    "脚踩踩镲": ("Pedal hi-hat", "ペダル・ハイハット", "페달 하이햇"),
+    "开放踩镲": ("Open hi-hat", "オープン・ハイハット", "드럼 오픈 하이햇"),
+    "碎音镲": ("Crash cymbal", "クラッシュシンバル", "크래시 심벌"),
+    "碎音镲 1": ("Crash cymbal 1", "クラッシュシンバル 1", "크래시 심벌 1"),
+    "碎音镲 2": ("Crash cymbal 2", "クラッシュシンバル 2", "크래시 심벌 2"),
+    "节奏镲": ("Ride cymbal", "ライドシンバル", "라이드 심벌"),
+    "节奏镲 1": ("Ride cymbal 1", "ライドシンバル 1", "라이드 심벌 1"),
+    "节奏镲 2": ("Ride cymbal 2", "ライドシンバル 2", "라이드 심벌 2"),
+    "中国镲": ("Chinese cymbal", "チャイナシンバル", "차이나 심벌"),
+    "镲帽": ("Ride bell", "ライドベル", "라이드 벨"),
+    "铃鼓": ("Tambourine", "タンバリン", "탬버린"),
+    "水镲": ("Splash cymbal", "スプラッシュシンバル", "스플래시 심벌"),
+    "牛铃": ("Cowbell", "カウベル", "카우벨"),
+    "颤音器": ("Vibra slap", "ビブラスラップ", "비브라 슬랩"),
+    "高音邦戈鼓": ("High bongo", "ハイボンゴ", "하이 봉고"),
+    "低音邦戈鼓": ("Low bongo", "ローボンゴ", "로우 봉고"),
+    "小军鼓短滚奏": ("Short snare roll", "スネア・ショートロール", "스네어 쇼트 롤"),
+    "小军鼓长滚奏": ("Long snare roll", "スネア・ロングロール", "스네어 롱 롤"),
+}
+for _source, (_english, _japanese, _korean) in _DRUM_LANE_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+del _source, _english, _japanese, _korean
+
 JA.update({
     "许可证": "ライセンス",
     "自动扒谱、音频与科学计算": "自動採譜・オーディオ・科学計算",
@@ -5943,6 +5990,63 @@ del _source, _english, _japanese, _korean
 
 
 _RELEASE_UPDATE_TRANSLATIONS = {
+    "软件更新": ("Software Update", "ソフトウェア更新", "소프트웨어 업데이트"),
+    "无感更新": ("Seamless Updates", "シームレス更新", "원활한 업데이트"),
+    "后台检查并准备经过签名验证的新版本；不会上传工程、Owner ID 或本机路径。": (
+        "Checks for and prepares signature-verified releases in the background; projects, Owner IDs, and local paths are never uploaded.",
+        "署名検証済みの新しいバージョンをバックグラウンドで確認・準備します。プロジェクト、Owner ID、ローカルパスは送信しません。",
+        "서명 검증된 새 버전을 백그라운드에서 확인하고 준비합니다. 프로젝트, Owner ID 및 로컬 경로는 업로드하지 않습니다.",
+    ),
+    "自动检查更新": ("Automatically check for updates", "更新を自動確認", "업데이트 자동 확인"),
+    "发现新版本后在后台自动下载": (
+        "Download new releases in the background",
+        "新しいバージョンをバックグラウンドで自動ダウンロード",
+        "새 버전을 백그라운드에서 자동 다운로드",
+    ),
+    "自动选择（优先可用镜像）": (
+        "Automatic (prefer an available mirror)",
+        "自動（利用可能なミラーを優先）",
+        "자동(사용 가능한 미러 우선)",
+    ),
+    "Gitee 国内镜像": ("Gitee China mirror", "Gitee 中国ミラー", "Gitee 중국 미러"),
+    "立即检查": ("Check Now", "今すぐ確認", "지금 확인"),
+    "更新来源": ("Update source", "更新元", "업데이트 소스"),
+    "正在后台检查更新…": (
+        "Checking for updates in the background…",
+        "バックグラウンドで更新を確認中…",
+        "백그라운드에서 업데이트 확인 중…",
+    ),
+    "当前环境无法启动更新检查": (
+        "Update checks are unavailable in this environment",
+        "この環境では更新確認を開始できません",
+        "현재 환경에서는 업데이트 확인을 시작할 수 없습니다",
+    ),
+    "正在检查更新…": ("Checking for updates…", "更新を確認中…", "업데이트 확인 중…"),
+    "发现新版本 v{version}，正在后台下载": (
+        "Version v{version} is available and is downloading in the background",
+        "新しいバージョン v{version} をバックグラウンドでダウンロード中です",
+        "새 버전 v{version}을(를) 백그라운드에서 다운로드 중입니다",
+    ),
+    "发现新版本 v{version}": (
+        "Version v{version} is available",
+        "新しいバージョン v{version} があります",
+        "새 버전 v{version}이(가) 있습니다",
+    ),
+    "v{version} 已准备好，将在下次启动时更新": (
+        "v{version} is ready and will be installed on the next launch",
+        "v{version} の準備が完了しました。次回起動時に更新します",
+        "v{version} 준비가 완료되었으며 다음 실행 시 업데이트됩니다",
+    ),
+    "检查更新失败，请稍后重试": (
+        "Update check failed; try again later",
+        "更新確認に失敗しました。後でもう一度お試しください",
+        "업데이트 확인에 실패했습니다. 나중에 다시 시도하세요",
+    ),
+    "已更新至 v{version}": (
+        "Updated to v{version}",
+        "v{version} に更新しました",
+        "v{version}(으)로 업데이트했습니다",
+    ),
     "更新日志 · v{version}": (
         "Release notes · v{version}",
         "リリースノート · v{version}",
@@ -6442,6 +6546,40 @@ for _source, (_english, _japanese, _korean) in (
     KO[_source] = _korean
 
 del _source, _english, _japanese, _korean
+
+EN.update({
+    "鼓组模式 · BDO 鼓件": "Drum mode · BDO pieces",
+    "鼓组模式 · GM 鼓键": "Drum mode · GM keys",
+    "卷帘模式": "Roll mode",
+    "钢琴模式": "Piano mode",
+    "打击乐模式": "Percussion mode",
+    "切换钢琴音高卷帘与按鼓件命名的打击乐卷帘；不会修改音符数据": (
+        "Switch between the pitched piano roll and the named percussion roll; note data is unchanged"
+    ),
+    "MIDI {pitch} · 未映射鼓键": "MIDI {pitch} · Unmapped drum key",
+})
+JA.update({
+    "鼓组模式 · BDO 鼓件": "ドラムモード・BDOパーツ",
+    "鼓组模式 · GM 鼓键": "ドラムモード・GMキー",
+    "卷帘模式": "ロールモード",
+    "钢琴模式": "ピアノモード",
+    "打击乐模式": "打楽器モード",
+    "切换钢琴音高卷帘与按鼓件命名的打击乐卷帘；不会修改音符数据": (
+        "ピアノロールと楽器名付き打楽器ロールを切り替えます。ノートデータは変更されません"
+    ),
+    "MIDI {pitch} · 未映射鼓键": "MIDI {pitch}・未割り当てのドラムキー",
+})
+KO.update({
+    "鼓组模式 · BDO 鼓件": "드럼 모드 · BDO 파트",
+    "鼓组模式 · GM 鼓键": "드럼 모드 · GM 키",
+    "卷帘模式": "롤 모드",
+    "钢琴模式": "피아노 모드",
+    "打击乐模式": "타악기 모드",
+    "切换钢琴音高卷帘与按鼓件命名的打击乐卷帘；不会修改音符数据": (
+        "피아노 롤과 악기 이름이 표시된 타악기 롤을 전환합니다. 음표 데이터는 변경되지 않습니다"
+    ),
+    "MIDI {pitch} · 未映射鼓键": "MIDI {pitch} · 매핑되지 않은 드럼 키",
+})
 
 
 _EFFECT_GUIDANCE_TRANSLATIONS = {

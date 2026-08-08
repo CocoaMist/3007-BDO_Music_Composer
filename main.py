@@ -154,6 +154,29 @@ def _self_test_startup() -> int:
 
 
 def main() -> None:
+    from bdo_music_composer.update.install import (
+        APPLY_UPDATE_ARGUMENT,
+        POST_UPDATE_ARGUMENT,
+        POST_UPDATE_STATE_ENVIRONMENT,
+        POST_UPDATE_TOKEN_ENVIRONMENT,
+        apply_update_plan,
+        cleanup_committed_updates,
+        launch_ready_update_on_startup,
+    )
+
+    if len(sys.argv) == 4 and sys.argv[1] == APPLY_UPDATE_ARGUMENT:
+        raise SystemExit(apply_update_plan(sys.argv[2], sys.argv[3]))
+    if len(sys.argv) == 4 and sys.argv[1] == POST_UPDATE_ARGUMENT:
+        import os
+
+        os.environ[POST_UPDATE_STATE_ENVIRONMENT] = sys.argv[2]
+        os.environ[POST_UPDATE_TOKEN_ENVIRONMENT] = sys.argv[3]
+        sys.argv[:] = sys.argv[:1]
+    elif getattr(sys, "frozen", False):
+        cleanup_committed_updates()
+        if launch_ready_update_on_startup():
+            raise SystemExit(0)
+
     if sys.argv[1:] == [TRANSCRIPTION_SELF_TEST_ARGUMENT]:
         raise SystemExit(_self_test_transcription())
     if sys.argv[1:] == [STARTUP_SELF_TEST_ARGUMENT]:

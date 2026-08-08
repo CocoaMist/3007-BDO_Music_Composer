@@ -473,6 +473,11 @@ from bdo_music_composer.app.application_metadata import (  # noqa: E402
     RELEASE_NOTES_UI_ENABLED,
     WINDOWS_APP_USER_MODEL_ID,
 )
+from bdo_music_composer.ui.self_update_qt import (  # noqa: E402
+    SelfUpdateController,
+)
+from bdo_music_composer.ui.self_update_host import SelfUpdateHostMixin  # noqa: E402
+from bdo_music_composer.update.preferences import update_preferences  # noqa: E402
 from bdo_music_composer.ui.dialogs.acknowledgements_dialog import AcknowledgementsDialog  # noqa: E402
 from bdo_music_composer.ui.dialogs.release_notes_dialog import ReleaseNotesDialog  # noqa: E402
 from bdo_music_composer.app.conversion_validation_controller import (  # noqa: E402
@@ -760,6 +765,7 @@ class MidiToBdoWindow(
     WorkspaceTempoHostMixin,
     GlobalVelocityGainHostMixin,
     TimelineValidationHostMixin,
+    SelfUpdateHostMixin,
     MainWindowStyleMixin,
     QMainWindow,
 ):
@@ -1056,6 +1062,7 @@ class MidiToBdoWindow(
         self.setMinimumSize(1160, 720)
 
         self.config = load_config()
+        self.update_settings = update_preferences(self.config)
         configured_owner_id, configured_character_name = owner_identity(self.config)
         self.language = str(self.config.get("language", "auto"))
         self.owner_id = configured_owner_id
@@ -1200,6 +1207,19 @@ class MidiToBdoWindow(
         self._sync_preview_state()
         self._update_process_metrics()
         self.process_metrics_timer.start()
+        self.self_update_controller = SelfUpdateController(
+            self.config,
+            lambda: save_config(self.config),
+            self,
+        )
+        self._manual_update_check = False
+        self.self_update_controller.available.connect(
+            self._on_update_available
+        )
+        self.self_update_controller.ready.connect(self._on_update_ready)
+        self.self_update_controller.current.connect(self._on_update_current)
+        self.self_update_controller.failed.connect(self._on_update_failed)
+        QTimer.singleShot(25_000, self._start_background_update)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -1746,18 +1766,6 @@ class MidiToBdoWindow(
             trf("已读取 Owner ID：0x{owner_id:08x}", owner_id=self.owner_id),
             kind="success",
         )
-
-    def _show_startup_notice(self) -> None:
-        if not self.owner_id:
-            self.show_toast(
-                tr("Owner ID 未设置；导出前需要从游戏曲谱读取。"),
-                kind="warning",
-                duration_ms=5000,
-            )
-        else:
-            self.show_toast(
-                tr("双击曲谱或项目即可打开；主页扫描不会读取曲谱中的身份信息。")
-            )
 
     def _scan_home_batch(self, generation: int) -> None:
         session = self.home_scan_session
@@ -7994,7 +8002,7 @@ class MidiToBdoWindow(
         old_effective_bpm = float(max(1, self.bpm_override or self.bpm))
         old_transpose = int(self.transpose)
         dialog = SettingsDialog(self)
-        dialog.settings_nav.setCurrentRow(max(0, min(2, int(initial_page))))
+        dialog.settings_nav.setCurrentRow(max(0, min(3, int(initial_page))))
         while True:
             if dialog.exec() != QDialog.Accepted:
                 return
@@ -8129,6 +8137,13 @@ class MidiToBdoWindow(
         self.config["game_music_dir"] = self.game_music_dir_path
         self.instrument_art_dir = selected_instrument_art_dir
         self.config["instrument_art_dir"] = self.instrument_art_dir
+        self.update_settings = {
+            **update_preferences(self.config),
+            "enabled": dialog.update_enabled.isChecked(),
+            "auto_download": dialog.update_auto_download.isChecked(),
+            "source": str(dialog.update_source.currentData() or "auto"),
+        }
+        self.config["updates"] = dict(self.update_settings)
         loaded_art_count = self.timeline.set_instrument_art_dir(
             self.instrument_art_dir
         )
@@ -8482,6 +8497,7 @@ class MidiToBdoWindow(
         self._stop_preview()
         self.reference_audio.shutdown()
         self.realtime_audio.stop()
+        self.self_update_controller.shutdown()
         self.workspace_close_pending = False
         super().closeEvent(event)
 
