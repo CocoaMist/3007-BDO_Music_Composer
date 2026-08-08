@@ -40,11 +40,14 @@ def _manifest_payload(**changes: object) -> bytes:
         "schema_version": 1,
         "app_id": "CocoaMist.BDOMusicComposer",
         "channel": "stable",
-        "version": "1.2.0",
+        "version": "1.2.0.1",
         "published_at": "2026-08-08T12:00:00Z",
         "update_protocol": 1,
         "mandatory": False,
-        "release_notes": {"zh_CN": "测试更新"},
+        "release_notes": {
+            "zh_CN": "测试更新",
+            "en_US": "Test update",
+        },
         "artifacts": [{
             "platform": "windows",
             "architecture": "x86_64",
@@ -53,8 +56,8 @@ def _manifest_payload(**changes: object) -> bytes:
             "size": 123,
             "sha256": "a" * 64,
             "urls": {
-                "github": "https://github.com/CocoaMist/repo/releases/download/v1.2.0/BDO-Music-Composer.exe",
-                "gitee": "https://gitee.com/CocoaMist/repo/releases/download/v1.2.0/BDO-Music-Composer.exe",
+                "github": "https://github.com/CocoaMist/repo/releases/download/v1.2.0.1/BDO-Music-Composer.exe",
+                "gitee": "https://gitee.com/CocoaMist/repo/releases/download/v1.2.0.1/BDO-Music-Composer.exe",
             },
         }],
     }
@@ -82,9 +85,11 @@ class SignedManifestTests(unittest.TestCase):
 
     def test_strict_manifest_selects_the_windows_onefile_artifact(self) -> None:
         manifest = _parse_manifest_payload(_manifest_payload())
-        self.assertEqual("1.2.0", str(manifest.version))
+        self.assertEqual("1.2.0.1", str(manifest.version))
         self.assertEqual("BDO-Music-Composer.exe", manifest.artifact.filename)
         self.assertEqual("https", manifest.artifact.url_for("gitee").split(":", 1)[0])
+        self.assertEqual("测试更新", manifest.localized_notes("zh_TW"))
+        self.assertEqual("Test update", manifest.localized_notes("ja_JP"))
 
     def test_manifest_rejects_untrusted_download_host_and_unknown_fields(self) -> None:
         payload = json.loads(_manifest_payload())

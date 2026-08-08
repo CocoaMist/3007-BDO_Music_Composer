@@ -33,6 +33,7 @@ _SEMVER_RE = re.compile(
     r"^(0|[1-9][0-9]*)\."
     r"(0|[1-9][0-9]*)\."
     r"(0|[1-9][0-9]*)"
+    r"(?:\.([1-9][0-9]*))?"
     r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
     r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$",
     re.ASCII,
@@ -87,11 +88,12 @@ class UpdateCheckError(ValueError):
 @total_ordering
 @dataclass(frozen=True, slots=True, eq=False)
 class SemanticVersion:
-    """Strict SemVer 2.0.0 value with precedence-aware comparisons."""
+    """SemVer value with one optional positive numeric test revision."""
 
     major: int
     minor: int
     patch: int
+    revision: int = 0
     prerelease: tuple[str, ...] = ()
     build: tuple[str, ...] = ()
 
@@ -102,7 +104,7 @@ class SemanticVersion:
         matched = _SEMVER_RE.fullmatch(value)
         if matched is None:
             raise ValueError("invalid semantic version")
-        prerelease = tuple((matched.group(4) or "").split("."))
+        prerelease = tuple((matched.group(5) or "").split("."))
         if prerelease == ("",):
             prerelease = ()
         if any(
@@ -113,13 +115,14 @@ class SemanticVersion:
             for identifier in prerelease
         ):
             raise ValueError("numeric prerelease identifiers cannot have leading zeroes")
-        build = tuple((matched.group(5) or "").split("."))
+        build = tuple((matched.group(6) or "").split("."))
         if build == ("",):
             build = ()
         return cls(
             major=int(matched.group(1)),
             minor=int(matched.group(2)),
             patch=int(matched.group(3)),
+            revision=int(matched.group(4) or 0),
             prerelease=prerelease,
             build=build,
         )
@@ -127,8 +130,8 @@ class SemanticVersion:
     def compare_precedence(self, other: "SemanticVersion") -> int:
         if not isinstance(other, SemanticVersion):
             raise TypeError("version comparison requires SemanticVersion")
-        local_core = (self.major, self.minor, self.patch)
-        remote_core = (other.major, other.minor, other.patch)
+        local_core = (self.major, self.minor, self.patch, self.revision)
+        remote_core = (other.major, other.minor, other.patch, other.revision)
         if local_core != remote_core:
             return 1 if local_core > remote_core else -1
         if not self.prerelease and not other.prerelease:
@@ -166,10 +169,14 @@ class SemanticVersion:
         return self.compare_precedence(other) < 0
 
     def __hash__(self) -> int:
-        return hash((self.major, self.minor, self.patch, self.prerelease))
+        return hash(
+            (self.major, self.minor, self.patch, self.revision, self.prerelease)
+        )
 
     def __str__(self) -> str:
         value = f"{self.major}.{self.minor}.{self.patch}"
+        if self.revision:
+            value += f".{self.revision}"
         if self.prerelease:
             value += f"-{'.'.join(self.prerelease)}"
         if self.build:

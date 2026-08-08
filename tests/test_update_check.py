@@ -56,6 +56,8 @@ class SemanticVersionTests(unittest.TestCase):
             "01.2.3",
             "1.02.3",
             "1.2.03",
+            "1.2.3.0",
+            "1.2.3.01",
             "1.2.3-01",
             "1.2.3-",
             "1.2.3+",
@@ -85,10 +87,16 @@ class SemanticVersionTests(unittest.TestCase):
             SemanticVersion.parse("1.0.0+build.2"),
         )
 
+    def test_positive_fourth_component_orders_test_revisions(self) -> None:
+        ordered = ["1.2.0", "1.2.0.1", "1.2.0.2", "1.2.1"]
+        parsed = [SemanticVersion.parse(value) for value in ordered]
+        self.assertEqual(parsed, sorted(parsed))
+        self.assertEqual("1.2.0.1", str(parsed[1]))
+
 
 class UpdatePayloadTests(unittest.TestCase):
     def test_metadata_is_fixed_to_public_project(self) -> None:
-        self.assertEqual(APP_VERSION, "1.2.0")
+        self.assertEqual(APP_VERSION, "1.2.0.1")
         self.assertFalse(RELEASE_NOTES_UI_ENABLED)
         self.assertEqual(
             WINDOWS_APP_USER_MODEL_ID,
@@ -203,7 +211,7 @@ class UpdatePayloadTests(unittest.TestCase):
         headers = github_request_headers()
         self.assertEqual(headers["Accept"], "application/vnd.github+json")
         self.assertEqual(headers["X-GitHub-Api-Version"], "2026-03-10")
-        self.assertEqual(headers["User-Agent"], "BDO-Music-Composer/1.2.0")
+        self.assertEqual(headers["User-Agent"], "BDO-Music-Composer/1.2.0.1")
         self.assertNotIn("Authorization", headers)
         self.assertNotIn("Owner", " ".join(headers))
 

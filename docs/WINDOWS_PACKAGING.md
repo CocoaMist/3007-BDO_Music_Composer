@@ -30,7 +30,7 @@ outside the repository:
 ```powershell
 .\.venv\Scripts\python.exe scripts\generate_update_manifest.py `
   dist\BDO-Music-Composer.exe `
-  --version 1.2.0 `
+  --version 1.2.0.1 `
   --github-url <exact-github-release-asset-url> `
   --gitee-url <exact-gitee-release-asset-url> `
   --private-key <outside-repository-private-key.pem> `
@@ -40,6 +40,9 @@ outside the repository:
 Publish the resulting `update-manifest-v1.json` and
 `update-manifest-v1.json.sig` byte-for-byte to both configured stable-channel
 paths. Never rebuild separately per mirror and never publish the private key.
+Ordinary releases use `major.minor.patch`. A positive fourth component is a
+test revision ordered after its three-part base and before the next patch; a
+zero or leading-zero fourth component is rejected to avoid version aliases.
 
 ## Build
 
