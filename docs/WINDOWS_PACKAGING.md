@@ -13,6 +13,34 @@ user cache location as a source checkout. It never contains reference audio,
 extracted game audio, Owner IDs, autosaves, exported scores, or transcription
 evidence caches.
 
+## Signed seamless updates
+
+The distributed shape remains one `BDO-Music-Composer.exe`. A frozen Windows
+build checks the RSA-signed stable channel after startup, can fetch identical
+assets from Gitee or GitHub, and stages a verified new EXE under Local AppData.
+It does not interrupt the current session: the next user-initiated launch hands
+off to the staged EXE, which replaces the installed copy and retains the old
+copy until the real new GUI reports healthy. Source launches and
+`--self-test-startup` never start update networking.
+
+After the ordinary public build gates pass and the same EXE has been uploaded
+to both mirrors, generate the exact channel document with the private key kept
+outside the repository:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\generate_update_manifest.py `
+  dist\BDO-Music-Composer.exe `
+  --version 1.2.0 `
+  --github-url <exact-github-release-asset-url> `
+  --gitee-url <exact-gitee-release-asset-url> `
+  --private-key <outside-repository-private-key.pem> `
+  --output-dir <release-channel-output>
+```
+
+Publish the resulting `update-manifest-v1.json` and
+`update-manifest-v1.json.sig` byte-for-byte to both configured stable-channel
+paths. Never rebuild separately per mirror and never publish the private key.
+
 ## Build
 
 Use CPython 3.12.10 and install the build/runtime dependencies into the

@@ -55,6 +55,10 @@ class InstrumentEditorUiTests(unittest.TestCase):
                 Note, TimelineCanvas, TrackState,
                 track_uses_canonical_drum_lanes,
             )
+            from bdo_music_composer.editor.editor_models import (
+                drum_lane_label_for_track,
+                track_uses_drum_lane_mode,
+            )
 
             app = QApplication([])
             canonical = TrackState(
@@ -67,6 +71,12 @@ class InstrumentEditorUiTests(unittest.TestCase):
             )
             assert track_uses_canonical_drum_lanes(canonical)
             assert not track_uses_canonical_drum_lanes(imported)
+            assert track_uses_drum_lane_mode(canonical)
+            assert track_uses_drum_lane_mode(imported)
+            assert drum_lane_label_for_track(canonical, 61) == "CymCrsh"
+            assert drum_lane_label_for_track(imported, 36) == "Kick"
+            assert drum_lane_label_for_track(imported, 42) == "Hi-Hat C"
+            assert drum_lane_label_for_track(imported, 49) == "Crash 1"
 
             timeline = TimelineCanvas()
             timeline.set_tracks([canonical, imported])
@@ -409,13 +419,78 @@ class InstrumentEditorUiTests(unittest.TestCase):
             visible_rows = editor.visible_pitch_rows()
             visible_bottom = editor.canvas.pitch_top - visible_rows + 1
             assert editor.canonical_drum_lanes
+            assert editor.drum_lane_mode
             assert editor.canvas.pitch_top >= 64
             assert visible_bottom <= 48
             assert editor.current_articulation() == 99
+            assert editor.drum_lane_label(48) == "Kck · 底鼓"
+            assert editor.drum_lane_label(64) == "SnrRollL · 小军鼓长滚奏"
+            assert editor.canvas.KEY_W == editor.canvas.PERCUSSION_KEY_W == 138
             assert not editor.note_invalid(48)
             assert not editor.note_invalid(64)
             assert editor.note_invalid(47)
             assert editor.note_invalid(65)
+            editor.close()
+            window.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_imported_gm_drum_editor_uses_named_drum_lanes(self) -> None:
+        completed = _run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication, QComboBox
+            from bdo_music_composer.editor.editor_roll_modes import EditorRollMode
+            from bdo_music_composer.ui.i18n import install_localizer
+            from bdo_music_composer.ui.main_window import (
+                MidiNoteEditorDialog, MidiToBdoWindow, Note, TrackState,
+            )
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            track = TrackState(
+                1,
+                [
+                    Note(36, 100, 0.0, 100.0, 0),
+                    Note(49, 90, 250.0, 100.0, 0),
+                    Note(62, 80, 500.0, 100.0, 0),
+                ],
+                0,
+                True,
+                "GM Drums",
+                0x0D,
+            )
+            window.tracks = [track]
+            editor = MidiNoteEditorDialog(window, track, 120, 4)
+            assert editor.drum_lane_mode
+            assert not editor.canonical_drum_lanes
+            assert editor.roll_mode_spec.mode is EditorRollMode.PERCUSSION
+            assert editor.findChild(QComboBox, "EditorRollModeCombo") is None
+            assert editor.default_articulation_ntype == 0
+            assert editor.drum_lane_label(36) == "Kick · 底鼓"
+            assert editor.drum_lane_label(42) == "Hi-Hat C · 闭合踩镲"
+            assert editor.drum_lane_label(49) == "Crash 1 · 碎音镲 1"
+            assert editor.drum_lane_label(62) == "MIDI 62 · 未映射鼓键"
+            assert editor.note_invalid(62)
+            assert editor.canvas.KEY_W == editor.canvas.PERCUSSION_KEY_W == 138
+            assert "GM" in editor.track_meta.text()
+            short_rect = editor.canvas.note_rect(editor.canvas.notes[0])
+            long_note = editor.canvas.notes[0]._replace(dur=2000.0)
+            assert editor.canvas.note_rect(long_note).width() == short_rect.width()
+            assert editor.canvas.note_at(short_rect.center()) == (0, "move")
+
+            assert editor.canvas.KEY_W == editor.canvas.PERCUSSION_KEY_W == 138
+            install_localizer(app, "en_US")
+            assert editor.drum_lane_label(36) == "Kick · Kick"
+            assert editor.drum_lane_label(42) == "Hi-Hat C · Closed hi-hat"
+            assert editor.drum_lane_label(49) == "Crash 1 · Crash cymbal 1"
+            assert editor.drum_lane_label(62) == "MIDI 62 · Unmapped drum key"
             editor.close()
             window.close()
             app.processEvents()

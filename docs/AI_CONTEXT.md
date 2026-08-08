@@ -28,6 +28,7 @@ the canonical path directly, with no root compatibility shim.
 | Global/per-track velocity base controls | immutable source-note baseline, exact BDO secondary-velocity binding, compact toolbar behavior | `bdo_music_composer/editor/global_velocity_gain.py`, `bdo_music_composer/ui/global_velocity_gain_qt.py`, `tests/test_global_velocity_gain.py`, `tests/test_track_volume_ui.py` |
 | Home page/unified projects | bounded scanners, safe project index, extracted presentation widgets | `bdo_music_composer/app/home_catalog.py`, `bdo_music_composer/ui/home_widgets.py`, `bdo_music_composer/project/project_persistence.py`, thin composition in `bdo_music_composer/ui/main_window.py`, `bdo_music_composer/ui/i18n.py` |
 | Dormant internal release notes / GitHub update check | optional machine-local catalog bounds, missing-record fallback, stable-only SemVer policy, no production UI route, Git-history/package exclusion, explicit network/privacy boundary | `bdo_music_composer/app/application_metadata.py`, `bdo_music_composer/app/release_notes.py`, `bdo_music_composer/app/update_check.py`, `bdo_music_composer/ui/update_check_qt.py`, `bdo_music_composer/ui/dialogs/release_notes_dialog.py`, optional Git-ignored `data/releases/release_notes.json` |
+| Frozen Windows self-update | exact signed manifest, GitHub/Gitee mirror failover, highest-version rollback prevention, bounded streaming download, next-launch single-EXE handoff, health commit/rollback | `bdo_music_composer/update/manifest.py`, `bdo_music_composer/update/install.py`, `bdo_music_composer/update/preferences.py`, `bdo_music_composer/ui/self_update_qt.py`, `main.py`, `scripts/generate_update_manifest.py` |
 | Open/edit a BDO v9 score | `read_bdo_score`, `bdo_music_composer.editor.editor_import.tracks_from_bdo_snapshot`, `MidiToBdoWindow._load_bdo_info` | `bdo_music_composer/export/bdo_score.py`, `bdo_music_composer/editor/editor_import.py`, thin apply adapter in `bdo_music_composer/ui/main_window.py` |
 | Piano-roll behavior and shortcuts | `PianoRollCanvas`, `VelocityLaneCanvas`, `MidiNoteEditorDialog`, the shared shortcut registry, mouse-transparent contextual hints, and the complete F1 reference | `bdo_music_composer/ui/editor/piano_roll_canvas.py`, `bdo_music_composer/ui/editor/midi_note_editor.py`, `bdo_music_composer/ui/editor/editor_shortcuts.py`, `bdo_music_composer/ui/editor/editor_shortcut_hud.py` |
 | Instrument-specific editor lanes/roles | verified vs preview vs recommended boundaries | `bdo_music_composer/editor/bdo_instrument_adaptation.py`, `bdo_music_composer/editor/editor_models.py`, `bdo_music_composer/ui/editor/midi_note_editor.py` |
@@ -239,6 +240,10 @@ Do not promote an inference to “verified” without game evidence.
   transport retained for explicit internal tests. Production home, startup,
   menu, and navigation flows must not construct it or the dormant dialog; the
   pure response/SemVer policy remains in `bdo_music_composer/app/update_check.py`.
+- `SelfUpdateController`: the production frozen-Windows coordinator. It uses
+  the signed channel and staging owners under `bdo_music_composer/update/`,
+  never the dormant release-notes dialog, and remains inert for source runs and
+  startup self-tests.
 
 `bdo_music_composer/ui/main_window.py` is the Qt composition root and compatibility facade. A
 symbol re-exported there remains owned by its focused implementation module;
@@ -451,10 +456,13 @@ new production code imports the owner directly. See
   tests may construct the dialog and start one asynchronous stable-release
   query; ordinary startup and the packaged startup self-test remain
   network-free.
-- Do not add authentication, auto-download, or execution to the update path.
-  It sends only public request headers, constructs release links from the fixed
-  repository identity, and must render timeout, rate-limit, TLS, malformed
-  response, and other errors as unknown/failure rather than “current”.
+- Do not add authentication, download, or execution to the dormant legacy
+  `UpdateCheckController`; it remains an internal release-notes test surface.
+- The production self-updater may auto-download only after exact signed-manifest
+  verification. Keep its host allow-list, bounded reads, highest-version
+  rollback guard, hash/size checks, canonical target filename, next-launch
+  handoff, `.old` recovery, and real-GUI health acknowledgement fail-closed.
+  Never log or transmit Owner IDs, project data, or local paths.
 
 ## Validation recipes
 

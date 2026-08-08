@@ -30,6 +30,7 @@ Qt owner 收拢到 `bdo_music_composer/ui/editor/`，并把版本与公开仓库
 | 应用版本与公开 GitHub 仓库身份 | `bdo_music_composer/app/application_metadata.py` | UI、链接和请求复用命名常量，不再创建平行版本源或硬编码仓库地址 |
 | 内部休眠的本地更新日志数据 | `bdo_music_composer/app/release_notes.py`, 可选的 `data/releases/release_notes.json` | JSON 仅为本机内部、Git 忽略的可选记录，可不存在且不得进入公开 Git 历史或安装包；只有显式内部测试消费有界不可变模型，生产首页、启动、菜单和导航无入口 |
 | 内部休眠的 GitHub 稳定版比较与异步传输 | `bdo_music_composer/app/update_check.py`, `bdo_music_composer/ui/update_check_qt.py` | 只有显式内部测试可构造弹窗并发起请求；生产流程不得接线，也不自动下载、执行或把失败说成最新版 |
+| 生产冻结版无感自更新 | `bdo_music_composer/update/`, `bdo_music_composer/ui/self_update_qt.py`, `bdo_music_composer/ui/self_update_host.py`, `scripts/generate_update_manifest.py` | 只在冻结 Windows 版启动；GitHub/Gitee 是镜像，签名清单才是信任根；下载、下次启动交棒、健康提交和回滚保持聚焦且失败关闭 |
 | 首页目录数据与首页/启动展示 | `bdo_music_composer/app/home_catalog.py`, `bdo_music_composer/ui/home_widgets.py`, `bdo_music_composer/ui/startup_widgets.py` | 扫描器不创建控件；展示组件不反向导入主窗口 |
 | 通用闭区间可见项查询 | `bdo_music_composer/editor/interval_index.py` | Canvas 在数据替换时建索引，paint 只查询可见范围 |
 | 工程 schema 和历史迁移 | `bdo_music_composer/project/project_schema.py` | 读取方先迁移，再交给类型化导入边界 |

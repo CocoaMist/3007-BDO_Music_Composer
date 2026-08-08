@@ -64,3 +64,7 @@ _tools/
 tools/.midi-to-bdo-git-backup/
 # Historical local converter inputs/outputs may still exist after v0.3 removal.
 tools/midi-to-bdo/
+
+# Release signing secrets are operator-owned and must stay outside the repo.
+update-signing-private.pem
+release-private/

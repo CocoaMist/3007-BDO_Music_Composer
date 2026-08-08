@@ -120,6 +120,15 @@ class InstrumentEditorAdaptationTests(unittest.TestCase):
         self.assertTrue(drum_set.compress_invalid_pitches)
         self.assertEqual(99, drum_set.default_ntype)
         self.assertEqual(tuple(range(48, 65)), tuple(lane.pitch for lane in drum_set.drum_lanes))
+        self.assertEqual(
+            (
+                "Kck", "SnrSide", "SnrHit", "RimShot", "SnrFlam",
+                "Tom1", "HihatC", "Tom2", "HatPdl", "Tom3", "HihatO",
+                "Tom4", "Tom5", "CymCrsh", "CymRide", "SnrRollS",
+                "SnrRollL",
+            ),
+            tuple(lane.label for lane in drum_set.drum_lanes),
+        )
         self.assertEqual("Kck", drum_set.drum_lane_label(48))
         self.assertEqual("SnrRollL", drum_set.drum_lane_label(64))
         self.assertIsNone(drum_set.drum_lane_label(65))

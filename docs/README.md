@@ -23,7 +23,8 @@ Tests and code override historical records.
   [`NOTE_ARTICULATION_TRANSPOSE_ALGORITHM_LOCK.md`](NOTE_ARTICULATION_TRANSPOSE_ALGORITHM_LOCK.md).
 - Editor and game evidence: [`BDO_COMPOSITION_AUTHORING.md`](BDO_COMPOSITION_AUTHORING.md),
   [`BDO_MIXER_EFFECTS.md`](BDO_MIXER_EFFECTS.md), and
-  [`INSTRUMENT_EDITOR_ADAPTATION.md`](INSTRUMENT_EDITOR_ADAPTATION.md).
+  [`INSTRUMENT_EDITOR_ADAPTATION.md`](INSTRUMENT_EDITOR_ADAPTATION.md), plus
+  [`PERCUSSION_ROLL_EVALUATION.md`](PERCUSSION_ROLL_EVALUATION.md).
 - Music semantics: [`BDO_ARTICULATION_RULES.md`](BDO_ARTICULATION_RULES.md),
   [`INSTRUMENT_ARTICULATION_GUIDE.md`](INSTRUMENT_ARTICULATION_GUIDE.md),
   [`MIDI_TECHNIQUE_MODEL.md`](MIDI_TECHNIQUE_MODEL.md), and
@@ -36,15 +37,18 @@ Tests and code override historical records.
 - Audio and samples: [`AUDIO_SOURCE_STRATEGY.md`](AUDIO_SOURCE_STRATEGY.md) and
   [`BDO_SAMPLE_MAPPING_STATUS.md`](BDO_SAMPLE_MAPPING_STATUS.md).
 - Product operations: [`LOCALIZATION.md`](LOCALIZATION.md) and
-  [`WINDOWS_PACKAGING.md`](WINDOWS_PACKAGING.md).
+  [`WINDOWS_PACKAGING.md`](WINDOWS_PACKAGING.md), including the signed
+  GitHub/Gitee single-EXE self-update release protocol.
 - Rehearsal tools: [`MULTIPLAYER_SYNCHRONIZER.md`](MULTIPLAYER_SYNCHRONIZER.md)
   documents the Global BPM authority, automatic reference-tempo following, and
   the reserved network-room adapter boundary.
 
 ## Evidence and history
 
+- [`releases/RELEASE_NOTES_V1.2.0.md`](releases/RELEASE_NOTES_V1.2.0.md)
+  records the current v1.2.0 release scope and verification evidence.
 - [`releases/RELEASE_NOTES_V1.1.2.md`](releases/RELEASE_NOTES_V1.1.2.md)
-  records the current v1.1.2 release scope and verification evidence.
+  records the historical v1.1.2 release scope and verification evidence.
 - [`releases/RELEASE_NOTES_V1.1.1.md`](releases/RELEASE_NOTES_V1.1.1.md)
   records the historical v1.1.1 release scope and verification evidence.
 - [`releases/RELEASE_NOTES_V1.1.0.md`](releases/RELEASE_NOTES_V1.1.0.md)

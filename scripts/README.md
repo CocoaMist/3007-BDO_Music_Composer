@@ -18,6 +18,9 @@ result.
 
 - [`audit_transcription_licenses.py`](audit_transcription_licenses.py) —
   exact dependency inventory used by the Windows release gate.
+- [`generate_update_manifest.py`](generate_update_manifest.py) — creates the
+  exact-byte RSA-signed stable-channel manifest shared by GitHub and Gitee;
+  the signing key must remain outside the repository.
 
 ## Controlled evidence and private-corpus checks
 

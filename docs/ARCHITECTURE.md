@@ -130,7 +130,7 @@ adapter, or Qt. These rules are executable in
 `tests/test_architecture_dependencies.py`; the owner map and staged extraction
 workflow are documented in [AI editing guide](AI_EDITING_GUIDE.md).
 
-## Dormant internal release notes and update checks
+## Release history, legacy checker, and production self-update
 
 `data/releases/release_notes.json` is an optional, machine-local, Git-ignored
 internal development record. It may be absent and must enter neither public Git
@@ -160,6 +160,27 @@ malformed payload, TLS, and other network failures remain explicit unknown/error
 states; none may be converted into “current”. The packaged startup self-test
 hard-disables this transport, and production application flows have no route
 that can start it.
+
+The production updater is a separate boundary. `bdo_music_composer/update/`
+owns the strict signed channel schema, RSA-3072/SHA-256 verification, normalized
+preferences, staging plan, exact executable digest, next-launch handoff,
+atomic sibling replacement, health supervision, and rollback. The signing
+private key remains outside the repository; only its public modulus is part of
+the immutable application identity. GitHub and Gitee host identical manifest,
+signature, and EXE bytes and are transport mirrors rather than trust roots.
+
+`bdo_music_composer/ui/self_update_qt.py` starts only in a frozen Windows build,
+after a 25-second UI delay and at most once per 24 hours. It checks Gitee then
+GitHub (or the last successful/preferred mirror), follows only allow-listed
+HTTPS redirects, bounds channel responses, streams the EXE to Local AppData,
+and verifies size and SHA-256 before recording it as ready. Source runs and
+`BDO_STARTUP_SELF_TEST` cannot start this transport. A normal close never
+reopens the app. On the user's next launch the old EXE starts the staged new EXE
+with `--apply-update-v1` and exits; the new EXE copies itself beside the target,
+rechecks the digest, preserves `.exe.old`, atomically replaces the target, and
+starts the installed copy with `--post-update-v1`. The supervising staged
+process commits only after the real main-window startup reports healthy;
+otherwise it restores the backup and relaunches the old version.
 
 ## Runtime model
 
@@ -1027,6 +1048,10 @@ account limit; the native composition UI receives `noteCount` dynamically.
   disposable user-data root, so invoking it directly cannot scan or update
   normal projects, recents, settings, caches, or autosaves. It also sets the
   update transport's hard network-disable environment boundary.
+- The public one-file EXE also owns the versioned `--apply-update-v1` and
+  `--post-update-v1` modes. They run before ordinary CLI/GUI composition, keep
+  the distribution single-file, and use only the user-data staging directory
+  plus a same-directory target `.new`/`.old` pair.
 - `build.ps1 -PublicRelease` validates the generated inventory against
   `packaging/transcription_release_policy.json`. The checked-in v1.0.0 policy
   clears only its recorded schema-2 digest; any dependency or artifact change fails

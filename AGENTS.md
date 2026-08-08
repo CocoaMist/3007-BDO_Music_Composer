@@ -60,6 +60,11 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
   startup flows must not expose or invoke it. The optional local
   `data/releases/release_notes.json` record may be absent, stays Git-ignored,
   and is used only by explicit internal tests.
+- `bdo_music_composer/update/`, `bdo_music_composer/ui/self_update_qt.py`, and
+  `scripts/generate_update_manifest.py`: production frozen-Windows self-update.
+  GitHub and Gitee are mirrors only; the exact manifest bytes must pass the
+  embedded RSA-3072 trust root before an artifact URL or version is accepted.
+  Source launches and packaged startup self-tests remain network-free.
 - `bdo_music_composer/ui/dialogs/` and
   `bdo_music_composer/ui/theme/`: focused Qt dialogs plus the application-level
   semantic theme. Their package initializers stay inert.
@@ -127,6 +132,13 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
   asynchronous, unauthenticated, and bounded; never send Owner IDs or local
   paths, download/execute a release, or report “current” after a failed
   request. Startup self-tests stay network-free.
+- The production self-updater runs only in the frozen Windows application. It
+  may send only the public application version, downloads only allow-listed
+  HTTPS GitHub/Gitee assets from a valid signed manifest, rejects rollback and
+  hash/size/path/protocol mismatches, and stages only under local user data.
+  The downloaded new single EXE performs `--apply-update-v1`; the old EXE must
+  remain recoverable until the real new GUI reports healthy. Never place the
+  release signing private key in this repository, an executable, or Git.
 - User data, Owner IDs, game audio, exports, autosaves, and local config never belong in the executable or Git history.
 - The optional local `data/releases/release_notes.json` internal record never
   belongs in public Git history or an installation package.
@@ -142,6 +154,7 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 | Serializer/export | `tests/test_bdo_codec.py`, `tests/test_bdo_export_roundtrip.py`, and binary structure checks |
 | Localization | `tests/test_i18n_catalog.py` plus offscreen language-switch smoke test |
 | Dormant internal release notes/update check | `tests/test_release_notes.py`, `tests/test_update_check.py`, `tests/test_update_check_qt.py`, `tests/test_release_notes_ui.py`, optional/missing local-record behavior, production-wiring exclusion, Git-history exclusion, and public-package resource exclusion |
+| Signed frozen self-update | `tests/test_self_update.py`, `tests/test_i18n_catalog.py`, source/self-test network exclusion, signed-manifest negative cases, staged replacement/rollback tests, and frozen startup/update smoke test |
 | Packaging/resources | clean PyInstaller build and 10+ second startup test |
 
 ## Repository safety

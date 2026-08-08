@@ -62,6 +62,7 @@ MIDI / BDO v9
 | 导出 | `bdo_music_composer/export/export_workflow.py`, `bdo_export/`, `bdo_codec/` | GUI 线程冻结快照；发布必须原子化 |
 | 工程与首页 | `bdo_music_composer/project/project_persistence.py`, `bdo_music_composer/project/project_schema.py`, `bdo_music_composer/app/home_catalog.py` | 自动保存后台序列化；首页只读安全小索引 |
 | 内部休眠的更新日志与检查更新 | `bdo_music_composer/app/application_metadata.py`, `bdo_music_composer/app/release_notes.py`, `bdo_music_composer/app/update_check.py`, `bdo_music_composer/ui/update_check_qt.py`, `bdo_music_composer/ui/dialogs/release_notes_dialog.py` | 日志 JSON 是可选、本机内部、Git 忽略的记录，可不存在且不得进入公开 Git 历史或安装包；生产首页、启动、菜单和导航均无入口，只有显式内部测试可构造并调用 |
+| 冻结版无感自更新 | `bdo_music_composer/update/`, `bdo_music_composer/ui/self_update_qt.py`, `bdo_music_composer/ui/self_update_host.py`, `scripts/generate_update_manifest.py` | GitHub/Gitee 只镜像相同字节；签名清单、版本防回退、大小/摘要、规范目标路径、下次启动交棒、真实 GUI 健康确认和 `.old` 回滚均须失败关闭 |
 | 工程载入 gate | `bdo_music_composer/project/project_lifecycle_controller.py` | generation 防止陈旧完成事件解除新载入状态 |
 | 预览传输状态 | `bdo_music_composer/audio/preview_transport_controller.py` | coordinator 只选择命令并保存 session 状态，不做 I/O/DSP；设备与 callback 仍归音频引擎 |
 | 本地化 | `bdo_music_composer/ui/i18n.py` | 现有中文固定文本是 source key；动态音乐数据不翻译 |
@@ -115,9 +116,11 @@ Qt 界面 owner 收拢到 inert 的 `bdo_music_composer/ui/editor/` 子包。所
   可选的 `data/releases/release_notes.json` 必须保持本机内部与 Git 忽略，
   可不存在且不得进入公开 Git 历史或安装包；只有显式内部测试可构造相关
   弹窗并发起请求。
-- GitHub 更新检查不得读取或发送 token、Owner ID、工程内容或本机路径，
-  不得自动下载/执行发行物；超时、限流和其他失败必须显示为失败，不能据此
-  声称当前已是最新版。启动自检必须禁网。
+- 内部休眠的 GitHub 更新检查不得读取或发送 token、Owner ID、工程内容或本机
+  路径，不得自动下载/执行发行物；它与生产自更新是两个独立边界。
+- 生产自更新仅可在冻结 Windows 版运行，只信任嵌入公钥验证的精确清单字节；
+  请求不得包含用户数据，私钥不得进入仓库/构建，启动自检必须禁网。下载后的
+  新单 EXE 必须保留旧版直到真实 GUI 健康确认，任何异常均不得声称更新成功。
 
 ## 6. 标准实施流程
 
@@ -144,6 +147,7 @@ Qt 界面 owner 收拢到 inert 的 `bdo_music_composer/ui/editor/` 子包。所
 | 序列化/导出 | `test_bdo_codec.py`、`test_bdo_export_roundtrip.py`、二进制结构检查 |
 | 本地化/README | `test_i18n_catalog.py`、语言切换烟测、`test_readme_locales.py` |
 | 内部休眠更新日志/检查更新 | `test_release_notes.py`、`test_update_check.py`、`test_update_check_qt.py`、离屏弹窗烟测、可选/缺失记录降级、生产入口排除、Git 历史排除与公开包资源排除 |
+| 冻结版签名自更新 | `test_self_update.py`、签名/清单负例、替换/回滚、源码与启动自检禁网、设置页离屏烟测、冻结版更新启动探针 |
 | 打包/资源 | 干净 PyInstaller 构建、转录自测、10 秒以上启动测试 |
 
 常用命令：

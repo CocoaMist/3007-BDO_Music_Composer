@@ -121,6 +121,9 @@ class SettingsHost(Protocol):
     vel_range: tuple[int, int] | None
     audio_sources: dict[str, str]
     instrument_art_dir: str
+    update_settings: dict[str, object]
+
+    def check_for_updates(self) -> bool: ...
 
 
 class GameArtImportWorker(QThread):
@@ -217,10 +220,14 @@ class SettingsDialog(QDialog):
         audio_scroll, audio_page_layout = self._settings_page(
             "SettingsAudioScroll", "SettingsAudioPage"
         )
+        update_scroll, update_page_layout = self._settings_page(
+            "SettingsUpdateScroll", "SettingsUpdatePage"
+        )
         for label, page in (
             (tr("通用与导出"), general_scroll),
             (tr("MIDI 与力度"), midi_scroll),
             (tr("音源与外观"), audio_scroll),
+            (tr("软件更新"), update_scroll),
         ):
             item = QListWidgetItem(label)
             item.setSizeHint(QSize(0, 48))
@@ -496,9 +503,53 @@ class SettingsDialog(QDialog):
             self._labeled_row("乐器图像", art_source_layout)
         )
 
+        updates, updates_layout = self._section(
+            "无感更新",
+            "后台检查并准备经过签名验证的新版本；不会上传工程、Owner ID 或本机路径。",
+        )
+        update_page_layout.addWidget(updates)
+        self.update_enabled = QCheckBox(tr("自动检查更新"))
+        self.update_enabled.setChecked(
+            parent.update_settings.get("enabled", True) is not False
+        )
+        updates_layout.addWidget(self.update_enabled)
+        self.update_auto_download = QCheckBox(
+            tr("发现新版本后在后台自动下载")
+        )
+        self.update_auto_download.setChecked(
+            parent.update_settings.get("auto_download", True) is not False
+        )
+        updates_layout.addWidget(self.update_auto_download)
+
+        update_source_row = QHBoxLayout()
+        update_source_row.setContentsMargins(0, 0, 0, 0)
+        self.update_source = QComboBox()
+        self.update_source.setProperty("i18nSkipItems", True)
+        for label, source in (
+            ("自动选择（优先可用镜像）", "auto"),
+            ("Gitee 国内镜像", "gitee"),
+            ("GitHub", "github"),
+        ):
+            self.update_source.addItem(tr(label), source)
+        source_index = self.update_source.findData(
+            str(parent.update_settings.get("source", "auto"))
+        )
+        self.update_source.setCurrentIndex(max(0, source_index))
+        update_source_row.addWidget(self.update_source, stretch=1)
+        check_update_button = PillButton(tr("立即检查"), "secondary")
+        check_update_button.setObjectName("CheckForUpdatesButton")
+        check_update_button.clicked.connect(
+            lambda: self._check_for_updates(parent)
+        )
+        update_source_row.addWidget(check_update_button)
+        updates_layout.addLayout(
+            self._labeled_row("更新来源", update_source_row)
+        )
+
         general_page_layout.addStretch(1)
         midi_page_layout.addStretch(1)
         audio_page_layout.addStretch(1)
+        update_page_layout.addStretch(1)
 
         self.settings_buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
@@ -596,6 +647,16 @@ class SettingsDialog(QDialog):
             if radio.isChecked():
                 return mode
         return "preserve"
+
+    def _check_for_updates(self, parent: SettingsHost) -> None:
+        if parent.check_for_updates():
+            show_global_toast(self, tr("正在后台检查更新…"))
+        else:
+            show_global_toast(
+                self,
+                tr("当前环境无法启动更新检查"),
+                kind="warning",
+            )
 
     def _browse_output_folder(self) -> None:
         current = self.output_dir.text().strip()
