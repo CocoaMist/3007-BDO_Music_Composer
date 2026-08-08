@@ -36,7 +36,7 @@ GITHUB_LATEST_RELEASE_API_URL = (
     f"{GITHUB_OWNER}/{GITHUB_REPOSITORY}/releases/latest"
 )
 
-GITEE_OWNER = "CocoaMist"
+GITEE_OWNER = "raionnyan"
 GITEE_REPOSITORY = GITHUB_REPOSITORY
 GITEE_REPOSITORY_URL = (
     f"https://gitee.com/{GITEE_OWNER}/{GITEE_REPOSITORY}"
@@ -44,11 +44,11 @@ GITEE_REPOSITORY_URL = (
 
 GITHUB_UPDATE_CHANNEL_URL = (
     "https://raw.githubusercontent.com/"
-    f"{GITHUB_OWNER}/{GITHUB_REPOSITORY}/main/updates/{UPDATE_CHANNEL}/"
+    f"{GITHUB_OWNER}/{GITHUB_REPOSITORY}/master/updates/{UPDATE_CHANNEL}/"
     "update-manifest-v1.json"
 )
 GITEE_UPDATE_CHANNEL_URL = (
-    f"{GITEE_REPOSITORY_URL}/raw/main/updates/{UPDATE_CHANNEL}/"
+    f"{GITEE_REPOSITORY_URL}/raw/master/updates/{UPDATE_CHANNEL}/"
     "update-manifest-v1.json"
 )
 
