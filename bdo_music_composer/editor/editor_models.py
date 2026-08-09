@@ -11,7 +11,11 @@ from bisect import bisect_left
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-from bdo_music_composer.editor.bdo_instrument_adaptation import instrument_editor_display_adaptations
+from bdo_music_composer.editor.bdo_instrument_adaptation import (
+    GameInstrumentFamily,
+    instrument_editor_display_adaptation,
+    instrument_editor_display_adaptations,
+)
 from bdo_common.bdo_track_effects import DEFAULT_TRACK_VOLUME
 
 
@@ -118,6 +122,25 @@ GM_DRUM_PITCH_TRANSLATION_KEYS = {
 BDO_DRUM_MIN = 48
 BDO_DRUM_MAX = 64
 BDO_SAMPLE_ONLY_PERCUSSION = frozenset({0x04, 0x05, 0x13})
+GAME_PERCUSSION_KEY_NAMES = {
+    0x04: {
+        60: "Bng1-Open",
+        65: "Bng2-Open",
+        66: "Bng2-Close",
+        67: "Bng2-Flam",
+        72: "Cng1-Open",
+        73: "Cng1-Close",
+        74: "Cng1-Flam",
+        77: "Cng2-Open",
+        78: "Cng2-Close",
+        79: "Cng2-Flam",
+    },
+    0x05: {
+        60: "HIT",
+        65: "HIT",
+        71: "HIT",
+    },
+}
 ARTICULATION_ONSET_TOLERANCE_MS = 12.0
 
 
@@ -212,32 +235,40 @@ def track_uses_canonical_drum_lanes(track: TrackState) -> bool:
     if track.bdo_source_group_index is not None or not track.notes:
         return True
     return all(
-        BDO_DRUM_MIN <= int(note.pitch) <= BDO_DRUM_MAX
-        and int(getattr(note, "ntype", 0)) == 99
+        int(getattr(note, "ntype", 0)) == 99
         for note in track.notes
     )
 
 
-def track_uses_drum_lane_mode(track: TrackState) -> bool:
-    """Use semantic percussion rows for every drum-set target track.
+def percussion_key_label_for_track(
+    track: TrackState,
+    pitch: int,
+) -> str | None:
+    """Return the source-space game key name for a percussion instrument.
 
-    This is deliberately broader than ``track_uses_canonical_drum_lanes``:
-    imported GM drums retain their source pitches, but should never fall back
-    to a melodic piano keyboard merely because export normalization is pending.
+    Drum-set tracks retain their BDO or pending-GM piece names. Hand-drum and
+    cymbal tracks use labels observed in the game composer. Percussion without
+    verified named-key evidence falls back to pitch names. This changes labels
+    only and never remaps a ``Note``.
     """
 
-    return int(track.bdo_instrument_id) == 0x0D
-
-
-def drum_lane_label_for_track(track: TrackState, pitch: int) -> str | None:
-    """Return a BDO-native or General MIDI drum-piece label for one row."""
-
-    labels = (
-        BDO_DRUM_PITCH_NAMES
-        if track_uses_canonical_drum_lanes(track)
-        else GM_DRUM_PITCH_NAMES
-    )
-    return labels.get(int(pitch)) if track_uses_drum_lane_mode(track) else None
+    instrument_id = int(track.bdo_instrument_id)
+    adaptation = instrument_editor_display_adaptation(instrument_id)
+    if (
+        adaptation is None
+        or adaptation.family is not GameInstrumentFamily.PERCUSSION
+    ):
+        return None
+    if instrument_id == 0x0D:
+        labels = (
+            BDO_DRUM_PITCH_NAMES
+            if track_uses_canonical_drum_lanes(track)
+            else GM_DRUM_PITCH_NAMES
+        )
+        return labels.get(int(pitch))
+    if instrument_id in GAME_PERCUSSION_KEY_NAMES:
+        return GAME_PERCUSSION_KEY_NAMES[instrument_id].get(int(pitch))
+    return note_name(int(pitch))
 
 
 def same_onset_articulation_indices(

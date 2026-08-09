@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 )
 
 from bdo_music_composer.editor.bdo_instrument_adaptation import (
+    GameInstrumentFamily,
     assess_game_draft,
     articulation_supports_pitch,
     articulation_trigger_pitches,
@@ -93,24 +94,18 @@ from .editor_shortcuts import editor_shortcut_spec
 from bdo_music_composer.editor.editor_models import (
     BDO_DRUM_MAX,
     BDO_DRUM_MIN,
-    BDO_DRUM_PITCH_NAMES,
     BDO_DRUM_PITCH_TRANSLATION_KEYS,
-    GM_DRUM_PITCH_NAMES,
     GM_DRUM_PITCH_TRANSLATION_KEYS,
     GhostNoteProjection,
     TrackState,
     game_supported_pitches,
     note_name,
+    percussion_key_label_for_track,
     same_onset_articulation_indices,
     track_uses_canonical_drum_lanes,
-    track_uses_drum_lane_mode,
 )
 from bdo_music_composer.editor.editor_commands import (
     next_non_overlapping_paste_origin,
-)
-from bdo_music_composer.editor.editor_roll_modes import (
-    EditorRollMode,
-    default_roll_mode,
 )
 from bdo_music_composer.ui.theme.fluent_theme import (
     FluentSymbol,
@@ -230,19 +225,20 @@ class MidiNoteEditorDialog(QDialog):
             int(track.bdo_instrument_id)
         )
         self.canonical_drum_lanes = track_uses_canonical_drum_lanes(track)
-        self.drum_lane_mode = track_uses_drum_lane_mode(track)
-        self.drum_lane_labels = (
-            BDO_DRUM_PITCH_NAMES
-            if self.canonical_drum_lanes
-            else GM_DRUM_PITCH_NAMES
+        self.uses_percussion_key_labels = bool(
+            self.instrument_adaptation is not None
+            and self.instrument_adaptation.family
+            is GameInstrumentFamily.PERCUSSION
         )
+        self.uses_named_percussion_keys = int(track.bdo_instrument_id) in {
+            0x04,
+            0x05,
+            0x0D,
+        }
         self.drum_lane_translation_keys = (
             BDO_DRUM_PITCH_TRANSLATION_KEYS
             if self.canonical_drum_lanes
             else GM_DRUM_PITCH_TRANSLATION_KEYS
-        )
-        self.roll_mode_spec = default_roll_mode(
-            int(track.bdo_instrument_id)
         )
         self.default_articulation_ntype = (
             99 if self.canonical_drum_lanes else 0
@@ -5351,27 +5347,17 @@ class MidiNoteEditorDialog(QDialog):
 
     def _update_track_meta(self) -> None:
         if hasattr(self, "track_meta"):
-            drum_mode = ""
-            if (
-                self.drum_lane_mode
-                and self.roll_mode_spec.mode is EditorRollMode.PERCUSSION
-            ):
-                drum_mode = tr(
-                    "鼓组模式 · BDO 鼓件"
-                    if self.canonical_drum_lanes
-                    else "鼓组模式 · GM 鼓键"
-                ) + "   ·   "
             self.track_meta.setText(
-                f"{drum_mode}♫ {len(self.canvas.notes) if hasattr(self, 'canvas') else len(self.track.notes)}"
+                f"♫ {len(self.canvas.notes) if hasattr(self, 'canvas') else len(self.track.notes)}"
                 f"   ·   {self.bpm} BPM   ·   {self.time_sig}/4"
             )
 
-    def drum_lane_label(self, pitch: int) -> str | None:
-        """Expose source-space drum labels to the shared piano-roll canvas."""
+    def percussion_key_label(self, pitch: int) -> str | None:
+        """Expose game percussion key names without changing roll behavior."""
 
-        if not self.drum_lane_mode:
+        if not self.uses_percussion_key_labels:
             return None
-        raw_label = self.drum_lane_labels.get(int(pitch))
+        raw_label = percussion_key_label_for_track(self.track, int(pitch))
         if raw_label is None:
             active_pitches = (
                 self.canvas.note_pitch_set
@@ -5384,10 +5370,26 @@ class MidiNoteEditorDialog(QDialog):
                     pitch=int(pitch),
                 )
             return None
+        if int(self.track.bdo_instrument_id) != 0x0D:
+            return raw_label
         translation_key = self.drum_lane_translation_keys.get(int(pitch))
         if translation_key is None:
             return raw_label
         return f"{raw_label} · {tr(translation_key)}"
+
+    def note_block_label(self, pitch: int) -> str:
+        """Keep note-block identity aligned with the corresponding key row."""
+
+        numeric_pitch = int(pitch)
+        percussion_label = percussion_key_label_for_track(
+            self.track,
+            numeric_pitch,
+        )
+        if percussion_label is not None:
+            return percussion_label
+        if self.uses_percussion_key_labels:
+            return f"MIDI {numeric_pitch}"
+        return note_name(numeric_pitch)
 
     def edited_notes(self) -> list:
         return sorted(self.canvas.notes, key=lambda n: (n.start, n.pitch, n.dur))
