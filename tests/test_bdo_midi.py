@@ -136,6 +136,13 @@ class MidiMappingTests(unittest.TestCase):
         mapped = map_drum_notes([Note(48, 90, 0.0, 120.0, 99)])
         self.assertEqual((mapped[0].pitch, mapped[0].ntype), (48, 99))
 
+    def test_unmapped_gm_drum_fails_closed(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "General MIDI drum pitch 62 has no BDO mapping",
+        ):
+            map_drum_notes([Note(62, 90, 0.0, 120.0, 0)])
+
 
 if __name__ == "__main__":
     unittest.main()

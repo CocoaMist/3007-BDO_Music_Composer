@@ -41,7 +41,15 @@ def map_drum_notes(notes: Iterable[Note]) -> list[Note]:
     result: list[Note] = []
     for note in notes:
         already_canonical = note.ntype == DRUM_NOTE_TYPE and 48 <= note.pitch <= 64
-        pitch = note.pitch if already_canonical else _GM_TO_BDO_DRUM.get(note.pitch, 48)
+        if already_canonical:
+            pitch = note.pitch
+        else:
+            try:
+                pitch = _GM_TO_BDO_DRUM[note.pitch]
+            except KeyError as exc:
+                raise ValueError(
+                    f"General MIDI drum pitch {note.pitch} has no BDO mapping"
+                ) from exc
         duration = note.dur if pitch in DRUM_ROLL_PITCHES else min(note.dur, DRUM_NOTE_MAX_DURATION_MS)
         # Preserve adapter-owned fields such as BDO velocity B while keeping
         # the public five-field ``Note`` wire shape unchanged.

@@ -6593,36 +6593,12 @@ for _source, (_english, _japanese, _korean) in (
 del _source, _english, _japanese, _korean
 
 EN.update({
-    "鼓组模式 · BDO 鼓件": "Drum mode · BDO pieces",
-    "鼓组模式 · GM 鼓键": "Drum mode · GM keys",
-    "卷帘模式": "Roll mode",
-    "钢琴模式": "Piano mode",
-    "打击乐模式": "Percussion mode",
-    "切换钢琴音高卷帘与按鼓件命名的打击乐卷帘；不会修改音符数据": (
-        "Switch between the pitched piano roll and the named percussion roll; note data is unchanged"
-    ),
     "MIDI {pitch} · 未映射鼓键": "MIDI {pitch} · Unmapped drum key",
 })
 JA.update({
-    "鼓组模式 · BDO 鼓件": "ドラムモード・BDOパーツ",
-    "鼓组模式 · GM 鼓键": "ドラムモード・GMキー",
-    "卷帘模式": "ロールモード",
-    "钢琴模式": "ピアノモード",
-    "打击乐模式": "打楽器モード",
-    "切换钢琴音高卷帘与按鼓件命名的打击乐卷帘；不会修改音符数据": (
-        "ピアノロールと楽器名付き打楽器ロールを切り替えます。ノートデータは変更されません"
-    ),
     "MIDI {pitch} · 未映射鼓键": "MIDI {pitch}・未割り当てのドラムキー",
 })
 KO.update({
-    "鼓组模式 · BDO 鼓件": "드럼 모드 · BDO 파트",
-    "鼓组模式 · GM 鼓键": "드럼 모드 · GM 키",
-    "卷帘模式": "롤 모드",
-    "钢琴模式": "피아노 모드",
-    "打击乐模式": "타악기 모드",
-    "切换钢琴音高卷帘与按鼓件命名的打击乐卷帘；不会修改音符数据": (
-        "피아노 롤과 악기 이름이 표시된 타악기 롤을 전환합니다. 음표 데이터는 변경되지 않습니다"
-    ),
     "MIDI {pitch} · 未映射鼓键": "MIDI {pitch} · 매핑되지 않은 드럼 키",
 })
 

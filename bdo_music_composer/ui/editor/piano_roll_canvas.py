@@ -45,7 +45,6 @@ from bdo_music_composer.transcription.bdo_transcription_melody_lines import (
 )
 from bdo_music_composer.transcription.bdo_transcription_policy import CANDIDATE_NOTE_POLICY
 from bdo_music_composer.editor.editor_models import GhostNoteProjection, note_name
-from bdo_music_composer.editor.editor_roll_modes import EditorRollMode
 from .editor_ui_helpers import (
     TRACK_COLORS,
     articulation_color,
@@ -74,7 +73,7 @@ class PianoRollCanvas(QWidget):
     voice_group_color_requested = Signal(str, str)
     voice_group_role_requested = Signal(str, str)
     PIANO_KEY_W = 86
-    PERCUSSION_KEY_W = 138
+    NAMED_PERCUSSION_KEY_W = 138
     KEY_W = PIANO_KEY_W
     BLACK_KEY_X = 8
     BLACK_KEY_W = 48
@@ -107,8 +106,8 @@ class PianoRollCanvas(QWidget):
         super().__init__(editor)
         self.editor = editor
         self.KEY_W = (
-            self.PERCUSSION_KEY_W
-            if self.is_percussion_roll()
+            self.NAMED_PERCUSSION_KEY_W
+            if getattr(self.editor, "uses_named_percussion_keys", False)
             else self.PIANO_KEY_W
         )
         self.notes: list = []
@@ -2159,14 +2158,6 @@ class PianoRollCanvas(QWidget):
     def note_rect(self, note) -> QRectF:
         x = self.x_at_time(note.start)
         y = self.RULER_H + (self.pitch_top - note.pitch) * self.ROW_H
-        if self.is_percussion_roll():
-            marker_width = max(10.0, min(18.0, self.ROW_H * 0.72))
-            return QRectF(
-                x - marker_width / 2.0,
-                y + max(1.0, (self.ROW_H - marker_width) / 2.0),
-                marker_width,
-                min(marker_width, self.ROW_H - 2.0),
-            )
         return QRectF(
             x,
             y + 1,
@@ -2174,25 +2165,9 @@ class PianoRollCanvas(QWidget):
             self.ROW_H - 2,
         )
 
-    def is_percussion_roll(self) -> bool:
-        mode_spec = getattr(self.editor, "roll_mode_spec", None)
-        return (
-            getattr(mode_spec, "mode", None)
-            is EditorRollMode.PERCUSSION
-        )
-
     def invalidate_roll_background(self) -> None:
         self._background_cache_key = None
         self._background_cache = QPixmap()
-
-    def apply_roll_mode_geometry(self) -> None:
-        """Resize only the semantic key rail when the roll mode changes."""
-
-        self.KEY_W = (
-            self.PERCUSSION_KEY_W
-            if self.is_percussion_roll()
-            else self.PIANO_KEY_W
-        )
 
     @staticmethod
     def _snap_to_device_pixel(value: float, device_pixel_ratio: float) -> float:
@@ -2263,8 +2238,6 @@ class PianoRollCanvas(QWidget):
         for index in reversed(self.visible_note_indices()):
             rect = self.note_rect(self.notes[index])
             if rect.contains(pos):
-                if self.is_percussion_roll():
-                    return index, "move"
                 if rect.width() >= self.NOTE_RESIZE_VISUAL_MIN_WIDTH:
                     edge_width = min(5.0, rect.width() / 3.0)
                     if abs(pos.x() - rect.left()) <= edge_width:
@@ -2283,7 +2256,12 @@ class PianoRollCanvas(QWidget):
     def _roll_background(self) -> QPixmap:
         """Cache the time-independent piano bed and keyboard rendering."""
 
-        drum_lane_mode = self.is_percussion_roll()
+        uses_percussion_key_labels = bool(
+            getattr(self.editor, "uses_percussion_key_labels", False)
+        )
+        uses_named_percussion_keys = bool(
+            getattr(self.editor, "uses_named_percussion_keys", False)
+        )
         cache_key = (
             self.width(),
             self.height(),
@@ -2291,7 +2269,9 @@ class PianoRollCanvas(QWidget):
             round(float(self.ROW_H), 3),
             self.piano_pressed_pitch,
             self.piano_hover_pitch,
-            drum_lane_mode,
+            uses_percussion_key_labels,
+            uses_named_percussion_keys,
+            bool(getattr(self.editor, "canonical_drum_lanes", False)),
             self.font().toString(),
             round(self.devicePixelRatioF(), 3),
         )
@@ -2318,16 +2298,12 @@ class PianoRollCanvas(QWidget):
         for row in range(visible_rows + 1):
             pitch = self.pitch_top - row
             y = self.RULER_H + row * self.ROW_H
-            drum_label = (
-                self.editor.drum_lane_label(pitch)
-                if drum_lane_mode
+            percussion_key_label = (
+                self.editor.percussion_key_label(pitch)
+                if uses_percussion_key_labels
                 else None
             )
-            black = (
-                False
-                if drum_lane_mode
-                else pitch % 12 in (1, 3, 6, 8, 10)
-            )
+            black = pitch % 12 in (1, 3, 6, 8, 10)
             pressed = pitch == self.piano_pressed_pitch
             hovered = pitch == self.piano_hover_pitch
             lane_color = QColor(
@@ -2389,7 +2365,7 @@ class PianoRollCanvas(QWidget):
                 key_font.setPointSize(
                     max(7, key_font.pointSize() - 2)
                 )
-            key_font.setBold(black or drum_label is not None)
+            key_font.setBold(black or percussion_key_label is not None)
             painter.setFont(key_font)
             if black:
                 black_key_inset = (
@@ -2456,9 +2432,13 @@ class PianoRollCanvas(QWidget):
                         )
                     )
                     painter.drawText(
-                        black_rect.adjusted(4, 0, -4, 0),
+                        (
+                            key_rect.adjusted(4, 0, -6, 0)
+                            if uses_named_percussion_keys
+                            else black_rect.adjusted(4, 0, -4, 0)
+                        ),
                         Qt.AlignRight | Qt.AlignVCenter,
-                        drum_label or note_name(pitch),
+                        percussion_key_label or note_name(pitch),
                     )
             else:
                 painter.setPen(
@@ -2473,7 +2453,7 @@ class PianoRollCanvas(QWidget):
                     )
                 )
                 show_natural_label = (
-                    drum_label is not None
+                    percussion_key_label is not None
                     or self.ROW_H >= self.PIANO_FULL_LABEL_MIN_ROW_HEIGHT
                     or pitch % 12 == 0
                     or pressed
@@ -2483,7 +2463,7 @@ class PianoRollCanvas(QWidget):
                     painter.drawText(
                         key_rect.adjusted(4, 0, -6, 0),
                         Qt.AlignRight | Qt.AlignVCenter,
-                        drum_label or note_name(pitch),
+                        percussion_key_label or note_name(pitch),
                     )
             painter.restore()
             painter.setPen(
@@ -3878,42 +3858,31 @@ class PianoRollCanvas(QWidget):
                 track_color.lighter(112),
                 maximum_value=168,
             )
-            painter.setPen(
-                QPen(
-                    QColor("#b85d58")
-                    if invalid
-                    else (
-                        QColor("#ae8c52")
-                        if index in self.selected
-                        else (technique_color or normal_outline)
-                    ),
-                    (
-                        1.5
-                        if compact_height and (index in self.selected or invalid)
-                        else (2.0 if index in self.selected or invalid else 1.0)
-                    ),
-                )
+            note_outline_pen = QPen(
+                QColor("#b85d58")
+                if invalid
+                else (
+                    QColor("#ae8c52")
+                    if index in self.selected
+                    else (technique_color or normal_outline)
+                ),
+                (
+                    1.5
+                    if compact_height and (index in self.selected or invalid)
+                    else (2.0 if index in self.selected or invalid else 1.0)
+                ),
             )
-            percussion_marker = self.is_percussion_roll()
-            if percussion_marker:
-                marker = QPainterPath()
-                marker.moveTo(body_rect.center().x(), body_rect.top())
-                marker.lineTo(body_rect.right(), body_rect.center().y())
-                marker.lineTo(body_rect.center().x(), body_rect.bottom())
-                marker.lineTo(body_rect.left(), body_rect.center().y())
-                marker.closeSubpath()
-                painter.drawPath(marker)
-            else:
-                painter.drawRoundedRect(
-                    body_rect,
-                    corner_radius,
-                    corner_radius,
-                )
+            painter.setPen(note_outline_pen)
+            painter.drawRoundedRect(
+                body_rect,
+                corner_radius,
+                corner_radius,
+            )
             velocity_rects = self.note_velocity_bar_rects(
                 rect,
                 velocity,
                 self.devicePixelRatioF(),
-            ) if not percussion_marker else None
+            )
             if velocity_rects is not None:
                 velocity_rail, velocity_fill = velocity_rects
                 painter.fillRect(velocity_rail, QColor(10, 11, 12, 155))
@@ -3926,8 +3895,6 @@ class PianoRollCanvas(QWidget):
                     ),
                 )
             if (
-                not percussion_marker
-                and
                 rect.width() >= 28
                 and rect.height() >= self.NOTE_TEXT_MIN_HEIGHT
             ):
@@ -3953,12 +3920,10 @@ class PianoRollCanvas(QWidget):
                 painter.drawText(
                     rect.adjusted(5, 0, -24 if articulated and rect.width() >= 52 else -2, 0),
                     Qt.AlignLeft | Qt.AlignVCenter,
-                    note_name(note.pitch),
+                    self.editor.note_block_label(note.pitch),
                 )
                 painter.restore()
             if (
-                not percussion_marker
-                and
                 index in self.selected
                 and rect.width() >= self.NOTE_RESIZE_VISUAL_MIN_WIDTH
                 and rect.height() >= self.NOTE_RESIZE_HANDLE_MIN_HEIGHT
@@ -3966,7 +3931,7 @@ class PianoRollCanvas(QWidget):
                 handle = QColor("#b7a177")
                 painter.fillRect(QRectF(rect.left() + 1, rect.top() + 3, 3, max(4, rect.height() - 6)), handle)
                 painter.fillRect(QRectF(rect.right() - 3, rect.top() + 3, 3, max(4, rect.height() - 6)), handle)
-            if articulated and technique_color is not None and not percussion_marker:
+            if articulated and technique_color is not None:
                 technique_color.setAlpha(218)
                 # Technique identity stays visible even when selection handles
                 # are shown; the old left stripe was painted underneath them.
