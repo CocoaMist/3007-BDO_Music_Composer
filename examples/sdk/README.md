@@ -1,5 +1,8 @@
 # SDK examples
 
+These examples are intentionally small and remain usable independently of the
+full desktop application.
+
 Run these commands from an editable SDK checkout:
 
 ```powershell

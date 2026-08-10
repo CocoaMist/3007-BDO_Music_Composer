@@ -1,0 +1,48 @@
+name: Windows desktop qualification
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  dpi-accessibility:
+    strategy:
+      fail-fast: false
+      matrix:
+        scale: ["1", "1.5", "2"]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+      QT_SCALE_FACTOR: ${{ matrix.scale }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12.10"
+          cache: pip
+          cache-dependency-path: requirements/windows-py312.txt
+      - name: Install pinned runtime
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --constraint requirements\windows-py312.txt -r requirements\desktop.txt
+          .\.venv\Scripts\python.exe -m pip install --no-deps --editable .
+      - name: Qualify keyboard and accessibility metadata
+        shell: pwsh
+        run: |
+          $report = .\.venv\Scripts\python.exe tools\qualify_desktop_ui.py
+          $qualificationExit = $LASTEXITCODE
+          $report | Set-Content -Encoding utf8 qualification-${{ matrix.scale }}.json
+          exit $qualificationExit
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: desktop-qualification-${{ matrix.scale }}
+          path: qualification-${{ matrix.scale }}.json
+          if-no-files-found: error

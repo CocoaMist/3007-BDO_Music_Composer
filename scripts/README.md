@@ -1,5 +1,7 @@
 # Supported scripts
 
+Only maintained user, operator, and release commands are indexed here.
+
 `scripts/` contains maintained command-line, release, and controlled validation
 entry points. Reusable application behavior must stay in its owning module;
 scripts should only parse arguments, call that owner, and publish an explicit
@@ -14,6 +16,9 @@ result.
 - [`install_transcription.ps1`](install_transcription.ps1) — pinned optional
   transcription environment setup.
 
+- [`export_support_bundle.py`](export_support_bundle.py) — writes a bounded,
+  path-redacted diagnostic ZIP only to a user-selected destination.
+
 ## Release gates
 
 - [`audit_transcription_licenses.py`](audit_transcription_licenses.py) —
@@ -21,6 +26,9 @@ result.
 - [`generate_update_manifest.py`](generate_update_manifest.py) — creates the
   exact-byte RSA-signed stable-channel manifest shared by GitHub and Gitee;
   the signing key must remain outside the repository.
+
+- [`generate_release_evidence.py`](generate_release_evidence.py) — emits the
+  release artifact SHA-256 and deterministic SPDX 2.3 evidence.
 
 ## Controlled evidence and private-corpus checks
 

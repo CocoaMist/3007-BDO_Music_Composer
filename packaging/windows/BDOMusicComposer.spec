@@ -103,7 +103,7 @@ hiddenimports = [
 
 a = Analysis(
     [str(project_root / "main.py")],
-    pathex=[str(project_root)],
+    pathex=[str(project_root / "src"), str(project_root)],
     binaries=collect_dynamic_libs("onnxruntime"),
     datas=datas,
     hiddenimports=hiddenimports,

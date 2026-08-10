@@ -52,6 +52,9 @@ from bdo_music_composer.ui.i18n import (
 from optimization import builtin as optimizer_builtin
 
 
+SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src"
+
+
 def _format_signature(template: str) -> tuple[tuple[str, str, str], ...]:
     return tuple(sorted(
         (
@@ -236,8 +239,7 @@ class TranslationCatalogTests(unittest.TestCase):
 
     def test_catalog_source_keys_are_not_redeclared(self):
         source_path = (
-            Path(__file__).resolve().parents[1]
-            / "bdo_music_composer/ui/i18n.py"
+            SOURCE_ROOT / "bdo_music_composer/ui/i18n.py"
         )
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         occurrences = {name: [] for name in ("EN", "JA", "KO")}
@@ -286,8 +288,7 @@ class TranslationCatalogTests(unittest.TestCase):
             for _ntype, label in pairs
         }
         source_path = (
-            Path(__file__).resolve().parents[1]
-            / "bdo_music_composer/ui/editor/editor_articulation_data.py"
+            SOURCE_ROOT / "bdo_music_composer/ui/editor/editor_articulation_data.py"
         )
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         hints = set()
@@ -317,7 +318,7 @@ class TranslationCatalogTests(unittest.TestCase):
 
     def test_builtin_optimizer_nested_runtime_text_is_catalogued(self):
         source_path = (
-            Path(__file__).resolve().parents[1] / "optimization" / "builtin.py"
+            SOURCE_ROOT / "optimization" / "builtin.py"
         )
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         parent = {
@@ -491,8 +492,7 @@ class TranslationCatalogTests(unittest.TestCase):
 
     def test_every_chinese_transcription_widget_literal_is_catalogued(self):
         source_path = (
-            Path(__file__).resolve().parents[1]
-            / "bdo_music_composer/ui/transcription/transcription_editor_qt.py"
+            SOURCE_ROOT / "bdo_music_composer/ui/transcription/transcription_editor_qt.py"
         )
         tree = ast.parse(source_path.read_text(encoding="utf-8"))
         source_literals = {
@@ -509,8 +509,7 @@ class TranslationCatalogTests(unittest.TestCase):
 
     def test_every_localized_piano_roll_literal_is_catalogued(self):
         source_path = (
-            Path(__file__).resolve().parents[1]
-            / "bdo_music_composer/ui/main_window.py"
+            SOURCE_ROOT / "bdo_music_composer/ui/main_window.py"
         )
         tree = ast.parse(source_path.read_text(encoding="utf-8-sig"))
         source_literals = set()
@@ -570,7 +569,7 @@ class TranslationCatalogTests(unittest.TestCase):
             "bdo_music_composer/ui/transcription/transcription_editor_qt.py",
             "bdo_music_composer/ui/ui_notifications.py",
         ):
-            path = Path(__file__).resolve().parents[1] / filename
+            path = SOURCE_ROOT / filename
             tree = ast.parse(path.read_text(encoding="utf-8-sig"))
             parents: dict[ast.AST, ast.AST] = {}
             for parent in ast.walk(tree):

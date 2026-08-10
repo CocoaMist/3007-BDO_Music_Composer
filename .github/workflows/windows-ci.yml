@@ -25,17 +25,17 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python 3.12.10
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: "3.12.10"
           cache: pip
           cache-dependency-path: |
-            constraints-windows-py312.txt
-            requirements-pyside.txt
-            requirements-transcription.txt
+            requirements/windows-py312.txt
+            requirements/desktop.txt
+            requirements/transcription.txt
 
       - name: Check repository hygiene
         shell: pwsh
@@ -52,8 +52,8 @@ jobs:
       - name: Compile primary entry points
         shell: pwsh
         run: |
-          .\.venv\Scripts\python.exe -m py_compile main.py bdo_music_composer\core\project_paths.py bdo_music_composer\ui\main_window.py bdo_music_composer\ui\i18n.py
-          .\.venv\Scripts\python.exe -m compileall -q bdo_common bdo_codec bdo_export bdo_midi optimization bdo_music_composer
+          .\.venv\Scripts\python.exe -m py_compile main.py src\bdo_music_composer\core\project_paths.py src\bdo_music_composer\ui\main_window.py src\bdo_music_composer\ui\i18n.py
+          .\.venv\Scripts\python.exe -m compileall -q src
 
       - name: Run headless lifecycle gate
         shell: pwsh
@@ -68,3 +68,10 @@ jobs:
           $env:BDO_USER_DATA_DIR = Join-Path $env:RUNNER_TEMP "bdo-music-composer-ci"
           New-Item -ItemType Directory -Force -Path $env:BDO_USER_DATA_DIR | Out-Null
           .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -q
+
+      - name: Build and test native differential core
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File packaging\native_audio\build.ps1
+          .\.venv\Scripts\python.exe -m unittest tests.test_native_audio_core tests.test_native_audio_parity -v
+          powershell -ExecutionPolicy Bypass -File packaging\native_audio\build.ps1 -Configuration Debug -AddressSanitizer

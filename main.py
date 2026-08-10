@@ -7,13 +7,21 @@ the command-line conversion entry point, for example::
     python main.py samples/test_chord.mid test_song
 """
 
+from pathlib import Path
 import sys
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+SOURCE_ROOT = PROJECT_ROOT / "src"
+if SOURCE_ROOT.is_dir() and str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 
 TRANSCRIPTION_SELF_TEST_ARGUMENT = "--self-test-transcription"
 STARTUP_SELF_TEST_ARGUMENT = "--self-test-startup"
 STARTUP_SELF_TEST_DURATION_MS = 10_500
 STARTUP_SELF_TEST_ENVIRONMENT = "BDO_STARTUP_SELF_TEST"
+EXPORT_SUPPORT_BUNDLE_ARGUMENT = "--export-support-bundle"
 
 
 def _self_test_transcription() -> int:
@@ -181,6 +189,11 @@ def main() -> None:
         raise SystemExit(_self_test_transcription())
     if sys.argv[1:] == [STARTUP_SELF_TEST_ARGUMENT]:
         raise SystemExit(_self_test_startup())
+    if len(sys.argv) == 3 and sys.argv[1] == EXPORT_SUPPORT_BUNDLE_ARGUMENT:
+        from bdo_music_composer.app.support_bundle import export_support_bundle
+
+        print(export_support_bundle(sys.argv[2]))
+        raise SystemExit(0)
 
     if len(sys.argv) > 1:
         from scripts.bdo_convert import main as cli_main

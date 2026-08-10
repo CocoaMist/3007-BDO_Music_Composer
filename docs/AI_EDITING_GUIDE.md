@@ -6,45 +6,45 @@
 
 第二阶段包迁移已按两段完成并分别验证：先迁移 6 个 Qt-free 编辑器 owner，
 再迁移 5 个对话框 owner 和 2 个主题 owner。后续又将 5 个时间轴/钢琴卷帘
-Qt owner 收拢到 `bdo_music_composer/ui/editor/`，并把版本与公开仓库身份收归
-`bdo_music_composer/app/application_metadata.py`。后续领域迁移已将全部调用方
+Qt owner 收拢到 `src/bdo_music_composer/ui/editor/`，并把版本与公开仓库身份收归
+`src/bdo_music_composer/app/application_metadata.py`。后续领域迁移已将全部调用方
 改用 canonical 包路径；根目录目前只保留 `main.py`，且不保留导入 shim。
 
 ## 1. 先找所有者，再改调用者
 
-`bdo_music_composer/ui/main_window.py` 是 Qt 组合根和兼容门面，不是默认的领域逻辑所有者。历史
+`src/bdo_music_composer/ui/main_window.py` 是 Qt 组合根和兼容门面，不是默认的领域逻辑所有者。历史
 调用者仍可从该模块取得部分公开名称，但新代码应直接导入下表中的实际所有者。
 兼容重导出只能指向同一个实现，不能复制类、函数、常量或状态。
 
 | 行为或数据 | 唯一所有者 | 调用方职责 |
 |---|---|---|
-| `TrackState` 和编辑器共享轨道字段 | `bdo_music_composer/editor/editor_models.py` | UI 只显示、提交显式修改 |
-| MIDI、BDO、工程数据到完整编辑器轨道 | `bdo_music_composer/editor/editor_import.py` | 主窗口注入本地化名称和颜色，并原子应用成功结果 |
-| 工程命令快照和撤销/重做 | `bdo_music_composer/editor/editor_commands.py` | UI 只在显式提交边界压入命令 |
-| 力度曲线变换 | `bdo_music_composer/editor/velocity_curve.py` | Canvas 提交参数，不复制曲线算法 |
-| 正式谱面/试听作用域、最终游戏乐器 ID、同乐器 Volume/Aux | `bdo_music_composer/editor/game_score_model.py` | UI 发出意图，预览/验证/导出消费同一规则 |
-| 游戏默认轨道音量及 FX wire 值 | `bdo_common/bdo_track_effects.py` | 其他模块引用命名常量，不复制 `70` 等游戏语义值 |
-| 转换设置与音高计划 | `bdo_music_composer/core/conversion_settings.py`, `bdo_music_composer/editor/pitch_transform.py` | 设置界面替换不可变快照，不重建字典规则 |
-| 用户配置读写和安全文件名 | `bdo_music_composer/app/application_config.py` | 对话框/主窗口只收集值并显示错误，不直接改 JSON |
-| 游戏约束 profile 的延迟缓存 | `bdo_music_composer/app/game_profile_provider.py` | 在真正验证时获取，不在模块导入期读盘 |
-| 应用版本与公开 GitHub 仓库身份 | `bdo_music_composer/app/application_metadata.py` | UI、链接和请求复用命名常量，不再创建平行版本源或硬编码仓库地址 |
-| 内部休眠的本地更新日志数据 | `bdo_music_composer/app/release_notes.py`, 可选的 `data/releases/release_notes.json` | JSON 仅为本机内部、Git 忽略的可选记录，可不存在且不得进入公开 Git 历史或安装包；只有显式内部测试消费有界不可变模型，生产首页、启动、菜单和导航无入口 |
-| 内部休眠的 GitHub 稳定版比较与异步传输 | `bdo_music_composer/app/update_check.py`, `bdo_music_composer/ui/update_check_qt.py` | 只有显式内部测试可构造弹窗并发起请求；生产流程不得接线，也不自动下载、执行或把失败说成最新版 |
-| 生产冻结版无感自更新 | `bdo_music_composer/update/`, `bdo_music_composer/ui/self_update_qt.py`, `bdo_music_composer/ui/self_update_host.py`, `scripts/generate_update_manifest.py` | 只在冻结 Windows 版启动；GitHub/Gitee 是镜像，签名清单才是信任根；下载、下次启动交棒、健康提交和回滚保持聚焦且失败关闭 |
-| 首页目录数据与首页/启动展示 | `bdo_music_composer/app/home_catalog.py`, `bdo_music_composer/ui/home_widgets.py`, `bdo_music_composer/ui/startup_widgets.py` | 扫描器不创建控件；展示组件不反向导入主窗口 |
-| 通用闭区间可见项查询 | `bdo_music_composer/editor/interval_index.py` | Canvas 在数据替换时建索引，paint 只查询可见范围 |
-| 工程 schema 和历史迁移 | `bdo_music_composer/project/project_schema.py` | 读取方先迁移，再交给类型化导入边界 |
-| 完整工程文档校验与加载计划 | `bdo_music_composer/app/project_document.py` | UI 只读取文本、注入端口、本地化错误，并一次性提交 `ProjectLoadPlan` |
-| 工程打开路由和 loading generation | `bdo_music_composer/project/project_lifecycle_controller.py` | 主窗口执行文件读取与 Qt 状态应用 |
-| 工程 metadata/轨道深冻结、自动保存请求和原子写入 | `bdo_music_composer/project/project_persistence.py` | GUI 线程捕获 `ProjectMetadataSnapshot`，单一 writer 解冻独立 payload 并执行 I/O |
-| 当前编辑器轨道到标准 MIDI 的确定性投影 | `bdo_music_composer/editor/preview_midi_writer.py` | 调用者提供轨道、速度/节拍和目标路径；不得在主窗口复制事件排序规则 |
-| 聚焦对话框和应用语义主题 | `bdo_music_composer/ui/dialogs/`, `bdo_music_composer/ui/theme/` | 主窗口注入状态并应用结果；子包 initializer 保持 inert |
-| 扒谱草稿与候选路由的正式提交计划 | `bdo_music_composer/transcription/transcription_commit_plan.py` | UI 做 preflight、单次撤销快照、应用计划、提交 sidecar、刷新和 autosave |
-| 不可变导出请求 factory、准备和发布 | `bdo_music_composer/export/export_workflow.py` | 主窗口只完成路径/Owner/本地化 gate，并传入当前编辑器事实源 |
-| 编辑器到 BDO v9 的字段级一致性诊断 | `bdo_music_composer/export/export_verification.py` | Qt-free 投影并检查 prepared、主文件、游戏副本；UI 只显示有范围限定的报告 |
-| 编辑器/MIDI 到 BDO 文档的适配、原文档复用与摘要 | `bdo_export/` | 不读取或修改 Qt 控件、工程文件；摘要只从最终文档生成 |
-| BDO v9 wire model、ICE、读写和验证 | `bdo_codec/` | 不认识 `TrackState`、项目生命周期或 UI |
-| 游戏规则问题的确定性收集与排序 | `bdo_music_composer/export/bdo_validation.py` | UI 只本地化/展示 `ValidationIssue`，不复制校验规则 |
+| `TrackState` 和编辑器共享轨道字段 | `src/bdo_music_composer/editor/editor_models.py` | UI 只显示、提交显式修改 |
+| MIDI、BDO、工程数据到完整编辑器轨道 | `src/bdo_music_composer/editor/editor_import.py` | 主窗口注入本地化名称和颜色，并原子应用成功结果 |
+| 工程命令快照和撤销/重做 | `src/bdo_music_composer/editor/editor_commands.py` | UI 只在显式提交边界压入命令 |
+| 力度曲线变换 | `src/bdo_music_composer/editor/velocity_curve.py` | Canvas 提交参数，不复制曲线算法 |
+| 正式谱面/试听作用域、最终游戏乐器 ID、同乐器 Volume/Aux | `src/bdo_music_composer/editor/game_score_model.py` | UI 发出意图，预览/验证/导出消费同一规则 |
+| 游戏默认轨道音量及 FX wire 值 | `src/bdo_common/bdo_track_effects.py` | 其他模块引用命名常量，不复制 `70` 等游戏语义值 |
+| 转换设置与音高计划 | `src/bdo_music_composer/core/conversion_settings.py`, `src/bdo_music_composer/editor/pitch_transform.py` | 设置界面替换不可变快照，不重建字典规则 |
+| 用户配置读写和安全文件名 | `src/bdo_music_composer/app/application_config.py` | 对话框/主窗口只收集值并显示错误，不直接改 JSON |
+| 游戏约束 profile 的延迟缓存 | `src/bdo_music_composer/app/game_profile_provider.py` | 在真正验证时获取，不在模块导入期读盘 |
+| 应用版本与公开 GitHub 仓库身份 | `src/bdo_music_composer/app/application_metadata.py` | UI、链接和请求复用命名常量，不再创建平行版本源或硬编码仓库地址 |
+| 内部休眠的本地更新日志数据 | `src/bdo_music_composer/app/release_notes.py`, 可选的 `data/releases/release_notes.json` | JSON 仅为本机内部、Git 忽略的可选记录，可不存在且不得进入公开 Git 历史或安装包；只有显式内部测试消费有界不可变模型，生产首页、启动、菜单和导航无入口 |
+| 内部休眠的 GitHub 稳定版比较与异步传输 | `src/bdo_music_composer/app/update_check.py`, `src/bdo_music_composer/ui/update_check_qt.py` | 只有显式内部测试可构造弹窗并发起请求；生产流程不得接线，也不自动下载、执行或把失败说成最新版 |
+| 生产冻结版无感自更新 | `src/bdo_music_composer/update/`, `src/bdo_music_composer/ui/self_update_qt.py`, `src/bdo_music_composer/ui/self_update_host.py`, `scripts/generate_update_manifest.py` | 只在冻结 Windows 版启动；GitHub/Gitee 是镜像，签名清单才是信任根；下载、下次启动交棒、健康提交和回滚保持聚焦且失败关闭 |
+| 首页目录数据与首页/启动展示 | `src/bdo_music_composer/app/home_catalog.py`, `src/bdo_music_composer/ui/home_widgets.py`, `src/bdo_music_composer/ui/startup_widgets.py` | 扫描器不创建控件；展示组件不反向导入主窗口 |
+| 通用闭区间可见项查询 | `src/bdo_music_composer/editor/interval_index.py` | Canvas 在数据替换时建索引，paint 只查询可见范围 |
+| 工程 schema 和历史迁移 | `src/bdo_music_composer/project/project_schema.py` | 读取方先迁移，再交给类型化导入边界 |
+| 完整工程文档校验与加载计划 | `src/bdo_music_composer/app/project_document.py` | UI 只读取文本、注入端口、本地化错误，并一次性提交 `ProjectLoadPlan` |
+| 工程打开路由和 loading generation | `src/bdo_music_composer/project/project_lifecycle_controller.py` | 主窗口执行文件读取与 Qt 状态应用 |
+| 工程 metadata/轨道深冻结、自动保存请求和原子写入 | `src/bdo_music_composer/project/project_persistence.py` | GUI 线程捕获 `ProjectMetadataSnapshot`，单一 writer 解冻独立 payload 并执行 I/O |
+| 当前编辑器轨道到标准 MIDI 的确定性投影 | `src/bdo_music_composer/editor/preview_midi_writer.py` | 调用者提供轨道、速度/节拍和目标路径；不得在主窗口复制事件排序规则 |
+| 聚焦对话框和应用语义主题 | `src/bdo_music_composer/ui/dialogs/`, `src/bdo_music_composer/ui/theme/` | 主窗口注入状态并应用结果；子包 initializer 保持 inert |
+| 扒谱草稿与候选路由的正式提交计划 | `src/bdo_music_composer/transcription/transcription_commit_plan.py` | UI 做 preflight、单次撤销快照、应用计划、提交 sidecar、刷新和 autosave |
+| 不可变导出请求 factory、准备和发布 | `src/bdo_music_composer/export/export_workflow.py` | 主窗口只完成路径/Owner/本地化 gate，并传入当前编辑器事实源 |
+| 编辑器到 BDO v9 的字段级一致性诊断 | `src/bdo_music_composer/export/export_verification.py` | Qt-free 投影并检查 prepared、主文件、游戏副本；UI 只显示有范围限定的报告 |
+| 编辑器/MIDI 到 BDO 文档的适配、原文档复用与摘要 | `src/bdo_export/` | 不读取或修改 Qt 控件、工程文件；摘要只从最终文档生成 |
+| BDO v9 wire model、ICE、读写和验证 | `src/bdo_codec/` | 不认识 `TrackState`、项目生命周期或 UI |
+| 游戏规则问题的确定性收集与排序 | `src/bdo_music_composer/export/bdo_validation.py` | UI 只本地化/展示 `ValidationIssue`，不复制校验规则 |
 
 如果现有逻辑位于主窗口，但表中已有所有者，应先给所有者补充小型 API 和纯逻辑
 测试，再把主窗口缩成参数收集、信号连接和结果应用。不要为降低行数机械拆分一组
@@ -67,34 +67,34 @@ Qt composition / widgets
 工程或 UI 所有者时连带初始化无关的 Qt、音频或扒谱模块。
 
 工程持久化是并列的应用基础设施：UI 可以调用
-`bdo_music_composer/app/project_document.py`、
-`bdo_music_composer/project/project_lifecycle_controller.py`、
-`bdo_music_composer/project/project_schema.py` 和
-`bdo_music_composer/project/project_persistence.py`，这些模块可以使用 Qt-free
+`src/bdo_music_composer/app/project_document.py`、
+`src/bdo_music_composer/project/project_lifecycle_controller.py`、
+`src/bdo_music_composer/project/project_schema.py` 和
+`src/bdo_music_composer/project/project_persistence.py`，这些模块可以使用 Qt-free
 领域值，但不得反向导入 UI、Codec 或导出工作流。
 
 具体规则由 `tests/test_architecture_dependencies.py` 执行：
 
-- `bdo_music_composer/editor/editor_import.py` 和 `bdo_music_composer/editor/game_score_model.py`
+- `src/bdo_music_composer/editor/editor_import.py` 和 `src/bdo_music_composer/editor/game_score_model.py`
   不依赖 PySide、主窗口或任何控件；
-- `bdo_codec/` 不依赖编辑器、游戏模型、工程、导出适配器或 UI；
-- `bdo_export/` 可以依赖 Codec、MIDI 和 wire-safe 效果值，但不依赖应用工作流、
+- `src/bdo_codec/` 不依赖编辑器、游戏模型、工程、导出适配器或 UI；
+- `src/bdo_export/` 可以依赖 Codec、MIDI 和 wire-safe 效果值，但不依赖应用工作流、
   工程或 UI；
-- `bdo_music_composer/export/export_workflow.py` 和 `bdo_music_composer/export/export_verification.py` 可以向下调用
+- `src/bdo_music_composer/export/export_workflow.py` 和 `src/bdo_music_composer/export/export_verification.py` 可以向下调用
   `bdo_export`/`bdo_codec`，不能回头读取 Qt
   或工程存储；
-- `bdo_music_composer/project/` 边界不依赖 Codec、导出层或 Qt；
-  `bdo_music_composer/app/project_document.py` 在状态修改前产出完整
+- `src/bdo_music_composer/project/` 边界不依赖 Codec、导出层或 Qt；
+  `src/bdo_music_composer/app/project_document.py` 在状态修改前产出完整
   `ProjectLoadPlan`，不能把半成品 mapping 交回主窗口；
-- `bdo_music_composer/app/application_config.py`、
-  `bdo_music_composer/app/game_profile_provider.py`、
-  `bdo_music_composer/app/application_metadata.py`、
-  `bdo_music_composer/app/release_notes.py`、
-  `bdo_music_composer/app/update_check.py` 和
-  `bdo_music_composer/editor/interval_index.py`、
-  `bdo_music_composer/editor/preview_midi_writer.py`、
-  `bdo_music_composer/transcription/transcription_commit_plan.py` 保持 Qt-free；主窗口不能直接绕过
-  `bdo_music_composer/export/export_workflow.py` 调用 Codec/导出适配器；
+- `src/bdo_music_composer/app/application_config.py`、
+  `src/bdo_music_composer/app/game_profile_provider.py`、
+  `src/bdo_music_composer/app/application_metadata.py`、
+  `src/bdo_music_composer/app/release_notes.py`、
+  `src/bdo_music_composer/app/update_check.py` 和
+  `src/bdo_music_composer/editor/interval_index.py`、
+  `src/bdo_music_composer/editor/preview_midi_writer.py`、
+  `src/bdo_music_composer/transcription/transcription_commit_plan.py` 保持 Qt-free；主窗口不能直接绕过
+  `src/bdo_music_composer/export/export_workflow.py` 调用 Codec/导出适配器；
 - 聚焦所有者有可执行的函数跨度预算。超过预算时应拆出有领域名称的 helper，
   不能通过关闭守卫或把逻辑搬进匿名闭包规避。
 
@@ -107,7 +107,7 @@ Qt composition / widgets
 跨线程、跨格式或跨持久化层时，不传递“差不多能用”的字典和可变 Qt 对象。
 
 - MIDI/BDO/工程导入先由
-  `bdo_music_composer/editor/editor_import.py` 完整解析。`EditorImportError` 携带
+  `src/bdo_music_composer/editor/editor_import.py` 完整解析。`EditorImportError` 携带
   稳定错误码和数据路径；任一权威轨道或音符损坏时整体失败，不返回部分谱面。
 - 工程 JSON 由 `prepare_project_load()` 在任何 UI 状态修改前完成解码、迁移、
   路径校验、轨道构造和全部 metadata 解析。`ProjectLoadPlan` 是完整加载事实；
@@ -123,7 +123,7 @@ Qt composition / widgets
   preflight、一次工程撤销快照、一次执行与一次刷新/autosave。
 - `bdo_music_composer.editor.preview_midi_writer.build_filtered_midi()` 是标准
   MIDI 投影的唯一实现；
-  `bdo_music_composer/ui/main_window.py` 只兼容重导出同一对象。它不属于 BDO v9 导出，也不证明
+  `src/bdo_music_composer/ui/main_window.py` 只兼容重导出同一对象。它不属于 BDO v9 导出，也不证明
   游戏内效果可由标准 MIDI 无损表达。
 - schema migration 只负责历史 wire payload 的升级；当前编辑器行为由领域模型
   拥有，不能在 UI 和迁移器中各实现一次。当前 schema 只验证已经物化的力度
@@ -145,7 +145,7 @@ Qt composition / widgets
 1. 从 [`AI_CONTEXT.md`](AI_CONTEXT.md) 定位所有者和相关不变量。
 2. 在所有者模块添加或修改最小的纯函数、不可变值或类型化错误。
 3. 先写所有者单元测试，包括无效输入、确定性和不修改输入。
-4. 在 `bdo_music_composer/ui/main_window.py` 或控件模块只连接信号、注入展示值并应用已验证结果。
+4. 在 `src/bdo_music_composer/ui/main_window.py` 或控件模块只连接信号、注入展示值并应用已验证结果。
 5. 若必须保留旧公开路径，在主窗口门面重导出同一对象，并增加身份测试。
 6. 运行聚焦测试、架构依赖守卫、任务对应回归和完整测试。
 7. 同步本指南、架构或领域文档；接口未改变时不要重复描述实现细节。
@@ -160,9 +160,9 @@ Qt composition / widgets
 
 ### 已落地：所有权与安全入口
 
-- `bdo_music_composer/editor/editor_models.py` 成为共享轨道模型；
-- `bdo_music_composer/editor/editor_import.py` 承担事务式 MIDI、BDO 和工程轨道构造；
-- `bdo_music_composer/editor/game_score_model.py` 统一正式谱面、试听和游戏混音身份；
+- `src/bdo_music_composer/editor/editor_models.py` 成为共享轨道模型；
+- `src/bdo_music_composer/editor/editor_import.py` 承担事务式 MIDI、BDO 和工程轨道构造；
+- `src/bdo_music_composer/editor/game_score_model.py` 统一正式谱面、试听和游戏混音身份；
 - 配置、游戏 profile、首页/启动展示和可见区间索引均有独立 owner；
 - BDO 原文档复用逻辑已从 Codec 上移到 `bdo_export`，Codec 不再认识编辑器字段；
 - `build_export_request()` 统一冻结正式轨、派生奏法/Volume/双力度映射并合成
@@ -171,13 +171,13 @@ Qt composition / widgets
   跨层契约测试；
 - `bdo_validation.validate_tracks()` 已拆为按规则域命名的小型验证阶段，保持原有
   问题顺序；当前 schema 不再重复烘焙力度；
-- `bdo_music_composer/app/project_document.py` 已将工程 JSON 完整准备成
+- `src/bdo_music_composer/app/project_document.py` 已将工程 JSON 完整准备成
   `ProjectLoadPlan`，加载失败带稳定 code/path；`ProjectMetadataSnapshot`
   已递归深冻结工程 metadata，保存 worker 不再持有 GUI 可变字典/列表；
-- `bdo_music_composer/transcription/transcription_commit_plan.py` 已提供确定性、非修改输入的正式提交计划；
+- `src/bdo_music_composer/transcription/transcription_commit_plan.py` 已提供确定性、非修改输入的正式提交计划；
   UI 执行器先提交 sidecar/轨道/撤销历史，模型阶段异常时恢复原对象与两套历史，
   Timeline 等后续刷新异常不再阻断 autosave；
-  `bdo_music_composer/editor/preview_midi_writer.py` 已成为标准 MIDI
+  `src/bdo_music_composer/editor/preview_midi_writer.py` 已成为标准 MIDI
   事件投影的唯一实现和兼容重导出所有者；
 - 项目、预览、转换校验和扒谱已有独立 Qt-free lifecycle/controller；
 - 主窗口保留兼容门面并已降至 8,600 行以内，架构与函数跨度测试阻止回退。

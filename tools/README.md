@@ -1,15 +1,26 @@
 # Developer tools
 
-`tools/` contains developer-only audits, benchmarks, local evidence importers,
-and one-off data preparation utilities. The desktop application and packaged
-runtime must not depend on these entry points.
+Only developer diagnostics, benchmarks, and validators are indexed here.
+
+`tools/` contains developer-only audits, benchmarks, evidence validators, and
+one-off preparation utilities. The desktop application and packaged runtime
+must not depend on these entry points.
 
 ## Repository and performance checks
 
 - [`check_repository_hygiene.py`](check_repository_hygiene.py)
 - [`check_readme_locales.py`](check_readme_locales.py)
+- [`collect_runtime_compatibility.py`](collect_runtime_compatibility.py)
+  emits path-free OS, Qt, DPI, and screen qualification evidence.
+- [`qualify_desktop_ui.py`](qualify_desktop_ui.py) constructs the real main
+  window in isolation and fails on missing interactive accessibility metadata,
+  Windows x64 incompatibility, first-frame regressions, input-to-paint latency,
+  or event-loop stalls. CI runs it at 100%, 150%, and 200% scale.
 - [`benchmark_conversion_validation.py`](benchmark_conversion_validation.py)
 - [`benchmark_dense_ui.py`](benchmark_dense_ui.py)
+- [`benchmark_native_audio_core.py`](benchmark_native_audio_core.py)
+  measures the optional original C++ differential mixer at explicit low-latency
+  frame sizes; build it first with `packaging/native_audio/build.ps1`.
 - [`benchmark_realtime_audio.py`](benchmark_realtime_audio.py)
 - [`benchmark_transcription_candidate_queries.py`](benchmark_transcription_candidate_queries.py)
 
@@ -24,22 +35,14 @@ runtime must not depend on these entry points.
 - [`build_wwise_runtime_profile.py`](build_wwise_runtime_profile.py)
 - [`map_wwise_midi_tracking.py`](map_wwise_midi_tracking.py)
 
-## Local import, extraction, and conversion
+## Local preparation
 
-- [`convert_wem_to_wav.py`](convert_wem_to_wav.py)
-- [`extract_wwise_wem.py`](extract_wwise_wem.py)
-- [`import_bdo_game_art.py`](import_bdo_game_art.py)
 - [`index_wav_samples.py`](index_wav_samples.py)
 - [`install_example_project.py`](install_example_project.py)
-- [`list_bdo_paz_audio.py`](list_bdo_paz_audio.py)
 - [`sanitize_mapping_paths.py`](sanitize_mapping_paths.py)
 
-## Native research helpers
+The public repository does not provide restricted-content acquisition or
+distribution tools. See [`docs/CONTENT_BOUNDARY.md`](../docs/CONTENT_BOUNDARY.md).
 
-- [`extract_bdo_bgm.cpp`](extract_bdo_bgm.cpp)
-- [`extract_bdo_instruments.cpp`](extract_bdo_instruments.cpp)
-- [`list_bdo_paz_audio.cpp`](list_bdo_paz_audio.cpp)
-- [`validate_paz_key.cpp`](validate_paz_key.cpp)
-
-Downloaded tools, extracted game assets, local caches, and generated reports are
+Downloaded utilities, private audio, local caches, and generated reports are
 ignored workspace data. Do not add them to Git or package them with the app.

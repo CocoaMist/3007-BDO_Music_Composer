@@ -13,7 +13,10 @@ small stable surface instead of treating every internal module as public API.
 - immutable MIDI notes, parsing, instrument mapping, and pure note transforms;
 - editor `TrackState`, track/master effect values, volume preview mapping, and
   editor-to-document export helpers;
-- `APP_VERSION` and `SDK_API_VERSION` for compatibility gates.
+- read-only BDO authoring diagnostics, readiness scoring, and semantic note
+  diffs that never apply changes to `TrackState`;
+- `APP_VERSION`, `SDK_API_VERSION`, `SDK_CAPABILITIES`, and
+  `negotiate_sdk_extension()` for fail-closed compatibility gates.
 
 Importing this module must never initialize PySide6, the audio engine, user
 configuration, or the desktop application.
@@ -54,6 +57,8 @@ Owner ID; never hard-code or publish someone else's identity.
 
 - SDK API level `1` covers the names listed in `core_api.__all__` and
   `ui_api.__all__`.
+- SDK consumers negotiate an explicit version range, capability set, and
+  `python-api` transport before enabling optional behavior.
 - `Note(pitch, vel, start, dur, ntype)` and `TrackState` preserve the editor
   wire model. Changing either requires migration and regression coverage.
 - Advanced classes returned by `load_ui_components()` are reusable but not a
@@ -66,6 +71,9 @@ Owner ID; never hard-code or publish someone else's identity.
 ## Extension boundaries
 
 Prefer the pure `optimization.registry` extension boundary for new optimizers.
+Trusted optimizer bundles use the explicitly labelled in-process contract;
+non-trusted Windows extensions use the bounded NDJSON stdio envelope in
+`bdo_common.extension_protocol` and do not enter the GUI process.
 Keep new domain logic out of `ui/main_window.py`; add a focused package owner
 and let the UI orchestrate it. UI paint paths must remain visible-range indexed,
 and package initializers under `bdo_music_composer` remain inert.

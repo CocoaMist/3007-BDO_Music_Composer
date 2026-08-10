@@ -1,10 +1,10 @@
 # 乐器编辑适配与游戏兼容边界
 
-`bdo_music_composer/editor/bdo_instrument_adaptation.py` 是 Qt 无关的编辑提示层。它把 26 个逻辑
+`src/bdo_music_composer/editor/bdo_instrument_adaptation.py` 是 Qt 无关的编辑提示层。它把 26 个逻辑
 BDO 乐器的游戏分类、编排角色、推荐可视音域、鼓件行、奏法路由证据和
 背景视觉键集中在一个只读接口中。实时播放、离线渲染和导出仍以原有
-`Note(pitch, vel, start, dur, ntype)`、`bdo_music_composer/core/bdo_profile.py`、
-`bdo_music_composer/audio/bdo_instrument_samples.py` 与 `bdo_codec` 为准。
+`Note(pitch, vel, start, dur, ntype)`、`src/bdo_music_composer/core/bdo_profile.py`、
+`src/bdo_music_composer/audio/bdo_instrument_samples.py` 与 `bdo_codec` 为准。
 
 ## 三种音高事实必须分开
 
@@ -68,7 +68,7 @@ Event 99。
 视觉键不是磁盘路径。解析器只能指向仓库自有素材或用户明确配置的本地素材，
 不能把游戏资源打包进程序或工程文件。
 
-时间轴现已使用 `bdo_music_composer/ui/editor/bdo_instrument_lane_art_qt.py` 绘制应用自有的抽象乐器线稿。
+时间轴现已使用 `src/bdo_music_composer/ui/editor/bdo_instrument_lane_art_qt.py` 绘制应用自有的抽象乐器线稿。
 用户也可以在“设置 → 音源与效果 → 轨道背景”选择一个本地目录。图片在设置
 生效时一次性解码并缩小，时间轴 `paintEvent` 只查询内存缓存，不访问磁盘。
 支持 PNG、WebP 和 JPEG；单图上限 8 MiB、解码像素上限 2000 万。文件名按
@@ -92,8 +92,8 @@ Bank/Sound/Source/Event/键域/力度层增删；四条已知部分奏法路由�
 列为错误；它不会删音、移调或把奏法静默回退到延音。新版映射同时暴露 1,024 条
 尚未建模的 Pitch RTPC，因此“Wwise 路由已确认”只表示结构路由，不表示听感 1:1。
 
-2026-07-26 使用 `tools/list_bdo_paz_audio.py` 对一份本地游戏安装做了纯路径
-索引：PAZ meta 版本为 757，声明的 8310 个归档全部存在。索引确认了 40 个
+2026-07-26 的历史本地研究曾对一份游戏安装做纯路径索引：PAZ meta 版本为
+757，声明的 8310 个归档全部存在。索引确认了 40 个
 `sound2022/windows/midi_instrument_*.bnk`，与签入的 Wwise v145 MIDI 映射
 集合一致。它还确认存在 `gamecommondata/binary/midiinstrument.bss`，但其字段
 结构尚未被完整解码，因此当前适配层没有从未知字段猜测新的音域、奏法或限制。
@@ -103,7 +103,8 @@ Bank/Sound/Source/Event/键域/力度层增删；四条已知部分奏法路由�
 逻辑乐器加四组各自额外三个模式，共 38 个物理乐器。字符串还明确给出
 `MIDI_Instrument_02_Recorder`、`MIDI_Instrument_27_ProClarinet` 与
 `Advanced_Clarinet`，但不存在独立 `MIDI_Instrument_12` 条目。这进一步确认
-ID `0x27` 是单簧管，CSS 中 ID 12 的 Whistle 图标不能升级为可用乐器。除头、
+ID `0x27` 是单簧管，CSS 中 ID 12 的 Whistle 图标不能升级为可用乐器。相关
+通用音频索引/提取命令已按 `CONTENT_BOUNDARY.md` 从公开仓库移除。除头、
 记录数和字符串身份外的二进制字段仍标记为未知。
 
 路径索引还找到以下视觉资源候选：

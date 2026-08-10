@@ -72,6 +72,8 @@ class TimelineIntervalIndexUiTests(unittest.TestCase):
             )
             timeline.set_reference_audio(reference)
             assert timeline._timeline_end_ms() == 320_000.0
+            assert timeline._timeline_row_count() == 2
+            assert timeline._musical_track_count() == 1
             reference.project_end_ms = 330_000.0
             reference.timeline_changed.emit()
             assert timeline._timeline_end_ms() == 330_000.0

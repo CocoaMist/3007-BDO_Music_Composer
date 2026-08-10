@@ -11,7 +11,7 @@ dependency direction, typed-boundary rules, and the staged decomposition plan.
 
 The package migration is complete for root Python owners. `main.py` is the only
 root module; application code is grouped by domain under
-`bdo_music_composer/`, cross-package primitives live in `bdo_common/`, and
+`src/bdo_music_composer/`, cross-package primitives live in `src/bdo_common/`, and
 operator/developer commands live in `scripts/` and `tools/`. Every caller uses
 the canonical path directly, with no root compatibility shim.
 
@@ -19,68 +19,72 @@ the canonical path directly, with no root compatibility shim.
 
 | User request | Read first | Likely edit |
 |---|---|---|
-| Main-window composition / toolbar / page transition | `MidiToBdoWindow._build_*`, `StackedPageCrossfade`, `MainWindowStyleMixin`, semantic theme | `bdo_music_composer/ui/main_window.py`, `bdo_music_composer/ui/page_transition_qt.py`, `bdo_music_composer/ui/theme/main_window_style.py`, `bdo_music_composer/ui/theme/fluent_theme.py` |
-| Timeline behavior / painting | shared interval index, reference-audio protocol, track interactions; the multitrack free-point velocity editor is dormant and has no workspace activation control | `bdo_music_composer/editor/interval_index.py`, `bdo_music_composer/editor/velocity_curve.py`, `bdo_music_composer/ui/editor/timeline_canvas.py`, `bdo_music_composer/ui/editor/timeline_velocity_curve_qt.py`, `bdo_music_composer/editor/editor_models.py`, thin transaction host in `bdo_music_composer/ui/timeline_velocity_curve_host.py` |
-| Application settings / local source fields | dialog host contract and Qt-free source normalization | `bdo_music_composer/ui/dialogs/application_settings_dialog.py`, `bdo_music_composer/app/audio_source_settings.py`, thin apply adapter in `bdo_music_composer/ui/main_window.py` |
-| Interface preference persistence | validated global UI schema, debounced Qt bindings, project/global ownership tests | `bdo_music_composer/app/ui_preferences.py`, `bdo_music_composer/ui/ui_preferences_qt.py`, `tests/test_ui_preferences.py` |
-| Config JSON / safe output names | atomic storage, corrupt backup, unknown-field preservation | `bdo_music_composer/app/application_config.py`; callers only provide path and mapping |
-| Track pitch / Aux / master-effect dialogs | structural track contract and raw-byte preservation | `bdo_music_composer/ui/dialogs/track_settings_dialogs.py`, `bdo_common/bdo_track_effects.py`, thin apply adapters in `bdo_music_composer/ui/main_window.py` |
-| Global/per-track velocity base controls | immutable source-note baseline, exact BDO secondary-velocity binding, compact toolbar behavior | `bdo_music_composer/editor/global_velocity_gain.py`, `bdo_music_composer/ui/global_velocity_gain_qt.py`, `tests/test_global_velocity_gain.py`, `tests/test_track_volume_ui.py` |
-| Home page/unified projects | bounded scanners, safe project index, extracted presentation widgets | `bdo_music_composer/app/home_catalog.py`, `bdo_music_composer/ui/home_widgets.py`, `bdo_music_composer/project/project_persistence.py`, thin composition in `bdo_music_composer/ui/main_window.py`, `bdo_music_composer/ui/i18n.py` |
-| Dormant internal release notes / GitHub update check | optional machine-local catalog bounds, missing-record fallback, stable-only SemVer policy, no production UI route, Git-history/package exclusion, explicit network/privacy boundary | `bdo_music_composer/app/application_metadata.py`, `bdo_music_composer/app/release_notes.py`, `bdo_music_composer/app/update_check.py`, `bdo_music_composer/ui/update_check_qt.py`, `bdo_music_composer/ui/dialogs/release_notes_dialog.py`, optional Git-ignored `data/releases/release_notes.json` |
-| Frozen Windows self-update | exact signed manifest, GitHub/Gitee mirror failover, highest-version rollback prevention, bounded streaming download, localized non-modal release-notes/progress presentation, next-launch single-EXE handoff, health commit/rollback | `bdo_music_composer/update/manifest.py`, `bdo_music_composer/update/install.py`, `bdo_music_composer/update/preferences.py`, `bdo_music_composer/ui/self_update_qt.py`, `bdo_music_composer/ui/dialogs/self_update_dialog.py`, `main.py`, `scripts/generate_update_manifest.py` |
-| Open/edit a BDO v9 score | `read_bdo_score`, `bdo_music_composer.editor.editor_import.tracks_from_bdo_snapshot`, `MidiToBdoWindow._load_bdo_info` | `bdo_music_composer/export/bdo_score.py`, `bdo_music_composer/editor/editor_import.py`, thin apply adapter in `bdo_music_composer/ui/main_window.py` |
-| Piano-roll behavior and shortcuts | `PianoRollCanvas`, `VelocityLaneCanvas`, `MidiNoteEditorDialog`, the shared shortcut registry, mouse-transparent contextual hints, and the complete F1 reference | `bdo_music_composer/ui/editor/piano_roll_canvas.py`, `bdo_music_composer/ui/editor/midi_note_editor.py`, `bdo_music_composer/ui/editor/editor_shortcuts.py`, `bdo_music_composer/ui/editor/editor_shortcut_hud.py` |
-| Instrument-specific editor lanes/roles | verified vs preview vs recommended boundaries | `bdo_music_composer/editor/bdo_instrument_adaptation.py`, `bdo_music_composer/editor/editor_models.py`, `bdo_music_composer/ui/editor/midi_note_editor.py` |
-| Timeline instrument artwork | packaged original icons, local override, vector fallback | `assets/README.md`, `bdo_music_composer/ui/editor/bdo_instrument_lane_art_qt.py`, `bdo_music_composer/ui/editor/timeline_canvas.py` |
+| Main-window composition / toolbar / page transition | `MidiToBdoWindow._build_*`, `StackedPageCrossfade`, `MainWindowStyleMixin`, semantic theme | `src/bdo_music_composer/ui/main_window.py`, `src/bdo_music_composer/ui/page_transition_qt.py`, `src/bdo_music_composer/ui/theme/main_window_style.py`, `src/bdo_music_composer/ui/theme/fluent_theme.py` |
+| Timeline behavior / painting | shared interval index, reference-audio protocol, track interactions; the multitrack free-point velocity editor is dormant and has no workspace activation control | `src/bdo_music_composer/editor/interval_index.py`, `src/bdo_music_composer/editor/velocity_curve.py`, `src/bdo_music_composer/ui/editor/timeline_canvas.py`, `src/bdo_music_composer/ui/editor/timeline_velocity_curve_qt.py`, `src/bdo_music_composer/editor/editor_models.py`, thin transaction host in `src/bdo_music_composer/ui/timeline_velocity_curve_host.py` |
+| Application settings / local source fields | dialog host contract and Qt-free source normalization | `src/bdo_music_composer/ui/dialogs/application_settings_dialog.py`, `src/bdo_music_composer/app/audio_source_settings.py`, thin apply adapter in `src/bdo_music_composer/ui/main_window.py` |
+| Interface preference persistence | validated global UI schema, debounced Qt bindings, project/global ownership tests | `src/bdo_music_composer/app/ui_preferences.py`, `src/bdo_music_composer/ui/ui_preferences_qt.py`, `tests/test_ui_preferences.py` |
+| Config JSON / safe output names | atomic storage, corrupt backup, unknown-field preservation | `src/bdo_music_composer/app/application_config.py`; callers only provide path and mapping |
+| Track pitch / Aux / master-effect dialogs | structural track contract and raw-byte preservation | `src/bdo_music_composer/ui/dialogs/track_settings_dialogs.py`, `src/bdo_common/bdo_track_effects.py`, thin apply adapters in `src/bdo_music_composer/ui/main_window.py` |
+| Global/per-track velocity base controls | immutable source-note baseline, exact BDO secondary-velocity binding, compact toolbar behavior | `src/bdo_music_composer/editor/global_velocity_gain.py`, `src/bdo_music_composer/ui/global_velocity_gain_qt.py`, `tests/test_global_velocity_gain.py`, `tests/test_track_volume_ui.py` |
+| Home page/unified projects | bounded scanners, safe project index, extracted presentation widgets | `src/bdo_music_composer/app/home_catalog.py`, `src/bdo_music_composer/ui/home_widgets.py`, `src/bdo_music_composer/project/project_persistence.py`, thin composition in `src/bdo_music_composer/ui/main_window.py`, `src/bdo_music_composer/ui/i18n.py` |
+| Dormant internal release notes / GitHub update check | optional machine-local catalog bounds, missing-record fallback, stable-only SemVer policy, no production UI route, Git-history/package exclusion, explicit network/privacy boundary | `src/bdo_music_composer/app/application_metadata.py`, `src/bdo_music_composer/app/release_notes.py`, `src/bdo_music_composer/app/update_check.py`, `src/bdo_music_composer/ui/update_check_qt.py`, `src/bdo_music_composer/ui/dialogs/release_notes_dialog.py`, optional Git-ignored `data/releases/release_notes.json` |
+| Frozen Windows self-update | exact signed manifest, GitHub/Gitee mirror failover, highest-version rollback prevention, bounded streaming download, localized non-modal release-notes/progress presentation, next-launch single-EXE handoff, health commit/rollback | `src/bdo_music_composer/update/manifest.py`, `src/bdo_music_composer/update/install.py`, `src/bdo_music_composer/update/preferences.py`, `src/bdo_music_composer/ui/self_update_qt.py`, `src/bdo_music_composer/ui/dialogs/self_update_dialog.py`, `main.py`, `scripts/generate_update_manifest.py` |
+| Open/edit a BDO v9 score | `read_bdo_score`, `bdo_music_composer.editor.editor_import.tracks_from_bdo_snapshot`, `MidiToBdoWindow._load_bdo_info` | `src/bdo_music_composer/export/bdo_score.py`, `src/bdo_music_composer/editor/editor_import.py`, thin apply adapter in `src/bdo_music_composer/ui/main_window.py` |
+| Piano-roll behavior and shortcuts | `PianoRollCanvas`, `VelocityLaneCanvas`, `MidiNoteEditorDialog`, the shared shortcut registry, mouse-transparent contextual hints, and the complete F1 reference | `src/bdo_music_composer/ui/editor/piano_roll_canvas.py`, `src/bdo_music_composer/ui/editor/midi_note_editor.py`, `src/bdo_music_composer/ui/editor/editor_shortcuts.py`, `src/bdo_music_composer/ui/editor/editor_shortcut_hud.py` |
+| Instrument-specific editor lanes/roles | verified vs preview vs recommended boundaries | `src/bdo_music_composer/editor/bdo_instrument_adaptation.py`, `src/bdo_music_composer/editor/editor_models.py`, `src/bdo_music_composer/ui/editor/midi_note_editor.py` |
+| Timeline instrument artwork | packaged original icons, local override, vector fallback | `assets/README.md`, `src/bdo_music_composer/ui/editor/bdo_instrument_lane_art_qt.py`, `src/bdo_music_composer/ui/editor/timeline_canvas.py` |
 | Local game-art import | allow-listed PAZ/CSS/sprite import, local cache only | `tools/import_bdo_game_art.py` |
-| Timeline process telemetry | current-process CPU/RAM plus callback-owned audio counters | `bdo_music_composer/app/process_metrics.py`, `MidiToBdoWindow._build_performance_strip` |
+| Timeline process telemetry | current-process CPU/RAM plus callback-owned audio counters | `src/bdo_music_composer/app/process_metrics.py`, `MidiToBdoWindow._build_performance_strip` |
+| Windows UI latency / dense-paint qualification | opt-in input-to-paint and event-loop probe, multi-scale qualification, visible-range paint benchmarks | `src/bdo_music_composer/ui/performance_metrics.py`, `src/bdo_music_composer/ui/performance_probe_qt.py`, `tools/qualify_desktop_ui.py`, `tools/benchmark_dense_ui.py` |
+| Workspace refresh execution | Qt-free refresh plan plus focused Qt executor; avoid redundant full invalidation | `src/bdo_music_composer/app/workspace_refresh_controller.py`, `src/bdo_music_composer/ui/workspace_refresh_qt.py`, thin delegate in `src/bdo_music_composer/ui/main_window.py` |
 | Local homepage examples | sanitized local manifest, attribution, no bundled user MIDI | `tools/install_example_project.py`, `scan_example_projects` |
-| MIDI optimization | package README, configs/reports/tests, Qt analysis boundary | `optimization/`, `bdo_music_composer/ui/dialogs/optimizer_dialog.py` |
-| Optimizer packages / Marnian | `optimization/README.md`, `docs/MARNIAN_MUSE_OPTIONAL_BOUNDARY.md` | `optimization/plugin_api.py`, `optimization/plugin_loader.py`, `optimization/plugin_host.py` |
-| Articulation recommendation | profile + technique registry | `bdo_music_composer/editor/bdo_articulation_profiles.py`, `bdo_music_composer/editor/bdo_techniques.py` |
-| Harmony/role analysis | theory context | `bdo_music_composer/editor/bdo_music_theory.py` |
-| Lyrics | lyric expression mode | `bdo_music_composer/editor/bdo_lyrics.py` |
-| Preview/audio timing | shared lifecycle, engine, reference drift policy and tests | `bdo_music_composer/audio/bdo_audio_lifecycle.py`, `bdo_music_composer/audio/bdo_realtime_audio.py`, `bdo_music_composer/audio/bdo_sample_renderer.py`, `bdo_music_composer/audio/reference_clock_sync.py` |
-| Reference-audio load/decode failures | bounded WAV/MP3 content probe, Qt playback/waveform owner, streamed transcription decode, spectrogram source gate | `bdo_music_composer/audio/reference_audio_format.py`, `bdo_music_composer/audio/reference_audio_controller.py`, `bdo_music_composer/transcription/bdo_transcription.py`, `bdo_music_composer/ui/transcription/bdo_spectrogram_qt.py` |
-| Standard-MIDI preview/round-trip projection | deterministic event ordering, `/4` metadata, controls, lyrics, percussion channel, duration scaling | `bdo_music_composer/editor/preview_midi_writer.py`; `bdo_music_composer/ui/main_window.py` only re-exports the same function |
-| Game mixer/effects | track volume, Aux/master byte layers, raw compatibility | `bdo_common/bdo_track_effects.py`, `docs/BDO_MIXER_EFFECTS.md` |
-| Transcription backend/cache/re-decode | `TranscriptionBackend`, `EvidenceDescriptor`, cache tests | `bdo_music_composer/transcription/bdo_transcription.py`, `bdo_music_composer/ui/transcription/transcription_workers.py` |
-| Fragment annotation/cleanup/lineage | `postprocess_frame_events`, v3 benchmark protocol, postprocess tests | `bdo_music_composer/transcription/bdo_transcription_postprocess.py`, `bdo_music_composer/transcription/bdo_transcription.py`, `bdo_music_composer/transcription/bdo_transcription_session.py` |
-| Rhythm cleanup/alignment | cached-onset tempo/phase estimate, adaptive or strict 1/64 projection, deterministic same-pitch boundary decode, immutable raw candidates, single cancellable worker | `bdo_music_composer/transcription/rhythm_grid.py`, `bdo_music_composer/transcription/rhythm_alignment.py`, `bdo_music_composer/transcription/rhythm_decode.py`, `bdo_music_composer/transcription/rhythm_cleanup.py`, `bdo_music_composer/ui/transcription/transcription_workers.py`, `bdo_music_composer/ui/transcription_rhythm_diagnostic.py` |
-| Candidate review/routing/project apply | session candidate indexes, mixed review plans, pure formal-commit plan, review/session tests | `bdo_music_composer/transcription/bdo_transcription_session.py`, `bdo_music_composer/transcription/transcription_commit_plan.py`, `bdo_music_composer/transcription/transcription_workspace_controller.py`, thin execution adapters in `bdo_music_composer/ui/main_window.py` and `bdo_music_composer/ui/editor/midi_note_editor.py` |
-| Embedded transcription editor/canvas | `MidiNoteEditorDialog`, `PianoRollCanvas`, offscreen UI tests | `bdo_music_composer/ui/editor/midi_note_editor.py`, `bdo_music_composer/ui/editor/piano_roll_canvas.py`, `bdo_music_composer/ui/transcription/transcription_editor_qt.py` |
-| Semantic blocks / transcription LOD | candidate visible indexes and paint-order tests | `PianoRollCanvas` in `bdo_music_composer/ui/editor/piano_roll_canvas.py` |
-| Melody-line guides | `docs/TRANSCRIPTION_VOICE_GUIDES.md`; deterministic lead/bass/harmony LOD, lineage and visible block indexes | `bdo_music_composer/transcription/bdo_transcription_melody_lines.py`, `PianoRollCanvas` |
-| Transcription key/chord analysis | `KeyEstimate`, `ChordSegment`, conservative `N` tests | `bdo_music_composer/transcription/bdo_transcription_harmony.py` |
-| Phrase/voice grouping and BDO Top-3 | `VoiceGroup`, `BdoInstrumentMatch`, deterministic ranking tests | `bdo_music_composer/transcription/bdo_transcription_instruments.py` |
-| Local BDO timbre feature cache | worker-only extraction, cache/privacy tests | `bdo_music_composer/transcription/bdo_transcription_timbre.py` |
-| Manual harmony/voice/instrument review | assist-review isolation/recovery tests | `bdo_music_composer/transcription/bdo_transcription_assist.py`, `bdo_music_composer/project/project_schema.py` |
-| Evidence background/tiles | `EvidenceTileController`, tile tests | `bdo_music_composer/ui/transcription/bdo_transcription_evidence_qt.py` |
-| Reference spectrogram background | Qt-free FFT transform, cancellable visible tiles | `bdo_music_composer/audio/bdo_spectrogram.py`, `bdo_music_composer/ui/transcription/bdo_spectrogram_qt.py` |
-| Reference offset/A–B/first beat | shared transport + project schema tests | `bdo_music_composer/ui/main_window.py`, `bdo_music_composer/project/project_schema.py` |
-| Timeline track meters | `AudioStatus.track_levels`, `TimelineCanvas.set_track_levels` | `bdo_music_composer/audio/bdo_realtime_audio.py`, `bdo_music_composer/ui/main_window.py` |
-| Sample selection/instrument ranges | canonical bank routing, renderer and mapping | `bdo_music_composer/audio/bdo_instrument_samples.py`, `bdo_music_composer/audio/bdo_sample_renderer.py` |
-| BDO v9 codec/binary format | `docs/BDO_V9_CODEC.md`, codec tests | `bdo_codec/` |
-| MIDI import / mappings | parser tests plus the transactional editor-import contract | `bdo_midi/`, `bdo_music_composer/editor/editor_import.py`, thin apply adapter in `bdo_music_composer/ui/main_window.py` |
-| MIDI/editor-to-BDO adaptation | immutable export snapshot, source-document reuse, final-document summary, staged atomic publication | `bdo_music_composer/export/export_workflow.py`, `bdo_common/atomic_io.py`, `bdo_export/core.py`, `bdo_export/source_reuse.py` |
-| Export consistency/debug mismatch | editor projection versus prepared/primary/game-copy fields, canonical 730 layout, lossless source bytes, redacted report | `bdo_music_composer/export/export_verification.py`, integration in `bdo_music_composer/export/export_workflow.py`, `tests/test_export_verification.py` |
-| Formal game-score scope, velocity materialization, shared instrument mixer | game-model unit tests plus UI/export round trips | `bdo_music_composer/editor/game_score_model.py`, thin UI adapters |
-| Conversion defaults/settings lifecycle | `docs/CONVERSION_SETTINGS.md`; new-score vs legacy/BDO source policy | `bdo_music_composer/core/conversion_settings.py`, thin adapters in `bdo_music_composer/ui/main_window.py` and `bdo_music_composer/export/export_workflow.py` |
-| Global/reference BPM and network room preview | one project tempo, static export range `1..200`, confidence-gated reference following, no second room tempo or unverified game-control claim | `bdo_music_composer/ui/workspace_tempo_qt.py`, `bdo_music_composer/transcription/reference_tempo.py`, `bdo_music_composer/ui/dialogs/multiplayer_sync_dialog.py`, `docs/MULTIPLAYER_SYNCHRONIZER.md` |
-| Global/per-track pitch projection | `docs/CONVERSION_SETTINGS.md`; stable track IDs, drum exemption, `12k` voice adaptation | `bdo_music_composer/editor/pitch_transform.py`, `bdo_music_composer/export/bdo_validation.py`, `bdo_music_composer/export/export_workflow.py`, preview adapters |
-| Game rules / conversion issues | lazy profile provider, ordered focused validation stages | `bdo_music_composer/app/game_profile_provider.py`, `bdo_music_composer/core/bdo_profile.py`, `bdo_music_composer/export/bdo_validation.py`, `data/profiles/` |
-| Revisioned conversion validation | explicit mutation boundary, cache-hit and exact-note notice tests | `bdo_music_composer/editor/model_revision.py`, `bdo_music_composer/app/conversion_validation_controller.py`, `bdo_music_composer/ui/timeline_validation_host.py` |
-| Transcription worker/review lifecycle | generation/restart, bounded mixed history, and stale-result tests | `bdo_music_composer/transcription/transcription_workspace_controller.py`, `bdo_music_composer/ui/transcription/transcription_workers.py` |
-| Project loading/persistence lifecycle | complete `ProjectLoadPlan`, path-aware track import, generation gate, recursively frozen metadata, and atomic writer | `bdo_music_composer/app/project_document.py`, `bdo_music_composer/editor/editor_import.py`, `bdo_music_composer/project/project_lifecycle_controller.py`, `bdo_music_composer/project/project_persistence.py`; UI only reads text, maps errors, and commits |
-| Preview transport lifecycle | session generation/state and real-time audio tests | `bdo_music_composer/audio/preview_transport_controller.py`, `bdo_music_composer/audio/bdo_realtime_audio.py` |
-| BDO score inspection / comparison | score snapshot tests | `bdo_music_composer/export/bdo_score.py`, `scripts/inspect_bdo.py` |
-| Audio A/B research | coverage/alignment tests | `bdo_music_composer/audio/bdo_audio_research.py`, `bdo_music_composer/research/bdo_experiments.py` |
-| Localization / regional terminology | `docs/LOCALIZATION.md`, catalog and four-locale UI tests | `bdo_music_composer/ui/i18n.py`, fixed-text producers only |
-| Credits / license links / citations | `THIRD_PARTY_NOTICES.md`, Basic Pitch license evidence | `bdo_music_composer/core/third_party_credits.py`, `bdo_music_composer/ui/dialogs/acknowledgements_dialog.py`, release docs |
+| MIDI optimization | package README, configs/reports/tests, Qt analysis boundary | `src/optimization/`, `src/bdo_music_composer/ui/dialogs/optimizer_dialog.py` |
+| Optimizer packages / Marnian | `src/optimization/README.md`, `docs/MARNIAN_MUSE_OPTIONAL_BOUNDARY.md` | `src/optimization/plugin_api.py`, `src/optimization/plugin_loader.py`, `src/optimization/plugin_host.py` |
+| Extension capability/version negotiation | fail-closed shared contract and bounded NDJSON envelope before extension execution | `src/bdo_common/extension_contract.py`, `src/bdo_common/extension_protocol.py`, `src/optimization/plugin_api.py`, `src/bdo_music_composer/sdk/core_api.py` |
+| Articulation recommendation | profile + technique registry | `src/bdo_music_composer/editor/bdo_articulation_profiles.py`, `src/bdo_music_composer/editor/bdo_techniques.py` |
+| Harmony/role analysis | theory context | `src/bdo_music_composer/editor/bdo_music_theory.py` |
+| Lyrics | lyric expression mode | `src/bdo_music_composer/editor/bdo_lyrics.py` |
+| Preview/audio timing | shared lifecycle, engine, reference drift policy and tests | `src/bdo_music_composer/audio/bdo_audio_lifecycle.py`, `src/bdo_music_composer/audio/bdo_realtime_audio.py`, `src/bdo_music_composer/audio/bdo_sample_renderer.py`, `src/bdo_music_composer/audio/reference_clock_sync.py` |
+| Windows native audio experiment | C ABI lifecycle, event-v3 articulation semantics, master limiter parity, fail-closed effect-bus gate | `src/bdo_music_composer/audio/native_audio_core.py`, `src/bdo_music_composer/audio/bdo_native_audio_core.cpp`, `packaging/native_audio/`, `tests/test_native_audio_core.py` |
+| Reference-audio load/decode failures | bounded WAV/MP3 content probe, Qt playback/waveform owner, streamed transcription decode, spectrogram source gate | `src/bdo_music_composer/audio/reference_audio_format.py`, `src/bdo_music_composer/audio/reference_audio_controller.py`, `src/bdo_music_composer/transcription/bdo_transcription.py`, `src/bdo_music_composer/ui/transcription/bdo_spectrogram_qt.py` |
+| Standard-MIDI preview/round-trip projection | deterministic event ordering, `/4` metadata, controls, lyrics, percussion channel, duration scaling | `src/bdo_music_composer/editor/preview_midi_writer.py`; `src/bdo_music_composer/ui/main_window.py` only re-exports the same function |
+| Game mixer/effects | track volume, Aux/master byte layers, raw compatibility | `src/bdo_common/bdo_track_effects.py`, `docs/BDO_MIXER_EFFECTS.md` |
+| Transcription backend/cache/re-decode | `TranscriptionBackend`, `EvidenceDescriptor`, cache tests | `src/bdo_music_composer/transcription/bdo_transcription.py`, `src/bdo_music_composer/ui/transcription/transcription_workers.py` |
+| Fragment annotation/cleanup/lineage | `postprocess_frame_events`, v3 benchmark protocol, postprocess tests | `src/bdo_music_composer/transcription/bdo_transcription_postprocess.py`, `src/bdo_music_composer/transcription/bdo_transcription.py`, `src/bdo_music_composer/transcription/bdo_transcription_session.py` |
+| Rhythm cleanup/alignment | cached-onset tempo/phase estimate, adaptive or strict 1/64 projection, deterministic same-pitch boundary decode, immutable raw candidates, single cancellable worker | `src/bdo_music_composer/transcription/rhythm_grid.py`, `src/bdo_music_composer/transcription/rhythm_alignment.py`, `src/bdo_music_composer/transcription/rhythm_decode.py`, `src/bdo_music_composer/transcription/rhythm_cleanup.py`, `src/bdo_music_composer/ui/transcription/transcription_workers.py`, `src/bdo_music_composer/ui/transcription_rhythm_diagnostic.py` |
+| Candidate review/routing/project apply | session candidate indexes, mixed review plans, pure formal-commit plan, review/session tests | `src/bdo_music_composer/transcription/bdo_transcription_session.py`, `src/bdo_music_composer/transcription/transcription_commit_plan.py`, `src/bdo_music_composer/transcription/transcription_workspace_controller.py`, thin execution adapters in `src/bdo_music_composer/ui/main_window.py` and `src/bdo_music_composer/ui/editor/midi_note_editor.py` |
+| Embedded transcription editor/canvas | `MidiNoteEditorDialog`, `PianoRollCanvas`, offscreen UI tests | `src/bdo_music_composer/ui/editor/midi_note_editor.py`, `src/bdo_music_composer/ui/editor/piano_roll_canvas.py`, `src/bdo_music_composer/ui/transcription/transcription_editor_qt.py` |
+| Semantic blocks / transcription LOD | candidate visible indexes and paint-order tests | `PianoRollCanvas` in `src/bdo_music_composer/ui/editor/piano_roll_canvas.py` |
+| Melody-line guides | `docs/TRANSCRIPTION_VOICE_GUIDES.md`; deterministic lead/bass/harmony LOD, lineage and visible block indexes | `src/bdo_music_composer/transcription/bdo_transcription_melody_lines.py`, `PianoRollCanvas` |
+| Transcription key/chord analysis | `KeyEstimate`, `ChordSegment`, conservative `N` tests | `src/bdo_music_composer/transcription/bdo_transcription_harmony.py` |
+| Phrase/voice grouping and BDO Top-3 | `VoiceGroup`, `BdoInstrumentMatch`, deterministic ranking tests | `src/bdo_music_composer/transcription/bdo_transcription_instruments.py` |
+| Local BDO timbre feature cache | worker-only extraction, cache/privacy tests | `src/bdo_music_composer/transcription/bdo_transcription_timbre.py` |
+| Manual harmony/voice/instrument review | assist-review isolation/recovery tests | `src/bdo_music_composer/transcription/bdo_transcription_assist.py`, `src/bdo_music_composer/project/project_schema.py` |
+| Evidence background/tiles | `EvidenceTileController`, tile tests | `src/bdo_music_composer/ui/transcription/bdo_transcription_evidence_qt.py` |
+| Reference spectrogram background | Qt-free FFT transform, cancellable visible tiles | `src/bdo_music_composer/audio/bdo_spectrogram.py`, `src/bdo_music_composer/ui/transcription/bdo_spectrogram_qt.py` |
+| Reference offset/A–B/first beat | shared transport + project schema tests | `src/bdo_music_composer/ui/main_window.py`, `src/bdo_music_composer/project/project_schema.py` |
+| Timeline track meters | `AudioStatus.track_levels`, `TimelineCanvas.set_track_levels` | `src/bdo_music_composer/audio/bdo_realtime_audio.py`, `src/bdo_music_composer/ui/main_window.py` |
+| Sample selection/instrument ranges | canonical bank routing, renderer and mapping | `src/bdo_music_composer/audio/bdo_instrument_samples.py`, `src/bdo_music_composer/audio/bdo_sample_renderer.py` |
+| BDO v9 codec/binary format | `docs/BDO_V9_CODEC.md`, codec tests | `src/bdo_codec/` |
+| MIDI import / mappings | parser tests plus the transactional editor-import contract | `src/bdo_midi/`, `src/bdo_music_composer/editor/editor_import.py`, thin apply adapter in `src/bdo_music_composer/ui/main_window.py` |
+| MIDI/editor-to-BDO adaptation | immutable export snapshot, source-document reuse, final-document summary, staged atomic publication | `src/bdo_music_composer/export/export_workflow.py`, `src/bdo_common/atomic_io.py`, `src/bdo_export/core.py`, `src/bdo_export/source_reuse.py` |
+| Export consistency/debug mismatch | editor projection versus prepared/primary/game-copy fields, canonical 730 layout, lossless source bytes, redacted report | `src/bdo_music_composer/export/export_verification.py`, integration in `src/bdo_music_composer/export/export_workflow.py`, `tests/test_export_verification.py` |
+| Formal game-score scope, velocity materialization, shared instrument mixer | game-model unit tests plus UI/export round trips | `src/bdo_music_composer/editor/game_score_model.py`, thin UI adapters |
+| Conversion defaults/settings lifecycle | `docs/CONVERSION_SETTINGS.md`; new-score vs legacy/BDO source policy | `src/bdo_music_composer/core/conversion_settings.py`, thin adapters in `src/bdo_music_composer/ui/main_window.py` and `src/bdo_music_composer/export/export_workflow.py` |
+| Global/reference BPM and network room preview | one project tempo, static export range `1..200`, confidence-gated reference following, no second room tempo or unverified game-control claim | `src/bdo_music_composer/ui/workspace_tempo_qt.py`, `src/bdo_music_composer/transcription/reference_tempo.py`, `src/bdo_music_composer/ui/dialogs/multiplayer_sync_dialog.py`, `docs/MULTIPLAYER_SYNCHRONIZER.md` |
+| Global/per-track pitch projection | `docs/CONVERSION_SETTINGS.md`; stable track IDs, drum exemption, `12k` voice adaptation | `src/bdo_music_composer/editor/pitch_transform.py`, `src/bdo_music_composer/export/bdo_validation.py`, `src/bdo_music_composer/export/export_workflow.py`, preview adapters |
+| Game rules / conversion issues | lazy profile provider, ordered focused validation stages | `src/bdo_music_composer/app/game_profile_provider.py`, `src/bdo_music_composer/core/bdo_profile.py`, `src/bdo_music_composer/export/bdo_validation.py`, `data/profiles/` |
+| Revisioned conversion validation | explicit mutation boundary, cache-hit and exact-note notice tests | `src/bdo_music_composer/editor/model_revision.py`, `src/bdo_music_composer/app/conversion_validation_controller.py`, `src/bdo_music_composer/ui/timeline_validation_host.py` |
+| Transcription worker/review lifecycle | generation/restart, bounded mixed history, and stale-result tests | `src/bdo_music_composer/transcription/transcription_workspace_controller.py`, `src/bdo_music_composer/ui/transcription/transcription_workers.py` |
+| Project loading/persistence lifecycle | complete `ProjectLoadPlan`, path-aware track import, generation gate, recursively frozen metadata, and atomic writer | `src/bdo_music_composer/app/project_document.py`, `src/bdo_music_composer/editor/editor_import.py`, `src/bdo_music_composer/project/project_lifecycle_controller.py`, `src/bdo_music_composer/project/project_persistence.py`; UI only reads text, maps errors, and commits |
+| Preview transport lifecycle | session generation/state and real-time audio tests | `src/bdo_music_composer/audio/preview_transport_controller.py`, `src/bdo_music_composer/audio/bdo_realtime_audio.py` |
+| BDO score inspection / comparison | score snapshot tests | `src/bdo_music_composer/export/bdo_score.py`, `scripts/inspect_bdo.py` |
+| Audio A/B research | coverage/alignment tests | `src/bdo_music_composer/audio/bdo_audio_research.py`, `src/bdo_music_composer/research/bdo_experiments.py` |
+| Localization / regional terminology | `docs/LOCALIZATION.md`, catalog and four-locale UI tests | `src/bdo_music_composer/ui/i18n.py`, fixed-text producers only |
+| Credits / license links / citations | `THIRD_PARTY_NOTICES.md`, Basic Pitch license evidence | `src/bdo_music_composer/core/third_party_credits.py`, `src/bdo_music_composer/ui/dialogs/acknowledgements_dialog.py`, release docs |
 | README languages / Agent handoff | root language hub, shared section markers, Agent workflow | `README.*.md`, `docs/AGENT_HANDOFF.md`, `tools/check_readme_locales.py` |
 | Repository layout / file cleanup | single root entry, domain package placement, private/generated artifact policy | `docs/PROJECT_STRUCTURE.md`, directory `README.md` files, `tools/check_repository_hygiene.py` |
-| Windows build | spec/build script/path split | `packaging/windows/`, `bdo_music_composer/core/project_paths.py` |
+| Windows build | spec/build script/path split | `packaging/windows/`, `src/bdo_music_composer/core/project_paths.py` |
 | Cross-module refactor / AI editability | ownership table, dependency direction, typed boundaries, architecture guards | `docs/AI_EDITING_GUIDE.md`, owner module, `tests/test_architecture_dependencies.py` |
 
 ## Source-of-truth hierarchy
@@ -128,9 +132,9 @@ Do not promote an inference to “verified” without game evidence.
 - `BdoRealtimeAudioEngine`: preload, event schedule, voice pool, Qt output.
 - `PreviewEffectProcessor`: preallocated, explicitly uncalibrated local
   Reverb/Delay/Chorus preview; exact export bytes remain in
-  `bdo_common/bdo_track_effects.py`.
+  `src/bdo_common/bdo_track_effects.py`.
 - `build_filtered_midi`: deterministic standard-MIDI projection owned by
-  `bdo_music_composer/editor/preview_midi_writer.py`. The main-window name is
+  `src/bdo_music_composer/editor/preview_midi_writer.py`. The main-window name is
   an identity-preserving
   compatibility re-export, not another implementation and not BDO v9 export.
 - `VoiceLifecycle` / `voice_lifecycle`: Qt-free formal-note, audible-tail, and
@@ -230,7 +234,7 @@ Do not promote an inference to “verified” without game evidence.
 - `build_bdo_binary` / `encrypt_bdo`: probe-generator helpers delegated to `bdo_codec`.
 - `Localizer`: exact-source widget translation.
 - `APP_VERSION` / GitHub repository constants: immutable public identity owned
-  by `bdo_music_composer/app/application_metadata.py`; do not recreate a
+  by `src/bdo_music_composer/app/application_metadata.py`; do not recreate a
   parallel root identity module.
 - `ReleaseNotesDocument`: deeply immutable, size/count/text-bounded local
   history parsed from an explicit fixture or the optional machine-local,
@@ -239,13 +243,13 @@ Do not promote an inference to “verified” without game evidence.
 - `UpdateCheckController`: an explicit, one-request-at-a-time QtNetwork
   transport retained for explicit internal tests. Production home, startup,
   menu, and navigation flows must not construct it or the dormant dialog; the
-  pure response/SemVer policy remains in `bdo_music_composer/app/update_check.py`.
+  pure response/SemVer policy remains in `src/bdo_music_composer/app/update_check.py`.
 - `SelfUpdateController`: the production frozen-Windows coordinator. It uses
-  the signed channel and staging owners under `bdo_music_composer/update/`,
+  the signed channel and staging owners under `src/bdo_music_composer/update/`,
   never the dormant release-notes dialog, and remains inert for source runs and
   startup self-tests.
 
-`bdo_music_composer/ui/main_window.py` is the Qt composition root and compatibility facade. A
+`src/bdo_music_composer/ui/main_window.py` is the Qt composition root and compatibility facade. A
 symbol re-exported there remains owned by its focused implementation module;
 new production code imports the owner directly. See
 `docs/AI_EDITING_GUIDE.md` before adding another main-window helper.
@@ -255,7 +259,7 @@ new production code imports the owner directly. See
 - Re-reading the source MIDI during export discards manual editor changes.
 - Constructing complete `TrackState` values in the main window duplicates the
   transactional import contract. Route MIDI, BDO, and project payloads through
-  `bdo_music_composer/editor/editor_import.py`, inject presentation values, and
+  `src/bdo_music_composer/editor/editor_import.py`, inject presentation values, and
   apply only a fully
   successful result.
 - Re-reading MIDI/BDO while restoring a project also discards user-created
@@ -623,7 +627,10 @@ internal test harness.
   and keep third-party terms in `THIRD_PARTY_NOTICES.md`.
 - Confirm source archives and binaries contain no historical `midi2bdo` or `_ice` modules.
 - Remove tracked `out/` scores and any Owner IDs from Git history.
-- Do not publish extracted game audio or PAZ contents.
+- Apply [`CONTENT_BOUNDARY.md`](CONTENT_BOUNDARY.md): do not add or publish
+  client-audio PAZ/WEM discovery, extraction, conversion, pack-building, or
+  distribution support. A user-selected preview source must have an
+  independently established licence.
 - Keep the single `BDO-Music-Composer.exe` build reproducible and bundled with
   the Basic Pitch ONNX CPU runtime. Do not publish it until its exact dependency
   inventory, model redistribution terms, native-library notices, and complete

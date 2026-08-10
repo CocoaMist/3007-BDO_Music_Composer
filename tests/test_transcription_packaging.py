@@ -137,7 +137,7 @@ class TranscriptionPackagingTests(unittest.TestCase):
 
     def test_source_install_uses_pinned_windows_constraints(self) -> None:
         constraints = (
-            PROJECT_ROOT / "constraints-windows-py312.txt"
+            PROJECT_ROOT / "requirements" / "windows-py312.txt"
         ).read_text(encoding="utf-8")
         for package in (
             "PySide6",
@@ -157,7 +157,7 @@ class TranscriptionPackagingTests(unittest.TestCase):
         install_script = (
             PROJECT_ROOT / "scripts" / "install_transcription.ps1"
         ).read_text(encoding="utf-8")
-        self.assertIn("constraints-windows-py312.txt", install_script)
+        self.assertIn("requirements\\windows-py312.txt", install_script)
         self.assertGreaterEqual(install_script.count('"--constraint"'), 3)
 
         workflow = (

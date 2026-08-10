@@ -74,6 +74,7 @@ def build_synthetic_engine(
     sample_rate: int = 36_000,
     *,
     effect_preview: bool = False,
+    unique_samples: int = 1,
 ) -> BdoRealtimeAudioEngine:
     """Create a device-free, loop-backed workload requiring no local samples."""
     voice_count = max(1, min(256, int(voices)))
@@ -82,17 +83,21 @@ def build_synthetic_engine(
     phase = np.arange(sample_frames, dtype=np.float32)
     phase *= 2.0 * math.pi * 220.0 / sample_rate
     mono = np.sin(phase, dtype=np.float32) * 0.025
-    sample = _Sample(
-        np.column_stack((mono, mono)),
-        sample_rate,
-        sample_frames,
-        sample_frames,
+    sample_count = max(1, min(voice_count, int(unique_samples)))
+    samples = tuple(
+        _Sample(
+            np.column_stack((mono * (1.0 - index * 0.001), mono)),
+            sample_rate,
+            sample_frames,
+            sample_frames,
+        )
+        for index in range(sample_count)
     )
     gain = 0.7 / math.sqrt(voice_count)
     events = [
         _Event(
             frame=0,
-            sample=sample,
+            sample=samples[index % sample_count],
             ratio=2.0 ** (((index % 25) - 12) / 12.0),
             gain=gain,
             duration_frames=duration_frames,
@@ -155,15 +160,20 @@ def enable_effect_preview(engine: BdoRealtimeAudioEngine) -> None:
 
 def _configure_offline_worker(
     engine: BdoRealtimeAudioEngine,
+    *,
+    render_block_frames: int = AUDIO_RENDER_BLOCK_FRAMES,
 ) -> _AudioOutputWorker:
     """Mirror production buffer policy without constructing a QAudioSink."""
     engine._buffer_frames = max(
-        AUDIO_RENDER_BLOCK_FRAMES,
+        render_block_frames,
         engine._sample_rate * AUDIO_BUFFER_MS // 1000,
     )
-    worker = _AudioOutputWorker(engine)
+    worker = _AudioOutputWorker(
+        engine,
+        render_block_frames=render_block_frames,
+    )
     worker.target_frames = max(
-        AUDIO_RENDER_BLOCK_FRAMES,
+        render_block_frames,
         min(
             engine._buffer_frames,
             round(engine._sample_rate * AUDIO_NOMINAL_QUEUE_MS / 1000.0),
@@ -181,9 +191,13 @@ def run_offline_benchmark(
     seconds: float,
     *,
     seek_interval_s: float = 0.0,
+    render_block_frames: int = AUDIO_RENDER_BLOCK_FRAMES,
 ) -> dict[str, Any]:
     """Run one deterministic mixer producer with production refill quanta."""
-    worker = _configure_offline_worker(engine)
+    worker = _configure_offline_worker(
+        engine,
+        render_block_frames=render_block_frames,
+    )
     target_frames = max(1, round(max(0.01, seconds) * engine._sample_rate))
     rendered_frames = 0
     free_frames = engine._buffer_frames
@@ -281,14 +295,19 @@ def run_offline_benchmark(
             else 0.0
         ),
         "sample_rate": engine._sample_rate,
+        "render_block_frames": int(render_block_frames),
         "buffer_frames": engine._buffer_frames,
         "block_distribution": {
             str(frames): count
             for frames, count in sorted(block_counts.items())
         },
+        "render_p50_ms": _percentile(render_times, 0.50),
         "render_p95_ms": _percentile(render_times, 0.95),
+        "render_p99_ms": _percentile(render_times, 0.99),
+        "render_p999_ms": _percentile(render_times, 0.999),
         "render_max_ms": max(render_times, default=0.0),
         "render_p95_load": _percentile(render_loads, 0.95),
+        "render_p99_load": _percentile(render_loads, 0.99),
         "active_voices": status.active_voices,
         "active_voices_peak": peak_voices,
         "voice_steals": status.voice_steals,
@@ -376,13 +395,19 @@ def run_sink_benchmark(
 ) -> dict[str, Any]:
     """Let the real QAudio worker be the sole timeline producer."""
     block_counts: Counter[int] = Counter()
+    render_times: list[float] = []
     block_counts_lock = threading.Lock()
     original_read_pcm = engine._read_pcm
 
     def counted_read_pcm(max_bytes: int) -> bytes:
+        started = time.perf_counter()
         with block_counts_lock:
             block_counts[max(1, max_bytes // engine._frame_bytes)] += 1
-        return original_read_pcm(max_bytes)
+        payload = original_read_pcm(max_bytes)
+        elapsed_ms = (time.perf_counter() - started) * 1_000.0
+        with block_counts_lock:
+            render_times.append(elapsed_ms)
+        return payload
 
     engine._read_pcm = counted_read_pcm  # type: ignore[method-assign]
     engine.play()
@@ -403,14 +428,18 @@ def run_sink_benchmark(
             str(frames): count
             for frames, count in sorted(block_counts.items())
         }
+        measured_render_times = tuple(render_times)
     return {
         "mode": "sink",
         "simulated_seconds": status.position_ms / 1000.0,
         "sample_rate": status.sample_rate,
         "buffer_frames": status.buffer_frames,
         "block_distribution": block_distribution,
-        "render_p95_ms": status.render_p95_ms,
-        "render_max_ms": status.render_max_ms,
+        "render_p50_ms": _percentile(list(measured_render_times), 0.50),
+        "render_p95_ms": _percentile(list(measured_render_times), 0.95),
+        "render_p99_ms": _percentile(list(measured_render_times), 0.99),
+        "render_p999_ms": _percentile(list(measured_render_times), 0.999),
+        "render_max_ms": max(measured_render_times, default=status.render_max_ms),
         "render_p95_load": status.render_p95_load,
         "active_voices": status.active_voices,
         "active_voices_peak": peak_voices,
@@ -425,6 +454,18 @@ def main() -> int:
     parser.add_argument("--seconds", type=float, default=30.0)
     parser.add_argument("--voices", type=int, default=256)
     parser.add_argument("--sample-rate", type=int, default=36_000)
+    parser.add_argument(
+        "--render-block-frames",
+        type=int,
+        default=AUDIO_RENDER_BLOCK_FRAMES,
+        help="offline render quantum; use 128/256/512 for low-latency diagnostics",
+    )
+    parser.add_argument(
+        "--synthetic-samples",
+        type=int,
+        default=1,
+        help="number of distinct synthetic PCM sources distributed across voices",
+    )
     parser.add_argument(
         "--mode",
         choices=("offline", "sink"),
@@ -476,6 +517,7 @@ def main() -> int:
             args.seconds,
             args.sample_rate,
             effect_preview=args.effects,
+            unique_samples=args.synthetic_samples,
         )
     else:
         engine = BdoRealtimeAudioEngine(
@@ -505,6 +547,7 @@ def main() -> int:
                 engine,
                 args.seconds,
                 seek_interval_s=args.seek_interval,
+                render_block_frames=max(1, args.render_block_frames),
             )
         else:
             result = run_sink_benchmark(engine, args.seconds)
