@@ -10,6 +10,15 @@ from bdo_music_composer.editor.model_change import ModelChange
 
 
 class WorkspaceRefreshControllerTests(unittest.TestCase):
+    def test_grid_change_refreshes_projection_without_rebuilding_tracks(self) -> None:
+        plan = WorkspaceRefreshController().plan((ModelChange.grid(),))
+
+        self.assertFalse(plan.advance_revision)
+        self.assertFalse(plan.rebuild_timeline)
+        self.assertTrue(plan.refresh_grid)
+        self.assertTrue(plan.refresh_validation)
+        self.assertTrue(plan.refresh_preview)
+
     def test_view_change_does_not_schedule_model_work(self) -> None:
         plan = WorkspaceRefreshController().plan((ModelChange.view(),))
 

@@ -37,7 +37,7 @@
 
 ## 当前实现
 
-`bdo_music_composer/transcription/bdo_transcription_melody_lines.py` 输出统一的只读 `MelodyLineSegment`：
+`src/bdo_music_composer/transcription/bdo_transcription_melody_lines.py` 输出统一的只读 `MelodyLineSegment`：
 
 - `note`：候选持续区间；
 - `connector`：间隔不超过 0.35 拍（并限制在 80–220 ms）、跳进不超过 7 半音的相邻候选；

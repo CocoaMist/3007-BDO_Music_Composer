@@ -158,11 +158,14 @@ class LocaleResponsiveUiTests(unittest.TestCase):
                 assert window.file_label.text() == "Open"
                 assert window.file_label.toolTip() == "Open"
                 assert window.timeline_meta.text() == trf(
-                    "{count} 轨 · BPM {bpm} · {meter}/4",
+                    "{count} 轨 · {meter}/4",
                     count=1,
-                    bpm=window.bpm_override or window.bpm,
                     meter=window.time_sig,
                 )
+                ghost_label_width = editor.ghost_box.fontMetrics().horizontalAdvance(
+                    editor.ghost_box.text()
+                )
+                assert editor.ghost_box.width() >= ghost_label_width + 34
                 assert home_list.item(0).text() == "Play"
                 assert "Play" in editor.windowTitle()
                 assert editor.findChild(QLabel, "EditorTrackTitle").text() == "Play"

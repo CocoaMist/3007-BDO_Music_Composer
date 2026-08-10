@@ -12,6 +12,72 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class UiPaintRegressionTests(unittest.TestCase):
+    def test_piano_roll_reuses_track_and_note_colors_within_one_frame(self) -> None:
+        script = textwrap.dedent(
+            """
+            from PySide6.QtWidgets import QApplication
+
+            from bdo_midi import Note
+            from bdo_music_composer.editor.editor_models import TrackState
+            from bdo_music_composer.ui.main_window import (
+                MidiNoteEditorDialog,
+                MidiToBdoWindow,
+            )
+
+            app = QApplication([])
+            notes = [
+                Note(60 + index % 5, 80 if index % 2 else 100, index * 25.0, 20.0, 0)
+                for index in range(2_000)
+            ]
+            track = TrackState(1, notes, 0, False, "dense", 0x0B)
+            window = MidiToBdoWindow()
+            window.tracks = [track]
+            editor = MidiNoteEditorDialog(window, track, 120, 4)
+            editor.resize(1_180, 720)
+            editor.show()
+            app.processEvents()
+
+            base_color_calls = []
+            fill_color_calls = []
+            original_base_color = editor.canvas._editable_note_base_color
+            original_fill_color = editor.canvas._note_fill_color
+
+            def counted_base_color():
+                base_color_calls.append(1)
+                return original_base_color()
+
+            def counted_fill_color(note, **kwargs):
+                fill_color_calls.append((int(note.vel), int(note.ntype)))
+                return original_fill_color(note, **kwargs)
+
+            editor.canvas._editable_note_base_color = counted_base_color
+            editor.canvas._note_fill_color = counted_fill_color
+            editor.canvas.grab()
+
+            assert base_color_calls == [1], len(base_color_calls)
+            assert set(fill_color_calls) == {(80, 0), (100, 0)}
+            assert len(fill_color_calls) == 2, fill_color_calls
+            editor.close()
+            window.close()
+            app.processEvents()
+            """
+        )
+        env = dict(os.environ)
+        env["QT_QPA_PLATFORM"] = "offscreen"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
     def test_timeline_playback_reuses_static_frame_without_note_queries(self) -> None:
         script = textwrap.dedent(
             """

@@ -12,7 +12,8 @@ Thanks for helping improve BDO Music Composer.
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-pyside.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements\desktop.txt
+.\.venv\Scripts\python.exe -m pip install --no-deps --editable .
 .\.venv\Scripts\python.exe -m unittest discover -s tests -q
 ```
 

@@ -1,0 +1,5 @@
+-r desktop.txt
+# Exact build and runtime versions are centralized in
+# windows-py312.txt.
+pyinstaller==6.21.0
+pillow==12.3.0

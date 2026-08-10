@@ -25,7 +25,7 @@
 
 Wwise 允许采样转调并不等于游戏编辑器允许写入，因此不会用宽泛的
 `0–127` 采样区间覆盖已经验证的游戏音域。实时试听、离线渲染、转换检查
-和音符编辑器共用 `bdo_music_composer/audio/bdo_instrument_samples.py` 的乐器/音色库路由；架子鼓也
+和音符编辑器共用 `src/bdo_music_composer/audio/bdo_instrument_samples.py` 的乐器/音色库路由；架子鼓也
 只使用 `bdo_midi` 的一份 GM→BDO 映射，避免预览与导出选择不同音块。
 采样选择顺序固定为“奏法 Event → 键位/力度音区 → 容器子采样”。有原生
 奏法 Event 时不再叠加旧版的升八度、和弦堆叠或近似包络，避免泛音、和弦、

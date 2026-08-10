@@ -18,7 +18,9 @@ from bdo_music_composer.sdk.core_api import (
     TrackState,
     build_score_document,
     decode_score,
+    diagnose_bdo_authoring,
     encode_score,
+    semantic_readiness_score,
 )
 ROOT = Path(__file__).resolve().parents[1]
 _BUILDER_SPEC = importlib.util.spec_from_file_location(
@@ -75,6 +77,13 @@ class DeveloperSdkCoreTests(unittest.TestCase):
         self.assertEqual(track.note_count, 1)
         self.assertEqual(track.end_ms, 525.0)
 
+    def test_public_semantic_diagnostics_are_read_only(self) -> None:
+        track = TrackState(1, [Note(60, 90, 0.0, 500.0, 0)], 0, False, "SDK", 0)
+        issues = diagnose_bdo_authoring([track])
+        self.assertEqual(issues, ())
+        self.assertEqual(semantic_readiness_score(issues), 100)
+        self.assertEqual(track.note_count, 1)
+
 
 class DeveloperSdkArchiveTests(unittest.TestCase):
     def test_archive_is_deterministic_and_manifest_is_complete(self) -> None:
@@ -91,8 +100,8 @@ class DeveloperSdkArchiveTests(unittest.TestCase):
                     f"{prefix}SDK_MANIFEST.json",
                     f"{prefix}SDK_README.md",
                     f"{prefix}pyproject.toml",
-                    f"{prefix}bdo_music_composer/sdk/core_api.py",
-                    f"{prefix}bdo_music_composer/sdk/ui_api.py",
+                    f"{prefix}src/bdo_music_composer/sdk/core_api.py",
+                    f"{prefix}src/bdo_music_composer/sdk/ui_api.py",
                     f"{prefix}docs/DEVELOPER_SDK.md",
                     f"{prefix}examples/sdk/timeline_widget.py",
                 }

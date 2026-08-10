@@ -1,5 +1,8 @@
 # Application artwork provenance
 
+Only reviewed application artwork belongs here. User-provided and cached
+content stays outside the repository.
+
 The files below are original, application-owned visual aids. They do not come
 from Black Desert Online or any other game archive.
 

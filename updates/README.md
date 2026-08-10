@@ -1,5 +1,8 @@
 # Signed update channel
 
+This directory contains public channel metadata only; it never stores signing
+secrets or downloaded application binaries.
+
 `stable/update-manifest-v1.json` and its `.sig` companion are release-channel
 metadata, not build inputs. Generate them only after the exact public EXE has
 passed all release gates and has identical GitHub and Gitee asset URLs:

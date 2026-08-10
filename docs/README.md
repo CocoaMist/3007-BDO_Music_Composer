@@ -1,5 +1,8 @@
 # Documentation index
 
+This is the canonical index for current contracts, evidence, and historical
+records. User-facing summaries stay in [`locales/`](locales/).
+
 Documentation is split into current contracts, domain references, and evidence.
 Tests and code override historical records.
 
@@ -14,6 +17,16 @@ Tests and code override historical records.
   examples, and deterministic source-SDK packaging.
 - [`OPTIMIZATION_EXTENSION_ROADMAP.md`](OPTIMIZATION_EXTENSION_ROADMAP.md) —
   remaining structural work and performance gates.
+- [`PERFORMANCE_NATIVE_CORE_PLAN.md`](PERFORMANCE_NATIVE_CORE_PLAN.md) —
+  measured professional-performance targets, native-core decision gates, and
+  the staged Python/C++ integration plan.
+
+- [`PROFESSIONAL_DESKTOP_PHASE6_10.md`](PROFESSIONAL_DESKTOP_PHASE6_10.md) —
+  trusted release, recovery, accessibility qualification, native-audio
+  promotion, and explainable BDO semantic gates.
+- [`CREATIVE_LANGUAGE_AND_UI_AUDIT.md`](CREATIVE_LANGUAGE_AND_UI_AUDIT.md) —
+  current visual language, interaction principles, and interface-by-interface
+  product audit.
 
 ## Domain contracts
 
@@ -35,7 +48,8 @@ Tests and code override historical records.
   [`MARNIAN_MUSE_OPTIONAL_BOUNDARY.md`](MARNIAN_MUSE_OPTIONAL_BOUNDARY.md), and
   [`BASIC_PITCH_LICENSE_REVIEW.md`](BASIC_PITCH_LICENSE_REVIEW.md).
 - Audio and samples: [`AUDIO_SOURCE_STRATEGY.md`](AUDIO_SOURCE_STRATEGY.md) and
-  [`BDO_SAMPLE_MAPPING_STATUS.md`](BDO_SAMPLE_MAPPING_STATUS.md).
+  [`BDO_SAMPLE_MAPPING_STATUS.md`](BDO_SAMPLE_MAPPING_STATUS.md). The governing
+  client-content rule is [`CONTENT_BOUNDARY.md`](CONTENT_BOUNDARY.md).
 - Product operations: [`LOCALIZATION.md`](LOCALIZATION.md) and
   [`WINDOWS_PACKAGING.md`](WINDOWS_PACKAGING.md), including the signed
   GitHub/Gitee single-EXE self-update release protocol.
@@ -59,6 +73,15 @@ Tests and code override historical records.
   records the historical v1.1.0 release scope and verification evidence.
 - [`benchmarks/`](benchmarks/) contains reproducible benchmark protocols and
   result snapshots.
+- [`benchmarks/performance_native_phase0_5_2026-08-09.md`](benchmarks/performance_native_phase0_5_2026-08-09.md)
+  records the measured Phase 0–5 performance/native evaluation, gate decisions,
+  and final regression evidence.
+- [`benchmarks/performance_refinement_2026-08-10.md`](benchmarks/performance_refinement_2026-08-10.md)
+  records the post-Phase 10 hot-path diagnosis, piano-roll refinement, current
+  Python/native audio gate, and code-capability assessment.
+- [`benchmarks/windows_p0_p4_2026-08-10.md`](benchmarks/windows_p0_p4_2026-08-10.md)
+  records the Windows-only P0–P4 interaction gates, refresh extraction, native
+  semantic parity boundary, extension contracts, and measured limitations.
 - [`reference/game-ui/README.md`](reference/game-ui/README.md) indexes
   private-source-safe game UI evidence.
 - [`history/`](history/) contains implementation and dated audit records.

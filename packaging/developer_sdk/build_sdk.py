@@ -25,12 +25,12 @@ ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 ARCHIVE_PREFIX = f"BDO-Music-Composer-Developer-SDK-{APP_VERSION}"
 
 SOURCE_DIRECTORIES = (
-    "bdo_common",
-    "bdo_codec",
-    "bdo_export",
-    "bdo_midi",
-    "bdo_music_composer",
-    "optimization",
+    "src/bdo_common",
+    "src/bdo_codec",
+    "src/bdo_export",
+    "src/bdo_midi",
+    "src/bdo_music_composer",
+    "src/optimization",
     "assets",
     "data/codec",
     "data/mappings",
@@ -45,15 +45,11 @@ ROOT_FILES = (
     "CONTRIBUTING.md",
     "LICENSE",
     "README.md",
-    "README.en.md",
-    "README.ja.md",
-    "README.ko.md",
-    "README.zh-CN.md",
     "THIRD_PARTY_NOTICES.md",
-    "constraints-windows-py312.txt",
+    "requirements/windows-py312.txt",
     "main.py",
-    "requirements-pyside.txt",
-    "requirements-transcription.txt",
+    "requirements/desktop.txt",
+    "requirements/transcription.txt",
 )
 FORBIDDEN_PARTS = frozenset(
     {
@@ -163,8 +159,11 @@ transcription = [
   "soxr==1.1.0",
 ]
 
+[tool.setuptools]
+package-dir = {{"" = "src"}}
+
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = [
   "bdo_common*",
   "bdo_codec*",

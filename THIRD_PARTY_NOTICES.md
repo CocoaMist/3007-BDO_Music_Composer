@@ -69,7 +69,7 @@ Black Desert Online names and format references are used for interoperability. T
 
 The single Windows BDO Music Composer package includes local audio
 transcription through the upstream Basic Pitch package, ONNX Runtime, librosa,
-and their transitive dependencies listed by `requirements-transcription.txt`.
+and their transitive dependencies listed by `requirements/transcription.txt`.
 Source checkouts install the same runtime through
 `scripts/install_transcription.ps1`. These packages retain their own upstream
 terms and notices.
@@ -91,8 +91,8 @@ bundled by this implementation.
 Historical/reference acknowledgements also link to their GitHub origin:
 
 - [iDevelopThings / bdo-data-extractor](https://github.com/iDevelopThings/bdo-data-extractor)
-  is a research reference for the separate local extraction workflow; its code
-  is not bundled by the application.
+  is retained as a historical format-research reference; its code and a
+  general extraction workflow are not bundled by the application.
 - [Bishop-R](https://github.com/Bishop-R) and
   [Skyro468](https://github.com/Skyro468) are credited for historical public
   BDO-format research; their runtime code is not present in v0.3.0.
@@ -104,8 +104,9 @@ Zenodo record 4603844. BabySlakh is licensed CC BY 4.0. Its audio and MIDI are
 stored only in the user's local benchmark cache and are not committed,
 packaged, or redistributed with this application.
 
-Optional timbre matching reads only game samples that the user provides
-locally. The application does not distribute those samples. Its Local AppData
+Optional timbre matching reads only compatible samples that the user selects
+locally and has independently obtained the right to use. The application does
+not acquire or distribute those samples. Its Local AppData
 cache contains content-keyed aggregate feature profiles, not WAV payloads,
 audio clips, sample paths, or reference-audio paths; neither that cache nor the
 reference audio is included in project files or the Windows executable.

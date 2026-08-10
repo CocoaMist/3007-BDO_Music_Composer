@@ -1,6 +1,0 @@
-# Direct desktop runtime dependencies. Exact Windows/Python 3.12
-# versions, including transitive packages, live in
-# constraints-windows-py312.txt and are applied by CI/release instructions.
-PySide6
-mido
-numpy

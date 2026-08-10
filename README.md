@@ -1,6 +1,6 @@
 # BDO Music Composer
 
-Unofficial PySide6 MIDI editor, local transcription workbench, optimizer, sample preview, and Black Desert v9 music-score exporter.
+Unofficial desktop music editor and Black Desert score workbench.
 
 ## Interface preview
 
@@ -12,14 +12,14 @@ Unofficial PySide6 MIDI editor, local transcription workbench, optimizer, sample
 
 ## Choose your language / 选择语言
 
-Each link opens a complete, standalone project guide with features, setup, workflow, architecture, testing, packaging, privacy, limitations, and licensing.
+Each link opens a concise guide for using and contributing to the project.
 
 | Language | Full README |
 |---|---|
-| 简体中文 | [README.zh-CN.md](README.zh-CN.md) |
-| English | [README.en.md](README.en.md) |
-| 日本語 | [README.ja.md](README.ja.md) |
-| 한국어 | [README.ko.md](README.ko.md) |
+| 简体中文 | [中文指南](docs/locales/zh-CN.md) |
+| English | [English guide](docs/locales/en.md) |
+| 日本語 | [日本語ガイド](docs/locales/ja.md) |
+| 한국어 | [한국어 안내](docs/locales/ko.md) |
 
 ## Agent / maintainer handoff
 
@@ -29,21 +29,16 @@ AI coding agents and new maintainers must start with [`AGENTS.md`](AGENTS.md), t
 
 ## Project status
 
-v1.0.0 is the first public stable major release. Core editor, autosave, optimization, preview, transcription-assist, and BDO v9 export flows are regression tested, but hardware-specific audio and game-version compatibility can still vary. This is an unofficial community project, not affiliated with Pearl Abyss.
+The core editing, autosave, optimization, preview, transcription-assist, and score-export flows are regression tested, but hardware and game-version compatibility can vary. This is an unofficial community project and is not affiliated with Pearl Abyss.
 
-The application processes MIDI, Owner IDs, audio, autosaves, and exported scores locally. It does not include account login, telemetry, file upload, an OpenAI API client, extracted game audio, or game-owned artwork.
-
-The staged no-shim package migration has reduced root Python files from 89 to
-69, then 56, and now 52. The latest stages colocated five related Qt owners
-under `bdo_music_composer/ui/editor/` and centralized version/repository
-metadata in `bdo_music_composer/app/application_metadata.py`; a 7-to-10-file
-root remains a future direction.
+The application processes projects locally. It has no account login, telemetry, or file upload. It does not provide restricted-content acquisition or distribution; users are responsible for the source and permission of external content.
 
 ## Quick links
 
 - [Documentation index](docs/README.md)
 - [Developer SDK and reusable UI](docs/DEVELOPER_SDK.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Content and audio boundary](docs/CONTENT_BOUNDARY.md)
 - [AI change-routing context](docs/AI_CONTEXT.md)
 - [Agent handoff guide](docs/AGENT_HANDOFF.md)
 - [Decoupling, performance, and extension roadmap](docs/OPTIMIZATION_EXTENSION_ROADMAP.md)

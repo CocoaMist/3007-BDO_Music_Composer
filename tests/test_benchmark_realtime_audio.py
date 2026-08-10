@@ -47,8 +47,32 @@ class RealtimeAudioBenchmarkTests(unittest.TestCase):
         self.assertEqual(result["underruns"], 0)
         self.assertGreater(result["render_p95_ms"], 0.0)
         self.assertGreater(result["render_p95_load"], 0.0)
+        self.assertGreater(result["render_p99_ms"], 0.0)
+        self.assertEqual(result["render_block_frames"], 2_048)
         self.assertIn("2048", result["block_distribution"])
         self.assertEqual(result["buffer_frames"], 4_608)
+
+    def test_low_latency_multisample_workload_uses_requested_quantum(self) -> None:
+        engine = build_synthetic_engine(
+            32,
+            0.2,
+            48_000,
+            unique_samples=8,
+        )
+        try:
+            result = run_offline_benchmark(
+                engine,
+                0.2,
+                render_block_frames=256,
+            )
+            unique_samples = len({id(event.sample) for event in engine._events})
+        finally:
+            engine.stop()
+
+        self.assertEqual(result["render_block_frames"], 256)
+        self.assertIn("256", result["block_distribution"])
+        self.assertEqual(unique_samples, 8)
+        self.assertGreaterEqual(result["render_p999_ms"], result["render_p99_ms"])
 
     def test_synthetic_all_effects_workload_is_active_and_bounded(self) -> None:
         engine = build_synthetic_engine(

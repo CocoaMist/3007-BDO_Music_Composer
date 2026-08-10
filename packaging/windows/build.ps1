@@ -1,5 +1,6 @@
 param(
-    [switch]$PublicRelease
+    [switch]$PublicRelease,
+    [string]$SigningCertificateThumbprint = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +11,9 @@ $Spec = Join-Path $PSScriptRoot "BDOMusicComposer.spec"
 $Policy = Join-Path $ProjectRoot "packaging\transcription_release_policy.json"
 $AuditScript = Join-Path $ProjectRoot "scripts\audit_transcription_licenses.py"
 $OutputExecutable = Join-Path $ProjectRoot "dist\BDO-Music-Composer.exe"
+$ReleaseEvidence = Join-Path $ProjectRoot "dist\release-evidence"
+$SignAndVerify = Join-Path $PSScriptRoot "sign-and-verify.ps1"
+$EvidenceScript = Join-Path $ProjectRoot "scripts\generate_release_evidence.py"
 $TempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $LicenseOutput = Join-Path $TempRoot (
     "bdo-transcription-licenses-" + [Guid]::NewGuid().ToString("N")
@@ -95,6 +99,12 @@ assert callable(soxr.ResampleStream)
 
     $env:BDO_TRANSCRIPTION_LICENSE_DIR = $LicenseOutput
     if ($PublicRelease) {
+        if (-not $SigningCertificateThumbprint) {
+            throw (
+                "Public releases require -SigningCertificateThumbprint. " +
+                "The certificate private key must remain outside the repository."
+            )
+        }
         Write-Host (
             "Building the reviewed BDO Music Composer release with bundled " +
             "Basic Pitch ONNX inference."
@@ -143,6 +153,18 @@ assert callable(soxr.ResampleStream)
             "Frozen 10-second startup self-test failed with exit code " +
             "$($StartupSelfTest.ExitCode)"
         )
+    }
+    if ($PublicRelease) {
+        & $SignAndVerify `
+            -Artifact $OutputExecutable `
+            -CertificateThumbprint $SigningCertificateThumbprint
+        if ($LASTEXITCODE -ne 0) {
+            throw "Authenticode signing or verification failed"
+        }
+    }
+    & $Python $EvidenceScript $OutputExecutable --output-dir $ReleaseEvidence
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release evidence generation failed with exit code $LASTEXITCODE"
     }
     Write-Host "Built and verified: $OutputExecutable"
 }

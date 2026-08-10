@@ -1,13 +1,15 @@
 # Project structure
 
-The repository root is intentionally an entry-only surface. `main.py` is the
-only root Python module; application behavior belongs to a package, and
-operational commands belong in `scripts/` or `tools/`.
+The repository root is an entry and governance surface. `main.py` is the only
+root Python module; installable packages live under `src/`, dependency groups
+under `requirements/`, localized guides under `docs/locales/`, and operational
+commands under `scripts/` or `tools/`.
 
 ## Dependency direction
 
 ```text
-main.py
+main.py / installed editable project
+  -> src/
   -> bdo_music_composer.ui
   -> application workflows/controllers
   -> editor, audio, transcription, project, and export domains
@@ -20,13 +22,15 @@ than adding aggregate imports or recreating root compatibility shims.
 
 ## Application package
 
-`bdo_music_composer/` is split by responsibility:
+`src/bdo_music_composer/` is split by responsibility:
 
 - `app/` — application configuration, metadata, crash logging, game-profile
   access, conversion controllers, project-load composition, bounded home
-  discovery, and dormant internal update owners.
+  discovery, the two-path local composition-art workflow, and dormant internal
+  update owners.
 - `core/` — Qt-free application infrastructure: conversion settings, paths,
-  game-profile data, program translations, and credits.
+  game-profile data, program translations, credits, the canonical content
+  boundary, and the bounded PAZ primitive used only by local composition art.
 - `audio/` — real-time preview, sample selection/rendering, mixing, lifecycle,
   spectrogram data, and reference-audio control.
 - `editor/` — Qt-free editor models, commands, imports, interval indexes,
@@ -46,21 +50,23 @@ than adding aggregate imports or recreating root compatibility shims.
   `ui/global_velocity_gain_qt.py` and `ui/timeline_validation_host.py` keep
   velocity transactions and exact-note validation presentation out of the
   composition root.
+  `ui/local_game_art_qt.py` is the image-codec adapter for the Qt-free validated
+  local artwork workflow in `app/local_game_art.py`.
 
 The desktop composition root is
-`bdo_music_composer/ui/main_window.py`. It may re-export implementation owners
+`src/bdo_music_composer/ui/main_window.py`. It may re-export implementation owners
 needed by the current UI tests, but other package modules must not import it.
 
 ## Independent packages
 
-- `bdo_common/` — shared atomic I/O and track-effect wire semantics required by
+- `src/bdo_common/` — shared atomic I/O and track-effect wire semantics required by
   independent packages; it imports neither the desktop application nor Qt.
-- `bdo_midi/` — independent MIDI parser, immutable note model, mappings, and
+- `src/bdo_midi/` — independent MIDI parser, immutable note model, mappings, and
   pure transforms.
-- `bdo_codec/` — independent BDO v9 document model, reader/writer, ICE, and
+- `src/bdo_codec/` — independent BDO v9 document model, reader/writer, ICE, and
   structure validation.
-- `bdo_export/` — editor/MIDI adaptation to canonical BDO documents.
-- `optimization/` — extensible optimizer; `builtin.py` is the production
+- `src/bdo_export/` — editor/MIDI adaptation to canonical BDO documents.
+- `src/optimization/` — extensible optimizer; `builtin.py` is the production
   pipeline and `registry.py` is the extension boundary.
 
 These packages remain independent rather than being nested under the desktop
@@ -70,13 +76,18 @@ application package.
 
 - `main.py` — the sole root Python entry point for desktop startup, command-line
   conversion dispatch, and packaged self-tests.
+- `pyproject.toml` — editable-install and `src/` package discovery contract.
+- `requirements/` — direct dependency groups and the Windows qualification
+  closure.
 - `scripts/` — maintained operator and release commands. The external NDJSON
   bridge is `scripts/wpf_sidecar.py`.
-- `tools/` — developer-only audits, benchmarks, evidence preparation, and the
-  repository-structure gate.
+- `tools/` — developer-only audits, benchmarks, evidence validation, and the
+  repository-structure gate. It contains no client-audio extraction or
+  conversion command.
 - `tests/` — regression and executable architecture contracts.
 - `assets/` and `data/` — packaged resources and mappings.
 - `docs/` — current contracts, evidence, and historical records.
+- `docs/locales/` — concise user and contributor guides in four languages.
 - `packaging/windows/` — reproducible PyInstaller configuration.
 - `packaging/developer_sdk/` — deterministic, privacy-filtered source SDK
   builder and its packaging contract.
@@ -88,7 +99,7 @@ gone. Import `optimization` and
 ## Placement rules
 
 1. Never add another root Python module. Extend an existing owner or place a
-   focused owner in the matching `bdo_music_composer/` domain.
+   focused owner in the matching `src/bdo_music_composer/` domain.
 2. Supported commands go in `scripts/`; developer-only diagnostics go in
    `tools/`. List new files in the directory README.
 3. Do not add package-level re-export hubs or root compatibility shims.
@@ -96,6 +107,9 @@ gone. Import `optimization` and
    caches, and downloaded game assets never enter Git history.
 5. Preserve visible-range indexing and bounded background work when moving UI,
    audio, or transcription code.
+6. Apply [`CONTENT_BOUNDARY.md`](CONTENT_BOUNDARY.md) to every audio source or
+   client-resource extension. Client-audio extraction/conversion tools do not
+   belong in any public directory.
 
 The executable structure gate enforces the single-root-module contract and
 rejects retired root imports:
@@ -108,3 +122,9 @@ rejects retired root imports:
 Do not use `git clean -fdX` for cleanup. Ignored paths include user-owned
 autosaves, exports, settings, sample caches, private research, and build
 environments.
+
+Historical root-local caches and build outputs may be moved intact under the
+ignored `.work/legacy/` holding area. This is a recoverable organization step,
+not permission to delete user data. Active application data remains under the
+platform user-data directory; release builds recreate their output directory
+only when explicitly requested.

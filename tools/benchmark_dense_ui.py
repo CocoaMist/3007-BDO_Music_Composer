@@ -20,11 +20,13 @@ from typing import Any, Callable
 
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("BDO_UI_PERF_DIAGNOSTICS", "1")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import PySide6  # noqa: E402
+from PySide6.QtCore import QCoreApplication, QEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from bdo_music_composer.ui.main_window import (  # noqa: E402
@@ -48,6 +50,7 @@ def _timing_summary(values: list[float]) -> dict[str, float]:
     return {
         "median_ms": statistics.median(values) if values else 0.0,
         "p95_ms": _percentile(values, 0.95),
+        "p99_ms": _percentile(values, 0.99),
         "max_ms": max(values, default=0.0),
     }
 
@@ -135,7 +138,13 @@ def benchmark_dense_ui(
                 "visible_notes": visible_count,
             }
             roll.close()
+            roll.deleteLater()
             editor.close()
+            editor.deleteLater()
+            QCoreApplication.sendPostedEvents(
+                None,
+                QEvent.Type.DeferredDelete,
+            )
 
         dense_notes = _notes(piano_notes, step_ms=50.0, duration_ms=45.0)
         ghosts = _notes(ghost_notes, step_ms=70.0, duration_ms=55.0)
@@ -148,12 +157,26 @@ def benchmark_dense_ui(
         ]
         timeline.update_tracks({tracks[-1].track_id})
         single_track_update_ms = (time.perf_counter() - started) * 1000.0
+        window_started = time.perf_counter()
         window = MidiToBdoWindow()
+        window_construct_ms = (time.perf_counter() - window_started) * 1000.0
+        first_frame_started = time.perf_counter()
+        window.show()
+        app.processEvents()
+        first_frame_ms = (time.perf_counter() - first_frame_started) * 1000.0
+        probe = window.ui_performance_probe
+        if probe is not None:
+            probe.begin_interaction_window()
+            for _ in range(max(3, min(12, iterations))):
+                probe.note_synthetic_input()
+                window.update()
+                app.processEvents()
         window.tracks = [dense, ghost]
         started = time.perf_counter()
         dialog = MidiNoteEditorDialog(window, dense, 120, 4)
         dialog_prepare_ms = (time.perf_counter() - started) * 1000.0
         dialog.resize(1_180, 720)
+        dialog.canvas.set_ghost_notes(ghosts)
         dialog.show()
         app.processEvents()
         piano_paint = _measure(dialog.canvas.grab, iterations)
@@ -164,6 +187,19 @@ def benchmark_dense_ui(
                 "python": platform.python_version(),
                 "pyside": PySide6.__version__,
                 "qt_platform": os.environ.get("QT_QPA_PLATFORM", ""),
+                "device_pixel_ratio": float(dialog.devicePixelRatioF()),
+                "screen_refresh_hz": float(
+                    dialog.screen().refreshRate() if dialog.screen() else 0.0
+                ),
+            },
+            "application": {
+                "window_construct_ms": window_construct_ms,
+                "first_frame_ms": first_frame_ms,
+                "ui_performance": (
+                    probe.recorder.snapshot().to_dict()
+                    if probe is not None
+                    else None
+                ),
             },
             "timeline": {
                 "tracks": len(tracks),
@@ -189,10 +225,27 @@ def benchmark_dense_ui(
     finally:
         if dialog is not None:
             dialog.close()
+            dialog.deleteLater()
+            QCoreApplication.sendPostedEvents(
+                None,
+                QEvent.Type.DeferredDelete,
+            )
         if window is not None:
+            if window.ui_performance_probe is not None:
+                window.ui_performance_probe.shutdown()
             window.close()
+            window.deleteLater()
+            QCoreApplication.sendPostedEvents(
+                None,
+                QEvent.Type.DeferredDelete,
+            )
         if timeline is not None:
             timeline.close()
+            timeline.deleteLater()
+            QCoreApplication.sendPostedEvents(
+                None,
+                QEvent.Type.DeferredDelete,
+            )
         app.processEvents()
 
 

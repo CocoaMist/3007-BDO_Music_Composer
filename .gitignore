@@ -1,5 +1,6 @@
 # Local Python runtime and bytecode
 .venv/
+.work/
 __pycache__/
 **/__pycache__/
 *.py[cod]

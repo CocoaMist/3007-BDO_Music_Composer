@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import numpy as np
 from PySide6.QtCore import QCoreApplication
-from PySide6.QtMultimedia import QAudioFormat
+from PySide6.QtMultimedia import QAudio, QAudioFormat
 
 from bdo_music_composer.audio.bdo_audio_lifecycle import (
     sample_output_frames,
@@ -394,6 +394,18 @@ class RealtimeAudioTests(unittest.TestCase):
         self.assertEqual(worker._refill_frame_count(2_208), 1_056)
         # An empty queue still uses the bounded 2048-frame maximum.
         self.assertEqual(worker._refill_frame_count(4_608), 2_048)
+
+    def test_initial_idle_is_not_counted_before_first_accepted_write(self) -> None:
+        worker = _AudioOutputWorker(self.engine)
+        self.engine._playing = True
+        worker.suppress_underrun_until_write = True
+
+        worker._on_sink_state_changed(QAudio.State.IdleState)
+        self.assertEqual(self.engine.get_status().underruns, 0)
+
+        worker.suppress_underrun_until_write = False
+        worker._on_sink_state_changed(QAudio.State.IdleState)
+        self.assertEqual(self.engine.get_status().underruns, 1)
 
     def test_dense_voice_refill_uses_larger_block_within_existing_buffer(self) -> None:
         worker = _AudioOutputWorker(self.engine)

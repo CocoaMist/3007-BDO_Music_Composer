@@ -5,10 +5,11 @@
 The preview selector persists one of three policies under
 `audio_sources.preview_mode`:
 
-- `auto`: prefer a valid user-owned BDO sample directory and otherwise use the
-  built-in generic renderer.
-- `bdo`: lock the local BDO source and report why it is unavailable; never
-  silently substitute another source.
+- `auto`: prefer a valid user-selected compatible sample directory whose rights
+  are independently established, and otherwise use the built-in renderer.
+- `bdo`: preserve the legacy configuration identifier for a compatible sampled
+  source and report why it is unavailable; it does not authorize or create a
+  source from the game client and never silently substitutes another source.
 - `generic`: lock the built-in, file-free General MIDI renderer.
 
 The generic renderer is original project code. It synthesizes bounded,
@@ -60,7 +61,7 @@ must never enter a project or BDO score.
 
 ## BDO to General MIDI preview map
 
-The executable-independent policy lives in `bdo_midi/gm_preview.py`. Program
+The executable-independent policy lives in `src/bdo_midi/gm_preview.py`. Program
 numbers below are zero-based, matching SoundFont APIs. Beginner and Florchestra
 variants share a GM preset where General MIDI has no honest way to distinguish
 the two game banks.
@@ -126,5 +127,7 @@ Before the selected renderer can replace the procedural fallback:
    result “generic SoundFont preview,” never BDO-verified audio.
 
 Until those gates pass, the shipped procedural family renderer remains the
-safe zero-package fallback and local `.bdosamples`/prepared BDO sources remain
-the only game-timbre path.
+safe zero-package fallback. A compatible `.bdosamples` source is accepted only
+as user-selected input with independently established rights; this project
+does not create one from the game client. See
+[`CONTENT_BOUNDARY.md`](CONTENT_BOUNDARY.md).

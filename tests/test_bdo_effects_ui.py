@@ -89,6 +89,100 @@ class BdoEffectsUiTests(unittest.TestCase):
             """
         )
 
+    def test_game_effect_controls_stay_synchronized_and_bounded(self) -> None:
+        self._run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication, QSpinBox, QWidget
+
+            from bdo_common.bdo_track_effects import MasterEffects
+            from bdo_music_composer.ui.dialogs.effect_controls_qt import (
+                EffectControlCard,
+                EffectModeCard,
+                GameEffectDial,
+            )
+            from bdo_music_composer.ui.main_window import (
+                MasterEffectsDialog,
+                TrackFxDialog,
+                TrackState,
+            )
+
+            app = QApplication([])
+            parent = QWidget()
+            track = TrackState(
+                1, [], 0, False, "fx-test", 0x0B,
+                bdo_track_settings=(10, 0, 20, 0, 30, 0, 0, 0),
+            )
+            track_dialog = TrackFxDialog(parent, track)
+            track_cards = track_dialog.findChildren(EffectControlCard)
+            track_dials = track_dialog.findChildren(GameEffectDial)
+            assert track_dialog.objectName() == "TrackFxDialog"
+            assert len(track_cards) == len(track_dials) == 3
+
+            reverb = track_dialog.findChild(QSpinBox, "TrackReverbSend")
+            assert reverb is not None
+            reverb_card = next(card for card in track_cards if reverb.parent() is card)
+            reverb_card.dial.setValue(42)
+            assert reverb.value() == 42
+            assert track_dialog.changed_send_indices() == frozenset({0})
+            reverb.setValue(73)
+            assert reverb_card.dial.value() == 73
+            assert not reverb_card.dial.grab().isNull()
+
+            master = MasterEffectsDialog(
+                parent,
+                MasterEffects(11, 22, 33, 44, 55),
+            )
+            assert len(master.findChildren(EffectControlCard)) == 5
+            assert len(master.findChildren(GameEffectDial)) == 5
+            assert master.minimumSizeHint().width() <= master.minimumWidth()
+            assert master.minimumSizeHint().height() <= master.minimumHeight()
+
+            beginner = TrackState(
+                2, [], 0, False, "beginner", 0x00,
+                bdo_track_settings=(10, 0, 20, 0, 30, 0, 0, 0),
+            )
+            unsupported = TrackFxDialog(parent, beginner)
+            assert all(
+                not dial.isEnabled()
+                for dial in unsupported.findChildren(GameEffectDial)
+            )
+
+            marnian = TrackState(
+                3, [], 0, False, "marnian", 0x14,
+                bdo_track_settings=(10, 0, 20, 0, 30, 0, 0, 0),
+                marnian_synth_mode="super",
+            )
+            marnian_dialog = TrackFxDialog(parent, marnian)
+            mode_cards = marnian_dialog.findChildren(EffectModeCard)
+            assert len(mode_cards) == 1
+            assert marnian_dialog.marnian_mode is not None
+            assert marnian_dialog.marnian_mode.parent() is mode_cards[0]
+            assert marnian_dialog.marnian_mode.objectName() == "MarnianModeSelector"
+            assert marnian_dialog.selected_marnian_synth_mode() == "super"
+            marnian_dialog.show()
+            app.processEvents()
+            rack_cards = [
+                *marnian_dialog.findChildren(EffectControlCard),
+                *mode_cards,
+            ]
+            assert len(rack_cards) == 4
+            assert len({card.geometry().y() for card in rack_cards}) == 1
+            assert len({card.height() for card in rack_cards}) == 1
+            marnian_dialog.marnian_mode.setCurrentIndex(
+                marnian_dialog.marnian_mode.findData("superoct")
+            )
+            assert marnian_dialog.selected_marnian_synth_mode() == "superoct"
+
+            marnian_dialog.close()
+            unsupported.close()
+            master.close()
+            track_dialog.close()
+            parent.close()
+            app.processEvents()
+            app.quit()
+            """
+        )
+
     def test_every_instrument_row_exposes_the_track_fx_editor(self) -> None:
         self._run_offscreen(
             """

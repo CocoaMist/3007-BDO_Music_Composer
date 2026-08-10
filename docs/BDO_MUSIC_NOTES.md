@@ -15,7 +15,7 @@ bdo_codec  -> BDO v9 document model, binary encoding, and ICE
 Install dependencies in the project virtualenv:
 
 ```powershell
-& .\.venv\Scripts\python.exe -m pip install --constraint constraints-windows-py312.txt -r requirements-pyside.txt
+& .\.venv\Scripts\python.exe -m pip install --constraint requirements\windows-py312.txt -r requirements\desktop.txt
 ```
 
 Run the local wrapper:

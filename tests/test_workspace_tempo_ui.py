@@ -99,7 +99,8 @@ class WorkspaceTempoUiTests(unittest.TestCase):
             assert window.bpm == 120
             assert window.bpm_override == 156
             assert window.timeline.bpm == 156
-            assert "BPM 156" in window.timeline_meta.text()
+            assert window.global_bpm_spin.value() == 156
+            assert window.timeline_meta.text() == "1 轨 · 4/4"
             stop_preview.assert_called_once_with(reset_playhead=False)
             autosave.assert_called_once_with("global bpm", immediate=True)
             assert show_toast.call_args.kwargs["kind"] == "success"

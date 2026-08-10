@@ -13,8 +13,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QBuffer, QIODevice
 from PySide6.QtGui import QColor, QImage
 
-import tools.import_bdo_game_art as game_art
-from tools.import_bdo_game_art import (
+import bdo_music_composer.app.local_game_art as game_art
+from bdo_music_composer.app.local_game_art import (
     COMPOSITION_CSS_PATH,
     EDITOR_INSTRUMENT_IDS,
     GameArtImportError,
@@ -22,10 +22,10 @@ from tools.import_bdo_game_art import (
     PazEntry,
     PazMeta,
     decompress_paz_payload,
-    import_game_instrument_art,
     parse_instrument_sprite_layout,
     read_paz_meta,
 )
+from bdo_music_composer.ui.local_game_art_qt import import_game_instrument_art
 
 
 def _css_payload() -> bytes:

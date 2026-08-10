@@ -5,12 +5,12 @@
 
 ## 当前边界
 
-- `bdo_music_composer/ui/main_window.py` 是 Qt 组合根和主窗口编排层，保持在 8,600 行以内；新领域
+- `src/bdo_music_composer/ui/main_window.py` 是 Qt 组合根和主窗口编排层，保持在 8,600 行以内；新领域
   逻辑优先进入已有 owner。
 - 编辑器模型、导入、命令、区间索引、revision、标准 MIDI 试听投影和力度曲线
-  位于 `bdo_music_composer/editor/`，保持 Qt-free。
+  位于 `src/bdo_music_composer/editor/`，保持 Qt-free。
 - 工程加载、生命周期、schema 和不可变保存快照位于
-  `bdo_music_composer/project/`；导出继续使用当前 `TrackState`，不得回读原 MIDI。
+  `src/bdo_music_composer/project/`；导出继续使用当前 `TrackState`，不得回读原 MIDI。
 - 扒谱候选索引、审阅历史、分析 generation 和正式提交计划已有单一事实源；UI
   只负责呈现、显式确认和副作用执行。
 - 实时音频 callback 不读盘、不解码、不解析配置，voice pool 和临时内存有界。
@@ -47,7 +47,7 @@
 
 `PreviewTransportCoordinator` 已拥有 Play 分类和 session 状态。暂停、定位、参考
 音频对齐和采样包准备应逐步返回 Qt-free 命令计划，由主窗口执行设备和 UI 副作用；
-DSP 仍归 `bdo_music_composer/audio/bdo_realtime_audio.py`。
+DSP 仍归 `src/bdo_music_composer/audio/bdo_realtime_audio.py`。
 
 小型响应式布局、工具栏组合和页面切换与 QWidget 生命周期紧密相关，除非出现
 重复实现或独立测试需求，不为减少行数机械拆分。
@@ -72,7 +72,7 @@ DSP 仍归 `bdo_music_composer/audio/bdo_realtime_audio.py`。
 
 | 能力 | 当前扩展点 | 必须保持 |
 |---|---|---|
-| 优化算法 | `optimization/registry.py`, `.bdoopt` | 确定性、作用域隔离、game-safe 不变量、可信本地包 |
+| 优化算法 | `src/optimization/registry.py`, `.bdoopt` | 确定性、作用域隔离、game-safe 不变量、可信本地包 |
 | 对话框/展示 | 聚焦 UI 模块 + 主窗口 host | 不反向导入主窗口；显式接受后才应用 |
 | BDO 编解码 | `bdo_codec` | little-endian v9、round trip、结构测试 |
 | MIDI 变换 | `bdo_midi` | 不可变 note 语义和规范鼓组映射 |

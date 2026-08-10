@@ -155,7 +155,7 @@ Basic/Stereo/Super/Super Octave 偏移因此属于不同键。时间轴上的每
 
 ## 工具中的近似试听
 
-`bdo_music_composer/audio/bdo_preview_effects.py` 按已确认的层级实现三条有界本地总线：每条轨道分别
+`src/bdo_music_composer/audio/bdo_preview_effects.py` 按已确认的层级实现三条有界本地总线：每条轨道分别
 把 PCM 送入 Reverb、Delay、Chorus；五个共享参数只配置对应主效果。所有环形
 缓冲和路由 scratch 均在播放前分配，音频回调不读文件、不解析 JSON，也不按
 工程规模分配内存。Stop/Seek 会清除近似效果尾音。
@@ -168,7 +168,7 @@ Basic/Stereo/Super/Super Octave 偏移因此属于不同键。时间轴上的每
 在绝对值 0.85 以内以避免失稳。Stereo Delay
 的 ParamID 语义与八字节运行时绑定仍未闭环，**不能**称作 1:1。界面因此固定
 显示“未校准近似”，而 v9 导出仍由
-`bdo_common/bdo_track_effects.py` 原样保留/写回八字节设置，不消费这些预览换算。
+`src/bdo_common/bdo_track_effects.py` 原样保留/写回八字节设置，不消费这些预览换算。
 
 ## 工具界面与状态边界
 
@@ -196,6 +196,12 @@ Basic/Stereo/Super/Super Octave 偏移因此属于不同键。时间轴上的每
 - 工作区工具栏的“全局效果”打开独立主效果窗口，只编辑整首曲子共享的
   Reverb Time、Delay Feedback 与三项 Chorus/Flanger 参数；常规“设置”页面
   不再承载歌曲效果。
+- 两个效果窗口共用游戏式效果机架语言：轨道窗口为三个发送量旋钮，全局窗口按
+  “混响与延迟”二槽和 Chorus/Flanger 三槽分组。旋钮与精确数值输入双向同步，
+  支持键盘和无障碍名称；不得以纯装饰控件替代可编辑字段，也不得因打开窗口而
+  归一化未编辑的导入字节。玛勒尼斯乐器在同一轨道机架内增加专属音源模式槽，
+  继续使用既有 `basic/stereo/super/superoct` ID 映射，不把模式伪装成第四个效果
+  发送量。
 - 两层修改均作为工程操作进入撤销、转换检查、近似试听刷新和自动保存，但
   各自只写自己拥有的字段。主效果保存在工程/曲谱中，不写入应用级偏好。
 - 新建空白工程或直接导入 MIDI 时主效果从全零开始；打开 BDO 曲谱或已有工程

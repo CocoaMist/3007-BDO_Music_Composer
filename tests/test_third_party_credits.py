@@ -16,6 +16,10 @@ from bdo_music_composer.core.third_party_credits import (
     CREDIT_SECTION_SOURCES,
     RESEARCH_CITATIONS,
 )
+from bdo_music_composer.core.content_boundary import (
+    CONTENT_BOUNDARY_PARAGRAPHS,
+    CONTENT_BOUNDARY_TITLE,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -96,6 +100,10 @@ class ThirdPartyCreditsTests(unittest.TestCase):
             from PySide6.QtWidgets import QApplication, QDialog, QTextBrowser
             from bdo_music_composer.ui.main_window import MidiToBdoWindow
             from bdo_music_composer.core.third_party_credits import CREDIT_ENTRIES
+            from bdo_music_composer.core.content_boundary import (
+                CONTENT_BOUNDARY_PARAGRAPHS,
+                CONTENT_BOUNDARY_TITLE,
+            )
 
             app = QApplication([])
             window = MidiToBdoWindow()
@@ -110,6 +118,9 @@ class ThirdPartyCreditsTests(unittest.TestCase):
             for entry in CREDIT_ENTRIES:
                 assert entry.github_url in html, entry.github_url
             assert "arxiv.org/abs/2203.09893" in html
+            assert CONTENT_BOUNDARY_TITLE in browser.toPlainText()
+            for paragraph in CONTENT_BOUNDARY_PARAGRAPHS:
+                assert paragraph in browser.toPlainText()
             dialog.close()
             window.close()
             app.processEvents()

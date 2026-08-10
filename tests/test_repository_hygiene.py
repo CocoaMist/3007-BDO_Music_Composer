@@ -6,14 +6,21 @@ import unittest
 
 from tools.check_repository_hygiene import (
     EXPECTED_ROOT_MODULES,
+    EXPECTED_ROOT_FILES,
+    EXPECTED_SOURCE_PACKAGES,
     PRODUCTION_DIRECTORIES,
+    PROHIBITED_CONTENT_TOOL_FILENAMES,
     ROOT_MODULE_BUDGET,
     STANDALONE_ROOT_MODULES,
     forbidden_path_errors,
     retired_document_reference_errors,
     retired_reference_errors,
     root_module_errors,
+    root_surface_errors,
     validate_repository,
+)
+from bdo_music_composer.core.content_boundary import (
+    PROHIBITED_GAME_AUDIO_TOOL_FILENAMES,
 )
 
 
@@ -38,9 +45,9 @@ class RepositoryHygieneTests(unittest.TestCase):
             targets,
             [
                 "main.py",
-                "bdo_music_composer\\core\\project_paths.py",
-                "bdo_music_composer\\ui\\main_window.py",
-                "bdo_music_composer\\ui\\i18n.py",
+                "src\\bdo_music_composer\\core\\project_paths.py",
+                "src\\bdo_music_composer\\ui\\main_window.py",
+                "src\\bdo_music_composer\\ui\\i18n.py",
             ],
         )
         self.assertTrue(all((ROOT / target).is_file() for target in targets))
@@ -55,6 +62,18 @@ class RepositoryHygieneTests(unittest.TestCase):
             )
         )
         self.assertEqual(len(errors), 4)
+
+    def test_client_audio_extraction_tools_are_rejected(self) -> None:
+        self.assertEqual(
+            PROHIBITED_CONTENT_TOOL_FILENAMES,
+            PROHIBITED_GAME_AUDIO_TOOL_FILENAMES,
+        )
+        errors = forbidden_path_errors(
+            PurePosixPath(f"tools/{name}")
+            for name in sorted(PROHIBITED_CONTENT_TOOL_FILENAMES)
+        )
+        self.assertEqual(len(errors), len(PROHIBITED_CONTENT_TOOL_FILENAMES))
+        self.assertTrue(all("content boundary" in error for error in errors))
 
     def test_standalone_root_modules_have_explained_roles(self) -> None:
         self.assertEqual(
@@ -81,12 +100,31 @@ class RepositoryHygieneTests(unittest.TestCase):
                 self.assertIn(pattern, ignore_text)
 
     def test_application_package_is_in_the_production_graph(self) -> None:
-        self.assertIn("bdo_music_composer", PRODUCTION_DIRECTORIES)
+        self.assertIn("src", PRODUCTION_DIRECTORIES)
         actual_root_modules = {
             path.name for path in ROOT.glob("*.py")
         }
         self.assertLessEqual(len(actual_root_modules), ROOT_MODULE_BUDGET)
         self.assertEqual(actual_root_modules, EXPECTED_ROOT_MODULES)
+
+    def test_root_surface_is_small_and_packages_live_under_src(self) -> None:
+        self.assertEqual(root_surface_errors(tuple(
+            PurePosixPath(path.replace("\\", "/"))
+            for path in (
+                "main.py",
+                "pyproject.toml",
+                "README.md",
+                "AGENTS.md",
+                "CHANGELOG.md",
+                "CONTRIBUTING.md",
+                "LICENSE",
+                "THIRD_PARTY_NOTICES.md",
+                ".gitattributes",
+                ".gitignore",
+                *(f"src/{name}/__init__.py" for name in EXPECTED_SOURCE_PACKAGES),
+            )
+        )), [])
+        self.assertEqual(len(EXPECTED_ROOT_FILES), 10)
 
     def test_root_budget_violation_is_reported_without_crashing(self) -> None:
         with TemporaryDirectory() as directory:

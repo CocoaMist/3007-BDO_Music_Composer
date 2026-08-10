@@ -6,6 +6,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = ROOT / "src"
 
 
 class GuiModuleBoundaryTests(unittest.TestCase):
@@ -76,7 +77,7 @@ class GuiModuleBoundaryTests(unittest.TestCase):
             "HomeEntryDelegate": home_widgets.HomeEntryDelegate,
             "HomeFooter": home_widgets.HomeFooter,
         }
-        source = (ROOT / "bdo_music_composer/ui/main_window.py").read_text(encoding="utf-8-sig")
+        source = (SOURCE_ROOT / "bdo_music_composer/ui/main_window.py").read_text(encoding="utf-8-sig")
         defined_classes = {
             node.name for node in ast.parse(source).body if isinstance(node, ast.ClassDef)
         }
@@ -130,7 +131,7 @@ class GuiModuleBoundaryTests(unittest.TestCase):
         ):
             with self.subTest(path=relative_path):
                 tree = ast.parse(
-                    (ROOT / relative_path).read_text(encoding="utf-8")
+                    (SOURCE_ROOT / relative_path).read_text(encoding="utf-8")
                 )
                 imports = {
                     alias.name
@@ -170,7 +171,7 @@ class GuiModuleBoundaryTests(unittest.TestCase):
                 )
 
     def test_main_gui_stays_below_orchestration_line_budget(self) -> None:
-        source = (ROOT / "bdo_music_composer/ui/main_window.py").read_text(encoding="utf-8-sig")
+        source = (SOURCE_ROOT / "bdo_music_composer/ui/main_window.py").read_text(encoding="utf-8-sig")
         self.assertLessEqual(len(source.splitlines()), 8_600)
 
     def test_crash_logging_installation_uses_the_packaged_owner(self) -> None:
@@ -202,7 +203,7 @@ class GuiModuleBoundaryTests(unittest.TestCase):
         finally:
             game_profile_provider.get_bdo_profile.cache_clear()
 
-        source = (ROOT / "bdo_music_composer/ui/main_window.py").read_text(encoding="utf-8-sig")
+        source = (SOURCE_ROOT / "bdo_music_composer/ui/main_window.py").read_text(encoding="utf-8-sig")
         module = ast.parse(source)
         top_level_profile_reads = [
             call
@@ -247,7 +248,7 @@ class GuiModuleBoundaryTests(unittest.TestCase):
 
     def test_transcription_scope_uses_session_index_not_canvas_privates(self) -> None:
         source = (
-            ROOT / "bdo_music_composer/ui/editor/midi_note_editor.py"
+            SOURCE_ROOT / "bdo_music_composer/ui/editor/midi_note_editor.py"
         ).read_text(encoding="utf-8")
         self.assertNotIn("canvas._candidate_starts", source)
         self.assertNotIn("canvas._transcription_candidate_ids", source)

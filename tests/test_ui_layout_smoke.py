@@ -187,6 +187,10 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert window.home_sidebar.height() == home_shell.height()
             assert window.home_sidebar.width() == 584
             assert window.home_sidebar.width() < home_shell.width()
+            assert abs(
+                window.home_library_surface.geometry().bottom()
+                - (window.home_sidebar.contentsRect().bottom() - 16)
+            ) <= 1
             hero_rect = window.home_hero.rect().translated(
                 window.home_hero.mapTo(home_shell, QPoint(0, 0))
             )
@@ -219,6 +223,10 @@ class UiLayoutSmokeTests(unittest.TestCase):
             window.resize(1600, 900)
             app.processEvents()
             assert window.home_sidebar.width() == 680
+            assert abs(
+                window.home_library_surface.geometry().bottom()
+                - (window.home_sidebar.contentsRect().bottom() - 16)
+            ) <= 1
             window.resize(window.minimumSize())
             app.processEvents()
             assert window.home_sidebar.width() == 584

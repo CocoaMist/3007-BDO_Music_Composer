@@ -91,6 +91,17 @@ class OptimizerPluginLoaderTests(unittest.TestCase):
             with self.assertRaisesRegex(OptimizerBundleError, "path-safe"):
                 read_bundle_manifest(path)
 
+    def test_unknown_capability_is_rejected_before_plugin_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "unknown-capability.bdoopt"
+            payload = manifest()
+            payload["capabilities"] = ["unbounded-filesystem"]
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("manifest.json", json.dumps(payload))
+                archive.writestr("payload/entry.py", "raise RuntimeError('must not run')")
+            with self.assertRaisesRegex(OptimizerBundleError, "unsupported capabilities"):
+                read_bundle_manifest(path)
+
 
 if __name__ == "__main__":
     unittest.main()

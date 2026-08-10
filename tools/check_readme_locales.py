@@ -9,10 +9,10 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCALIZED_READMES = (
-    "README.zh-CN.md",
-    "README.en.md",
-    "README.ja.md",
-    "README.ko.md",
+    "docs/locales/zh-CN.md",
+    "docs/locales/en.md",
+    "docs/locales/ja.md",
+    "docs/locales/ko.md",
 )
 SECTION_MARKERS = (
     "status",
@@ -29,13 +29,13 @@ SECTION_MARKERS = (
     "license",
 )
 REQUIRED_REFERENCES = (
-    "AGENTS.md",
-    "docs/AGENT_HANDOFF.md",
-    "docs/ARCHITECTURE.md",
-    "docs/AI_CONTEXT.md",
-    "docs/OPTIMIZATION_EXTENSION_ROADMAP.md",
-    "THIRD_PARTY_NOTICES.md",
-    "LICENSE",
+    "../../AGENTS.md",
+    "../AGENT_HANDOFF.md",
+    "../ARCHITECTURE.md",
+    "../AI_CONTEXT.md",
+    "../OPTIMIZATION_EXTENSION_ROADMAP.md",
+    "../../THIRD_PARTY_NOTICES.md",
+    "../../LICENSE",
 )
 MARKDOWN_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 
@@ -62,7 +62,7 @@ def validate_readmes(root: Path = ROOT) -> list[str]:
             errors.append(f"{filename}: missing")
             continue
         text = path.read_text(encoding="utf-8")
-        if len(text) < 6_000:
+        if len(text) < 1_500:
             errors.append(f"{filename}: too short to be a standalone guide")
         positions: list[int] = []
         for section in SECTION_MARKERS:
@@ -77,8 +77,11 @@ def validate_readmes(root: Path = ROOT) -> list[str]:
         if positions != sorted(positions):
             errors.append(f"{filename}: shared sections are out of order")
         for sibling in LOCALIZED_READMES:
-            if sibling not in text:
-                errors.append(f"{filename}: language nav misses {sibling}")
+            sibling_name = Path(sibling).name
+            if sibling_name not in text:
+                errors.append(
+                    f"{filename}: language nav misses {sibling_name}"
+                )
         for reference in REQUIRED_REFERENCES:
             if reference not in text:
                 errors.append(f"{filename}: missing required reference {reference}")

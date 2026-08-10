@@ -9,10 +9,12 @@ $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 if ([string]::IsNullOrWhiteSpace($Python)) {
     $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 }
-$Requirements = Join-Path $ProjectRoot "requirements-transcription.txt"
+$Requirements = Join-Path $ProjectRoot "requirements\transcription.txt"
 if ([string]::IsNullOrWhiteSpace($Constraints)) {
-    $Constraints = Join-Path $ProjectRoot "constraints-windows-py312.txt"
+    $Constraints = Join-Path $ProjectRoot "requirements\windows-py312.txt"
 }
+
+$EditableProject = $ProjectRoot
 
 if (-not (Test-Path -LiteralPath $Python)) {
     throw "Missing Python interpreter: $Python"
@@ -39,6 +41,9 @@ Invoke-Pip -PipArgs @(
 )
 Invoke-Pip -PipArgs @(
     "install", "--constraint", $Constraints, "-r", $Requirements
+)
+Invoke-Pip -PipArgs @(
+    "install", "--no-deps", "--editable", $EditableProject
 )
 
 & $Python -c "from pathlib import Path; import basic_pitch, onnxruntime, soundfile, soxr; model = Path(basic_pitch.build_icassp_2022_model_path(basic_pitch.FilenameSuffix.onnx)); assert basic_pitch.ONNX_PRESENT and model.is_file() and 'CPUExecutionProvider' in onnxruntime.get_available_providers() and soundfile.available_formats() and callable(soxr.ResampleStream)"

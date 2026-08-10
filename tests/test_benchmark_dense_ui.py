@@ -52,7 +52,12 @@ class DenseUiBenchmarkTests(unittest.TestCase):
         self.assertEqual(result["timeline"]["single_track_rebuild_count"], 1)
         self.assertGreaterEqual(result["timeline"]["single_track_update_ms"], 0.0)
         self.assertGreaterEqual(result["timeline"]["paint"]["p95_ms"], 0.0)
+        self.assertGreaterEqual(result["timeline"]["paint"]["p99_ms"], 0.0)
         self.assertGreaterEqual(result["piano_roll"]["paint"]["p95_ms"], 0.0)
+        self.assertGreater(result["piano_roll"]["visible_ghost_notes"], 0)
+        self.assertGreaterEqual(result["application"]["window_construct_ms"], 0.0)
+        self.assertGreaterEqual(result["application"]["first_frame_ms"], 0.0)
+        self.assertIsNotNone(result["application"]["ui_performance"])
 
 
 if __name__ == "__main__":

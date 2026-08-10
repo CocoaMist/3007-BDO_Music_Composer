@@ -28,18 +28,37 @@ PROJECT_STRUCTURE_PATH = PurePosixPath("docs/PROJECT_STRUCTURE.md")
 
 PRODUCTION_DIRECTORIES = frozenset(
     {
-        "bdo_common",
-        "bdo_music_composer",
-        "bdo_codec",
-        "bdo_export",
-        "bdo_midi",
-        "optimization",
+        "src",
         "scripts",
         "tools",
     }
 )
 ROOT_MODULE_BUDGET = 1
 EXPECTED_ROOT_MODULES = frozenset({"main.py"})
+EXPECTED_ROOT_FILES = frozenset(
+    {
+        ".gitattributes",
+        ".gitignore",
+        "AGENTS.md",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "LICENSE",
+        "README.md",
+        "THIRD_PARTY_NOTICES.md",
+        "main.py",
+        "pyproject.toml",
+    }
+)
+EXPECTED_SOURCE_PACKAGES = frozenset(
+    {
+        "bdo_codec",
+        "bdo_common",
+        "bdo_export",
+        "bdo_midi",
+        "bdo_music_composer",
+        "optimization",
+    }
+)
 
 # These modules are entered externally or preserve a documented import path.
 # A new exception must state a concrete public/research role and be documented
@@ -52,6 +71,7 @@ LOCAL_ONLY_TOP_LEVEL_DIRECTORIES = frozenset(
     {
         ".idea",
         ".venv",
+        ".work",
         "auto_save",
         "build",
         "dist",
@@ -85,6 +105,17 @@ LOCAL_ONLY_FILENAMES = frozenset(
         "coverage.xml",
         "desktop.ini",
         "Thumbs.db",
+    }
+)
+PROHIBITED_CONTENT_TOOL_FILENAMES = frozenset(
+    {
+        "convert_wem_to_wav.py",
+        "extract_bdo_bgm.cpp",
+        "extract_bdo_instruments.cpp",
+        "extract_wwise_wem.py",
+        "list_bdo_paz_audio.cpp",
+        "list_bdo_paz_audio.py",
+        "validate_paz_key.cpp",
     }
 )
 PRIVATE_OR_GENERATED_SUFFIXES = frozenset(
@@ -321,6 +352,8 @@ def _forbidden_reason(path: PurePosixPath) -> str | None:
         return "ignored local third-party workspace"
     if path.name in LOCAL_ONLY_FILENAMES:
         return "machine-local/generated file"
+    if path.name in PROHIBITED_CONTENT_TOOL_FILENAMES:
+        return "client-audio extraction/conversion tool violates content boundary"
     if path.suffix.lower() in PRIVATE_OR_GENERATED_SUFFIXES:
         return "private input or generated binary/output"
     return None
@@ -557,6 +590,36 @@ def root_module_errors(
     return errors
 
 
+def root_surface_errors(paths: Iterable[PurePosixPath]) -> list[str]:
+    """Keep the repository root small and all importable packages in src/."""
+
+    available = tuple(paths)
+    root_files = {path.name for path in available if len(path.parts) == 1}
+    errors = [
+        f"unexpected root file: {name}; move it to its owning directory"
+        for name in sorted(root_files - EXPECTED_ROOT_FILES)
+    ]
+    errors.extend(
+        f"missing required root file: {name}"
+        for name in sorted(EXPECTED_ROOT_FILES - root_files)
+    )
+    source_packages = {
+        path.parts[1]
+        for path in available
+        if len(path.parts) == 3
+        and path.parts[0] == "src"
+        and path.name == "__init__.py"
+    }
+    if source_packages != EXPECTED_SOURCE_PACKAGES:
+        errors.append(
+            "src package set mismatch: expected "
+            + ", ".join(sorted(EXPECTED_SOURCE_PACKAGES))
+            + "; found "
+            + ", ".join(sorted(source_packages))
+        )
+    return errors
+
+
 def _indexed_members(
     paths: Iterable[PurePosixPath],
     directory: str,
@@ -644,6 +707,7 @@ def validate_repository(root: Path = ROOT) -> list[str]:
     errors.extend(retired_reference_errors(root, paths))
     errors.extend(retired_document_reference_errors(root, paths))
     errors.extend(root_module_errors(root, paths))
+    errors.extend(root_surface_errors(paths))
     errors.extend(index_errors(root, paths))
     errors.extend(markdown_link_errors(root, paths))
     return sorted(errors)
