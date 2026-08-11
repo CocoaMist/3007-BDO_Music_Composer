@@ -37,6 +37,17 @@ BDO Music Composer 是一款非官方桌面音乐编辑器，用于本地创作�
 
 工程、设置、缓存和外部内容都保留在本机。外部内容不会自动进入仓库或发布包。缺少可选内容时，主要编辑与导出流程仍可使用。
 
+发行页可另行提供 `BDO-Approximate-CC0-Full-Coverage-v4-Compact.bdosamples`
+近似试听音源包。主程序不内嵌该包；在设置中选择“音源包”后定位文件即可，亦可改选其他兼容且具有合法使用权限的包。内置通用音源始终可用。
+
+v4 包的 WAV 字节来自三个独立的 CC0 开放音源库：
+[VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE)、
+[Versilian Community Sample Library](https://github.com/sgossner/VCSL) 和
+[FreePats CC0 音色库](https://freepats.zenvoid.org/)。包内 `manifest.json`
+逐槽记录来源库、上游相对路径和 SHA-256。它不包含 Black Desert 客户端音频，
+仅用于近似编辑试听，不代表游戏原声或已完成 A/B 验证。v1.2.1 发布包摘要为
+`82cea29f1316b943571663e4150b31e353da4ab9f556141ed65b6598a384db63`。
+
 <!-- section:architecture -->
 ## 项目结构
 

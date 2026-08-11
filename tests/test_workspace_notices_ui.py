@@ -18,6 +18,7 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
             """
             from pathlib import Path
             import tempfile
+            from unittest.mock import patch
             from PySide6.QtCore import Qt
             from PySide6.QtTest import QTest
             from PySide6.QtWidgets import QApplication, QMessageBox
@@ -30,13 +31,16 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
             window = MidiToBdoWindow()
 
             assert window.preview_source_badge.menu() is window.preview_source_menu
-            assert set(window.preview_source_actions) == {"auto", "bdo", "generic"}
-            assert window.preview_source_actions["auto"].isChecked()
+            assert set(window.preview_source_actions) == {"pack", "generic"}
+            assert window.preview_source_actions["generic"].isChecked()
+            with patch.object(window, "_open_settings") as open_settings:
+                window._set_preview_source_mode("pack")
+            open_settings.assert_called_once_with(2, "pack")
             window._set_preview_source_mode("generic")
             assert window.audio_sources["preview_mode"] == "generic"
             assert window.preview_source_actions["generic"].isChecked()
             if window.realtime_audio.available():
-                assert "MIDI" in window.preview_source_badge.text()
+                assert "内置通用音源" in window.preview_source_badge.text()
             else:
                 assert window.preview_source_badge.text() == "无可用音频设备"
 

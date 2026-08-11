@@ -16,22 +16,21 @@ an optional native mixer that can be promoted only after semantic parity.
 ## Phase 6 — trusted release
 
 - GitHub Actions dependencies are pinned by immutable commit SHA.
-- `packaging/windows/build.ps1 -PublicRelease` now requires an Authenticode
-  certificate thumbprint. It cannot produce a public candidate without a
-  valid publisher signature.
-- `packaging/windows/sign-and-verify.ps1` signs with SHA-256, requests an RFC
-  3161 timestamp, invokes SignTool verification, and checks Windows reports a
-  `Valid` signature.
+- `packaging/windows/build.ps1 -PublicRelease` enforces the reviewed dependency
+  inventory and release checks without requiring a publisher certificate.
+- Optional `packaging/windows/sign-and-verify.ps1` signing uses SHA-256,
+  requests an RFC 3161 timestamp, invokes SignTool verification, and checks
+  Windows reports a `Valid` signature whenever a certificate thumbprint is
+  supplied.
 - Every build produces a SHA-256 checksum and deterministic SPDX 2.3 evidence
   through `scripts/generate_release_evidence.py`.
-- `.github/workflows/windows-release.yml` builds and tests an unsigned
-  candidate, generates evidence, and attaches hosted-build provenance. The
-  maintainer signing environment remains separate because no private signing
-  material belongs in GitHub source or ordinary CI.
+- `.github/workflows/windows-release.yml` builds and tests the reviewed release,
+  generates evidence, and attaches hosted-build provenance. Optional publisher
+  signing remains outside ordinary CI because no private signing material
+  belongs in GitHub source or repository secrets.
 
-External release gate: a public artifact remains blocked until a maintainer has
-installed an eligible Authenticode certificate in a protected certificate
-store and the signing/verification step passes.
+Authenticode is an optional publisher-identity enhancement, not a public
+release gate. Unsigned releases may still trigger Windows SmartScreen.
 
 ## Phase 7 — recovery and supportability
 

@@ -517,6 +517,17 @@ KO = {
 }
 
 EN.update({
+    "选择音源包…": "Choose Sample Pack…",
+    "内置通用音源": "Built-in General Source",
+    "配套近似音源": "Companion Approximate Source",
+    "自选音源包": "Custom Sample Pack",
+    "管理音源包…": "Manage Sample Packs…",
+    "音源包路径": "Sample Pack Path",
+    "定位配套包": "Locate Companion Pack",
+    "配套近似音源不可用": "Companion Approximate Source Unavailable",
+    "自选音源包不可用": "Custom Sample Pack Unavailable",
+    "当前音源包无法试听：{reason}": "The current sample pack cannot preview: {reason}",
+    "请先选择一个 .bdosamples 音源包。": "Select a .bdosamples sample pack first.",
     "音乐参考": "Music Reference",
     "在当前音符编辑器中显示音乐参考、分析证据、候选和参考波形": "Show music-reference evidence, candidates, and the aligned waveform in this note editor",
     "当前工程没有可用于音乐参考的旋律乐器轨，请先新建乐器轨。": "This project has no melodic instrument track for Music Reference. Create one first.",
@@ -627,6 +638,17 @@ EN.update({
 })
 
 JA.update({
+    "选择音源包…": "音源パックを選択…",
+    "内置通用音源": "内蔵汎用音源",
+    "配套近似音源": "コンパニオン近似音源",
+    "自选音源包": "カスタム音源パック",
+    "管理音源包…": "音源パックを管理…",
+    "音源包路径": "音源パックのパス",
+    "定位配套包": "コンパニオンパックを指定",
+    "配套近似音源不可用": "コンパニオン近似音源を使用できません",
+    "自选音源包不可用": "カスタム音源パックを使用できません",
+    "当前音源包无法试听：{reason}": "現在の音源パックを試聴できません：{reason}",
+    "请先选择一个 .bdosamples 音源包。": ".bdosamples 音源パックを先に選択してください。",
     "音乐参考": "音楽リファレンス",
     "在当前音符编辑器中显示音乐参考、分析证据、候选和参考波形": "このノートエディターに音楽リファレンス、解析証拠、候補、参照波形を表示します",
     "当前工程没有可用于音乐参考的旋律乐器轨，请先新建乐器轨。": "音楽リファレンスに使えるメロディ楽器トラックがありません。先に作成してください。",
@@ -735,6 +757,17 @@ JA.update({
 })
 
 KO.update({
+    "选择音源包…": "음원 팩 선택…",
+    "内置通用音源": "내장 범용 음원",
+    "配套近似音源": "동반 근사 음원",
+    "自选音源包": "사용자 음원 팩",
+    "管理音源包…": "음원 팩 관리…",
+    "音源包路径": "음원 팩 경로",
+    "定位配套包": "동반 팩 찾기",
+    "配套近似音源不可用": "동반 근사 음원을 사용할 수 없음",
+    "自选音源包不可用": "사용자 음원 팩을 사용할 수 없음",
+    "当前音源包无法试听：{reason}": "현재 음원 팩을 미리들을 수 없습니다: {reason}",
+    "请先选择一个 .bdosamples 音源包。": "먼저 .bdosamples 음원 팩을 선택하세요.",
     "音乐参考": "음악 참조",
     "在当前音符编辑器中显示音乐参考、分析证据、候选和参考波形": "현재 음표 편집기에 음악 참조, 분석 근거, 후보 및 참조 파형을 표시합니다",
     "当前工程没有可用于音乐参考的旋律乐器轨，请先新建乐器轨。": "음악 참조에 사용할 멜로디 악기 트랙이 없습니다. 먼저 생성하세요.",

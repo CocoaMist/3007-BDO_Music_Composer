@@ -191,6 +191,9 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
   Public builds must pass the exact-inventory gate in
   `packaging/transcription_release_policy.json`, and any dependency change
   requires a new maintainer review.
+- Authenticode publisher signing is optional. Its absence must not block a
+  reviewed public build; when a certificate thumbprint is supplied, the build
+  must still fail closed if signing or verification fails.
 
 ## Style
 

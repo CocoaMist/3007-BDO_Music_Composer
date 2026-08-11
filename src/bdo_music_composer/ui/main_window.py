@@ -248,11 +248,14 @@ from bdo_music_composer.editor.pitch_transform import (  # noqa: E402
 )
 from bdo_music_composer.app.audio_source_settings import (  # noqa: E402
     PREVIEW_SOURCE_MODES,
+    activate_audio_source,
     audio_source_config,
     classify_audio_source,
     default_game_music_dir,
     displayed_audio_source,
     preview_source_mode,
+    remember_source_paths,
+    source_paths_for_mode,
 )
 from bdo_music_composer.ui.dialogs.application_settings_dialog import (  # noqa: E402
     GameArtImportWorker,
@@ -1366,9 +1369,8 @@ class MidiToBdoWindow(
         self.preview_source_action_group.setExclusive(True)
         self.preview_source_actions = {}
         for mode, label in (
-            ("auto", "自动选择音源"),
-            ("bdo", "锁定本地 BDO 音源"),
-            ("generic", "锁定内置通用 MIDI"),
+            ("generic", "内置通用音源"),
+            ("pack", "音源包"),
         ):
             action = self.preview_source_menu.addAction(tr(label))
             action.setCheckable(True)
@@ -1380,7 +1382,7 @@ class MidiToBdoWindow(
             self.preview_source_actions[mode] = action
         self.preview_source_menu.addSeparator()
         self.preview_source_menu.addAction(
-            tr("管理本地音源包…"), lambda: self._open_settings(2)
+            tr("选择音源包…"), lambda: self._open_settings(2, "pack")
         )
         self.preview_source_badge.setMenu(self.preview_source_menu)
         self._sync_preview_source_menu()
@@ -7247,29 +7249,16 @@ class MidiToBdoWindow(
             elif not self.realtime_audio.available():
                 badge_text = tr("无可用音频设备")
             elif source_mode == "generic":
-                badge_text = tr("内置通用 MIDI · 已锁定")
-            elif source_mode == "bdo" and preview_blockers:
-                badge_text = tr("本地 BDO 音源不可用")
-            elif source_mode == "auto" and preview_blockers:
-                badge_text = tr("自动音源 · 内置通用 MIDI")
+                badge_text = tr("内置通用音源")
+            elif preview_blockers:
+                badge_text = tr("音源包不可用")
             elif self.realtime_audio.status.cache_misses:
                 badge_text = tr("等待预取")
-            elif self.realtime_validation_state == "verified":
-                badge_text = tr(
-                    "本地 BDO 音源 · 已验证"
-                    if source_mode == "bdo"
-                    else "自动音源 · BDO 已验证"
-                )
             else:
-                # Wwise samples are exact; DSP remains explicitly unverified until A/B calibration.
-                badge_text = tr(
-                    "本地 BDO 音源 · DSP 待 A/B"
-                    if source_mode == "bdo"
-                    else "自动音源 · BDO 近似"
-                )
+                badge_text = tr("音源包")
             self.preview_source_badge.setText(badge_text)
             detail = tr("点击切换试听音源；不会改变导出结果")
-            if source_mode == "bdo" and preview_blockers:
+            if source_mode == "pack" and preview_blockers:
                 detail += "\n" + str(preview_blockers[0])
             self.preview_source_badge.setToolTip(detail)
             self._sync_preview_source_menu()
@@ -7286,6 +7275,14 @@ class MidiToBdoWindow(
         selected_mode = str(mode or "").casefold()
         if selected_mode not in PREVIEW_SOURCE_MODES:
             return
+        if selected_mode == "pack":
+            sample_pack, audio_root = source_paths_for_mode(
+                self.audio_sources, selected_mode
+            )
+            if not sample_pack and not audio_root:
+                self._open_settings(2, selected_mode)
+                self._sync_preview_source_menu()
+                return
         if selected_mode == preview_source_mode(self.audio_sources):
             self._sync_preview_source_menu()
             self._sync_preview_state()
@@ -7295,16 +7292,15 @@ class MidiToBdoWindow(
         )
         retained_position = self.timeline.playhead_ms
         self._stop_preview(reset_playhead=False)
-        self.audio_sources["preview_mode"] = selected_mode
-        self.realtime_audio.source_config = dict(self.audio_sources)
+        activate_audio_source(self.audio_sources, selected_mode)
+        self.realtime_audio.set_source_config(self.audio_sources)
         self.config["audio_sources"] = dict(self.audio_sources)
         save_config(self.config)
         self._sync_preview_source_menu()
         self._sync_preview_state()
         label = {
-            "auto": "自动选择音源",
-            "bdo": "锁定本地 BDO 音源",
-            "generic": "锁定内置通用 MIDI",
+            "generic": "内置通用音源",
+            "pack": "音源包",
         }[selected_mode]
         self.show_toast(
             trf("试听音源已切换：{source}", source=tr(label)),
@@ -7528,14 +7524,12 @@ class MidiToBdoWindow(
         self.last_reported_underruns = 0
         blockers = self._realtime_preview_blockers(tracks)
         source_mode = preview_source_mode(self.audio_sources)
-        use_generic = source_mode == "generic" or (
-            source_mode == "auto" and bool(blockers)
-        )
-        if source_mode == "bdo" and blockers:
-            self.status_label.setText(tr("本地 BDO 音源不可用"))
+        use_generic = source_mode == "generic"
+        if source_mode == "pack" and blockers:
+            self.status_label.setText(tr("音源包不可用"))
             self.show_toast(
                 trf(
-                    "已锁定本地 BDO 音源，当前无法试听：{reason}",
+                    "当前音源包无法试听：{reason}",
                     reason=blockers[0],
                 ),
                 kind="warning",
@@ -7973,11 +7967,18 @@ class MidiToBdoWindow(
             velocity_mode=VELOCITY_MODE_PRESERVE
         ), note_count
 
-    def _open_settings(self, initial_page: int = 0) -> None:
+    def _open_settings(
+        self,
+        initial_page: int = 0,
+        initial_preview_mode: str | None = None,
+    ) -> None:
         old_effective_bpm = float(max(1, self.bpm_override or self.bpm))
         old_transpose = int(self.transpose)
         dialog = SettingsDialog(self)
         dialog.settings_nav.setCurrentRow(max(0, min(3, int(initial_page))))
+        if initial_preview_mode in PREVIEW_SOURCE_MODES:
+            mode_index = dialog.preview_mode.findData(initial_preview_mode)
+            dialog.preview_mode.setCurrentIndex(max(0, mode_index))
         while True:
             if dialog.exec() != QDialog.Accepted:
                 return
@@ -8004,8 +8005,14 @@ class MidiToBdoWindow(
                     Path(selected_instrument_art_dir).resolve()
                 )
 
+            selected_preview_mode = str(dialog.preview_mode.currentData() or "generic")
+            selected_source_values = dialog.audio_source_values()
+            selected_source_value = selected_source_values.get(
+                selected_preview_mode,
+                "",
+            )
             sample_pack, audio_root = classify_audio_source(
-                dialog.audio_source.text().strip()
+                selected_source_value
             )
             if sample_pack:
                 prepared_root = self._prepare_sample_pack(sample_pack)
@@ -8072,12 +8079,26 @@ class MidiToBdoWindow(
         sample_source_changed = (
             old_sample_pack != sample_pack or old_audio_root != audio_root
         )
-        self.audio_sources["sample_pack"] = sample_pack
-        self.audio_sources["audio_root"] = audio_root
+        for source_mode in ("pack",):
+            remembered_pack, remembered_root = source_paths_for_mode(
+                self.audio_sources,
+                source_mode,
+            )
+            next_pack, next_root = classify_audio_source(
+                selected_source_values.get(source_mode, "")
+            )
+            if next_pack == remembered_pack and Path(remembered_root).is_dir():
+                next_root = remembered_root
+            if source_mode == selected_preview_mode:
+                next_pack, next_root = sample_pack, audio_root
+            remember_source_paths(
+                self.audio_sources,
+                source_mode,
+                next_pack,
+                next_root,
+            )
         self.audio_sources["paz_root"] = dialog.selected_paz_root.strip()
-        self.audio_sources["preview_mode"] = str(
-            dialog.preview_mode.currentData() or "auto"
-        )
+        activate_audio_source(self.audio_sources, selected_preview_mode)
         preview_mode_changed = (
             old_preview_mode != preview_source_mode(self.audio_sources)
         )
@@ -8100,7 +8121,7 @@ class MidiToBdoWindow(
             # reuse a stale Top-3 result while the replacement worker runs.
             self.automatic_instrument_match_analysis = None
             self.instrument_match_analysis = None
-        self.realtime_audio.source_config = dict(self.audio_sources)
+        self.realtime_audio.set_source_config(self.audio_sources)
         self.config["audio_sources"] = dict(self.audio_sources)
         if sample_source_changed or preview_mode_changed:
             self._stop_preview(reset_playhead=False)

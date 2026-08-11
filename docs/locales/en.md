@@ -37,6 +37,22 @@ Most users should use the published Windows build. Source development requires P
 
 Projects, settings, caches, and external content remain local. External content is never added automatically to the repository or a release. Core editing and export continue without optional content.
 
+The release page may separately provide
+`BDO-Approximate-CC0-Full-Coverage-v4-Compact.bdosamples` for approximate
+preview. It is not embedded in the application. Choose **Sample Pack** in
+Settings to locate it or another compatible pack for which you have the
+required rights; the built-in general source remains available.
+
+The v4 WAV bytes come from three independent CC0 libraries:
+[VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE),
+[Versilian Community Sample Library](https://github.com/sgossner/VCSL), and
+[FreePats CC0 instrument banks](https://freepats.zenvoid.org/). The embedded
+`manifest.json` records the source library, upstream relative path, and SHA-256
+for every slot. The pack contains no Black Desert client audio and is an
+approximate editing preview, not game-original or A/B-verified sound. Its
+v1.2.1 SHA-256 is
+`82cea29f1316b943571663e4150b31e353da4ab9f556141ed65b6598a384db63`.
+
 <!-- section:architecture -->
 ## Project structure
 

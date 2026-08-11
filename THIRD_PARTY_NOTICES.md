@@ -4,6 +4,30 @@ This project depends on third-party software, including PySide6/Qt, Mido, NumPy,
 
 The root MIT License applies only to original BDO Music Composer code owned by CocoaMist. It does not relicense third-party components.
 
+## Optional CC0 sample-pack release asset
+
+`BDO-Approximate-CC0-Full-Coverage-v4-Compact.bdosamples` may be published
+beside the Windows application as a separate, optional preview asset. It is not
+part of the repository or embedded in `BDO-Music-Composer.exe`. The v4 pack
+selects unmodified WAV bytes from the following independently published CC0
+sources:
+
+- [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE), source
+  revision `6dd651d55dde97fd4028699be9d4481f26917891`.
+- [Versilian Community Sample Library](https://github.com/sgossner/VCSL),
+  source revision `c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e`.
+- [FreePats](https://freepats.zenvoid.org/) CC0 Spanish classical guitar,
+  clean electric guitar, picked bass, concert harp, and clarinet banks.
+
+CC0 1.0 terms are available from
+[Creative Commons](https://creativecommons.org/publicdomain/zero/1.0/legalcode.en).
+The pack's `manifest.json` records the source library, upstream relative path,
+and SHA-256 for every audio slot so the assembled asset remains auditable.
+The pack contains no Black Desert client audio. It provides approximate editor
+preview only and must not be described as game-original or A/B-verified sound.
+Its inclusion does not alter the client-content boundary in
+[`docs/CONTENT_BOUNDARY.md`](docs/CONTENT_BOUNDARY.md).
+
 ## Human-readable upstream credits
 
 This table records the direct and release-relevant foundations of the current

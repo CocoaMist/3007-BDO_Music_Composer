@@ -99,12 +99,6 @@ assert callable(soxr.ResampleStream)
 
     $env:BDO_TRANSCRIPTION_LICENSE_DIR = $LicenseOutput
     if ($PublicRelease) {
-        if (-not $SigningCertificateThumbprint) {
-            throw (
-                "Public releases require -SigningCertificateThumbprint. " +
-                "The certificate private key must remain outside the repository."
-            )
-        }
         Write-Host (
             "Building the reviewed BDO Music Composer release with bundled " +
             "Basic Pitch ONNX inference."
@@ -154,7 +148,7 @@ assert callable(soxr.ResampleStream)
             "$($StartupSelfTest.ExitCode)"
         )
     }
-    if ($PublicRelease) {
+    if ($SigningCertificateThumbprint) {
         & $SignAndVerify `
             -Artifact $OutputExecutable `
             -CertificateThumbprint $SigningCertificateThumbprint
