@@ -12,6 +12,11 @@ from pathlib import Path
 
 import numpy as np
 
+from bdo_music_composer.audio.pcm_wav import (
+    pcm_bytes_to_float32,
+    stereo_pcm,
+)
+
 from bdo_music_composer.audio.bdo_audio_mixing import (
     apply_articulation_preview_in_place,
     prepare_sample_pcm,
@@ -100,17 +105,15 @@ class _PreparedEvent:
 def _read_wav(path_string: str) -> np.ndarray:
     path = Path(path_string)
     with wave.open(str(path), "rb") as source:
-        if source.getsampwidth() != 2:
+        sample_width = source.getsampwidth()
+        if sample_width not in {2, 3}:
             raise ValueError(f"Unsupported sample width: {path}")
-        data = np.frombuffer(source.readframes(source.getnframes()), dtype="<i2").astype(np.float32) / 32768.0
         channels = source.getnchannels()
         rate = source.getframerate()
-    if channels == 1:
-        data = np.column_stack((data, data))
-    else:
-        data = data.reshape(-1, channels)[:, :2]
-        if data.shape[1] == 1:
-            data = np.column_stack((data[:, 0], data[:, 0]))
+        payload = source.readframes(source.getnframes())
+    data = stereo_pcm(
+        pcm_bytes_to_float32(payload, sample_width, channels)
+    )
     if rate != SAMPLE_RATE:
         length = max(1, round(len(data) * SAMPLE_RATE / rate))
         positions = np.linspace(0, len(data) - 1, length)

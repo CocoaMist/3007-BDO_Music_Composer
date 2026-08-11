@@ -1,4 +1,4 @@
-name: Windows release candidate
+name: Windows release
 
 on:
   workflow_dispatch:
@@ -28,26 +28,24 @@ jobs:
           python -m venv .venv
           .\.venv\Scripts\python.exe -m pip install --constraint requirements\windows-py312.txt -r requirements\build.txt
           powershell -ExecutionPolicy Bypass -File scripts\install_transcription.ps1
-      - name: Verify candidate before signing
+      - name: Verify reviewed release
         shell: pwsh
         run: |
           .\.venv\Scripts\python.exe tools\check_repository_hygiene.py
           .\.venv\Scripts\python.exe -m unittest discover -s tests -t . -q
-          powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
-      - name: Attest unsigned candidate provenance
+          powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1 -PublicRelease
+      - name: Attest release provenance
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
         with:
           subject-path: dist/BDO-Music-Composer.exe
-      - name: Upload candidate and SPDX evidence
+      - name: Upload release and SPDX evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: unsigned-windows-release-candidate
+          name: windows-release
           path: |
             dist/BDO-Music-Composer.exe
             dist/release-evidence/*
           if-no-files-found: error
 
-# Public publication remains a separate maintainer operation: import the
-# Authenticode certificate into a protected signing environment, rerun
-# packaging/windows/build.ps1 -PublicRelease -SigningCertificateThumbprint,
-# verify the signed hash, then generate the RSA-signed update manifest.
+# Authenticode remains optional. When used, signing belongs in a protected
+# maintainer environment; private signing material never enters this workflow.

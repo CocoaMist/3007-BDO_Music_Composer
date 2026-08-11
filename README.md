@@ -33,6 +33,25 @@ The core editing, autosave, optimization, preview, transcription-assist, and sco
 
 The application processes projects locally. It has no account login, telemetry, or file upload. It does not provide restricted-content acquisition or distribution; users are responsible for the source and permission of external content.
 
+## Optional CC0 sample pack
+
+Releases may provide `BDO-Approximate-CC0-Full-Coverage-v4-Compact.bdosamples`
+as a separate, optional preview asset. The app itself remains usable with its
+built-in general source; choose **Sample Pack** in Settings to locate this or
+another compatible pack. External pack paths stay in local configuration and
+are never compiled into the EXE.
+
+The v4 pack contains unchanged WAV bytes selected from three independently
+licensed CC0 libraries: [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE),
+[Versilian Community Sample Library](https://github.com/sgossner/VCSL), and the
+CC0 instrument banks published by [FreePats](https://freepats.zenvoid.org/).
+Its `manifest.json` records the source library, upstream relative path, and
+SHA-256 for every audio slot. It contains no Black Desert client audio and is
+an approximate editing preview, not game-original or A/B-verified sound.
+
+Release v1.2.1 pack SHA-256:
+`82cea29f1316b943571663e4150b31e353da4ab9f556141ed65b6598a384db63`.
+
 ## Quick links
 
 - [Documentation index](docs/README.md)

@@ -40,8 +40,8 @@ from bdo_export import BDO_BPM_MAX
 from bdo_music_composer.app.audio_source_settings import (
     classify_audio_source,
     default_game_music_dir,
-    displayed_audio_source,
     preview_source_mode,
+    source_paths_for_mode,
 )
 from bdo_music_composer.audio.bdo_sample_pack import PACK_SUFFIX
 from bdo_music_composer.export.bdo_score import read_bdo_score
@@ -438,14 +438,19 @@ class SettingsDialog(QDialog):
         self.preview_mode = QComboBox()
         self.preview_mode.setProperty("i18nSkipItems", True)
         for label, mode in (
-            ("自动选择音源", "auto"),
-            ("锁定本地 BDO 音源", "bdo"),
-            ("锁定内置通用 MIDI", "generic"),
+            ("内置通用音源", "generic"),
+            ("音源包", "pack"),
         ):
             self.preview_mode.addItem(tr(label), mode)
-        preview_mode_index = self.preview_mode.findData(
-            preview_source_mode(parent.audio_sources)
-        )
+        self._audio_source_mode = preview_source_mode(parent.audio_sources)
+        self._audio_source_values = {
+            mode: str(sample_pack or audio_root)
+            for mode in ("pack",)
+            for sample_pack, audio_root in (
+                source_paths_for_mode(parent.audio_sources, mode),
+            )
+        }
+        preview_mode_index = self.preview_mode.findData(self._audio_source_mode)
         self.preview_mode.setCurrentIndex(max(0, preview_mode_index))
         preview_mode_row = QHBoxLayout()
         preview_mode_row.setContentsMargins(0, 0, 0, 0)
@@ -453,7 +458,9 @@ class SettingsDialog(QDialog):
         audio_layout.addLayout(
             self._labeled_row("试听音源", preview_mode_row)
         )
-        self.audio_source = QLineEdit(displayed_audio_source(parent.audio_sources))
+        self.audio_source = QLineEdit(
+            self._audio_source_values.get(self._audio_source_mode, "")
+        )
         self.audio_source.setObjectName("AudioSourceEdit")
         self.audio_source.setReadOnly(True)
         self.audio_source.setPlaceholderText(tr("未选择"))
@@ -461,20 +468,20 @@ class SettingsDialog(QDialog):
         audio_source_layout.setContentsMargins(0, 0, 0, 0)
         audio_source_layout.setSpacing(6)
         audio_source_layout.addWidget(self.audio_source, stretch=1)
-        sample_pack_button = PillButton(tr("音源包"), "secondary")
-        sample_pack_button.setToolTip(tr("选择 .bdosamples 音源包"))
-        sample_pack_button.clicked.connect(self._browse_sample_pack)
-        audio_source_layout.addWidget(sample_pack_button)
-        audio_folder_button = PillButton(tr("文件夹"), "secondary")
-        audio_folder_button.setToolTip(tr("选择已准备好的本地 BDO 音源目录"))
-        audio_folder_button.clicked.connect(self._browse_audio_folder)
-        audio_source_layout.addWidget(audio_folder_button)
-        clear_audio_button = PillButton(tr("清除"), "ghost")
-        clear_audio_button.clicked.connect(self.audio_source.clear)
-        audio_source_layout.addWidget(clear_audio_button)
+        self.sample_pack_button = PillButton(tr("选择音源包"), "secondary")
+        self.sample_pack_button.setToolTip(tr("选择 .bdosamples 音源包"))
+        self.sample_pack_button.clicked.connect(self._browse_sample_pack)
+        audio_source_layout.addWidget(self.sample_pack_button)
+        self.clear_audio_button = PillButton(tr("清除"), "ghost")
+        self.clear_audio_button.clicked.connect(self.audio_source.clear)
+        audio_source_layout.addWidget(self.clear_audio_button)
         audio_layout.addLayout(
-            self._labeled_row("本地音源", audio_source_layout)
+            self._labeled_row("音源包路径", audio_source_layout)
         )
+        self.preview_mode.currentIndexChanged.connect(
+            self._preview_source_mode_changed
+        )
+        self._sync_audio_source_controls()
 
         self.instrument_art_dir = QLineEdit(parent.instrument_art_dir)
         self.instrument_art_dir.setObjectName("InstrumentArtDirectoryEdit")
@@ -715,6 +722,35 @@ class SettingsDialog(QDialog):
         if selected:
             self.audio_source.setText(selected)
 
+    def _preview_source_mode_changed(self) -> None:
+        if self._audio_source_mode in self._audio_source_values:
+            self._audio_source_values[self._audio_source_mode] = (
+                self.audio_source.text().strip()
+            )
+        self._audio_source_mode = str(
+            self.preview_mode.currentData() or "generic"
+        )
+        self.audio_source.setText(
+            self._audio_source_values.get(self._audio_source_mode, "")
+        )
+        self._sync_audio_source_controls()
+
+    def _sync_audio_source_controls(self) -> None:
+        external = self._audio_source_mode == "pack"
+        self.audio_source.setEnabled(external)
+        self.sample_pack_button.setEnabled(external)
+        self.clear_audio_button.setEnabled(external)
+        self.sample_pack_button.setText(tr("选择音源包"))
+
+    def audio_source_values(self) -> dict[str, str]:
+        """Return both remembered pack selections, including the visible edit."""
+
+        if self._audio_source_mode in self._audio_source_values:
+            self._audio_source_values[self._audio_source_mode] = (
+                self.audio_source.text().strip()
+            )
+        return dict(self._audio_source_values)
+
     def _browse_audio_folder(self) -> None:
         current = self.audio_source.text().strip()
         start = current if current and Path(current).is_dir() else ""
@@ -845,8 +881,10 @@ class SettingsDialog(QDialog):
                 tr("请选择有效的本地乐器图片目录。"),
             )
             return
+        source_mode = str(self.preview_mode.currentData() or "generic")
+        source_value = self.audio_source_values().get(source_mode, "")
         try:
-            classify_audio_source(self.audio_source.text().strip())
+            classify_audio_source(source_value)
         except ValueError:
             self.settings_nav.setCurrentRow(2)
             self.audio_source.setFocus()
@@ -854,6 +892,15 @@ class SettingsDialog(QDialog):
                 self,
                 tr("音源不可用"),
                 tr("请选择 .bdosamples 音源包或本地音源文件夹。"),
+            )
+            return
+        if source_mode == "pack" and not source_value:
+            self.settings_nav.setCurrentRow(2)
+            self.audio_source.setFocus()
+            QMessageBox.warning(
+                self,
+                tr("音源不可用"),
+                tr("请先选择一个 .bdosamples 音源包。"),
             )
             return
         super().accept()

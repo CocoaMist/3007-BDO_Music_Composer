@@ -2,15 +2,21 @@
 
 ## Shipped source modes
 
-The preview selector persists one of three policies under
+The preview selector persists one of two explicit choices under
 `audio_sources.preview_mode`:
 
-- `auto`: prefer a valid user-selected compatible sample directory whose rights
-  are independently established, and otherwise use the built-in renderer.
-- `bdo`: preserve the legacy configuration identifier for a compatible sampled
-  source and report why it is unavailable; it does not authorize or create a
-  source from the game client and never silently substitutes another source.
-- `generic`: lock the built-in, file-free General MIDI renderer.
+- `generic`: use the built-in, file-free general preview renderer.
+- `pack`: use one compatible, independently licensed `.bdosamples` pack
+  selected by the user.
+
+The pack path and prepared cache root remain remembered while the built-in
+source is active. Legacy `auto`/`bdo`/`companion`/`custom` preferences migrate
+to `pack`. No developer-machine path is compiled into the application or
+included in a release; a fresh installation must select its external pack once.
+
+Changing the selected pack or prepared root invalidates the decoded WAV cache
+before the next preload, preventing equal bank/source identifiers in two packs
+from reusing audio from the previous source.
 
 The generic renderer is original project code. It synthesizes bounded,
 deterministic instrument-family voices before playback and performs no file I/O
@@ -127,7 +133,7 @@ Before the selected renderer can replace the procedural fallback:
    result “generic SoundFont preview,” never BDO-verified audio.
 
 Until those gates pass, the shipped procedural family renderer remains the
-safe zero-package fallback. A compatible `.bdosamples` source is accepted only
-as user-selected input with independently established rights; this project
-does not create one from the game client. See
+safe zero-package fallback. Compatible 16-bit and 24-bit PCM `.bdosamples`
+sources are accepted only as user-selected input with independently established
+rights; this project does not create one from the game client. See
 [`CONTENT_BOUNDARY.md`](CONTENT_BOUNDARY.md).

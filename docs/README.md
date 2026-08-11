@@ -59,8 +59,10 @@ Tests and code override historical records.
 
 ## Evidence and history
 
+- [`releases/RELEASE_NOTES_V1.2.1.md`](releases/RELEASE_NOTES_V1.2.1.md)
+  records the current v1.2.1 sample-pack preview release and verification.
 - [`releases/RELEASE_NOTES_V1.2.0.2.md`](releases/RELEASE_NOTES_V1.2.0.2.md)
-  records the current v1.2.0.2 percussion-editor test release and verification.
+  records the historical v1.2.0.2 percussion-editor test release and verification.
 - [`releases/RELEASE_NOTES_V1.2.0.1.md`](releases/RELEASE_NOTES_V1.2.0.1.md)
   records the historical v1.2.0.1 test-release scope and verification evidence.
 - [`releases/RELEASE_NOTES_V1.2.0.md`](releases/RELEASE_NOTES_V1.2.0.md)

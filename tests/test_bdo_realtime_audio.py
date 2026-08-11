@@ -5,6 +5,7 @@ import json
 import tempfile
 import threading
 import time
+import wave
 from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
@@ -921,6 +922,28 @@ class RealtimeAudioTests(unittest.TestCase):
         self.assertEqual(status.preload_total, 8)
         self.assertAlmostEqual(status.preload_progress, 0.375)
 
+    def test_source_switch_invalidates_decoded_sample_cache(self) -> None:
+        sample = _Sample(np.zeros((2, 2), dtype=np.float32), 48_000, 2)
+        self.engine.set_source_config({
+            "sample_pack": "C:/packs/first.bdosamples",
+            "audio_root": "C:/cache/first",
+        })
+        self.engine._cache = {("bank", 1): sample}
+        self.engine._cache_bytes = sample.pcm.nbytes
+
+        self.engine.set_source_config({
+            "sample_pack": "C:/packs/first.bdosamples",
+            "audio_root": "C:/cache/first",
+        })
+        self.assertEqual(self.engine._cache, {("bank", 1): sample})
+        self.engine.set_source_config({
+            "sample_pack": "D:/packs/second.bdosamples",
+            "audio_root": "D:/cache/second",
+        })
+        self.assertEqual(self.engine._cache, {})
+        self.assertEqual(self.engine._cache_bytes, 0)
+        self.assertIsNone(self.engine._sample_arena)
+
     def test_cancel_loading_invalidates_future_and_resets_progress(self) -> None:
         future = Future()
         self.engine._load_future = future
@@ -973,6 +996,30 @@ class RealtimeAudioTests(unittest.TestCase):
             with self.assertRaises(_LoadCancelled):
                 self.engine._decode_wav(Path("unused.wav"), cancel_event)
         self.assertEqual(source.reads, 1)
+
+    def test_wav_decode_accepts_24_bit_pcm(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "24-bit.wav"
+            values = (-4_000_000, 4_000_000, -2_000_000, 2_000_000)
+            payload = bytearray()
+            for value in values:
+                unsigned = value & 0xFFFFFF
+                payload.extend((
+                    unsigned & 0xFF,
+                    (unsigned >> 8) & 0xFF,
+                    (unsigned >> 16) & 0xFF,
+                ))
+            with wave.open(str(path), "wb") as target:
+                target.setnchannels(2)
+                target.setsampwidth(3)
+                target.setframerate(44_100)
+                target.writeframes(payload)
+
+            sample = self.engine._decode_wav(path)
+
+        self.assertEqual(sample.pcm.shape, (2, 2))
+        self.assertEqual(sample.rate, 44_100)
+        self.assertTrue(np.isfinite(sample.pcm).all())
 
     def test_preload_submission_is_bounded_to_one_worker_window(self) -> None:
         class RecordingExecutor:

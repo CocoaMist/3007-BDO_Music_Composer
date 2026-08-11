@@ -66,19 +66,20 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ```
 
 Every build also emits `dist\release-evidence\BDO-Music-Composer.exe.sha256`
-and an SPDX 2.3 JSON document. A public release fails closed unless a protected
-certificate-store identity is supplied and Authenticode verification succeeds:
+and an SPDX 2.3 JSON document. A reviewed public release enables the checked-in
+exact-inventory license gate:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1 `
-  -PublicRelease `
-  -SigningCertificateThumbprint <certificate-store-thumbprint>
+  -PublicRelease
 ```
 
-The publisher private key must not be passed as a file, environment variable,
-or repository secret to this script. The checked-in workflow produces an
-attested unsigned candidate; final publisher signing belongs in the protected
-maintainer signing environment.
+Authenticode publisher signing is optional. When a protected certificate-store
+identity is available, append
+`-SigningCertificateThumbprint <certificate-store-thumbprint>`; signing and
+verification then fail closed. The publisher private key must not be passed as
+a file, environment variable, or repository secret. Unsigned releases may
+trigger a Windows SmartScreen warning.
 
 The output is always `dist\BDO-Music-Composer.exe`. Loading a reference audio
 file and entering transcription mode exposes its bundled analysis capability.

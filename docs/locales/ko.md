@@ -37,6 +37,20 @@ BDO Music Composer는 Black Desert 악보를 로컬에서 만들고 검토하고
 
 프로젝트, 설정, 캐시와 외부 콘텐츠는 로컬에 남습니다. 외부 콘텐츠가 저장소나 배포 파일에 자동으로 들어가지 않으며 선택 콘텐츠가 없어도 주요 편집과 내보내기를 사용할 수 있습니다.
 
+릴리스 페이지에서는 근사 미리듣기용
+`BDO-Approximate-CC0-Full-Coverage-v4-Compact.bdosamples`를 별도 파일로
+제공할 수 있습니다. 앱에는 내장되지 않습니다. 설정의 **음원 팩**에서 이 파일이나
+필요한 권리를 보유한 다른 호환 팩을 선택할 수 있으며 내장 범용 음원은 항상 사용할 수 있습니다.
+
+v4 WAV 바이트는 독립적인 CC0 라이브러리인
+[VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE),
+[Versilian Community Sample Library](https://github.com/sgossner/VCSL),
+[FreePats CC0 악기 뱅크](https://freepats.zenvoid.org/)에서 선택되었습니다.
+`manifest.json`은 모든 슬롯의 출처, 업스트림 상대 경로와 SHA-256을 기록합니다.
+Black Desert 클라이언트 오디오는 포함하지 않으며 게임 원음이나 A/B 검증 음원이 아닙니다.
+v1.2.1 SHA-256은
+`82cea29f1316b943571663e4150b31e353da4ab9f556141ed65b6598a384db63`입니다.
+
 <!-- section:architecture -->
 ## 프로젝트 구조
 

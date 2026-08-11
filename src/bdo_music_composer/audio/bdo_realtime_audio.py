@@ -26,6 +26,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from bdo_music_composer.audio.pcm_wav import (
+    pcm_bytes_to_float32,
+    stereo_pcm,
+)
 from PySide6.QtCore import QIODevice, QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtMultimedia import QAudio, QAudioFormat, QAudioSink, QMediaDevices
 
@@ -739,6 +744,30 @@ class BdoRealtimeAudioEngine(QObject):
         self._track_block_peaks = np.empty(0, dtype=np.float32)
         self._sample_arena: np.ndarray | None = None
         self.last_error = ""
+
+    @staticmethod
+    def _source_identity(source_config: dict[str, str]) -> tuple[str, str]:
+        def normalized(key: str) -> str:
+            value = str(source_config.get(key, "") or "").strip()
+            return os.path.normcase(os.path.abspath(value)) if value else ""
+
+        return normalized("sample_pack"), normalized("audio_root")
+
+    def set_source_config(self, source_config: dict[str, str]) -> None:
+        """Switch sources without reusing decoded samples from the old root."""
+
+        next_config = dict(source_config)
+        with self._lock:
+            source_changed = self._source_identity(
+                self.source_config
+            ) != self._source_identity(next_config)
+            self.source_config = next_config
+            if source_changed:
+                # Events and active voices retain direct references while a
+                # stopped/replacement project starts with a clean source cache.
+                self._cache = {}
+                self._cache_bytes = 0
+                self._sample_arena = None
 
     def available(self) -> bool:
         return bool(QMediaDevices.defaultAudioOutput().id())
@@ -2037,8 +2066,11 @@ class BdoRealtimeAudioEngine(QObject):
         BdoRealtimeAudioEngine._raise_if_preload_cancelled(cancel_event)
         try:
             with wave.open(str(path), "rb") as source:
-                if source.getsampwidth() != 2:
-                    raise AudioEngineError(f"不支持非 16-bit WAV：{path}")
+                sample_width = source.getsampwidth()
+                if sample_width not in {2, 3}:
+                    raise AudioEngineError(
+                        f"仅支持 16-bit/24-bit PCM WAV：{path}"
+                    )
                 channels = source.getnchannels()
                 if channels < 1:
                     raise AudioEngineError(f"无效 WAV 声道数：{path}")
@@ -2052,19 +2084,16 @@ class BdoRealtimeAudioEngine(QObject):
                     if not chunk:
                         break
                     raw_bytes.extend(chunk)
-                    remaining -= len(chunk) // (channels * 2)
+                    remaining -= len(chunk) // (channels * sample_width)
         except (OSError, wave.Error) as exc:
             raise AudioEngineError(f"无法读取游戏 WAV：{path} ({exc})") from exc
         BdoRealtimeAudioEngine._raise_if_preload_cancelled(cancel_event)
-        raw = np.frombuffer(raw_bytes, dtype="<i2")
-        if raw.size % channels:
-            raise AudioEngineError(f"无效 WAV PCM 数据：{path}")
-        raw = raw.astype(np.float32) / 32768.0
-        raw = raw.reshape(-1, channels)
-        if channels == 1:
-            pcm = np.repeat(raw, 2, axis=1)
-        else:
-            pcm = raw[:, :2]
+        try:
+            pcm = stereo_pcm(
+                pcm_bytes_to_float32(raw_bytes, sample_width, channels)
+            )
+        except ValueError as exc:
+            raise AudioEngineError(f"无效 WAV PCM 数据：{path}") from exc
         pcm, _gain = normalise_sample_loudness(pcm)
         active_frames = detect_active_signal_frames(pcm, rate)
         BdoRealtimeAudioEngine._raise_if_preload_cancelled(cancel_event)

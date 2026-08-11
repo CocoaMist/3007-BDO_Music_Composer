@@ -29,6 +29,18 @@ class SettingsValidationUiTests(unittest.TestCase):
                 root = Path(folder_name)
                 invalid = root / "not-a-folder"
                 invalid.write_text("file", encoding="utf-8")
+                custom_pack = root / "custom.bdosamples"
+                custom_pack.write_bytes(b"not-a-companion-manifest")
+                dialog.preview_mode.setCurrentIndex(
+                    dialog.preview_mode.findData("pack")
+                )
+                with patch(
+                    "bdo_music_composer.ui.dialogs.application_settings_dialog.QFileDialog.getOpenFileName",
+                    return_value=(str(custom_pack), ""),
+                ):
+                    dialog._browse_sample_pack()
+                assert dialog.preview_mode.currentData() == "pack"
+                assert dialog.audio_source.text() == str(custom_pack)
                 dialog.game_music_dir.setText(str(invalid))
                 with patch.object(QMessageBox, "warning") as warning:
                     dialog.accept()
@@ -40,6 +52,9 @@ class SettingsValidationUiTests(unittest.TestCase):
                 wanted = root / "Black Desert" / "music"
                 dialog.game_music_dir.setText(str(wanted))
                 dialog.output_dir.setText(str(root / "exports"))
+                dialog.preview_mode.setCurrentIndex(
+                    dialog.preview_mode.findData("generic")
+                )
                 dialog.audio_source.clear()
                 dialog.instrument_art_dir.clear()
                 dialog.accept()
