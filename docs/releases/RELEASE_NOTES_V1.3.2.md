@@ -31,6 +31,15 @@ v1.3.2 是 Clip 编辑工作流的 P0 稳定性版本。时间线、混音轨道
 已有本地副本无需重新下载。该包仅包含独立许可的 CC0 近似试听素材，
 不含 Black Desert 客户端音频。
 
+### 发行资产与验证
+
+- `BDO-Music-Composer.exe`：`186,983,622` 字节；SHA-256 `2f6e210edcf2ed2cac6cb87db73cb58076820bc33323c70d9d0cf23bfd4d9461`。
+- 源提交：`51553d90c4cff954d5d1fbc82920f5cb42f74119`；正式构建：[Windows Release #31716418744](https://github.com/CocoaMist/3007-BDO_Music_Composer/actions/runs/31716418744)。
+- 本地完整套件 1,296 项通过、1 项跳过；GitHub Windows CI 与正式公共发行构建均通过。
+- 正式构建的依赖许可清单、冻结 Basic Pitch/CPU 推理、GUI 启动自检和 GitHub 来源证明通过；下载产物在隔离用户数据目录再次通过转录与 10 秒 GUI 启动自检。
+
+本版本未使用 Authenticode 发布者签名，Windows SmartScreen 可能显示“未知发布者”。本项目是非官方社区工具，与 Pearl Abyss 无隶属关系。
+
 ## English
 
 v1.3.2 is a P0 stability release for the Clip editing workflow. The timeline,
@@ -61,3 +70,12 @@ This release remains compatible with the v1.2.1
 asset. Existing local copies do not need to be downloaded again. The pack
 contains independently licensed CC0 material for approximate preview only,
 not Black Desert client audio.
+
+### Release asset and verification
+
+- `BDO-Music-Composer.exe`: `186,983,622` bytes; SHA-256 `2f6e210edcf2ed2cac6cb87db73cb58076820bc33323c70d9d0cf23bfd4d9461`.
+- Source commit: `51553d90c4cff954d5d1fbc82920f5cb42f74119`; official build: [Windows Release #31716418744](https://github.com/CocoaMist/3007-BDO_Music_Composer/actions/runs/31716418744).
+- All 1,296 local tests passed with one skipped; GitHub Windows CI and the reviewed public-release build passed.
+- The public dependency inventory, frozen Basic Pitch/CPU inference, GUI startup self-test, and GitHub provenance attestation passed; the downloaded artifact also passed transcription and 10-second GUI startup self-tests in an isolated user-data directory.
+
+This release is not Authenticode publisher-signed, so Windows SmartScreen may show an unknown-publisher warning. This is an unofficial community tool and is not affiliated with Pearl Abyss.
