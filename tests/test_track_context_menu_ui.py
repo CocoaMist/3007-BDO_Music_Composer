@@ -34,12 +34,10 @@ class TrackContextMenuUiTests(unittest.TestCase):
                 if not action.isSeparator()
             ]
             assert top == [
-                "编辑音符…", "更换游戏乐器",
-                "轨道 FX", "轨道八度…", "轨道力度基数…", "优化此轨道",
-                "新建轨道", "合并同乐器轨道…", "上移轨道", "下移轨道", "删除轨道",
-                "清除 Solo", "取消静音",
+                "更换游戏乐器", "编辑音符…", "音高与力度",
+                "优化此轨道", "轨道管理", "监听状态",
             ], top
-            assert len([a for a in menu.actions() if a.isSeparator()]) == 3
+            assert len([a for a in menu.actions() if a.isSeparator()]) == 2
             instrument = menu._instrument_menu
             assert instrument is not None
             instrument_text = [
@@ -51,6 +49,9 @@ class TrackContextMenuUiTests(unittest.TestCase):
                 "以此轨统一同乐器音量和 FX",
             ], instrument_text
             assert "转换检查" not in top + instrument_text
+            sound = menu._sound_menu
+            sound_text = [a.text() for a in sound.actions()]
+            assert sound_text == ["轨道 FX", "轨道移调…", "轨道力度基数…"]
             assert set(actions) == {
                 "edit_notes", "effects", "pitch", "velocity", "optimize",
                 "create_track", "merge", "move_up", "move_down", "delete",

@@ -213,6 +213,7 @@ class ProjectTrackSnapshot:
                         "end_ms": float(clip.end_ms),
                         "content_start_ms": float(clip.content_start_ms),
                         "content_end_ms": float(clip.content_end_ms),
+                        "time_offset_ms": float(clip.time_offset_ms),
                     }
                     for clip in getattr(track, "arrangement_clips", ())
                 ],

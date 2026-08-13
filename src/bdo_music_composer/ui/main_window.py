@@ -1245,17 +1245,19 @@ class MidiToBdoWindow(
         self.project_file_menu = QMenu(self.toolbar_project_btn)
         new_action = self.project_file_menu.addAction(tr("新建项目"))
         new_action.triggered.connect(self._new_project)
+        open_action = self.project_file_menu.addAction(tr("打开工程"))
+        open_action.triggered.connect(self._open_project)
+        self.project_file_menu.addSeparator()
         import_action = self.project_file_menu.addAction(tr("导入 MIDI"))
         import_action.triggered.connect(self._browse_midi)
         self._install_arrangement_import_menu(self.project_file_menu)
-        self._install_midi_export_action(self.project_file_menu)
-        open_action = self.project_file_menu.addAction(tr("打开工程"))
-        open_action.triggered.connect(self._open_project)
         self.project_file_menu.addSeparator()
         save_action = self.project_file_menu.addAction(tr("保存项目"))
         save_action.triggered.connect(self._save_current_project)
         save_as_action = self.project_file_menu.addAction(tr("另存为"))
         save_as_action.triggered.connect(self._save_project_as)
+        self.project_file_menu.addSeparator()
+        self._install_midi_export_action(self.project_file_menu)
         self.toolbar_project_btn.setMenu(self.project_file_menu)
         project_command_layout.addWidget(self.toolbar_project_btn)
         command_layout.addWidget(self.project_toolbar_group)
@@ -2505,6 +2507,8 @@ class MidiToBdoWindow(
         self.timeline.clip_edit_requested.connect(self._commit_timeline_clip_edit)
         self.timeline.clip_create_requested.connect(self._create_timeline_clip)
         self.timeline.clip_split_requested.connect(self._split_timeline_clip)
+        self.timeline.clip_copy_requested.connect(self._copy_timeline_clip)
+        self.timeline.clip_paste_requested.connect(self._paste_timeline_clip)
         self.timeline.marker_edit_requested.connect(self._edit_timeline_marker)
         self.timeline.group_control_requested.connect(self._apply_arrangement_group_control)
         self.timeline_snap_tool.toggled.connect(self.timeline.set_snap_enabled)
@@ -6988,25 +6992,25 @@ class MidiToBdoWindow(
         dialog = TrackPitchDialog(self, track, self._pitch_transform_plan)
         if dialog.exec() != QDialog.Accepted:
             return
-        selected_offset = dialog.selected_octave_offset()
+        selected_offset = dialog.selected_semitone_offset()
         current = self._pitch_transform_plan.override_for(track.track_id)
         current_offset = current.semitones if current is not None else 0
         if selected_offset == current_offset:
             return
         self._push_project_snapshot()
         self._pitch_transform_plan = (
-            self._pitch_transform_plan.with_track_octave(
+            self._pitch_transform_plan.with_track_semitones(
                 track.track_id,
                 selected_offset,
             )
         )
         self._restart_preview_after_timeline_change()
         self._schedule_timeline_validation_refresh()
-        self._autosave_project("track octave", immediate=True)
+        self._autosave_project("track transpose", immediate=True)
         self._select_track(track)
         self.show_toast(
             trf(
-                "{track} · 轨道八度 {track_transpose:+d} · 最终移调 {effective:+d} 半音",
+                "{track} · 轨道移调 {track_transpose:+d} · 最终移调 {effective:+d} 半音",
                 track=track.display_name,
                 track_transpose=selected_offset,
                 effective=self._effective_track_transpose(track),

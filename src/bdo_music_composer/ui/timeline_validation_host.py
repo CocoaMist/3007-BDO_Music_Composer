@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from bdo_music_composer.export.bdo_validation import localized_validation_message
+from bdo_music_composer.editor.arrangement_clip import project_track_notes
 from bdo_music_composer.ui.i18n import tr, trf
 
 
@@ -57,12 +58,13 @@ class TimelineValidationHostMixin:
                     track = tracks_by_id.get(track_id)
                     if track is None:
                         continue
+                    projected_notes = project_track_notes(track)
                     for note_index in issue.note_indices:
                         index = int(note_index)
-                        if not 0 <= index < len(track.notes):
+                        if not 0 <= index < len(projected_notes):
                             continue
                         key = self.timeline._validation_note_key(
-                            track.notes[index]
+                            projected_notes[index]
                         )
                         if key not in notice["invalid_note_keys"]:
                             notice["invalid_note_keys"].append(key)

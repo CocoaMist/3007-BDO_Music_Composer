@@ -7,7 +7,9 @@ from bdo_midi import Note
 from bdo_music_composer.editor.arrangement_clip import (
     plan_clip_create,
     plan_clip_edit,
+    plan_clip_paste,
     plan_clip_split,
+    copy_clip,
     track_clip_bounds,
     project_track_notes,
 )
@@ -26,7 +28,7 @@ def _track(track_id: int, notes=None) -> TrackState:
 
 
 class ArrangementClipTests(unittest.TestCase):
-    def test_move_shifts_notes_controls_and_secondary_velocity_records(self) -> None:
+    def test_move_offsets_clip_without_rewriting_authored_content(self) -> None:
         source = _track(1, [Note(60, 90, 100.0, 200.0, 0)])
         source.performance_controls = [{"time": 150.0, "kind": "pitchwheel"}]
         source.bdo_source_group_index = 2
@@ -38,9 +40,12 @@ class ArrangementClipTests(unittest.TestCase):
         )
 
         update = plan.updates[0]
-        self.assertEqual(update.notes[0].start, 600.0)
-        self.assertEqual(update.performance_controls[0]["time"], 650.0)
-        self.assertEqual(update.source_note_records[0][2:4], (600.0, 200.0))
+        self.assertEqual(update.notes[0].start, 100.0)
+        self.assertEqual(update.performance_controls[0]["time"], 150.0)
+        self.assertEqual(update.source_note_records[0][2:4], (100.0, 200.0))
+        moved = deepcopy(source)
+        moved.arrangement_clips = list(update.arrangement_clips)
+        self.assertEqual(project_track_notes(moved)[0].start, 600.0)
         self.assertEqual(source, original)
 
     def test_resize_changes_clip_boundary_without_rewriting_notes(self) -> None:
@@ -79,7 +84,10 @@ class ArrangementClipTests(unittest.TestCase):
             new_end_ms=400.0,
         )
         self.assertEqual(plan.updates[0].notes, ())
-        self.assertEqual([note.start for note in plan.updates[1].notes], [50.0, 300.0])
+        destination = deepcopy(target)
+        destination.notes = list(plan.updates[1].notes)
+        destination.arrangement_clips = list(plan.updates[1].arrangement_clips)
+        self.assertEqual([note.start for note in project_track_notes(destination)], [50.0, 300.0])
         self.assertEqual(plan.selected_track_id, 2)
 
     def test_cross_track_move_keeps_mapping_risks_for_validator(self) -> None:
@@ -94,7 +102,10 @@ class ArrangementClipTests(unittest.TestCase):
         )
 
         self.assertEqual(plan.updates[0].notes, ())
-        self.assertEqual(plan.updates[1].notes, (Note(48, 90, 300.0, 100.0, 99),))
+        destination = deepcopy(target)
+        destination.notes = list(plan.updates[1].notes)
+        destination.arrangement_clips = list(plan.updates[1].arrangement_clips)
+        self.assertEqual(project_track_notes(destination), (Note(48, 90, 300.0, 100.0, 99),))
 
     def test_create_adds_one_editable_note(self) -> None:
         track = _track(4)
@@ -102,7 +113,20 @@ class ArrangementClipTests(unittest.TestCase):
         self.assertEqual(plan.updates[0].notes, (Note(64, 90, 500.0, 250.0, 0),))
         self.assertEqual(track_clip_bounds(track), None)
 
-    def test_razor_creates_independent_clips_and_splits_crossing_note(self) -> None:
+    def test_copy_paste_creates_independent_content_and_timeline_instance(self) -> None:
+        source = _track(1, [Note(60, 90, 100.0, 200.0, 0)])
+        clipboard = copy_clip(source, "track-1-main")
+        target = _track(2)
+        plan = plan_clip_paste(target, clipboard, start_ms=800.0)
+        update = plan.updates[0]
+        pasted = deepcopy(target)
+        pasted.notes = list(update.notes)
+        pasted.arrangement_clips = list(update.arrangement_clips)
+        self.assertEqual(project_track_notes(pasted), (Note(60, 90, 800.0, 200.0, 0),))
+        self.assertNotEqual(update.arrangement_clips[0].clip_id, clipboard.clip.clip_id)
+        self.assertEqual(source.notes[0].start, 100.0)
+
+    def test_razor_creates_two_nondestructive_views_of_complete_content(self) -> None:
         source = _track(1, [
             Note(60, 90, 100.0, 300.0, 0),
             Note(64, 80, 500.0, 100.0, 0),
@@ -115,9 +139,11 @@ class ArrangementClipTests(unittest.TestCase):
         ).updates[0].arrangement_clips)
         plan = plan_clip_split(source, clip_id=clip_id, split_ms=300.0)
         self.assertEqual(len(plan.updates[0].arrangement_clips), 2)
+        self.assertEqual(plan.updates[0].notes, tuple(source.notes))
+        left, right = plan.updates[0].arrangement_clips
         self.assertEqual(
-            [(note.start, note.dur) for note in plan.updates[0].notes],
-            [(100.0, 200.0), (300.0, 100.0), (500.0, 100.0)],
+            (left.content_start_ms, left.content_end_ms),
+            (right.content_start_ms, right.content_end_ms),
         )
 
     def test_only_selected_clip_moves_within_one_track(self) -> None:
@@ -140,7 +166,7 @@ class ArrangementClipTests(unittest.TestCase):
         )
         self.assertEqual(
             [note.start for note in plan.updates[0].notes],
-            [100.0, 700.0],
+            [100.0, 400.0],
         )
         self.assertEqual(
             [clip.start_ms for clip in plan.updates[0].arrangement_clips],
@@ -174,7 +200,10 @@ class ArrangementClipTests(unittest.TestCase):
              destination.arrangement_clips[0].end_ms),
             (400.0, 550.0),
         )
-        self.assertEqual([note.start for note in destination.notes], [400.0, 450.0])
+        projected = deepcopy(target)
+        projected.notes = list(destination.notes)
+        projected.arrangement_clips = list(destination.arrangement_clips)
+        self.assertEqual([note.start for note in project_track_notes(projected)], [400.0, 450.0])
 
 
 if __name__ == "__main__":

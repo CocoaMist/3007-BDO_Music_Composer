@@ -166,6 +166,7 @@ class ArrangementClipState:
     end_ms: float
     content_start_ms: float
     content_end_ms: float
+    time_offset_ms: float = 0.0
 
 
 @dataclass

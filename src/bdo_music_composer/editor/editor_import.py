@@ -708,21 +708,16 @@ def _project_arrangement_clips(
                 "start_ms", "end_ms", "content_start_ms", "content_end_ms"
             )
         ]
+        time_offset_ms = _finite_number(
+            raw.get("time_offset_ms", 0.0),
+            path=f"{clip_path}.time_offset_ms",
+            code=EditorImportErrorCode.INVALID_TRACK,
+        )
         if values[0] < 0.0 or values[1] <= values[0] or values[3] <= values[2]:
             raise _import_error(
                 EditorImportErrorCode.INVALID_TRACK, clip_path, "invalid clip bounds"
             )
-        clips.append(ArrangementClipState(clip_id, *values))
-    ordered = sorted(clips, key=lambda clip: clip.content_start_ms)
-    if any(
-        left.content_end_ms > right.content_start_ms
-        for left, right in zip(ordered, ordered[1:])
-    ):
-        raise _import_error(
-            EditorImportErrorCode.INVALID_TRACK,
-            f"{path}.arrangement_clips",
-            "clip content ranges cannot overlap",
-        )
+        clips.append(ArrangementClipState(clip_id, *values, time_offset_ms))
     return clips
 
 
