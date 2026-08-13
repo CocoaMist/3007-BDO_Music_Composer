@@ -70,6 +70,13 @@ BDO Music Composer is possible because many authors and maintainers publish
 their work openly. Thank you to every contributor behind these projects and
 communities.
 
+### 测试鸣谢 / Testing thanks
+
+感谢 CN 服务器「彩虹乐队」玩家参与测试并提供反馈。
+
+Thank you to the players of 彩虹乐队 on the CN server for testing and
+feedback.
+
 ### Third-party support
 
 | Area | Projects and contributors |
