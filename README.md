@@ -1,69 +1,73 @@
 # BDO Music Composer
 
-Unofficial desktop music editor and Black Desert score workbench.
+Unofficial desktop music editor and Black Desert score workbench. Arrange
+multitrack clips, edit MIDI notes, preview locally, and export the current
+project state as a BDO v9 score.
 
-## Interface preview
+[简体中文](docs/locales/zh-CN.md) · [English](docs/locales/en.md) ·
+[日本語](docs/locales/ja.md) · [한국어](docs/locales/ko.md)
 
-![Project home with local projects and game scores](docs/images/readme-home.png)
+![BDO Music Composer v1.3.0 multitrack arrangement](docs/images/readme-timeline.png)
 
-| Multitrack timeline | Piano-roll note editor |
+## Highlights
+
+- Arrange and merge clips across a multitrack timeline with select, razor, and
+  stateful snapping tools. Snap priority is time marker, clips, then grid.
+- Edit notes, velocity, rhythm, articulations, and track instruments in the
+  piano roll while keeping operations undoable.
+- Open MIDI or existing BDO scores, autosave locally, preview the edited model,
+  and export that same current model without falling back to the original MIDI.
+- Use local optimization and transcription assistance as reviewable editing
+  aids rather than destructive one-click replacements.
+
+## Get started
+
+Most users should download the Windows build from
+[GitHub Releases](https://github.com/CocoaMist/3007-BDO_Music_Composer/releases).
+Source development requires Python 3.12 and the environment described in
+[`CONTRIBUTING.md`](CONTRIBUTING.md). The application entry point is `main.py`.
+
+1. Create a project, import MIDI, or open a BDO score.
+2. Arrange clips on the timeline and edit notes in the piano roll.
+3. Preview the result and review automatic export validation.
+4. Export with a valid Owner ID, then verify the score in game.
+
+## Note editor
+
+![BDO Music Composer v1.3.0 piano-roll note editor](docs/images/readme-piano-roll.png)
+
+## Documentation
+
+| Need | Start here |
 |---|---|
-| ![Multitrack arrangement timeline](docs/images/readme-timeline.png) | ![Piano-roll editor with velocity lane and shortcut HUD](docs/images/readme-piano-roll.png) |
+| Use the application | [中文](docs/locales/zh-CN.md) · [English](docs/locales/en.md) · [日本語](docs/locales/ja.md) · [한국어](docs/locales/ko.md) |
+| Browse technical documentation | [Documentation index](docs/README.md) |
+| Understand architecture and data flow | [Architecture](docs/ARCHITECTURE.md) |
+| Contribute code | [Contributing guide](CONTRIBUTING.md) |
+| Continue work as an agent or maintainer | [`AGENTS.md`](AGENTS.md), then [Agent handoff](docs/AGENT_HANDOFF.md) |
+| Build a Windows release | [Windows packaging](docs/WINDOWS_PACKAGING.md) |
 
-## Choose your language / 选择语言
+## Local content and preview audio
 
-Each link opens a concise guide for using and contributing to the project.
+Projects, settings, Owner IDs, caches, and external content remain local. The
+application has no account login, telemetry, or file upload, and it does not
+acquire or distribute restricted content. See the governing
+[content boundary](docs/CONTENT_BOUNDARY.md).
 
-| Language | Full README |
-|---|---|
-| 简体中文 | [中文指南](docs/locales/zh-CN.md) |
-| English | [English guide](docs/locales/en.md) |
-| 日本語 | [日本語ガイド](docs/locales/ja.md) |
-| 한국어 | [한국어 안내](docs/locales/ko.md) |
+Releases may separately provide the optional
+`BDO-Approximate-CC0-Full-Coverage-v4-Compact.bdosamples` pack. It contains
+independently licensed CC0 material for approximate editing preview, not Black
+Desert client audio or game-original sound. Provenance, configuration, and the
+v1.2.1 pack checksum are documented in
+[Audio source strategy](docs/AUDIO_SOURCE_STRATEGY.md).
 
-## Agent / maintainer handoff
+## Status and license
 
-AI coding agents and new maintainers must start with [`AGENTS.md`](AGENTS.md), then read the [Agent handoff and collaboration guide](docs/AGENT_HANDOFF.md). The guide contains the repository routing map, invariants, validation matrix, privacy rules, and a reusable handoff packet.
+Core editing, autosave, optimization, preview, transcription assistance, and
+score export have automated regression coverage. Hardware, audio-device, and
+game-version compatibility can still vary. This community project is not
+affiliated with Pearl Abyss.
 
-继续开发前，AI Agent 与新维护者必须先阅读 [`AGENTS.md`](AGENTS.md)，再阅读 [Agent 接手与协作手册](docs/AGENT_HANDOFF.md)。
-
-## Project status
-
-The core editing, autosave, optimization, preview, transcription-assist, and score-export flows are regression tested, but hardware and game-version compatibility can vary. This is an unofficial community project and is not affiliated with Pearl Abyss.
-
-The application processes projects locally. It has no account login, telemetry, or file upload. It does not provide restricted-content acquisition or distribution; users are responsible for the source and permission of external content.
-
-## Optional CC0 sample pack
-
-Releases may provide `BDO-Approximate-CC0-Full-Coverage-v4-Compact.bdosamples`
-as a separate, optional preview asset. The app itself remains usable with its
-built-in general source; choose **Sample Pack** in Settings to locate this or
-another compatible pack. External pack paths stay in local configuration and
-are never compiled into the EXE.
-
-The v4 pack contains unchanged WAV bytes selected from three independently
-licensed CC0 libraries: [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE),
-[Versilian Community Sample Library](https://github.com/sgossner/VCSL), and the
-CC0 instrument banks published by [FreePats](https://freepats.zenvoid.org/).
-Its `manifest.json` records the source library, upstream relative path, and
-SHA-256 for every audio slot. It contains no Black Desert client audio and is
-an approximate editing preview, not game-original or A/B-verified sound.
-
-Release v1.2.1 pack SHA-256:
-`82cea29f1316b943571663e4150b31e353da4ab9f556141ed65b6598a384db63`.
-
-## Quick links
-
-- [Documentation index](docs/README.md)
-- [Developer SDK and reusable UI](docs/DEVELOPER_SDK.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Content and audio boundary](docs/CONTENT_BOUNDARY.md)
-- [AI change-routing context](docs/AI_CONTEXT.md)
-- [Agent handoff guide](docs/AGENT_HANDOFF.md)
-- [Decoupling, performance, and extension roadmap](docs/OPTIMIZATION_EXTENSION_ROADMAP.md)
-- [Windows packaging](docs/WINDOWS_PACKAGING.md)
-- [BDO v9 codec](docs/BDO_V9_CODEC.md)
-- [Localization policy](docs/LOCALIZATION.md)
-- [Contributing](CONTRIBUTING.md)
-- [Third-party notices](THIRD_PARTY_NOTICES.md)
-- [MIT license for original project code](LICENSE)
+Original project code is available under the [MIT License](LICENSE).
+Third-party components and references retain their own terms; see
+[Third-party notices](THIRD_PARTY_NOTICES.md).

@@ -75,8 +75,8 @@ are equivalent.
 Before publishing a build:
 
 1. Verify equal catalog key sets and equal placeholder signatures.
-2. Switch a live main window, Settings dialog, note editor, conversion check, and
-   transcription editor through all five locales.
+2. Switch a live main window, Settings dialog, note editor, automatic timeline
+   validation states, and transcription editor through all five locales.
 3. Confirm dynamic names survive every switch byte-for-byte.
 4. Check the minimum supported window sizes with the longest English/Japanese/
    Korean labels and confirm tooltips/accessibility names remain available in

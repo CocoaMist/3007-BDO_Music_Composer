@@ -14,10 +14,11 @@ Editing, autosave, optimization, preview, transcription assistance, and score ex
 <!-- section:features -->
 ## Features
 
-- Import MIDI or begin with an empty project and edit multitrack notes, velocity, rhythm, and articulations.
+- Import MIDI or begin with an empty project, then arrange, split, move, and merge clips on the multitrack timeline.
+- Use stateful snapping with marker, clip, then grid priority, and edit notes, velocity, rhythm, and articulations in the piano roll.
 - Continue editing existing scores while preserving the current project state through export.
 - Review local transcription assistance as an editable draft before committing it.
-- Use undoable optimization, autosave, export checks, and local project management.
+- Use undoable optimization, autosave, automatic export validation, and local project management.
 
 <!-- section:requirements -->
 ## Install and run
@@ -28,8 +29,8 @@ Most users should use the published Windows build. Source development requires P
 ## Basic workflow
 
 1. Create a project, import MIDI, or open a score.
-2. Edit the arrangement and notes.
-3. Review the result with preview and validation.
+2. Arrange clips on the timeline and refine notes in the piano roll.
+3. Review the result with preview and automatic validation.
 4. Export with a valid Owner ID and verify the score in game.
 
 <!-- section:local-assets -->

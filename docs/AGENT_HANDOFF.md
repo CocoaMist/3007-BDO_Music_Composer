@@ -51,10 +51,10 @@ MIDI / BDO v9
 | 任务 | 首要模块 | 边界说明 |
 |---|---|---|
 | 主窗口信号和工作流编排 | `src/bdo_music_composer/ui/main_window.py` | 只放 UI 编排；新领域逻辑优先进入聚焦模块 |
-| 模型 revision / 转换校验 | `src/bdo_music_composer/editor/model_revision.py`, `src/bdo_music_composer/app/conversion_validation_controller.py` | 可变轨道必须经过显式 mutation boundary；快照只按 revision/语言复用 |
+| 模型 revision / 自动导出校验 | `src/bdo_music_composer/editor/model_revision.py`, `src/bdo_music_composer/app/conversion_validation_controller.py`, `src/bdo_music_composer/ui/timeline_validation_host.py` | 可变轨道必须经过显式 mutation boundary；快照只按 revision/语言复用；结果投影到时间轴与导出确认，不提供独立“转换检查”菜单 |
 | 轨道/音符共享模型 | `src/bdo_music_composer/editor/editor_models.py`, `src/bdo_midi/` | `Note(pitch, vel, start, dur, ntype)` 线形状不可随意改变 |
 | 时间轴/钢琴卷帘 | `src/bdo_music_composer/ui/editor/timeline_canvas.py`, `src/bdo_music_composer/ui/editor/piano_roll_canvas.py`, `src/bdo_music_composer/ui/editor/midi_note_editor.py` | 绘制必须保持可见区索引和批处理 |
-| 设置、检查、优化、致谢 | `src/bdo_music_composer/ui/dialogs/application_settings_dialog.py`, `src/bdo_music_composer/ui/dialogs/conversion_check_dialog.py`, `src/bdo_music_composer/ui/dialogs/optimizer_dialog.py`, `src/bdo_music_composer/ui/dialogs/track_settings_dialogs.py`, `src/bdo_music_composer/ui/dialogs/acknowledgements_dialog.py` | 对话框自主管布局和展示，主窗口只注入状态并应用结果 |
+| 设置、优化、轨道配置、致谢 | `src/bdo_music_composer/ui/dialogs/application_settings_dialog.py`, `src/bdo_music_composer/ui/dialogs/optimizer_dialog.py`, `src/bdo_music_composer/ui/dialogs/track_settings_dialogs.py`, `src/bdo_music_composer/ui/dialogs/acknowledgements_dialog.py` | 对话框自主管布局和展示，主窗口只注入状态并应用结果 |
 | 优化算法 | `src/optimization/` | `builtin.py` 是生产管线，`registry.py` / plugin API 是扩展边界 |
 | 实时预览 | `src/bdo_music_composer/audio/bdo_realtime_audio.py`, `src/bdo_music_composer/audio/bdo_sample_renderer.py` | 音频回调禁止磁盘 I/O、解码和无界分配 |
 | 扒谱 | `bdo_transcription*.py`, `src/bdo_music_composer/ui/transcription/transcription_workers.py` | 分析后台运行；正式音符只能经用户确认写回 |
