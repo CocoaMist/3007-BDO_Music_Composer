@@ -120,7 +120,8 @@ Historical/reference acknowledgements also link to their GitHub origin:
 - [Bishop-R](https://github.com/Bishop-R) and
   [Skyro468](https://github.com/Skyro468) are credited for historical public
   BDO-format research; their runtime code is not present in v0.3.0.
-- [OpenAI](https://openai.com/) and
+- [OpenAI](https://github.com/openai), the
+  [OpenAI website](https://openai.com/), and
   [ChatGPT](https://chatgpt.com/) are acknowledged for development and
   documentation collaboration. The application contains no OpenAI API or
   cloud-model runtime.
