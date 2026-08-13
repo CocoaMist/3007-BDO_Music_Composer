@@ -17,7 +17,7 @@ class EditorInteractionUiTests(unittest.TestCase):
             """
             from PySide6.QtCore import QPoint, Qt
             from PySide6.QtTest import QTest
-            from PySide6.QtWidgets import QApplication
+            from PySide6.QtWidgets import QApplication, QPushButton
 
             from bdo_music_composer.transcription.bdo_transcription import TranscriptionCandidate
             from bdo_music_composer.ui.main_window import (
@@ -75,6 +75,32 @@ class EditorInteractionUiTests(unittest.TestCase):
             QTest.keyClick(editor.pitch_edit, Qt.Key_Space)
             app.processEvents()
             assert toggles == []
+
+            # Enter commits a property field but must not bubble into
+            # QDialog's auto-default Play button.
+            editor.canvas.selected = {0}
+            editor.refresh_fields()
+            play_button_clicks = []
+            editor.draft_play_button.clicked.connect(
+                lambda: play_button_clicks.append("play")
+            )
+            editor.start_edit.setFocus()
+            editor.start_edit.selectAll()
+            QTest.keyClick(editor.start_edit, Qt.Key_Delete)
+            app.processEvents()
+            assert editor.start_edit.text() == ""
+            assert len(editor.canvas.notes) == 2
+            QTest.keyClicks(editor.start_edit, "125")
+            QTest.keyClick(editor.start_edit, Qt.Key_Return)
+            app.processEvents()
+            assert editor.canvas.notes[0].start == 125.0
+            assert play_button_clicks == []
+            assert editor.draft_playback_state == "stopped"
+            assert all(
+                not button.autoDefault()
+                for button in editor.findChildren(QPushButton)
+            )
+
             editor.canvas.setFocus()
             QTest.keyClick(editor.canvas, Qt.Key_Space)
             app.processEvents()

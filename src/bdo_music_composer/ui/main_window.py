@@ -198,10 +198,9 @@ from bdo_music_composer.editor.editor_models import (  # noqa: E402
 )
 from bdo_music_composer.editor.preview_midi_writer import build_filtered_midi  # noqa: E402
 from bdo_music_composer.editor.arrangement_clip import (  # noqa: E402
-    clip_edit_fingerprint,
     clip_editor_notes,
+    clip_editor_scope,
     default_empty_clip,
-    plan_clip_note_edit,
     project_track_notes,
     reconcile_track_clips_after_note_edit,
     track_clips,
@@ -1070,7 +1069,7 @@ class MidiToBdoWindow(
         self.workspace_close_pending = False
         self._final_autosave_queued = False
         self.active_transcription_editor: MidiNoteEditorDialog | None = None
-        self._note_editors: dict[int, MidiNoteEditorDialog] = {}
+        self._note_editors: dict[object, MidiNoteEditorDialog] = {}
         self.transcription_analysis_busy = False
         self.transcription_analysis_progress: int | None = None
         self._transcription_ui_status_spec = trv(
@@ -2523,6 +2522,7 @@ class MidiToBdoWindow(
         self.timeline.clip_split_requested.connect(self._split_timeline_clip)
         self.timeline.clip_copy_requested.connect(self._copy_timeline_clip)
         self.timeline.clip_paste_requested.connect(self._paste_timeline_clip)
+        self.timeline.clip_delete_requested.connect(self._delete_timeline_clip)
         self.timeline.marker_edit_requested.connect(self._edit_timeline_marker)
         self.timeline.group_control_requested.connect(self._apply_arrangement_group_control)
         self.timeline_snap_tool.toggled.connect(self.timeline.set_snap_enabled)
@@ -5675,46 +5675,6 @@ class MidiToBdoWindow(
         )
         return report
 
-    def _commit_arrangement_clip_note_editor(
-        self,
-        request: TranscriptionEditorCommit,
-        track: TrackState,
-        draft_notes: tuple[Note, ...],
-    ) -> TranscriptionEditorCommitReport | None:
-        """Publish one explicit Clip draft without reconciling sibling Clips."""
-
-        if request.routes or request.new_track_specs:
-            QMessageBox.warning(
-                self,
-                tr("无法应用音符编辑"),
-                tr("片段编辑不能同时提交转录路由。"),
-            )
-            return None
-        try:
-            current_fingerprint = clip_edit_fingerprint(
-                track, request.arrangement_clip_id
-            )
-            if current_fingerprint != request.arrangement_clip_fingerprint:
-                raise ValueError("clip changed after the note editor was opened")
-            plan = plan_clip_note_edit(
-                track,
-                clip_id=request.arrangement_clip_id,
-                notes=draft_notes,
-            )
-            self._publish_clip_plan(plan, "edit arrangement clip notes")
-            reconcile_track_game_velocity_records(track, track.notes)
-            self._autosave_project(
-                "edit arrangement clip notes", immediate=True
-            )
-        except (TypeError, ValueError) as exc:
-            QMessageBox.warning(
-                self,
-                tr("无法应用音符编辑"),
-                trf("片段已发生变化，无法安全应用：{error}", error=exc),
-            )
-            return None
-        return TranscriptionEditorCommitReport(project_changed=True)
-
     def _create_workspace_status_state(self) -> None:
         """Keep legacy status sinks without reserving a visible bottom bar."""
 
@@ -6459,15 +6419,27 @@ class MidiToBdoWindow(
                     return
                 arrangement_clip_id = clips[labels.index(selected)].clip_id
         track_id = int(track.track_id)
-        existing = self._note_editors.get(track_id)
+        existing = next((
+            value for value in self._note_editors.values()
+            if int(value.track.track_id) == track_id
+            and str(getattr(value, "arrangement_clip_id", "") or "")
+            == arrangement_clip_id
+        ), None)
         if existing is not None and existing.isVisible():
             existing.showNormal()
             existing.raise_()
             existing.activateWindow()
             self._activate_note_editor(existing)
             return
+        editor_key: object = (
+            track_id
+            if track_id not in self._note_editors
+            else (track_id, arrangement_clip_id)
+        )
         editor_track = track
+        editor_clip_scope = None
         if arrangement_clip_id:
+            editor_clip_scope = clip_editor_scope(track, arrangement_clip_id)
             editor_track = deepcopy(track)
             editor_track.notes = list(
                 clip_editor_notes(track, arrangement_clip_id)
@@ -6481,12 +6453,24 @@ class MidiToBdoWindow(
             self._effective_track_transpose(track),
             transcription_mode=transcription_mode,
             pitch_plan=self._pitch_transform_plan,
+            clip_scope=editor_clip_scope,
         )
         dialog.arrangement_clip_id = arrangement_clip_id
         dialog.arrangement_clip_fingerprint = (
-            clip_edit_fingerprint(track, arrangement_clip_id)
-            if arrangement_clip_id else ""
+            editor_clip_scope.fingerprint
+            if editor_clip_scope is not None else ""
         )
+        if arrangement_clip_id:
+            dialog.clip_draft_changed.connect(
+                lambda notes, current=dialog:
+                self._sync_arrangement_clip_editor(current, notes)
+            )
+            dialog.clip_resize_requested.connect(
+                lambda mode, value, current=dialog:
+                self._resize_arrangement_clip_from_editor(
+                    current, mode, value
+                )
+            )
         if selected_note_indices:
             dialog.canvas.selected = {
                 index for index in selected_note_indices if 0 <= index < len(dialog.canvas.notes)
@@ -6494,7 +6478,7 @@ class MidiToBdoWindow(
             dialog.canvas.update()
             dialog.refresh_fields()
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        self._note_editors[track_id] = dialog
+        self._note_editors[editor_key] = dialog
         self._activate_note_editor(dialog)
         self._refresh_transcription_workspace()
         if transcription_mode and self.transcription_session.candidates:
@@ -6511,8 +6495,8 @@ class MidiToBdoWindow(
                 self._invalidate_transcription_rhythm_diagnostic()
             if self.active_transcription_editor is dialog:
                 self.active_transcription_editor = None
-            if self._note_editors.get(track_id) is dialog:
-                self._note_editors.pop(track_id, None)
+            if self._note_editors.get(editor_key) is dialog:
+                self._note_editors.pop(editor_key, None)
             dialog.release_transcription_resources()
             if dialog._draft_autosave_revision > 0:
                 # The editor may have been rejected after draft checkpoints.
@@ -7508,6 +7492,7 @@ class MidiToBdoWindow(
                 play=True,
                 force=True,
             )
+            self.realtime_status_timer.start()
             self.status_label.setText(tr("试听播放"))
             self._sync_preview_state()
             return
@@ -7652,9 +7637,16 @@ class MidiToBdoWindow(
         if self.realtime_preview_active and not self.realtime_preview_loading:
             try:
                 self.realtime_audio.pause()
+                status = self.realtime_audio.get_status()
             except AudioEngineError as exc:
                 self._on_preview_failed(str(exc))
                 return
+            # Freeze the transport at the engine's acknowledged pause frame.
+            # Leaving the 60 FPS poller alive lets one or more queued timeout
+            # callbacks advance the timeline after Pause has returned.
+            self.realtime_status_timer.stop()
+            self.timeline.set_playhead(status.position_ms, follow=True)
+            self.timeline.set_track_levels({})
         self.reference_audio.pause()
         self.reference_status_timer.stop()
         self.status_label.setText(tr("试听暂停"))

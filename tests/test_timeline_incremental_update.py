@@ -17,7 +17,6 @@ class TimelineIncrementalUpdateTests(unittest.TestCase):
             """
             from unittest.mock import patch
             from PySide6.QtWidgets import QApplication
-            from bdo_music_composer.editor.interval_index import IntervalIndex
             from bdo_music_composer.ui.main_window import Note, TimelineCanvas, TrackState
 
             app = QApplication([])
@@ -36,17 +35,17 @@ class TimelineIncrementalUpdateTests(unittest.TestCase):
             timeline.set_tracks(tracks)
             unchanged = timeline._track_note_indexes[id(tracks[0])].intervals
             tracks[73].notes = [Note(72, 100, 250.0, 300.0, 0)]
-            original = IntervalIndex.build
+            original = timeline._build_track_index
             calls = []
 
-            def counted(*args, **kwargs):
-                calls.append(args[0])
-                return original(*args, **kwargs)
+            def counted(track):
+                calls.append(track)
+                return original(track)
 
-            with patch.object(IntervalIndex, "build", side_effect=counted):
+            with patch.object(timeline, "_build_track_index", side_effect=counted):
                 timeline.update_tracks({73})
 
-            assert len(calls) == 1, len(calls)
+            assert calls == [tracks[73]], len(calls)
             assert timeline._track_note_indexes[id(tracks[0])].intervals is unchanged
             changed = timeline._track_note_indexes[id(tracks[73])].intervals
             assert changed.maximum_end == 550.0

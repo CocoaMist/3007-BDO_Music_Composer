@@ -17,7 +17,6 @@ class TimelineVelocityRefreshEfficiencyTests(unittest.TestCase):
             """
             from unittest.mock import patch
             from PySide6.QtWidgets import QApplication
-            from bdo_music_composer.editor.interval_index import IntervalIndex
             from bdo_music_composer.ui.main_window import MidiToBdoWindow, Note, TrackState
 
             app = QApplication([])
@@ -41,17 +40,19 @@ class TimelineVelocityRefreshEfficiencyTests(unittest.TestCase):
             window.tracks = tracks
             window.timeline.set_tracks(tracks)
             changed = [Note(60, 110, 0.0, 100.0, 0)]
-            original = IntervalIndex.build
+            original = window.timeline._build_track_index
             calls = []
 
-            def counted(*args, **kwargs):
-                calls.append(args[0])
-                return original(*args, **kwargs)
+            def counted(track):
+                calls.append(track)
+                return original(track)
 
-            with patch.object(IntervalIndex, "build", side_effect=counted):
+            with patch.object(
+                window.timeline, "_build_track_index", side_effect=counted
+            ):
                 window._commit_timeline_velocity_curve(tracks[73], changed)
 
-            assert len(calls) == 1, len(calls)
+            assert calls == [tracks[73]], len(calls)
             assert tracks[73].notes == changed
             window.close()
             app.processEvents()

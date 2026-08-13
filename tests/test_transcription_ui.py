@@ -430,6 +430,7 @@ class TranscriptionUiTests(unittest.TestCase):
             import wave
             from pathlib import Path
 
+            from PySide6.QtCore import QEvent
             from PySide6.QtWidgets import QApplication
             import bdo_music_composer.ui.main_window as gui
 
@@ -469,6 +470,10 @@ class TranscriptionUiTests(unittest.TestCase):
             editor.close()
             window.active_transcription_editor = None
             window.close()
+            app.processEvents()
+            editor.deleteLater()
+            window.deleteLater()
+            QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
             app.processEvents()
             app.quit()
             """
@@ -1017,6 +1022,7 @@ class TranscriptionUiTests(unittest.TestCase):
             import threading
             from pathlib import Path
 
+            from PySide6.QtCore import QEvent
             from PySide6.QtWidgets import QApplication
 
             import bdo_music_composer.ui.main_window as gui
@@ -1085,6 +1091,9 @@ class TranscriptionUiTests(unittest.TestCase):
             window.workspace_transcription_worker = None
 
             window.close()
+            app.processEvents()
+            window.deleteLater()
+            QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
             app.processEvents()
             app.quit()
             """

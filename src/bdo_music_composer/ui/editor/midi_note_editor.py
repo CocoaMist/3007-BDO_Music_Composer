@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -109,6 +110,10 @@ from bdo_music_composer.editor.editor_models import (
 from bdo_music_composer.editor.editor_commands import (
     next_non_overlapping_paste_origin,
 )
+from bdo_music_composer.editor.arrangement_clip import (
+    MIN_CLIP_DURATION_MS,
+    ClipEditorScope,
+)
 from bdo_music_composer.editor.note_creative_tools import (
     humanize_notes,
     quantize_note_starts,
@@ -188,6 +193,8 @@ class _VelocityMappingTask(QRunnable):
 
 class MidiNoteEditorDialog(QDialog):
     notes_applied = Signal(object)
+    clip_draft_changed = Signal(object)
+    clip_resize_requested = Signal(str, float)
     REFERENCE_TRAILING_BEATS = 4.0
     FREE_AUTHORING_TRAILING_BEATS = 12.0
     FREE_AUTHORING_TRAILING_VIEWPORTS = 1.5
@@ -202,6 +209,7 @@ class MidiNoteEditorDialog(QDialog):
         *,
         transcription_mode: bool = False,
         pitch_plan: PitchTransformPlan | None = None,
+        clip_scope: ClipEditorScope | None = None,
     ) -> None:
         super().__init__(parent)
         self._velocity_mapping_pool = QThreadPool(self)
@@ -219,6 +227,9 @@ class MidiNoteEditorDialog(QDialog):
             track,
             int(bpm or 120),
             int(time_sig or 4),
+        )
+        self.clip_scope = (
+            clip_scope if isinstance(clip_scope, ClipEditorScope) else None
         )
         self.pitch_transform_plan = (
             pitch_plan
@@ -298,7 +309,7 @@ class MidiNoteEditorDialog(QDialog):
         self._transcription_mode_requested = bool(transcription_mode)
         self.updating_fields = False
         self.draft_playback_state = "stopped"
-        self.playhead_ms = 0.0
+        self.playhead_ms = self.draft_start_ms()
         self.draft_reference_last_resync_at = 0.0
         self.playback_timer = QTimer(self)
         self.playback_timer.setInterval(16)
@@ -331,6 +342,8 @@ class MidiNoteEditorDialog(QDialog):
         self.last_note_duration_ms = 0.0
         self._last_selected_note_properties: tuple[int, float, int] | None = None
         self._draft_autosave_revision = 0
+        self._clip_sync_in_progress = False
+        self._clip_live_snapshot_pushed = False
         self._invalid_pitch_cache: dict[int, bool] = {}
         self._invalid_note_count = 0
         self._hover_status_key: tuple[int, int] | None = None
@@ -408,6 +421,54 @@ class MidiNoteEditorDialog(QDialog):
         self.playback_time_label.setFixedWidth(152)
         transport.addWidget(self.playback_time_label)
         toolbar.addWidget(self.editor_transport_frame)
+        self.clip_bounds_frame: QFrame | None = None
+        self.clip_start_spin: QDoubleSpinBox | None = None
+        self.clip_end_spin: QDoubleSpinBox | None = None
+        if self.clip_scope is not None:
+            self.clip_bounds_frame = QFrame()
+            self.clip_bounds_frame.setObjectName("EditorClipBounds")
+            clip_bounds_layout = QHBoxLayout(self.clip_bounds_frame)
+            clip_bounds_layout.setContentsMargins(5, 1, 5, 1)
+            clip_bounds_layout.setSpacing(4)
+            for label_text, attribute, mode, initial in (
+                (
+                    "片段左边界",
+                    "clip_start_spin",
+                    "resize_start",
+                    self.clip_scope.timeline_start_ms,
+                ),
+                (
+                    "片段右边界",
+                    "clip_end_spin",
+                    "resize_end",
+                    self.clip_scope.timeline_end_ms,
+                ),
+            ):
+                spin = QDoubleSpinBox()
+                spin.setObjectName(
+                    "ClipStartSpin"
+                    if mode == "resize_start"
+                    else "ClipEndSpin"
+                )
+                spin.setRange(0.0, 2_147_483_647.0)
+                spin.setDecimals(1)
+                spin.setSingleStep(max(1.0, 60_000.0 / self.bpm / 4.0))
+                spin.setPrefix("L " if mode == "resize_start" else "R ")
+                spin.setSuffix(" ms")
+                spin.setToolTip(tr(label_text))
+                spin.setAccessibleName(tr(label_text))
+                spin.setKeyboardTracking(False)
+                spin.setFixedWidth(118)
+                spin.setValue(float(initial))
+                spin.editingFinished.connect(
+                    lambda current_mode=mode, current_spin=spin:
+                    self._request_clip_resize(
+                        current_mode, current_spin.value()
+                    )
+                )
+                setattr(self, attribute, spin)
+                clip_bounds_layout.addWidget(spin)
+            toolbar.addWidget(self.clip_bounds_frame)
         toolbar.addStretch(1)
         self.editor_toolbar_action_buttons: dict[str, PillButton] = {}
         for label, callback in (("撤销", self.undo), ("重做", self.redo)):
@@ -443,6 +504,13 @@ class MidiNoteEditorDialog(QDialog):
         self.confirm_button.setAccessibleName(tr("应用并关闭"))
         self.confirm_button.clicked.connect(self.accept_with_apply)
         toolbar.addWidget(self.confirm_button)
+        if self.clip_scope is not None:
+            self.cancel_button.setVisible(False)
+            self.confirm_button.setText(tr("完成"))
+            self.confirm_button.setToolTip(
+                tr("音符与片段边界已实时同步；关闭编辑器")
+            )
+            self.confirm_button.setAccessibleName(tr("完成并关闭"))
         add_inset(toolbar_frame, "EditorToolbarInset")
 
         inspector = QFrame()
@@ -1192,6 +1260,10 @@ class MidiNoteEditorDialog(QDialog):
             self.transcription_panel.melody_line_roles
         )
         self.canvas.set_notes(list(initial_notes))
+        if self.clip_scope is not None:
+            self.canvas.scroll_ms = self.clip_scope.timeline_start_ms
+            self.canvas.playhead_ms = self.clip_scope.timeline_start_ms
+            self.canvas.edit_cursor_ms = self.clip_scope.timeline_start_ms
         self.canvas.set_timeline_markers(
             getattr(parent, "research_metadata", {}).get(
                 "timeline_markers", ()
@@ -1452,11 +1524,27 @@ class MidiNoteEditorDialog(QDialog):
         self.shortcut_help_shortcut.setAutoRepeat(False)
         self.shortcut_help_shortcut.activated.connect(self.show_shortcut_help)
         self._shortcut_help_dialog: EditorShortcutHelpDialog | None = None
+        # This editor has explicit transport and completion controls, but no
+        # semantic "default" action.  Leaving QDialog's auto-default behavior
+        # enabled lets Return from a child editor activate whichever toolbar
+        # button Qt happens to nominate (typically Play).
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
+            button.setDefault(False)
         self._recalculate_invalid_note_count()
         self._update_track_meta()
         self.refresh_fields()
+        self._sync_clip_bounds_controls()
         self._apply_editor_responsive_density()
         QTimer.singleShot(0, self.update_scrollbars)
+        if self.clip_scope is not None:
+            QTimer.singleShot(
+                0,
+                lambda: self.focus_transcription_time_range(
+                    self.clip_scope.timeline_start_ms,
+                    self.clip_scope.timeline_end_ms,
+                ),
+            )
         if self._transcription_mode_requested:
             QTimer.singleShot(
                 0, lambda: self.transcription_mode_toggle.setChecked(True)
@@ -1546,8 +1634,8 @@ class MidiNoteEditorDialog(QDialog):
         )
         self._set_editor_compact_button(
             self.confirm_button,
-            "应用",
-            tr("应用"),
+            "完成" if self.clip_scope is not None else "应用",
+            tr("完成") if self.clip_scope is not None else tr("应用"),
             compact,
         )
 
@@ -4296,6 +4384,8 @@ class MidiNoteEditorDialog(QDialog):
         self.velocity_lane.set_game_velocity_boundaries(values, status)
 
     def draft_duration_ms(self) -> float:
+        if self.clip_scope is not None:
+            return self.clip_scope.timeline_end_ms
         end = (
             self.canvas.content_end_ms
             if hasattr(self, "canvas")
@@ -4316,6 +4406,152 @@ class MidiNoteEditorDialog(QDialog):
                 )
         return max(self.canvas.beat_ms if hasattr(self, "canvas") else 60000.0 / max(1, self.bpm), end + 60000.0 / max(1, self.bpm))
 
+    def draft_start_ms(self) -> float:
+        return (
+            self.clip_scope.timeline_start_ms
+            if self.clip_scope is not None
+            else 0.0
+        )
+
+    def constrain_timeline_time(self, value: float) -> float:
+        numeric = max(0.0, float(value))
+        if self.clip_scope is None:
+            return numeric
+        return max(
+            self.clip_scope.timeline_start_ms,
+            min(self.clip_scope.timeline_end_ms, numeric),
+        )
+
+    def constrain_note_to_scope(self, note: Note) -> Note:
+        """Keep every completed Clip gesture inside its captured time domain."""
+
+        if self.clip_scope is None:
+            return note
+        minimum = min(self.minimum_duration_ms(), self.clip_scope.duration_ms)
+        latest_start = self.clip_scope.timeline_end_ms - minimum
+        start = max(
+            self.clip_scope.timeline_start_ms,
+            min(latest_start, float(note.start)),
+        )
+        duration = max(
+            minimum,
+            min(float(note.dur), self.clip_scope.timeline_end_ms - start),
+        )
+        return note._replace(start=start, dur=duration)
+
+    def notes_fit_clip_scope(self, notes: Iterable[Note]) -> bool:
+        return self.clip_scope is None or all(
+            self.clip_scope.contains_note(note) for note in notes
+        )
+
+    def constrain_note_group_to_scope(
+        self, notes: Iterable[Note]
+    ) -> list[Note]:
+        """Shift a gesture as one unit before applying per-note edge clamps."""
+
+        values = list(notes)
+        if self.clip_scope is None or not values:
+            return values
+        group_start = min(float(note.start) for note in values)
+        group_end = max(float(note.start + note.dur) for note in values)
+        shift = 0.0
+        if group_start < self.clip_scope.timeline_start_ms:
+            shift = self.clip_scope.timeline_start_ms - group_start
+        elif group_end > self.clip_scope.timeline_end_ms:
+            shift = self.clip_scope.timeline_end_ms - group_end
+        shifted = [
+            note._replace(start=float(note.start) + shift)
+            for note in values
+        ]
+        return [self.constrain_note_to_scope(note) for note in shifted]
+
+    def _constrain_draft_to_scope(self) -> None:
+        if self.clip_scope is None:
+            return
+        self.canvas.notes = [
+            self.constrain_note_to_scope(note) for note in self.canvas.notes
+        ]
+
+    def _sync_clip_bounds_controls(self) -> None:
+        if (
+            self.clip_scope is None
+            or self.clip_start_spin is None
+            or self.clip_end_spin is None
+        ):
+            return
+        occupied_start = min(
+            (float(note.start) for note in self.canvas.notes),
+            default=self.clip_scope.timeline_end_ms - MIN_CLIP_DURATION_MS,
+        )
+        occupied_end = max(
+            (float(note.start + note.dur) for note in self.canvas.notes),
+            default=self.clip_scope.timeline_start_ms + MIN_CLIP_DURATION_MS,
+        )
+        self.clip_start_spin.blockSignals(True)
+        self.clip_end_spin.blockSignals(True)
+        self.clip_start_spin.setMaximum(min(
+            self.clip_scope.timeline_end_ms - MIN_CLIP_DURATION_MS,
+            occupied_start,
+        ))
+        self.clip_end_spin.setMinimum(max(
+            self.clip_scope.timeline_start_ms + MIN_CLIP_DURATION_MS,
+            occupied_end,
+        ))
+        self.clip_start_spin.setValue(self.clip_scope.timeline_start_ms)
+        self.clip_end_spin.setValue(self.clip_scope.timeline_end_ms)
+        self.clip_start_spin.blockSignals(False)
+        self.clip_end_spin.blockSignals(False)
+
+    def _request_clip_resize(self, mode: str, value: float) -> None:
+        if self.clip_scope is None or self._clip_sync_in_progress:
+            return
+        current = (
+            self.clip_scope.timeline_start_ms
+            if mode == "resize_start"
+            else self.clip_scope.timeline_end_ms
+        )
+        if math.isclose(float(value), current, abs_tol=1e-6):
+            return
+        if self.draft_playback_state != "stopped":
+            self.stop_draft()
+        self.clip_resize_requested.emit(str(mode), float(value))
+
+    def synchronize_clip_scope(
+        self,
+        scope: ClipEditorScope,
+        notes: Iterable[Note] | None = None,
+    ) -> None:
+        """Adopt the formal Clip projection after a mixer/editor publish."""
+
+        if not isinstance(scope, ClipEditorScope):
+            raise TypeError("clip editor synchronization requires a scope")
+        replacement = None if notes is None else list(notes)
+        self._clip_sync_in_progress = True
+        try:
+            self.clip_scope = scope
+            self.arrangement_clip_fingerprint = scope.fingerprint
+            if replacement is not None and replacement != self.edited_notes():
+                self.canvas.set_notes(replacement)
+                self.canvas.selected.clear()
+                self.undo_stack.clear()
+                self.redo_stack.clear()
+                self.canvas.rebuild_note_index()
+                self._recalculate_invalid_note_count()
+                self.refresh_fields()
+            self.track.notes = list(self.canvas.notes)
+            self.last_applied = self.edited_notes()
+            self.canvas.scroll_ms = max(
+                scope.timeline_start_ms,
+                min(scope.timeline_end_ms, float(self.canvas.scroll_ms)),
+            )
+            self.set_draft_playhead(self.playhead_ms)
+            self._sync_clip_bounds_controls()
+            self.update_scrollbars()
+            self.canvas.update()
+            self.velocity_lane.update()
+        finally:
+            self._clip_sync_in_progress = False
+
     @staticmethod
     def format_playback_time(ms: float) -> str:
         ms = max(0, round(ms))
@@ -4325,7 +4561,9 @@ class MidiNoteEditorDialog(QDialog):
 
     def set_draft_playhead(self, ms: float, follow: bool = False) -> None:
         duration = self.draft_duration_ms()
-        self.playhead_ms = max(0.0, min(float(ms), duration))
+        self.playhead_ms = max(
+            self.draft_start_ms(), min(float(ms), duration)
+        )
         if hasattr(self, "canvas"):
             self.canvas.set_playhead(self.playhead_ms)
         if hasattr(self, "transcription_waveform"):
@@ -4604,7 +4842,7 @@ class MidiNoteEditorDialog(QDialog):
                 ):
                     self.draft_reference_only = True
                 elif self.loop_box.isChecked():
-                    self.seek_draft(0.0)
+                    self.seek_draft(self.draft_start_ms())
                     parent.realtime_audio.play()
                     if (
                         self.transcription_mode_enabled
@@ -4613,7 +4851,7 @@ class MidiNoteEditorDialog(QDialog):
                         and reference_audio.audio_path
                     ):
                         self._sync_draft_reference_audio(
-                            0.0,
+                            self.draft_start_ms(),
                             play=True,
                             force=True,
                         )
@@ -4661,9 +4899,13 @@ class MidiNoteEditorDialog(QDialog):
             1e-9, self.canvas.px_per_ms
         )
         centered_start = max(
-            0.0,
+            self.draft_start_ms(),
             (start_ms + end_ms - visible_ms) * 0.5,
         )
+        if self.clip_scope is not None:
+            self.canvas.scroll_ms = centered_start
+            self.update_scrollbars()
+            return
         self.update_scrollbars()
         self.set_time_scroll(round(centered_start))
 
@@ -4671,6 +4913,34 @@ class MidiNoteEditorDialog(QDialog):
         if not hasattr(self, "time_scroll"):
             return
         visible_ms = max(1.0, (self.canvas.width() - self.canvas.KEY_W) / self.canvas.px_per_ms)
+        if self.clip_scope is not None:
+            minimum = math.floor(self.clip_scope.timeline_start_ms)
+            maximum_time = max(
+                self.clip_scope.timeline_start_ms,
+                self.clip_scope.timeline_end_ms - visible_ms,
+            )
+            maximum = max(minimum, math.ceil(maximum_time))
+            scroll_ms = float(max(
+                self.clip_scope.timeline_start_ms,
+                min(maximum_time, float(self.canvas.scroll_ms)),
+            ))
+            time_changed = not math.isclose(
+                scroll_ms, self.canvas.scroll_ms, abs_tol=1e-6
+            )
+            self.canvas.scroll_ms = scroll_ms
+            self.time_scroll.blockSignals(True)
+            self.time_scroll.setRange(minimum, maximum)
+            self.time_scroll.setPageStep(max(1, round(visible_ms)))
+            self.time_scroll.setSingleStep(max(1, round(self.quantize_ms())))
+            self.time_scroll.setValue(round(scroll_ms))
+            self.time_scroll.blockSignals(False)
+            pitch_changed = self._update_pitch_scrollbar()
+            if time_changed:
+                self.velocity_lane.update()
+                self.transcription_waveform.refresh()
+            if time_changed or pitch_changed:
+                self.canvas.update()
+            return
         reference_audio = getattr(self.parent(), "reference_audio", None)
         has_reference_audio = bool(
             getattr(reference_audio, "audio_path", "")
@@ -4700,6 +4970,14 @@ class MidiNoteEditorDialog(QDialog):
         self.time_scroll.setValue(round(scroll_ms))
         self.time_scroll.blockSignals(False)
 
+        pitch_changed = self._update_pitch_scrollbar()
+        if time_changed:
+            self.velocity_lane.update()
+            self.transcription_waveform.refresh()
+        if time_changed or pitch_changed:
+            self.canvas.update()
+
+    def _update_pitch_scrollbar(self) -> bool:
         if self._initial_pitch_focus_pending:
             self.canvas.pitch_top = self._recommended_initial_pitch_top()
             self._initial_pitch_focus_pending = False
@@ -4714,12 +4992,7 @@ class MidiNoteEditorDialog(QDialog):
         # Scrollbar value grows downwards while MIDI pitches grow upwards.
         self.pitch_scroll.setValue(pitch_max - pitch_top)
         self.pitch_scroll.blockSignals(False)
-        if time_changed:
-            self.velocity_lane.update()
-            self.transcription_waveform.refresh()
-        if time_changed or pitch_changed:
-            self.canvas.update()
-        self.set_draft_playhead(self.playhead_ms)
+        return pitch_changed
 
     def visible_pitch_rows(self) -> int:
         grid_height = max(0, self.canvas.height() - self.canvas.RULER_H)
@@ -4765,6 +5038,21 @@ class MidiNoteEditorDialog(QDialog):
 
     def set_time_scroll(self, value: int) -> None:
         value = float(max(self.time_scroll.minimum(), min(self.time_scroll.maximum(), int(value))))
+        if self.clip_scope is not None:
+            visible_ms = max(
+                1.0,
+                (self.canvas.width() - self.canvas.KEY_W)
+                / self.canvas.px_per_ms,
+            )
+            value = max(
+                self.clip_scope.timeline_start_ms,
+                min(
+                    self.clip_scope.timeline_end_ms - min(
+                        visible_ms, self.clip_scope.duration_ms
+                    ),
+                    value,
+                ),
+            )
         if self.time_scroll.value() != round(value):
             self.time_scroll.blockSignals(True)
             self.time_scroll.setValue(round(value))
@@ -4794,7 +5082,13 @@ class MidiNoteEditorDialog(QDialog):
         if not parent or not hasattr(parent, "tracks"):
             return
         draft_tracks = [
-            replace(item, notes=self.edited_notes()) if int(item.track_id) == int(self.track.track_id) else item
+            replace(
+                self.track,
+                notes=self.edited_notes(),
+                arrangement_clips=[],
+            )
+            if int(item.track_id) == int(self.track.track_id)
+            else item
             for item in parent.tracks
         ]
         dialog = parent.create_midi_optimize_dialog(
@@ -4808,6 +5102,13 @@ class MidiNoteEditorDialog(QDialog):
             None,
         )
         if optimized is None:
+            return
+        if not self.notes_fit_clip_scope(optimized.notes):
+            QMessageBox.warning(
+                self,
+                tr("无法应用优化"),
+                tr("优化结果超出当前片段的时间范围，未修改草稿。"),
+            )
             return
         self.push_snapshot()
         self.canvas.notes = list(optimized.notes)
@@ -5233,7 +5534,7 @@ class MidiNoteEditorDialog(QDialog):
             self._set_draft_playback_state("stopped")
         if hasattr(self, "canvas"):
             self.canvas.set_preload_progress(0.0, "idle")
-            self.set_draft_playhead(0.0)
+            self.set_draft_playhead(self.draft_start_ms())
 
     def closeEvent(self, event) -> None:
         self.audition_timer.stop()
@@ -5252,6 +5553,22 @@ class MidiNoteEditorDialog(QDialog):
             if callable(activate):
                 activate(self)
         return super().event(event)
+
+    def keyPressEvent(self, event) -> None:
+        # QLineEdit emits editingFinished/returnPressed before an unhandled
+        # Enter reaches QDialog.  QDialog would then activate its first
+        # auto-default QPushButton (the transport Play button), turning one
+        # property confirmation into an unrelated playback command.  Keep
+        # Return local to editable controls after they have committed.
+        focus = QApplication.focusWidget()
+        if (
+            event.key() in (Qt.Key_Return, Qt.Key_Enter)
+            and isinstance(focus, QLineEdit)
+            and self.isAncestorOf(focus)
+        ):
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def reject(self) -> None:
         super().reject()
@@ -5294,7 +5611,7 @@ class MidiNoteEditorDialog(QDialog):
         inherited_velocity = template[0] if template is not None else self.default_note_velocity
         inherited_duration = template[1] if template is not None else self.default_note_duration()
         inherited_articulation = template[2] if template is not None else self.current_articulation()
-        return Note(
+        return self.constrain_note_to_scope(Note(
             max(0, min(127, int(pitch))),
             max(0, min(127, int(inherited_velocity if velocity is None else velocity))),
             max(0.0, float(start_ms)),
@@ -5303,17 +5620,17 @@ class MidiNoteEditorDialog(QDialog):
                 float(inherited_duration if duration_ms is None else duration_ms),
             ),
             int(inherited_articulation if articulation is None else articulation),
-        )
+        ))
 
     def snap_time(self, value: float) -> float:
         if not self.snap_box.isChecked():
-            return max(0.0, value)
+            return self.constrain_timeline_time(value)
         q = self.quantize_ms()
-        return max(
-            0.0,
+        return self.constrain_timeline_time(max(
+            self.draft_start_ms(),
             self.beat_origin_ms
             + round((value - self.beat_origin_ms) / q) * q,
-        )
+        ))
 
     def current_articulation(self) -> int:
         value = self.articulation_combo.currentData()
@@ -5467,7 +5784,9 @@ class MidiNoteEditorDialog(QDialog):
             grid_origin_ms=self.beat_origin_ms,
         )
         first = len(self.canvas.notes)
-        self.canvas.notes.extend(n._replace(start=origin + n.start) for n in self.clipboard)
+        self.canvas.notes.extend(self.constrain_note_group_to_scope(
+            n._replace(start=origin + n.start) for n in self.clipboard
+        ))
         self.canvas.selected = set(range(first, len(self.canvas.notes)))
         self.canvas.anchor_index = first
         self.canvas.set_edit_cursor(max(
@@ -5485,7 +5804,9 @@ class MidiNoteEditorDialog(QDialog):
         span = max(self.quantize_ms(), end - start)
         offset = math.ceil(span / self.quantize_ms()) * self.quantize_ms()
         first = len(self.canvas.notes)
-        self.canvas.notes.extend(note._replace(start=note.start + offset) for note in chosen)
+        self.canvas.notes.extend(self.constrain_note_group_to_scope(
+            note._replace(start=note.start + offset) for note in chosen
+        ))
         self.canvas.selected = set(range(first, len(self.canvas.notes)))
         self.canvas.anchor_index = first
         self.canvas.set_edit_cursor(max(
@@ -5503,7 +5824,10 @@ class MidiNoteEditorDialog(QDialog):
         elif field == "start": value = max(0.0, float(value))
         else: value = max(self.minimum_duration_ms(), float(value))
         self.push_snapshot()
-        for i in self.canvas.selected: self.canvas.notes[i] = self.canvas.notes[i]._replace(**{field: value})
+        for i in self.canvas.selected:
+            self.canvas.notes[i] = self.constrain_note_to_scope(
+                self.canvas.notes[i]._replace(**{field: value})
+            )
         self._notes_changed(); self.refresh_fields()
 
     def _choose_articulation(self, ntype: int) -> None:
@@ -5709,17 +6033,31 @@ class MidiNoteEditorDialog(QDialog):
     def _notes_changed(self) -> None:
         if self.draft_playback_state != "stopped":
             self.stop_draft()
+        self._constrain_draft_to_scope()
         self._reconcile_staged_primary_routes()
         self.canvas.rebuild_note_index()
         self._recalculate_invalid_note_count()
         self._update_track_meta()
         self.canvas.update(); self.velocity_lane.update(); self._update_status(); self.update_scrollbars()
+        self._sync_clip_bounds_controls()
+        clip_draft_published = False
+        if self.clip_scope is not None and not self._clip_sync_in_progress:
+            draft_notes = tuple(self.edited_notes())
+            self.clip_draft_changed.emit(draft_notes)
+            # A successful live Clip publication already checkpoints the
+            # formal project.  Avoid immediately serializing the same edit a
+            # second time through the active-dialog draft overlay.
+            clip_draft_published = tuple(self.last_applied) == draft_notes
         checkpoint = getattr(
             self.parent(),
             "_autosave_note_editor_draft",
             None,
         )
-        if callable(checkpoint) and checkpoint(self, "note block edit"):
+        if (
+            not clip_draft_published
+            and callable(checkpoint)
+            and checkpoint(self, "note block edit")
+        ):
             self._draft_autosave_revision += 1
         if self.transcription_mode_enabled:
             self._sync_shared_transcription_projection()

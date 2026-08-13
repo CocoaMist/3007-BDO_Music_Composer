@@ -1638,7 +1638,12 @@ class PianoRollCanvas(QWidget):
             if self.transcription_candidates_visible
             else 0.0
         )
-        self.content_end_ms = max(self._note_end_ms, candidate_end)
+        clip_scope = getattr(self.editor, "clip_scope", None)
+        self.content_end_ms = (
+            float(clip_scope.timeline_end_ms)
+            if clip_scope is not None
+            else max(self._note_end_ms, candidate_end)
+        )
 
     def visible_note_indices(
         self,
@@ -2219,7 +2224,10 @@ class PianoRollCanvas(QWidget):
 
     def set_edit_cursor(self, ms: float) -> None:
         old_x = self.x_at_time(self.edit_cursor_ms)
-        self.edit_cursor_ms = max(0.0, float(ms))
+        constrain = getattr(self.editor, "constrain_timeline_time", None)
+        self.edit_cursor_ms = (
+            constrain(ms) if callable(constrain) else max(0.0, float(ms))
+        )
         new_x = self.x_at_time(self.edit_cursor_ms)
         for x in (old_x, new_x):
             if self.KEY_W - 8 <= x <= self.width() + 8:
@@ -2323,7 +2331,9 @@ class PianoRollCanvas(QWidget):
         return None, ""
 
     def time_at(self, x: float) -> float:
-        return max(0.0, self.scroll_ms + (x - self.KEY_W) / self.px_per_ms)
+        value = max(0.0, self.scroll_ms + (x - self.KEY_W) / self.px_per_ms)
+        constrain = getattr(self.editor, "constrain_timeline_time", None)
+        return constrain(value) if callable(constrain) else value
 
     def pitch_at(self, y: float) -> int:
         return max(0, min(127, self.pitch_top - int((y - self.RULER_H) // self.ROW_H)))
@@ -3770,6 +3780,36 @@ class PianoRollCanvas(QWidget):
             QRectF(self.KEY_W, self.RULER_H - 1, grid.width(), 1),
             grid_edge,
         )
+        clip_scope = getattr(self.editor, "clip_scope", None)
+        if clip_scope is not None:
+            clip_left = self.x_at_time(clip_scope.timeline_start_ms)
+            clip_right = self.x_at_time(clip_scope.timeline_end_ms)
+            if clip_left > self.KEY_W:
+                painter.fillRect(
+                    QRectF(
+                        self.KEY_W,
+                        0,
+                        min(self.width(), clip_left) - self.KEY_W,
+                        self.height(),
+                    ),
+                    QColor(8, 8, 9, 185),
+                )
+            if clip_right < self.width():
+                painter.fillRect(
+                    QRectF(
+                        max(self.KEY_W, clip_right),
+                        0,
+                        self.width() - max(self.KEY_W, clip_right),
+                        self.height(),
+                    ),
+                    QColor(8, 8, 9, 185),
+                )
+            painter.setPen(QPen(QColor("#d3a24b"), 2))
+            for boundary_x in (clip_left, clip_right):
+                if self.KEY_W <= boundary_x <= self.width():
+                    painter.drawLine(
+                        boundary_x, 0, boundary_x, self.height()
+                    )
         # Time-axis content must never paint over the fixed piano keyboard.
         # This matters after horizontal scrolling, when a long note's logical
         # rectangle can begin well to the left of the visible grid.
@@ -4610,7 +4650,11 @@ class PianoRollCanvas(QWidget):
                 start = self.creation_anchor_ms
                 duration = self.editor.default_note_duration()
             velocity = max(0, min(127, self.editor.default_note_velocity - round(dy * 1.5)))
-            self.creation_preview = self.creation_preview._replace(start=start, dur=duration, vel=velocity)
+            self.creation_preview = self.editor.constrain_note_to_scope(
+                self.creation_preview._replace(
+                    start=start, dur=duration, vel=velocity
+                )
+            )
             self.update()
             return
         if self.drag_mode == "pending_clone" and math.hypot(dx, dy) > 4 and self.ctrl_press_index is not None:
@@ -4647,13 +4691,13 @@ class PianoRollCanvas(QWidget):
                 dt = round(dt / q) * q
             dt = max(dt, -min(note.start for note in self.clone_base_notes))
             dp = -round(dy / self.ROW_H)
-            self.notes = list(self.press_notes) + [
+            self.notes = list(self.press_notes) + self.editor.constrain_note_group_to_scope(
                 note._replace(
                     start=note.start + dt,
                     pitch=max(0, min(127, note.pitch + dp)),
                 )
                 for note in self.clone_base_notes
-            ]
+            )
             self.update()
             return
         if self.drag_mode not in ("move", "resize_left", "resize_right") or not self.selected:
@@ -4668,18 +4712,31 @@ class PianoRollCanvas(QWidget):
         for i in self.selected:
             old = self.press_notes[i]
             if self.drag_mode == "move":
-                changed[i] = old._replace(start=max(0.0, old.start + dt), pitch=max(0, min(127, old.pitch + dp)))
+                changed[i] = old._replace(
+                    start=max(0.0, old.start + dt),
+                    pitch=max(0, min(127, old.pitch + dp)),
+                )
             elif self.drag_mode == "resize_right":
                 anchor = self.press_notes[self.anchor_index] if self.anchor_index in self.selected else old
                 factor = max(minimum / max(minimum, anchor.dur), (anchor.dur + dt) / max(minimum, anchor.dur))
-                changed[i] = old._replace(dur=max(minimum, old.dur * factor))
+                changed[i] = self.editor.constrain_note_to_scope(
+                    old._replace(dur=max(minimum, old.dur * factor))
+                )
             else:
                 anchor = self.press_notes[self.anchor_index] if self.anchor_index in self.selected else old
                 factor = max(minimum / max(minimum, anchor.dur), (anchor.dur - dt) / max(minimum, anchor.dur))
                 new_dur = max(minimum, old.dur * factor)
                 end = old.start + old.dur
                 new_start = max(0.0, end - new_dur)
-                changed[i] = old._replace(start=new_start, dur=end - new_start)
+                changed[i] = self.editor.constrain_note_to_scope(
+                    old._replace(start=new_start, dur=end - new_start)
+                )
+        if self.drag_mode == "move":
+            constrained = self.editor.constrain_note_group_to_scope(
+                changed[index] for index in sorted(self.selected)
+            )
+            for index, note in zip(sorted(self.selected), constrained):
+                changed[index] = note
         self.notes = changed
         self.update()
 
@@ -5083,9 +5140,9 @@ class PianoRollCanvas(QWidget):
                 step = 12 if command == "transpose_octave" else 1
                 delta = step if key == Qt.Key_Up else -step
                 for index in self.selected:
-                    changed[index] = changed[index]._replace(
+                    changed[index] = self.editor.constrain_note_to_scope(changed[index]._replace(
                         pitch=max(0, min(127, changed[index].pitch + delta))
-                    )
+                    ))
             else:
                 fine = command in {"nudge_time_fine", "resize_duration_fine"}
                 step = (
@@ -5096,13 +5153,20 @@ class PianoRollCanvas(QWidget):
                 delta = step if key == Qt.Key_Right else -step
                 if command in {"resize_duration", "resize_duration_fine"}:
                     for index in self.selected:
-                        changed[index] = changed[index]._replace(
+                        changed[index] = self.editor.constrain_note_to_scope(changed[index]._replace(
                             dur=max(self.editor.minimum_duration_ms(), changed[index].dur + delta)
-                        )
+                        ))
                 else:
                     delta = max(delta, -min(self.notes[index].start for index in self.selected))
                     for index in self.selected:
-                        changed[index] = changed[index]._replace(start=changed[index].start + delta)
+                        changed[index] = changed[index]._replace(
+                            start=changed[index].start + delta
+                        )
+                    constrained = self.editor.constrain_note_group_to_scope(
+                        changed[index] for index in sorted(self.selected)
+                    )
+                    for index, note in zip(sorted(self.selected), constrained):
+                        changed[index] = note
             self.notes = changed
             self.notes_changed.emit()
             self.selection_changed.emit()

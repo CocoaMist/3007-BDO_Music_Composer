@@ -8,6 +8,10 @@ import traceback
 from PySide6.QtCore import QThread, QTimer, Signal
 
 from bdo_music_composer.app.crash_logging import append_crash_log
+from bdo_music_composer.editor.arrangement_clip import (
+    clip_edit_fingerprint,
+    plan_clip_note_edit,
+)
 from bdo_music_composer.project.project_persistence import (
     AutosaveRequest,
     write_autosave,
@@ -42,11 +46,17 @@ class ProjectAutosaveHostMixin:
     ) -> bool:
         """Checkpoint one completed editor transaction without committing it."""
 
-        if (
-            editor is not self.active_transcription_editor
-            or editor.track not in self.tracks
-            or self.loading_project
-        ):
+        if editor is not self.active_transcription_editor or self.loading_project:
+            return False
+        target_track_id = int(editor.track.track_id)
+        formal_track = next((
+            track for track in self.tracks
+            if int(track.track_id) == target_track_id
+        ), None)
+        if formal_track is None:
+            return False
+        clip_id = str(getattr(editor, "arrangement_clip_id", "") or "")
+        if not clip_id and editor.track is not formal_track:
             return False
         self._autosave_project(str(reason or "note block edit"), immediate=True)
         return True
@@ -55,10 +65,49 @@ class ProjectAutosaveHostMixin:
         """Overlay the active draft only in an immutable recovery snapshot."""
 
         editor = self.active_transcription_editor
-        if editor is None or editor.track not in self.tracks:
+        if editor is None:
             return tuple(self.tracks)
         draft_notes = list(editor.edited_notes())
         target_track_id = int(editor.track.track_id)
+        formal_track = next((
+            track for track in self.tracks
+            if int(track.track_id) == target_track_id
+        ), None)
+        if formal_track is None:
+            return tuple(self.tracks)
+        clip_id = str(getattr(editor, "arrangement_clip_id", "") or "")
+        if clip_id:
+            expected_fingerprint = str(
+                getattr(editor, "arrangement_clip_fingerprint", "") or ""
+            )
+            try:
+                if clip_edit_fingerprint(formal_track, clip_id) != expected_fingerprint:
+                    return tuple(self.tracks)
+                plan = plan_clip_note_edit(
+                    formal_track,
+                    clip_id=clip_id,
+                    notes=draft_notes,
+                )
+                update = plan.updates[0]
+                overlay = replace(
+                    formal_track,
+                    notes=list(update.notes),
+                    performance_controls=list(update.performance_controls),
+                    bdo_source_note_records=update.source_note_records,
+                    bdo_source_group_index=update.source_group_index,
+                    duration_scale=1.0,
+                    clip_start_ms=update.clip_start_ms,
+                    clip_end_ms=update.clip_end_ms,
+                    arrangement_clips=list(update.arrangement_clips),
+                )
+            except (TypeError, ValueError):
+                return tuple(self.tracks)
+            return tuple(
+                overlay if track is formal_track else track
+                for track in self.tracks
+            )
+        if editor.track is not formal_track:
+            return tuple(self.tracks)
         return tuple(
             replace(track, notes=list(draft_notes))
             if int(track.track_id) == target_track_id
