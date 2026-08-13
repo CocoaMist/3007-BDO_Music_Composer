@@ -9,6 +9,9 @@ project state as a BDO v9 score.
 
 ![BDO Music Composer v1.3.0 multitrack arrangement](docs/images/readme-timeline.png)
 
+Screenshots use the English interface. Track and instrument names are project
+data and remain in their original language.
+
 ## Highlights
 
 - Arrange and merge clips across a multitrack timeline with select, razor, and
