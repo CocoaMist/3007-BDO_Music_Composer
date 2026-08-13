@@ -69,6 +69,20 @@ class UiLayoutSmokeTests(unittest.TestCase):
             )
             assert timeline_controls is not None
             assert timeline_controls.height() == 42
+            assert window.timeline_meta.x() < window.timeline_edit_tools.x()
+            assert window.timeline_edit_tools.x() < window.timeline_mix_button.x()
+            assert window.timeline_mix_button.x() < window.timeline_snap_tool.x()
+            assert window.timeline_snap_tool.x() < window.timeline_view_button.x()
+            assert window.timeline_snap_tool.isChecked()
+            assert window.timeline.snap_enabled
+            assert "已激活" in window.timeline_snap_tool.toolTip()
+            QTest.mouseClick(window.timeline_snap_tool, Qt.LeftButton)
+            assert not window.timeline_snap_tool.isChecked()
+            assert not window.timeline.snap_enabled
+            assert "未激活" in window.timeline_snap_tool.toolTip()
+            QTest.mouseClick(window.timeline_snap_tool, Qt.LeftButton)
+            assert window.timeline_snap_tool.isChecked()
+            assert window.timeline.snap_enabled
             assert window.main_page_transition.is_running
             QTest.qWait(260)
             app.processEvents()
@@ -330,11 +344,8 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert not hasattr(window, "out_dir")
             assert not hasattr(window, "open_output_button")
             assert not hasattr(window, "install_check")
-            assert window.track_actions_button.menu() is not None
-            assert [
-                action.text()
-                for action in window.track_actions_button.menu().actions()
-            ] == ["删除轨道", "上移轨道", "下移轨道", "", "清除 Solo", "取消静音"]
+            assert not hasattr(window, "add_track_button")
+            assert not hasattr(window, "track_actions_button")
             assert not hasattr(window, "transcription_tools_slot")
             assert not hasattr(window, "transcription_entry_button")
             assert not hasattr(window, "delete_track_button")
@@ -470,11 +481,18 @@ class UiLayoutSmokeTests(unittest.TestCase):
             workspace = editor.findChild(QFrame, "EditorWorkspace")
             assert workspace is not None
             workspace_left = workspace.mapTo(editor, QPoint(0, 0)).x()
-            assert workspace_left == editor.contentsRect().left()
+            tool_rail = editor.findChild(QFrame, "EditorToolRail")
+            properties_bar = editor.findChild(QFrame, "EditorPropertiesBar")
+            assert tool_rail is not None
+            assert properties_bar is not None
+            assert tool_rail.mapTo(editor, QPoint(0, 0)).x() == editor.contentsRect().left()
+            assert workspace_left == tool_rail.width()
             assert workspace_left + workspace.width() == editor.contentsRect().right() + 1
-            assert toolbar.mapTo(editor, QPoint(0, 0)).x() > workspace_left
+            assert toolbar.mapTo(editor, QPoint(0, 0)).x() > tool_rail.mapTo(editor, QPoint(0, 0)).x()
             assert toolbar.isAncestorOf(editor.cancel_button)
             assert toolbar.isAncestorOf(editor.confirm_button)
+            assert editor.select_tool_button.isChecked()
+            assert not editor.editor_properties_bar.isVisible()
             assert not hasattr(editor, "apply_button")
             assert "删除" not in editor.editor_toolbar_action_buttons
             assert not hasattr(editor, "playback_timeline")
@@ -487,9 +505,10 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert editor.canvas.BLACK_KEY_X == 8
             assert editor.canvas.BLACK_KEY_W == 48
             assert editor.canvas._editable_note_base_color().name().lower() == track.color.lower()
-            inspector_height = top_inspector.height()
-            assert editor.note_mode_button.height() == editor.articulation_mode_button.height() == editor.grid_mode_button.height()
-            assert editor.note_controls.isVisible()
+            assert not editor.note_mode_button.isVisible()
+            assert not editor.articulation_mode_button.isVisible()
+            assert not editor.grid_mode_button.isVisible()
+            assert not editor.note_controls.isVisible()
             assert not editor.articulation_controls.isVisible()
             assert not editor.grid_controls.isVisible()
             assert editor.quantize_quick.isVisible()
@@ -500,7 +519,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
                 editor.quantize_quick,
                 editor.velocity_toggle,
                 editor.ghost_box,
-                editor.note_controls,
+                editor.editor_view_button,
             )
             assert {widget.height() for widget in aligned_controls} == {26}
             assert len(
@@ -510,6 +529,13 @@ class UiLayoutSmokeTests(unittest.TestCase):
                 }
             ) == 1
             assert all(not group.isVisible() for group in editor.note_field_groups)
+            assert editor.quantize_quick.width() <= 150
+            assert editor.velocity_toggle.width() <= 88
+            assert editor.ghost_box.width() <= 108
+            assert editor.follow_playhead_box.width() <= 112
+            assert editor.editor_view_button.menu() is editor.editor_view_menu
+            assert editor.editor_snap_action.isChecked()
+            assert editor.editor_preview_action.isChecked()
             assert not editor.ghost_box.isChecked()
             assert top_inspector.isAncestorOf(editor.ghost_box)
             assert editor.ghost_opacity_slider.value() == 30
@@ -525,13 +551,14 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert workspace.geometry().top() <= 100
             scroll_corner = editor.findChild(QWidget, "PianoScrollCorner")
             assert scroll_corner is not None and scroll_corner.size().width() == 12
-            editor.articulation_mode_button.click()
-            app.processEvents()
-            assert top_inspector.height() == inspector_height
-            assert editor.articulation_controls.isVisible()
-            assert not editor.note_controls.isVisible()
             editor.canvas.selected = {0}
             editor.refresh_fields()
+            assert editor.editor_properties_bar.isVisible()
+            assert editor.editor_properties_bar.height() == 44
+            assert properties_bar.width() == editor.contentsRect().width()
+            assert editor.editor_properties_bar.isAncestorOf(
+                editor.articulation_combo
+            )
             # Keep this broad layout smoke independent of the real asynchronous
             # audio worker.  Dedicated editor/audio tests cover articulation
             # audition with a controlled engine below.
@@ -539,10 +566,6 @@ class UiLayoutSmokeTests(unittest.TestCase):
             editor.articulation_buttons[3].click()
             assert editor.canvas.notes[0].ntype == 3
             editor.note_preview_box.setChecked(True)
-            editor.grid_mode_button.click()
-            app.processEvents()
-            assert top_inspector.height() == inspector_height
-            assert editor.grid_controls.isVisible()
             assert editor.ghost_box.toolTip()
             assert editor.ghost_opacity_slider.accessibleName()
             assert [
@@ -579,6 +602,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert editor.quantize_ms() == editor.canvas.beat_ms
             editor.quantize_combo.setCurrentIndex(2)
             assert not editor.note_controls.isVisible()
+            editor._set_top_inspector_mode("grid")
             editor_toast = getattr(editor, "_global_toast", None)
             assert isinstance(editor_toast, GlobalToast)
             assert "Ctrl+拖动复制" in editor_toast.message.text()
@@ -590,10 +614,6 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert editor_toast.y() + editor_toast.height() == editor_footer_top - 8
             assert 0 <= editor_toast.x()
             assert editor_toast.x() + editor_toast.width() <= editor.width()
-            editor.note_mode_button.click()
-            app.processEvents()
-            assert top_inspector.height() == inspector_height
-            assert editor.note_controls.isVisible()
             footer = editor.findChild(QFrame, "EditorFooter")
             assert footer is not None
             assert footer.height() == 27
@@ -606,6 +626,8 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert window.reference_audio.volume_percent == 35
             editor.transcription_mode_toggle.setChecked(True)
             assert editor.transcription_mode_enabled
+            assert editor.transcription_panel.height() <= 36
+            assert not editor.transcription_panel.analyze_button.isVisible()
             assert not editor.velocity_lane.isVisible()
             assert not hasattr(editor, "velocity_curve_button")
             assert editor.velocity_toggle.property("fluentSymbol") == "curve"
@@ -613,6 +635,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             editor.refresh_fields()
             assert editor.selection_summary.text().startswith("已选择 1 个音符")
             assert all(group.isVisible() for group in editor.note_field_groups)
+            assert max(group.width() for group in editor.note_field_groups) <= 142
             ruler_x = round(editor.canvas.KEY_W + 500.0 * editor.canvas.px_per_ms)
             QTest.mouseClick(editor.canvas, Qt.LeftButton, pos=QPoint(ruler_x, 5))
             assert abs(editor.playhead_ms - 500.0) < 10.0
@@ -639,6 +662,7 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert editor.canvas.notes[0].vel == 65
             editor.resize(1440, 900)
             app.processEvents()
+            assert editor.canvas.width() > 1000
             assert editor.canvas.width() > 1300
 
             class FakeAudio:

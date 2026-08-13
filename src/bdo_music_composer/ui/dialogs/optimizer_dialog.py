@@ -27,6 +27,9 @@ from bdo_midi import BDO_INSTRUMENT_NAMES
 from bdo_music_composer.audio.bdo_audio_validation import (
     verified_instrument_articulations,
 )
+from bdo_music_composer.audio.bdo_sample_renderer import (
+    sample_map_evidence_sha256,
+)
 from bdo_music_composer.app.crash_logging import append_crash_log
 from bdo_music_composer.ui.editor.editor_articulation_data import BDO_ARTICULATIONS
 from bdo_music_composer.editor.editor_models import (
@@ -277,6 +280,8 @@ class MidiOptimizeDialog(QDialog):
         self._analysis_started_once = False
         self._analysis_error: tuple[str, bool, bool] | None = None
         self.analysis_worker: OptimizerAnalysisWorker | None = None
+        self.setObjectName("MidiOptimizeDialog")
+        self.setProperty("uiSurface", "workflow")
         self.setWindowTitle(tr("MIDI 优化"))
         self.resize(820, 430)
         self.setMinimumSize(720, 410)
@@ -287,6 +292,7 @@ class MidiOptimizeDialog(QDialog):
 
         header_card = QFrame()
         header_card.setObjectName("OptimizerHeader")
+        header_card.setProperty("uiRole", "dialogHeader")
         header = QVBoxLayout(header_card)
         header.setContentsMargins(16, 12, 16, 12)
         header.setSpacing(4)
@@ -303,6 +309,7 @@ class MidiOptimizeDialog(QDialog):
 
         scope_card = QFrame()
         scope_card.setObjectName("OptimizerOptions")
+        scope_card.setProperty("uiRole", "workflowSection")
         scope_selector = QGridLayout(scope_card)
         scope_selector.setContentsMargins(14, 12, 14, 12)
         scope_selector.setHorizontalSpacing(10)
@@ -324,6 +331,7 @@ class MidiOptimizeDialog(QDialog):
 
         selector_card = QFrame()
         selector_card.setObjectName("OptimizerOptions")
+        selector_card.setProperty("uiRole", "workflowSection")
         selector = QGridLayout(selector_card)
         selector.setContentsMargins(14, 12, 14, 12)
         selector.setHorizontalSpacing(10)
@@ -360,6 +368,7 @@ class MidiOptimizeDialog(QDialog):
         action_row = QHBoxLayout()
         action_row.addStretch(1)
         self.analyse_button = QPushButton(tr("分析优化"))
+        self.analyse_button.setProperty("kind", "primary")
         self.analyse_button.clicked.connect(self._analyse)
         action_row.addWidget(self.analyse_button)
         layout.addLayout(action_row)
@@ -683,13 +692,10 @@ class MidiOptimizeDialog(QDialog):
         ):
             try:
                 payload = json.loads(AUDIO_VALIDATION_PATH.read_text(encoding="utf-8"))
-                mapping = json.loads(
-                    WWISE_MIDI_MAP_PATH.read_text(encoding="utf-8")
-                )
                 verified_articulations = set(
                     verified_instrument_articulations(
                         payload,
-                        mapping.get("evidence_sha256"),
+                        sample_map_evidence_sha256(WWISE_MIDI_MAP_PATH),
                     )
                 )
             except (OSError, ValueError, TypeError, KeyError):

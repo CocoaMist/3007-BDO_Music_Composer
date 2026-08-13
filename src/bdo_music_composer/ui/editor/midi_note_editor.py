@@ -9,10 +9,11 @@ from dataclasses import replace
 import math
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QObject, QRunnable, QThreadPool, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollBar,
+    QSizePolicy,
     QSlider,
     QToolButton,
     QVBoxLayout,
@@ -106,6 +108,11 @@ from bdo_music_composer.editor.editor_models import (
 )
 from bdo_music_composer.editor.editor_commands import (
     next_non_overlapping_paste_origin,
+)
+from bdo_music_composer.editor.note_creative_tools import (
+    humanize_notes,
+    quantize_note_starts,
+    strum_chords,
 )
 from bdo_music_composer.ui.theme.fluent_theme import (
     FluentSymbol,
@@ -331,6 +338,8 @@ class MidiNoteEditorDialog(QDialog):
             trf("编辑音符 · {track}", track=track.display_name)
         )
         self.setMinimumSize(920, 680)
+        self.active_note_tool = "select"
+        self.follow_playhead_enabled = True
         available = QApplication.primaryScreen().availableGeometry() if QApplication.primaryScreen() else None
         if available is None:
             self.resize(1440, 860)
@@ -358,6 +367,13 @@ class MidiNoteEditorDialog(QDialog):
         toolbar = QHBoxLayout(toolbar_frame)
         toolbar.setContentsMargins(10, 3, 8, 3)
         toolbar.setSpacing(6)
+        self.editor_track_color = QFrame()
+        self.editor_track_color.setObjectName("EditorTrackColor")
+        self.editor_track_color.setFixedSize(4, 30)
+        self.editor_track_color.setStyleSheet(
+            f"QFrame#EditorTrackColor {{ background: {track.color}; border-radius: 2px; }}"
+        )
+        toolbar.addWidget(self.editor_track_color)
         self.editor_title_block = QWidget()
         title_layout = QVBoxLayout(self.editor_title_block)
         title_layout.setContentsMargins(0, 0, 0, 0)
@@ -404,6 +420,11 @@ class MidiNoteEditorDialog(QDialog):
         self.shortcut_help_button.setAccessibleName(tr("查看完整快捷键"))
         self.shortcut_help_button.clicked.connect(self.show_shortcut_help)
         toolbar.addWidget(self.shortcut_help_button)
+        self.shortcut_hud_button = PillButton(tr("操作提示"), "ghost")
+        self.shortcut_hud_button.setCheckable(True)
+        self.shortcut_hud_button.setChecked(False)
+        self.shortcut_hud_button.setToolTip(tr("在画布右上角显示当前操作提示"))
+        toolbar.addWidget(self.shortcut_hud_button)
         self.editor_optimize_button = PillButton(
             tr("优化此轨"),
             "secondary",
@@ -412,12 +433,12 @@ class MidiNoteEditorDialog(QDialog):
         self.editor_optimize_button.clicked.connect(self.optimize_draft)
         toolbar.addWidget(self.editor_optimize_button)
         toolbar.addSpacing(5)
-        self.cancel_button = PillButton(tr("放弃"), "ghost")
+        self.cancel_button = PillButton(tr("关闭"), "ghost")
         self.cancel_button.setToolTip(tr("取消"))
         self.cancel_button.setAccessibleName(tr("取消"))
         self.cancel_button.clicked.connect(self.reject)
         toolbar.addWidget(self.cancel_button)
-        self.confirm_button = PillButton(tr("完成"), "convert")
+        self.confirm_button = PillButton(tr("应用"), "convert")
         self.confirm_button.setToolTip(tr("应用并关闭"))
         self.confirm_button.setAccessibleName(tr("应用并关闭"))
         self.confirm_button.clicked.connect(self.accept_with_apply)
@@ -497,6 +518,19 @@ class MidiNoteEditorDialog(QDialog):
         quantize_quick_layout.addWidget(self.quantize_combo)
         inspector_layout.addWidget(self.quantize_quick, 0, Qt.AlignVCenter)
 
+        self.quantize_now_button = PillButton(tr("对齐"), "ghost")
+        self.quantize_now_button.setToolTip(tr("按当前网格量化所选音符；未选择时处理全部"))
+        self.quantize_now_button.clicked.connect(self.quantize_selection)
+        inspector_layout.addWidget(self.quantize_now_button, 0, Qt.AlignVCenter)
+        self.humanize_button = PillButton(tr("自然"), "ghost")
+        self.humanize_button.setToolTip(tr("轻微改变时间与力度，使演奏更自然"))
+        self.humanize_button.clicked.connect(self.humanize_selection)
+        inspector_layout.addWidget(self.humanize_button, 0, Qt.AlignVCenter)
+        self.strum_button = PillButton(tr("扫弦"), "ghost")
+        self.strum_button.setToolTip(tr("将同起点和弦按低音到高音错开"))
+        self.strum_button.clicked.connect(self.strum_selection)
+        inspector_layout.addWidget(self.strum_button, 0, Qt.AlignVCenter)
+
         self.velocity_toggle = PillButton(tr("力度"), "ghost", FluentSymbol.CURVE)
         self.velocity_toggle.setObjectName("VelocityToggle")
         self.velocity_toggle.setCheckable(True)
@@ -559,18 +593,31 @@ class MidiNoteEditorDialog(QDialog):
         self.ghost_opacity_menu.addAction(ghost_opacity_action)
         self.ghost_box.setMenu(self.ghost_opacity_menu)
         inspector_layout.addWidget(self.ghost_box, 0, Qt.AlignVCenter)
+        self.follow_playhead_box = QCheckBox(tr("跟随播放头"))
+        self.follow_playhead_box.setChecked(True)
+        self.follow_playhead_box.setToolTip(tr("播放时保持播放头在可见范围内"))
+        self.follow_playhead_box.toggled.connect(
+            lambda checked: setattr(self, "follow_playhead_enabled", bool(checked))
+        )
+        inspector_layout.addWidget(
+            self.follow_playhead_box, 0, Qt.AlignVCenter
+        )
 
         self.note_controls = QWidget()
-        self.note_controls.setFixedHeight(26)
-        note_layout = QHBoxLayout(self.note_controls)
-        note_layout.setContentsMargins(3, 0, 0, 0)
-        note_layout.setSpacing(7)
+        note_layout = QVBoxLayout(self.note_controls)
+        note_layout.setContentsMargins(6, 4, 6, 4)
+        note_layout.setSpacing(4)
         self.selection_summary = QLabel(tr("未选择音符"))
         self.selection_summary.setObjectName("InspectorSelection")
         self.selection_summary.setWordWrap(False)
         self.selection_summary.setMinimumWidth(145)
         self.selection_summary.setMaximumWidth(190)
         note_layout.addWidget(self.selection_summary)
+        note_fields = QWidget()
+        note_fields_layout = QGridLayout(note_fields)
+        note_fields_layout.setContentsMargins(0, 0, 0, 0)
+        note_fields_layout.setHorizontalSpacing(8)
+        note_fields_layout.setVerticalSpacing(6)
         self.pitch_edit = QLineEdit()
         self.start_edit = QLineEdit()
         self.duration_edit = QLineEdit()
@@ -592,7 +639,13 @@ class MidiNoteEditorDialog(QDialog):
             self.note_field_groups.append(group)
             group_layout.addWidget(field_label)
             group_layout.addWidget(widget)
-            note_layout.addWidget(group)
+            note_fields_layout.addWidget(
+                group,
+                (len(self.note_field_groups) - 1) // 2,
+                (len(self.note_field_groups) - 1) % 2,
+            )
+        note_layout.addWidget(note_fields)
+        note_layout.addStretch(1)
 
         self.articulation_combo = QComboBox()
         supported = list(BDO_ARTICULATIONS.get(track.bdo_instrument_id, []))
@@ -652,21 +705,24 @@ class MidiNoteEditorDialog(QDialog):
         if default_index >= 0:
             self.articulation_combo.setCurrentIndex(default_index)
         self.articulation_combo.currentIndexChanged.connect(self.apply_articulation)
-        note_layout.addStretch(1)
         inspector_layout.addWidget(
             self.note_controls, 1, Qt.AlignVCenter
         )
 
         self.articulation_controls = QWidget()
-        articulation_layout = QHBoxLayout(self.articulation_controls)
-        articulation_layout.setContentsMargins(3, 0, 0, 0)
-        articulation_layout.setSpacing(6)
+        articulation_layout = QVBoxLayout(self.articulation_controls)
+        articulation_layout.setContentsMargins(6, 4, 6, 4)
+        articulation_layout.setSpacing(4)
+        articulation_selector_row = QWidget()
+        articulation_selector_layout = QHBoxLayout(articulation_selector_row)
+        articulation_selector_layout.setContentsMargins(0, 0, 0, 0)
+        articulation_selector_layout.setSpacing(6)
         self.articulation_combo.setObjectName("ArticulationCombo")
         self.articulation_combo.setMinimumWidth(172)
         self.articulation_combo.setFixedHeight(26)
-        articulation_layout.addWidget(
+        articulation_selector_layout.addWidget(
             self.articulation_combo,
-            0,
+            1,
             Qt.AlignVCenter,
         )
         self.articulation_preview_button = QPushButton("")
@@ -691,11 +747,16 @@ class MidiNoteEditorDialog(QDialog):
         self.articulation_preview_button.clicked.connect(
             lambda: self.preview_selected_articulation(force=True)
         )
-        articulation_layout.addWidget(
+        articulation_selector_layout.addWidget(
             self.articulation_preview_button,
             0,
             Qt.AlignVCenter,
         )
+        articulation_layout.addWidget(articulation_selector_row)
+        articulation_chips = QWidget()
+        articulation_chips_layout = QHBoxLayout(articulation_chips)
+        articulation_chips_layout.setContentsMargins(0, 0, 0, 0)
+        articulation_chips_layout.setSpacing(5)
         self.articulation_buttons: dict[int, QPushButton] = {}
         for ntype, label in self.available_articulations[:4]:
             button = QPushButton(label)
@@ -711,7 +772,7 @@ class MidiNoteEditorDialog(QDialog):
             hint_source = BDO_ARTICULATION_USAGE_HINTS.get(ntype)
             if hint_source:
                 button.setToolTip(tr(hint_source))
-            articulation_layout.addWidget(button, 0, Qt.AlignVCenter)
+            articulation_chips_layout.addWidget(button, 0, Qt.AlignVCenter)
             self.articulation_buttons[ntype] = button
         self.articulation_overflow_button = QPushButton("")
         self.articulation_overflow_button.setObjectName("ArticulationChip")
@@ -727,26 +788,34 @@ class MidiNoteEditorDialog(QDialog):
             )
         )
         self.articulation_overflow_button.hide()
-        articulation_layout.addWidget(
+        articulation_chips_layout.addWidget(
             self.articulation_overflow_button,
             0,
             Qt.AlignVCenter,
         )
+        articulation_chips_layout.addStretch(1)
+        articulation_layout.addWidget(articulation_chips)
         articulation_layout.addStretch(1)
         inspector_layout.addWidget(
             self.articulation_controls, 1, Qt.AlignVCenter
         )
 
         self.grid_controls = QWidget()
-        grid_layout = QHBoxLayout(self.grid_controls)
-        grid_layout.setContentsMargins(3, 0, 0, 0)
-        grid_layout.setSpacing(12)
+        grid_layout = QVBoxLayout(self.grid_controls)
+        grid_layout.setContentsMargins(6, 4, 6, 4)
+        grid_layout.setSpacing(4)
+        grid_checks = QWidget()
+        grid_checks_layout = QHBoxLayout(grid_checks)
+        grid_checks_layout.setContentsMargins(0, 0, 0, 0)
+        grid_checks_layout.setSpacing(12)
         self.snap_box = QCheckBox(tr("吸附"))
         self.snap_box.setChecked(True)
-        grid_layout.addWidget(self.snap_box)
+        grid_checks_layout.addWidget(self.snap_box)
         self.note_preview_box = QCheckBox(tr("点击试听"))
         self.note_preview_box.setChecked(True)
-        grid_layout.addWidget(self.note_preview_box)
+        grid_checks_layout.addWidget(self.note_preview_box)
+        grid_checks_layout.addStretch(1)
+        grid_layout.addWidget(grid_checks)
         editor_zoom_label = QLabel(tr("水平缩放"))
         grid_layout.addWidget(editor_zoom_label)
         self.editor_zoom = QSlider(Qt.Horizontal)
@@ -765,10 +834,116 @@ class MidiNoteEditorDialog(QDialog):
         editor_zoom_label.setBuddy(self.editor_zoom)
         self.editor_zoom.valueChanged.connect(self.set_zoom)
         grid_layout.addWidget(self.editor_zoom)
+        self.scale_combo = QComboBox()
+        self.scale_combo.setObjectName("ScaleHighlightCombo")
+        self.scale_combo.setAccessibleName(tr("音阶高亮"))
+        self.scale_combo.addItem(tr("音阶高亮：关闭"), None)
+        for label, root_pitch, minor in (
+            ("C 大调", 0, False),
+            ("G 大调", 7, False),
+            ("D 大调", 2, False),
+            ("F 大调", 5, False),
+            ("A 小调", 9, True),
+        ):
+            self.scale_combo.addItem(tr(label), (root_pitch, minor))
+        self.scale_combo.currentIndexChanged.connect(
+            self._scale_highlight_changed
+        )
+        grid_layout.addWidget(self.scale_combo)
         grid_layout.addStretch(1)
         inspector_layout.addWidget(
             self.grid_controls, 1, Qt.AlignVCenter
         )
+
+        # Display controls belong to a compact popup, not a persistent
+        # inspector page that competes with the piano roll.
+        self.editor_view_button = QToolButton(inspector)
+        self.editor_view_button.setObjectName("EditorViewButton")
+        self.editor_view_button.setText(tr("视图"))
+        self.editor_view_button.setAccessibleName(tr("显示"))
+        self.editor_view_button.setToolTip(tr("显示"))
+        self.editor_view_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.editor_view_menu = QMenu(self.editor_view_button)
+        self.editor_snap_action = self.editor_view_menu.addAction(tr("吸附"))
+        self.editor_snap_action.setCheckable(True)
+        self.editor_snap_action.setChecked(self.snap_box.isChecked())
+        self.editor_snap_action.toggled.connect(self.snap_box.setChecked)
+        self.snap_box.toggled.connect(self.editor_snap_action.setChecked)
+        self.editor_preview_action = self.editor_view_menu.addAction(
+            tr("点击试听")
+        )
+        self.editor_preview_action.setCheckable(True)
+        self.editor_preview_action.setChecked(self.note_preview_box.isChecked())
+        self.editor_preview_action.toggled.connect(
+            self.note_preview_box.setChecked
+        )
+        self.note_preview_box.toggled.connect(
+            self.editor_preview_action.setChecked
+        )
+        scale_menu = self.editor_view_menu.addMenu(tr("音阶高亮"))
+        self.editor_scale_action_group = QActionGroup(scale_menu)
+        self.editor_scale_action_group.setExclusive(True)
+        self.editor_scale_actions = []
+        for index in range(self.scale_combo.count()):
+            action = scale_menu.addAction(self.scale_combo.itemText(index))
+            action.setCheckable(True)
+            action.setChecked(index == self.scale_combo.currentIndex())
+            action.triggered.connect(
+                lambda _checked=False, target=index: (
+                    self.scale_combo.setCurrentIndex(target)
+                )
+            )
+            self.editor_scale_action_group.addAction(action)
+            self.editor_scale_actions.append(action)
+        self.scale_combo.currentIndexChanged.connect(
+            lambda index: self.editor_scale_actions[index].setChecked(True)
+            if 0 <= index < len(self.editor_scale_actions)
+            else None
+        )
+        self.editor_view_menu.addSeparator()
+        self.editor_zoom_popup = QWidget(self.editor_view_menu)
+        zoom_popup_layout = QHBoxLayout(self.editor_zoom_popup)
+        zoom_popup_layout.setContentsMargins(9, 5, 9, 5)
+        zoom_popup_layout.setSpacing(8)
+        zoom_popup_layout.addWidget(QLabel(tr("水平缩放")))
+        zoom_popup_layout.addWidget(self.editor_zoom)
+        zoom_action = QWidgetAction(self.editor_view_menu)
+        zoom_action.setDefaultWidget(self.editor_zoom_popup)
+        self.editor_view_menu.addAction(zoom_action)
+        self.editor_view_button.setMenu(self.editor_view_menu)
+
+        for widget in (
+            self.note_mode_button,
+            self.articulation_mode_button,
+            self.grid_mode_button,
+            self.note_controls,
+            self.articulation_controls,
+            self.grid_controls,
+        ):
+            inspector_layout.removeWidget(widget)
+            widget.hide()
+        for widget in (
+            self.quantize_quick,
+            self.velocity_toggle,
+            self.ghost_box,
+            self.follow_playhead_box,
+            self.editor_view_button,
+        ):
+            widget.setSizePolicy(
+                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Fixed,
+            )
+        self.quantize_quick.setFixedWidth(150)
+        self.velocity_toggle.setFixedWidth(88)
+        self.ghost_box.setFixedWidth(108)
+        self.follow_playhead_box.setFixedWidth(112)
+        self.editor_view_button.setFixedSize(72, 26)
+        inspector_layout.addWidget(
+            self.editor_view_button, 0, Qt.AlignVCenter
+        )
+        inspector_layout.addStretch(1)
         add_inset(inspector, "EditorInspectorInset")
         self._set_top_inspector_mode("note")
 
@@ -1017,11 +1192,22 @@ class MidiNoteEditorDialog(QDialog):
             self.transcription_panel.melody_line_roles
         )
         self.canvas.set_notes(list(initial_notes))
+        self.canvas.set_timeline_markers(
+            getattr(parent, "research_metadata", {}).get(
+                "timeline_markers", ()
+            )
+        )
         self.shortcut_hud = EditorShortcutHud(self.canvas)
+        self.shortcut_hud_button.toggled.connect(
+            self.shortcut_hud.set_user_visible
+        )
         self.canvas.selection_changed.connect(self.refresh_fields)
         self.canvas.notes_changed.connect(self._notes_changed)
         self.canvas.hover_changed.connect(self._hover_changed)
         self.canvas.ruler_seek_requested.connect(self.seek_draft)
+        self.canvas.marker_edit_requested.connect(
+            self._request_timeline_marker_edit
+        )
         self.canvas.candidate_selection_changed.connect(
             self._transcription_selection_changed
         )
@@ -1111,7 +1297,107 @@ class MidiNoteEditorDialog(QDialog):
         scroll_corner.setFixedSize(12, 12)
         scroll_row.addWidget(scroll_corner)
         workspace_layout.addLayout(scroll_row)
-        root.addWidget(workspace, 1)
+        editor_body = QFrame()
+        editor_body.setObjectName("EditorBody")
+        editor_body_layout = QHBoxLayout(editor_body)
+        editor_body_layout.setContentsMargins(0, 0, 0, 0)
+        editor_body_layout.setSpacing(0)
+
+        self.editor_tool_rail = QFrame()
+        self.editor_tool_rail.setObjectName("EditorToolRail")
+        self.editor_tool_rail.setFixedWidth(58)
+        tool_rail_layout = QVBoxLayout(self.editor_tool_rail)
+        tool_rail_layout.setContentsMargins(6, 8, 6, 8)
+        tool_rail_layout.setSpacing(6)
+        self.note_tool_group = QButtonGroup(self)
+        self.note_tool_group.setExclusive(True)
+        self.select_tool_button = PillButton("", "ghost", FluentSymbol.SELECT)
+        self.select_tool_button.setObjectName("EditorToolButton")
+        self.select_tool_button.setAccessibleName(tr("选择"))
+        self.select_tool_button.setToolTip(
+            tr("选择模式：双击新建，拖动空白框选，Ctrl+拖动复制")
+        )
+        self.select_tool_button.setCheckable(True)
+        self.select_tool_button.setChecked(True)
+        self.draw_mode_button.setText("")
+        set_fluent_symbol(self.draw_mode_button, FluentSymbol.ADD_TRACK)
+        self.draw_mode_button.setAccessibleName(tr("绘制"))
+        self.draw_mode_button.setObjectName("EditorToolButton")
+        self.erase_tool_button = PillButton("", "ghost", FluentSymbol.DELETE)
+        self.erase_tool_button.setObjectName("EditorToolButton")
+        self.erase_tool_button.setAccessibleName(tr("擦除"))
+        self.erase_tool_button.setCheckable(True)
+        self.erase_tool_button.setToolTip(tr("单击音符即可删除"))
+        self.split_tool_button = PillButton("", "ghost", FluentSymbol.RAZOR)
+        self.split_tool_button.setObjectName("EditorToolButton")
+        self.split_tool_button.setAccessibleName(tr("剃刀"))
+        self.split_tool_button.setCheckable(True)
+        self.split_tool_button.setToolTip(tr("剃刀：单击音符内部即可切分"))
+        for tool_id, button in enumerate((
+            self.select_tool_button,
+            self.draw_mode_button,
+            self.erase_tool_button,
+            self.split_tool_button,
+        )):
+            self.note_tool_group.addButton(button, tool_id)
+            button.setFixedSize(46, 36)
+            tool_rail_layout.addWidget(button)
+        self.note_tool_group.idClicked.connect(self._note_tool_changed)
+        tool_rail_layout.addSpacing(8)
+        self.fit_selection_button = PillButton("", "ghost", FluentSymbol.FIT)
+        self.fit_selection_button.setObjectName("EditorToolButton")
+        self.fit_selection_button.setAccessibleName(tr("适应"))
+        self.fit_selection_button.setFixedSize(46, 36)
+        self.fit_selection_button.setToolTip(tr("适应所选音符；未选择时适应整轨"))
+        self.fit_selection_button.clicked.connect(self.fit_note_view)
+        tool_rail_layout.addWidget(self.fit_selection_button)
+        tool_rail_layout.addStretch(1)
+        self.delete_selection_button = PillButton("", "ghost", FluentSymbol.DELETE)
+        self.delete_selection_button.setObjectName("EditorToolButton")
+        self.delete_selection_button.setAccessibleName(tr("删除所选音符"))
+        self.delete_selection_button.setFixedSize(46, 36)
+        self.delete_selection_button.setToolTip(tr("删除所选音符"))
+        self.delete_selection_button.clicked.connect(self.delete_selected)
+        tool_rail_layout.addWidget(self.delete_selection_button)
+
+        self.editor_properties_bar = QFrame()
+        self.editor_properties_bar.setObjectName("EditorPropertiesBar")
+        self.editor_properties_bar.setFixedHeight(44)
+        properties_layout = QHBoxLayout(self.editor_properties_bar)
+        properties_layout.setContentsMargins(66, 4, 10, 4)
+        properties_layout.setSpacing(8)
+        self.selection_summary.setFixedWidth(230)
+        properties_layout.addWidget(self.selection_summary)
+        field_widths = (112, 142, 142, 112)
+        for group, width in zip(self.note_field_groups, field_widths):
+            group.setFixedWidth(width)
+            group.setSizePolicy(
+                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Fixed,
+            )
+            properties_layout.addWidget(group, 0, Qt.AlignVCenter)
+        properties_separator = QFrame(self.editor_properties_bar)
+        properties_separator.setObjectName("EditorPropertiesSeparator")
+        properties_separator.setFrameShape(QFrame.VLine)
+        properties_layout.addWidget(properties_separator)
+        self.articulation_context_label = QLabel(tr("奏法"))
+        self.articulation_context_label.setObjectName("Muted")
+        self.articulation_context_label.setBuddy(self.articulation_combo)
+        properties_layout.addWidget(self.articulation_context_label)
+        self.articulation_combo.setFixedWidth(184)
+        properties_layout.addWidget(
+            self.articulation_combo, 0, Qt.AlignVCenter
+        )
+        properties_layout.addWidget(
+            self.articulation_preview_button, 0, Qt.AlignVCenter
+        )
+        properties_layout.addStretch(1)
+
+        editor_body_layout.addWidget(self.editor_tool_rail)
+        editor_body_layout.addWidget(workspace, 1)
+        root.addWidget(editor_body, 1)
+        root.addWidget(self.editor_properties_bar)
+        self.editor_properties_bar.hide()
 
         footer = QFrame()
         footer.setObjectName("EditorFooter")
@@ -1254,22 +1540,18 @@ class MidiNoteEditorDialog(QDialog):
         )
         self._set_editor_compact_button(
             self.cancel_button,
-            "放弃",
-            tr("放弃"),
+            "关闭",
+            tr("关闭"),
             compact,
         )
         self._set_editor_compact_button(
             self.confirm_button,
-            "完成",
-            tr("完成"),
+            "应用",
+            tr("应用"),
             compact,
         )
 
         for button, source, compact_text in (
-            (self.draw_mode_button, "绘制 B", tr("绘制")),
-            (self.note_mode_button, "音符", tr("音符")),
-            (self.articulation_mode_button, "奏法", tr("奏法")),
-            (self.grid_mode_button, "显示", tr("显示")),
             (self.velocity_toggle, "力度", tr("力度")),
         ):
             self._set_editor_compact_button(
@@ -1282,8 +1564,17 @@ class MidiNoteEditorDialog(QDialog):
             label.setVisible(not compact)
         self.quantize_quick_label.setVisible(not compact)
         self.quantize_combo.setFixedWidth(88 if compact else 92)
-        self.selection_summary.setMinimumWidth(70 if compact else 145)
-        self.selection_summary.setMaximumWidth(120 if compact else 190)
+        self.quantize_quick.setFixedWidth(104 if compact else 150)
+        self.velocity_toggle.setFixedWidth(72 if compact else 88)
+        self.follow_playhead_box.setFixedWidth(96 if compact else 112)
+        self.selection_summary.setFixedWidth(150 if compact else 230)
+        for group, width in zip(
+            self.note_field_groups,
+            (72, 80, 80, 72) if compact else (112, 142, 142, 112),
+        ):
+            group.setFixedWidth(width)
+        self.articulation_context_label.setVisible(not compact)
+        self.articulation_combo.setFixedWidth(140 if compact else 184)
         ghost_label = tr("参照") if compact else tr("其他轨")
         self.ghost_box.setText(ghost_label)
         ghost_width = self.ghost_box.fontMetrics().horizontalAdvance(ghost_label) + 34
@@ -1295,6 +1586,36 @@ class MidiNoteEditorDialog(QDialog):
 
     def quantize_ms(self) -> float:
         return self.canvas.beat_ms / int(self.quantize_combo.currentData() or 4)
+
+    def _apply_creative_transform(self, transformed: list[Note]) -> None:
+        if transformed == self.canvas.notes:
+            return
+        self.push_snapshot()
+        self.canvas.notes = transformed
+        self._notes_changed()
+        self.refresh_fields()
+
+    def quantize_selection(self) -> None:
+        self._apply_creative_transform(quantize_note_starts(
+            self.canvas.notes,
+            set(self.canvas.selected),
+            self.quantize_ms(),
+            self.beat_origin_ms,
+        ))
+
+    def humanize_selection(self) -> None:
+        self._apply_creative_transform(humanize_notes(
+            self.canvas.notes,
+            set(self.canvas.selected),
+            self.quantize_ms(),
+            seed=f"{self.track.track_id}:{len(self.undo_stack)}",
+        ))
+
+    def strum_selection(self) -> None:
+        self._apply_creative_transform(strum_chords(
+            self.canvas.notes,
+            set(self.canvas.selected),
+        ))
 
     def _quantize_grid_changed(self, _index: int) -> None:
         """Refresh the existing snap grid after the shared preset changes."""
@@ -1408,6 +1729,16 @@ class MidiNoteEditorDialog(QDialog):
     # dialog into its panel/canvas implementation details.
     def has_transcription_staging(self) -> bool:
         return self._has_transcription_staging()
+
+    def set_timeline_markers(self, markers: object) -> None:
+        self.canvas.set_timeline_markers(markers)
+
+    def _request_timeline_marker_edit(self, request: object) -> None:
+        edit_marker = getattr(
+            self.parentWidget(), "_edit_timeline_marker", None
+        )
+        if callable(edit_marker):
+            edit_marker(request)
 
     def warn_transcription_staging_blocked(self) -> bool:
         return self._warn_staging_blocks_analysis()
@@ -3765,9 +4096,6 @@ class MidiNoteEditorDialog(QDialog):
     def _set_top_inspector_mode(self, mode: str) -> None:
         show_notes = mode == "note"
         show_articulation = mode == "articulation"
-        self.note_controls.setVisible(show_notes)
-        self.articulation_controls.setVisible(show_articulation)
-        self.grid_controls.setVisible(mode == "grid")
         self.note_mode_button.setChecked(show_notes)
         self.articulation_mode_button.setChecked(show_articulation)
         self.grid_mode_button.setChecked(mode == "grid")
@@ -3780,12 +4108,104 @@ class MidiNoteEditorDialog(QDialog):
             )
 
     def _toggle_draw_mode(self, enabled: bool) -> None:
+        if enabled:
+            self.active_note_tool = "draw"
+        elif self.active_note_tool == "draw":
+            self.active_note_tool = "select"
         if hasattr(self, "canvas"):
             self.canvas.setCursor(Qt.CrossCursor if enabled else Qt.ArrowCursor)
             self.canvas.update()
         if hasattr(self, "status"):
             self._update_shortcut_hud()
             self._update_status()
+
+    def _note_tool_changed(self, tool_id: int) -> None:
+        self.active_note_tool = {
+            0: "select",
+            1: "draw",
+            2: "erase",
+            3: "split",
+        }.get(int(tool_id), "select")
+        if hasattr(self, "canvas"):
+            cursor = {
+                "draw": Qt.CrossCursor,
+                "erase": Qt.PointingHandCursor,
+                "split": Qt.SplitHCursor,
+            }.get(self.active_note_tool, Qt.ArrowCursor)
+            self.canvas.setCursor(cursor)
+            self.canvas.update()
+        self._update_shortcut_hud()
+        self._update_status()
+
+    def split_note_at(self, index: int, split_ms: float) -> bool:
+        """Split one draft note without touching the formal TrackState."""
+
+        if not 0 <= int(index) < len(self.canvas.notes):
+            return False
+        note = self.canvas.notes[int(index)]
+        minimum = max(1.0, min(self.quantize_ms(), float(note.dur) / 4.0))
+        split = float(split_ms)
+        if self.snap_box.isChecked():
+            grid = self.quantize_ms()
+            split = round(split / grid) * grid
+        split = max(float(note.start) + minimum, min(float(note.start + note.dur) - minimum, split))
+        if split <= note.start or split >= note.start + note.dur:
+            return False
+        self.push_snapshot()
+        left = note._replace(dur=split - note.start)
+        right = note._replace(start=split, dur=note.start + note.dur - split)
+        self.canvas.notes[int(index): int(index) + 1] = [left, right]
+        self.canvas.selected = {int(index), int(index) + 1}
+        self.canvas.anchor_index = int(index) + 1
+        self._notes_changed()
+        self.refresh_fields()
+        return True
+
+    def fit_note_view(self) -> None:
+        """Fit the selected phrase, or the whole track, in the current roll."""
+
+        indices = sorted(self.canvas.selected)
+        notes = [
+            self.canvas.notes[index]
+            for index in indices
+            if 0 <= index < len(self.canvas.notes)
+        ] or list(self.canvas.notes)
+        if not notes:
+            return
+        start_ms = min(float(note.start) for note in notes)
+        end_ms = max(float(note.start + note.dur) for note in notes)
+        self.focus_transcription_time_range(start_ms, end_ms)
+        low = min(int(note.pitch) for note in notes)
+        high = max(int(note.pitch) for note in notes)
+        available_height = max(
+            120.0, float(self.canvas.height() - self.canvas.RULER_H)
+        )
+        self.canvas.ROW_H = max(
+            self.canvas.MIN_ROW_H,
+            min(
+                self.canvas.MAX_ROW_H,
+                available_height / max(4, high - low + 3),
+            ),
+        )
+        visible_rows = self.visible_pitch_rows()
+        self.canvas.pitch_top = min(
+            self.canvas.MAX_PITCH,
+            max(high + 1, low + visible_rows - 2),
+        )
+        self.canvas.invalidate_roll_background()
+        self.update_scrollbars()
+        self.canvas.update()
+
+    def _scale_highlight_changed(self, _index: int) -> None:
+        data = self.scale_combo.currentData()
+        if data is None:
+            pitch_classes = None
+            root_pitch = None
+        else:
+            root_pitch, minor = data
+            intervals = (0, 2, 3, 5, 7, 8, 10) if minor else (0, 2, 4, 5, 7, 9, 11)
+            pitch_classes = frozenset((int(root_pitch) + value) % 12 for value in intervals)
+        self.canvas.set_scale_highlight(pitch_classes, root_pitch)
 
     def _update_shortcut_hud(self) -> None:
         if not hasattr(self, "shortcut_hud"):
@@ -4124,7 +4544,13 @@ class MidiNoteEditorDialog(QDialog):
                         force=True,
                     )
             status = parent.realtime_audio.get_status()
-            self.set_draft_playhead(status.position_ms, follow=self.draft_playback_state == "playing")
+            self.set_draft_playhead(
+                status.position_ms,
+                follow=(
+                    self.draft_playback_state == "playing"
+                    and self.follow_playhead_enabled
+                ),
+            )
             if (
                 shared_range is not None
                 and status.state == "playing"
@@ -4306,7 +4732,11 @@ class MidiNoteEditorDialog(QDialog):
             self.canvas.MAX_PITCH - self.canvas.MIN_PITCH + 1,
             self.visible_pitch_rows(),
         )
-        if self.canvas.notes:
+        if self.canonical_drum_lanes:
+            # Always expose every native 48–64 drum lane, even when the
+            # current draft happens to contain only one middle piece.
+            target = max(BDO_DRUM_MAX, BDO_DRUM_MIN + visible_rows - 1)
+        elif self.canvas.notes:
             low = min(int(note.pitch) for note in self.canvas.notes)
             high = max(int(note.pitch) for note in self.canvas.notes)
             if high - low + 1 > max(1, visible_rows - 3):
@@ -4416,6 +4846,9 @@ class MidiNoteEditorDialog(QDialog):
         parent = self.parent()
         if not parent or not hasattr(parent, "realtime_audio"):
             return
+        claim_focus = getattr(parent, "_claim_playback_focus", None)
+        if callable(claim_focus):
+            claim_focus(self)
         self.audition_timer.stop()
         self.audition_stop_timer.stop()
         self.audition_pending = False
@@ -4812,6 +5245,14 @@ class MidiNoteEditorDialog(QDialog):
         self._velocity_mapping_pool.clear()
         super().closeEvent(event)
 
+    def event(self, event) -> bool:
+        if event.type() == QEvent.Type.WindowActivate:
+            owner = self.parentWidget()
+            activate = getattr(owner, "_activate_note_editor", None)
+            if callable(activate):
+                activate(self)
+        return super().event(event)
+
     def reject(self) -> None:
         super().reject()
 
@@ -5147,6 +5588,8 @@ class MidiNoteEditorDialog(QDialog):
                 self.canvas.notes[preferred_index]
             )
         has_selection = bool(chosen)
+        if hasattr(self, "editor_properties_bar"):
+            self.editor_properties_bar.setVisible(has_selection)
         for group in self.note_field_groups:
             group.setVisible(has_selection)
         if not chosen:
@@ -5207,7 +5650,41 @@ class MidiNoteEditorDialog(QDialog):
         self._request_velocity_mapping_hint()
         self.note_controls.updateGeometry()
         self._update_shortcut_hud()
+        self._update_game_note_status(chosen)
         self._update_status()
+
+    def _update_game_note_status(self, chosen: list) -> None:
+        if not hasattr(self, "game_note_status"):
+            return
+        invalid = sum(1 for note in chosen if self.note_invalid(note.pitch))
+        if invalid:
+            self.game_note_status.setProperty("gameState", "warning")
+            self.game_note_status.setText(
+                trf(
+                    "游戏检查：所选音符中有 {count} 个超出当前乐器音域；应用不会自动修正。",
+                    count=invalid,
+                )
+            )
+        elif chosen:
+            self.game_note_status.setProperty("gameState", "ok")
+            self.game_note_status.setText(
+                tr("游戏检查：所选音符符合当前乐器音域。")
+            )
+        elif self._invalid_note_count:
+            self.game_note_status.setProperty("gameState", "warning")
+            self.game_note_status.setText(
+                trf(
+                    "游戏检查：整轨有 {count} 个音符超出当前乐器音域。",
+                    count=self._invalid_note_count,
+                )
+            )
+        else:
+            self.game_note_status.setProperty("gameState", "ok")
+            self.game_note_status.setText(
+                tr("游戏检查：当前轨道音符均符合乐器音域。")
+            )
+        self.game_note_status.style().unpolish(self.game_note_status)
+        self.game_note_status.style().polish(self.game_note_status)
 
     def _hover_changed(self, ms: float, pitch: int) -> None:
         key = (int(ms // 25.0), int(pitch))

@@ -6,6 +6,19 @@ Only developer diagnostics, benchmarks, and validators are indexed here.
 one-off preparation utilities. The desktop application and packaged runtime
 must not depend on these entry points.
 
+## Temporary conversion
+
+- [`bdo_to_midi.py`](bdo_to_midi.py) converts a BDO v9 score to a playable
+  Type-1 MIDI file without integrating with the desktop application.  It
+  embeds exact BDO note fields (`ntype`, both velocity bytes, and floating-point
+  milliseconds) in per-track standard MIDI sequencer-specific metadata. Run:
+  `python tools/bdo_to_midi.py input.bdo output.mid --verify`.
+- [`bdo_to_midi_gui.py`](bdo_to_midi_gui.py) is the separate Windows UI for
+  the same temporary converter. Build only this tool with
+  `powershell -ExecutionPolicy Bypass -File packaging\\windows\\build_bdo_to_midi_tool.ps1`;
+  it writes `out/tools/bdo-to-midi/BDO-to-MIDI.exe` and does not alter the
+  desktop application's build.
+
 ## Repository and performance checks
 
 - [`check_repository_hygiene.py`](check_repository_hygiene.py)
@@ -23,6 +36,11 @@ must not depend on these entry points.
   frame sizes; build it first with `packaging/native_audio/build.ps1`.
 - [`benchmark_realtime_audio.py`](benchmark_realtime_audio.py)
 - [`benchmark_transcription_candidate_queries.py`](benchmark_transcription_candidate_queries.py)
+- [`stress_project_reliability.py`](stress_project_reliability.py) runs a
+  deterministic, temporary-directory-only adversarial workload against project
+  undo/redo, autosave atomic replacement, malformed snapshots, diagnostic-log
+  failure, and bounded history. Run `python tools/stress_project_reliability.py
+  --seed 20260813 --iterations 120`.
 
 ## Game/audio evidence audits
 

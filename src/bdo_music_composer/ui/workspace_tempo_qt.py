@@ -189,7 +189,7 @@ class WorkspaceTempoHostMixin:
         self.automatic_instrument_match_analysis = None
         self.instrument_match_analysis = None
         self._apply_workspace_change(ModelChange.grid())
-        self._mark_conversion_check_dirty()
+        self._schedule_timeline_validation_refresh()
         if self.transcription_result is not None:
             self._start_transcription_assist_analysis()
             self._start_reference_timbre_analysis(force_restart=True)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from io import BytesIO
 from pathlib import Path
 import subprocess
 import sys
@@ -12,7 +13,10 @@ import mido
 
 from bdo_midi import Note
 from bdo_music_composer.editor.editor_models import TrackState
-from bdo_music_composer.editor.preview_midi_writer import build_filtered_midi
+from bdo_music_composer.editor.preview_midi_writer import (
+    build_filtered_midi,
+    build_filtered_midi_bytes,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -219,6 +223,36 @@ class PreviewMidiWriterTests(unittest.TestCase):
             0,
             completed.stdout + completed.stderr,
         )
+
+    def test_in_memory_projection_is_a_complete_standard_midi(self) -> None:
+        payload = build_filtered_midi_bytes(
+            [_track(
+                1,
+                notes=[Note(60, 90, 250.0, 500.0, 0)],
+                gm_program=12,
+            )],
+            120,
+            4,
+            [{"time": 250.0, "kind": "lyrics", "text": "A"}],
+        )
+
+        midi = mido.MidiFile(file=BytesIO(payload))
+
+        self.assertEqual(len(midi.tracks), 2)
+        self.assertTrue(any(message.type == "lyrics" for message in midi.tracks[0]))
+        self.assertTrue(any(message.type == "note_on" for message in midi.tracks[1]))
+
+    def test_standard_projection_rejects_more_than_fifteen_programs(self) -> None:
+        tracks = [
+            _track(
+                index,
+                notes=[Note(60, 90, 0.0, 100.0, 0)],
+                gm_program=index,
+            )
+            for index in range(16)
+        ]
+        with self.assertRaisesRegex(ValueError, "15 simultaneous"):
+            build_filtered_midi_bytes(tracks, 120, 4)
 
 
 if __name__ == "__main__":

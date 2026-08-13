@@ -18,7 +18,7 @@ from bdo_music_composer.editor.game_score_model import bake_game_velocity_transf
 from bdo_music_composer.editor.pitch_transform import PitchTransformPlan
 
 
-CURRENT_PROJECT_SCHEMA = 11
+CURRENT_PROJECT_SCHEMA = 13
 REFERENCE_LAYER_SETTINGS_VERSION = 10
 
 
@@ -429,6 +429,20 @@ def migrate_project(payload: Mapping[str, Any]) -> dict[str, Any]:
         _bake_game_velocity_policy(result)
         result["schema_version"] = 11
         version = 11
+    if version == 11:
+        for track in result.get("tracks") or ():
+            if isinstance(track, dict):
+                track.setdefault("clip_start_ms", None)
+                track.setdefault("clip_end_ms", None)
+                track.setdefault("arrangement_group_id", "")
+        result["schema_version"] = 12
+        version = 12
+    if version == 12:
+        for track in result.get("tracks") or ():
+            if isinstance(track, dict):
+                track.setdefault("arrangement_clips", [])
+        result["schema_version"] = 13
+        version = 13
     # A hand-written current project can omit optional fields.  Keep migration
     # idempotent and give every current project the same safe defaults.
     result.setdefault("reference_audio_offset_ms", 0.0)

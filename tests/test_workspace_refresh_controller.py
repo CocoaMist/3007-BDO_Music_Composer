@@ -35,8 +35,16 @@ class WorkspaceRefreshControllerTests(unittest.TestCase):
         self.assertTrue(plan.advance_revision)
         self.assertFalse(plan.rebuild_timeline)
         self.assertEqual(plan.changed_track_ids, frozenset({3, 7}))
+        self.assertEqual(plan.reindex_track_ids, frozenset({3, 7}))
         self.assertTrue(plan.refresh_validation)
         self.assertTrue(plan.refresh_transcription)
+
+    def test_track_meta_refresh_does_not_reindex_notes(self) -> None:
+        plan = WorkspaceRefreshController().plan((ModelChange.track_meta(3, 7),))
+        self.assertEqual(plan.changed_track_ids, frozenset({3, 7}))
+        self.assertEqual(plan.reindex_track_ids, frozenset())
+        self.assertTrue(plan.refresh_preview)
+        self.assertFalse(plan.refresh_validation)
 
     def test_structure_change_dominates_local_note_updates(self) -> None:
         plan = WorkspaceRefreshController().plan(

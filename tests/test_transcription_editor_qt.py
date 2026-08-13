@@ -148,9 +148,9 @@ class TranscriptionEditorQtTests(unittest.TestCase):
                 panel.timbre_grouping_checkbox.parentWidget()
                 is panel.timbre_legend_label.parentWidget()
             )
-            assert panel.candidate_layer_button.isVisible()
+            assert not panel.candidate_layer_button.isVisible()
             assert panel.candidate_layer_button.text() == "分析音块 · 52%"
-            assert panel.pitch_guide_button.isVisible()
+            assert not panel.pitch_guide_button.isVisible()
             assert panel.pitch_guide_button.text() == "音高线"
             assert panel.candidate_layer_menu is not panel.pitch_guide_menu
             assert not panel.pitch_only_button.isVisible()
@@ -195,6 +195,8 @@ class TranscriptionEditorQtTests(unittest.TestCase):
             panel.set_audio_loaded(True, display_name="reference.wav")
             assert panel.audio_button.text() == "更换音频"
             assert panel.remove_audio_button.isVisible()
+            assert panel.candidate_layer_button.isVisible()
+            assert panel.pitch_guide_button.isVisible()
             panel.audio_button.click()
             assert events["load"] == 2
             assert events["unload"] == 0

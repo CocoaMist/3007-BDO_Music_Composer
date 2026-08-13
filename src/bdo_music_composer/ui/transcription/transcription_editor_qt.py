@@ -3227,6 +3227,7 @@ class TranscriptionEditorPanel(QWidget):
         self.audio_button.setProperty("i18nSkipToolTip", bool(loaded))
         self.audio_button.setToolTip(display_name if loaded else "")
         self.remove_audio_button.setVisible(self._audio_loaded)
+        self._refresh_contextual_visibility()
         self._refresh_analysis_controls()
 
     def set_sensitivity(self, value: str) -> None:
@@ -3715,6 +3716,19 @@ class TranscriptionEditorPanel(QWidget):
         advanced = self._advanced_controls_expanded
         has_candidates = self._candidate_count > 0 or self._rejected_count > 0
         has_reference_context = self._audio_loaded or has_candidates
+        empty_audio_state = not has_reference_context
+        self.analyze_button.setVisible(self._audio_loaded)
+        self.rhythm_diagnostic_button.setVisible(self._audio_loaded)
+        self.review_bar.setVisible(
+            has_reference_context or self._staging_count > 0
+        )
+        if empty_audio_state:
+            self.analysis_bar.setFixedHeight(36)
+            self._analysis_layout.setContentsMargins(8, 3, 8, 3)
+        else:
+            self.analysis_bar.setMinimumHeight(0)
+            self.analysis_bar.setMaximumHeight(16777215)
+            self._analysis_layout.setContentsMargins(8, 5, 8, 5)
         self.candidate_tools_bar.setVisible(advanced and has_candidates)
         self.guide_tools_bar.setVisible(advanced and has_reference_context)
         self.alignment_tools_bar.setVisible(

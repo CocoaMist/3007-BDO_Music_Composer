@@ -101,6 +101,12 @@ class EditorShortcutHudTests(unittest.TestCase):
             hud = editor.shortcut_hud
             assert isinstance(hud, EditorShortcutHud)
             assert hud.parent() is editor.canvas
+            assert not hud.user_visible
+            assert not hud.isVisible()
+            assert not editor.shortcut_hud_button.isChecked()
+            editor.shortcut_hud_button.click()
+            app.processEvents()
+            assert hud.user_visible
             assert hud.isVisible()
             assert hud.testAttribute(Qt.WA_TransparentForMouseEvents)
             assert hud.focusPolicy() == Qt.NoFocus

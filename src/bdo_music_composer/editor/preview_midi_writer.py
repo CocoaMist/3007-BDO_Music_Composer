@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 
 import mido
 
 from .editor_models import TrackState
+from .arrangement_clip import project_track_notes
 
 
 _TICKS_PER_BEAT = 480
 _TEXT_EVENT_KINDS = frozenset({"lyrics", "text", "marker", "cue_marker"})
+_MELODIC_CHANNELS = tuple(channel for channel in range(16) if channel != 9)
 
 
 def _milliseconds_to_ticks(ms: float, *, tempo: int) -> int:
@@ -118,10 +121,10 @@ def _track_events(
             continue
         if message is not None:
             events.append((tick, 1, message))
-    for note in track_state.notes:
+    for note in project_track_notes(track_state):
         start = _milliseconds_to_ticks(note.start, tempo=tempo)
         end = _milliseconds_to_ticks(
-            note.start + max(1.0, note.dur * track_state.duration_scale),
+            note.start + max(1.0, note.dur),
             tempo=tempo,
         )
         velocity = max(1, min(127, round(note.vel)))
@@ -152,6 +155,40 @@ def _midi_track(events: list[tuple[int, int, object]]) -> object:
     return midi_track
 
 
+def _build_filtered_midi_document(
+    tracks: list[TrackState],
+    bpm: int,
+    time_sig: int,
+    lyric_events: list[dict] | None = None,
+    *,
+    standard_channels: bool = False,
+) -> mido.MidiFile:
+    mid = mido.MidiFile(ticks_per_beat=_TICKS_PER_BEAT)
+    meta_track, tempo = _build_meta_track(bpm, time_sig, lyric_events)
+    mid.tracks.append(meta_track)
+    program_channels: dict[int, int] = {}
+    for out_index, track_state in enumerate(tracks):
+        if track_state.is_percussion:
+            channel = 9
+        elif standard_channels:
+            program = int(track_state.gm_program)
+            if program not in program_channels:
+                if len(program_channels) >= len(_MELODIC_CHANNELS):
+                    raise ValueError(
+                        "standard MIDI supports at most 15 simultaneous melodic programs"
+                    )
+                program_channels[program] = _MELODIC_CHANNELS[len(program_channels)]
+            channel = program_channels[program]
+        else:
+            channel = min(out_index, 8)
+        mid.tracks.append(_midi_track(_track_events(
+            track_state,
+            channel,
+            tempo=tempo,
+        )))
+    return mid
+
+
 def build_filtered_midi(
     tracks: list[TrackState],
     bpm: int,
@@ -161,17 +198,28 @@ def build_filtered_midi(
 ) -> None:
     """Write a deterministic /4 MIDI projection of current editor tracks."""
 
-    mid = mido.MidiFile(ticks_per_beat=_TICKS_PER_BEAT)
-    meta_track, tempo = _build_meta_track(bpm, time_sig, lyric_events)
-    mid.tracks.append(meta_track)
-    for out_index, track_state in enumerate(tracks):
-        channel = 9 if track_state.is_percussion else min(out_index, 8)
-        mid.tracks.append(_midi_track(_track_events(
-            track_state,
-            channel,
-            tempo=tempo,
-        )))
+    mid = _build_filtered_midi_document(tracks, bpm, time_sig, lyric_events)
     mid.save(out_path)
 
 
-__all__ = ["build_filtered_midi"]
+def build_filtered_midi_bytes(
+    tracks: list[TrackState],
+    bpm: int,
+    time_sig: int,
+    lyric_events: list[dict] | None = None,
+) -> bytes:
+    """Return the current editor projection without touching a destination."""
+
+    mid = _build_filtered_midi_document(
+        tracks,
+        bpm,
+        time_sig,
+        lyric_events,
+        standard_channels=True,
+    )
+    output = BytesIO()
+    mid.save(file=output)
+    return output.getvalue()
+
+
+__all__ = ["build_filtered_midi", "build_filtered_midi_bytes"]

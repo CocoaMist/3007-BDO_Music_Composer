@@ -45,6 +45,7 @@ from bdo_music_composer.transcription.bdo_transcription_melody_lines import (
 )
 from bdo_music_composer.transcription.bdo_transcription_policy import CANDIDATE_NOTE_POLICY
 from bdo_music_composer.editor.editor_models import GhostNoteProjection, note_name
+from bdo_music_composer.editor.timeline_markers import normalize_timeline_markers
 from .editor_ui_helpers import (
     TRACK_COLORS,
     articulation_color,
@@ -72,6 +73,7 @@ class PianoRollCanvas(QWidget):
     voice_group_merge_requested = Signal(str, str)
     voice_group_color_requested = Signal(str, str)
     voice_group_role_requested = Signal(str, str)
+    marker_edit_requested = Signal(object)
     PIANO_KEY_W = 86
     NAMED_PERCUSSION_KEY_W = 138
     KEY_W = PIANO_KEY_W
@@ -113,6 +115,10 @@ class PianoRollCanvas(QWidget):
             else self.PIANO_KEY_W
         )
         self.notes: list = []
+        self.timeline_markers: list[dict[str, object]] = []
+        self._timeline_marker_times: tuple[float, ...] = ()
+        self._marker_label_regions: list[tuple[QRectF, dict[str, object]]] = []
+        self._marker_delete_regions: list[tuple[QRectF, dict[str, object]]] = []
         self.ghost_notes: list = []
         self._ghost_opacity = 0.24
         self.transcription_candidates: list[TranscriptionCandidate] = []
@@ -202,6 +208,9 @@ class PianoRollCanvas(QWidget):
         self._ruler_range_moved = False
         self._drag_time_range: tuple[float, float] | None = None
         self.selected: set[int] = set()
+        self.hovered_note_index: int | None = None
+        self.scale_pitch_classes: frozenset[int] | None = None
+        self.scale_root_pitch_class: int | None = None
         self.anchor_index: int | None = None
         self.px_per_beat = 92.0
         # Instance-owned so Alt+wheel can resize pitch lanes without changing
@@ -313,6 +322,22 @@ class PianoRollCanvas(QWidget):
             for start in range(0, len(self._ghost_ends), block_size)
         ]
         self._ghost_max_duration = max((float(note.dur) for note in self.ghost_notes), default=0.0)
+        self.update()
+
+    def set_scale_highlight(
+        self,
+        pitch_classes: frozenset[int] | None,
+        root_pitch_class: int | None = None,
+    ) -> None:
+        self.scale_pitch_classes = (
+            None
+            if pitch_classes is None
+            else frozenset(int(value) % 12 for value in pitch_classes)
+        )
+        self.scale_root_pitch_class = (
+            None if root_pitch_class is None else int(root_pitch_class) % 12
+        )
+        self.invalidate_roll_background()
         self.update()
 
     def set_ghost_opacity(self, opacity: float) -> None:
@@ -2153,6 +2178,45 @@ class PianoRollCanvas(QWidget):
             if self.KEY_W - 110 <= x <= self.width() + 110:
                 self.update(QRectF(x - 110, 0, 220, self.height()).toAlignedRect())
 
+    def set_timeline_markers(self, markers: object) -> None:
+        self.timeline_markers = list(normalize_timeline_markers(markers))
+        self._timeline_marker_times = tuple(
+            float(marker["time_ms"]) for marker in self.timeline_markers
+        )
+        self.update(QRectF(self.KEY_W, 0, self.width() - self.KEY_W, self.height()).toAlignedRect())
+
+    def _paint_timeline_markers(self, painter: QPainter) -> None:
+        self._marker_label_regions.clear()
+        self._marker_delete_regions.clear()
+        painter.save()
+        visible_start = self.time_at(self.KEY_W)
+        visible_end = self.time_at(self.width())
+        first = bisect_left(self._timeline_marker_times, visible_start)
+        last = bisect_right(self._timeline_marker_times, visible_end)
+        for marker in self.timeline_markers[first:last]:
+            x = self.x_at_time(float(marker["time_ms"]))
+            if x < self.KEY_W or x > self.width():
+                continue
+            painter.fillRect(
+                QRectF(x, self.TIME_RULER_H, 1.0, self.height() - self.TIME_RULER_H),
+                QColor(229, 174, 69, 120),
+            )
+            label = str(marker["label"])
+            width = min(184.0, max(64.0, painter.fontMetrics().horizontalAdvance(label) + 30.0))
+            label_x = max(self.KEY_W + 92.0, min(x + 3.0, self.width() - width - 3.0))
+            pill = QRectF(label_x, 4.0, width, 21.0)
+            painter.setBrush(QColor(48, 40, 25, 246))
+            painter.setPen(QPen(QColor("#d9a53f"), 1))
+            painter.drawRoundedRect(pill, 4.0, 4.0)
+            painter.setPen(QColor("#f1d9a3"))
+            painter.drawText(pill.adjusted(7, 0, -22, 0), Qt.AlignVCenter, label)
+            delete_rect = QRectF(pill.right() - 21.0, pill.top(), 21.0, pill.height())
+            painter.setPen(QColor("#caa967"))
+            painter.drawText(delete_rect, Qt.AlignCenter, "×")
+            self._marker_label_regions.append((pill, marker))
+            self._marker_delete_regions.append((delete_rect, marker))
+        painter.restore()
+
     def set_edit_cursor(self, ms: float) -> None:
         old_x = self.x_at_time(self.edit_cursor_ms)
         self.edit_cursor_ms = max(0.0, float(ms))
@@ -2283,6 +2347,8 @@ class PianoRollCanvas(QWidget):
             uses_percussion_key_labels,
             uses_named_percussion_keys,
             bool(getattr(self.editor, "canonical_drum_lanes", False)),
+            self.scale_pitch_classes,
+            self.scale_root_pitch_class,
             self.font().toString(),
             round(self.devicePixelRatioF(), 3),
         )
@@ -2322,6 +2388,14 @@ class PianoRollCanvas(QWidget):
                 if black
                 else ("#24231f" if pitch % 12 == 0 else "#202125")
             )
+            if self.scale_pitch_classes is not None:
+                pitch_class = pitch % 12
+                if pitch_class == self.scale_root_pitch_class:
+                    lane_color = QColor("#2a2922")
+                elif pitch_class in self.scale_pitch_classes:
+                    lane_color = QColor("#23272a")
+                else:
+                    lane_color = QColor("#18191c")
             painter.fillRect(
                 QRectF(
                     self.KEY_W,
@@ -3769,6 +3843,7 @@ class PianoRollCanvas(QWidget):
         painter.drawRect(grid_label_rect)
         painter.setPen(QColor("#ffedd4"))
         painter.drawText(grid_label_rect, Qt.AlignCenter, grid_label)
+        self._paint_timeline_markers(painter)
         self._paint_harmony_lane(
             painter,
             paint_left_ms,
@@ -3900,18 +3975,27 @@ class PianoRollCanvas(QWidget):
             # a second decorative layer. Velocity is already encoded in the
             # fill value and repeated as one direct proportional bar below.
             painter.setBrush(fill)
+            hovered = index == self.hovered_note_index
             note_outline_pen = QPen(
                 QColor("#b85d58")
                 if invalid
                 else (
                     QColor("#ae8c52")
                     if index in selected
-                    else (technique_color or normal_outline)
+                    else (
+                        QColor("#dbc18b")
+                        if hovered
+                        else (technique_color or normal_outline)
+                    )
                 ),
                 (
                     1.5
                     if compact_height and (index in selected or invalid)
-                    else (2.0 if index in selected or invalid else 1.0)
+                    else (
+                        2.0
+                        if index in selected or invalid
+                        else (1.5 if hovered else 1.0)
+                    )
                 ),
             )
             painter.setPen(note_outline_pen)
@@ -4094,6 +4178,26 @@ class PianoRollCanvas(QWidget):
         painter.restore()
 
     def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            for rect, marker in reversed(self._marker_delete_regions):
+                if rect.contains(event.position()):
+                    self.marker_edit_requested.emit({"action": "delete", **marker})
+                    event.accept()
+                    return
+        if event.button() == Qt.RightButton:
+            for rect, marker in reversed(self._marker_label_regions):
+                if not rect.contains(event.position()):
+                    continue
+                menu = QMenu(self)
+                rename_action = menu.addAction(tr("重命名时间轴标记…"))
+                delete_action = menu.addAction(tr("删除时间轴标记"))
+                selected = menu.exec(event.globalPosition().toPoint())
+                if selected is rename_action:
+                    self.marker_edit_requested.emit({"action": "rename", **marker})
+                elif selected is delete_action:
+                    self.marker_edit_requested.emit({"action": "delete", **marker})
+                event.accept()
+                return
         if event.button() == Qt.RightButton:
             index, _mode = self.note_at(event.position())
             if index is not None:
@@ -4177,13 +4281,22 @@ class PianoRollCanvas(QWidget):
         self.ctrl_press_index = None
         self.clone_base_notes = []
         index, mode = self.note_at(event.position())
+        active_tool = str(getattr(self.editor, "active_note_tool", "select"))
+        if index is not None and active_tool == "erase":
+            self.editor.delete_note_at(index)
+            event.accept()
+            return
+        if index is not None and active_tool == "split":
+            self.editor.split_note_at(index, self.time_at(event.position().x()))
+            event.accept()
+            return
         mods = event.modifiers()
         candidate_review_active = (
             self.editor.transcription_mode_enabled
             and self.transcription_candidates_visible
             and self._transcription_candidate_layer_visible
             and bool(self.transcription_candidates)
-            and not self.editor.draw_mode_button.isChecked()
+            and active_tool == "select"
         )
         candidate_id = None
         guide = None
@@ -4396,7 +4509,7 @@ class PianoRollCanvas(QWidget):
             guide_hit = (
                 self.melody_guide_at(pos)
                 if candidate_hit is None
-                and not self.editor.draw_mode_button.isChecked()
+                and str(getattr(self.editor, "active_note_tool", "select")) == "select"
                 else None
             )
             if guide_hit is not None:
@@ -4443,14 +4556,32 @@ class PianoRollCanvas(QWidget):
                 self.setCursor(Qt.SizeHorCursor)
             else:
                 _index, mode = self.note_at(pos)
+                if _index != self.hovered_note_index:
+                    previous_index = self.hovered_note_index
+                    self.hovered_note_index = _index
+                    for note_index in (previous_index, _index):
+                        if note_index is not None and 0 <= note_index < len(self.notes):
+                            self.update(
+                                self.note_rect(self.notes[note_index])
+                                .adjusted(-3, -3, 3, 3)
+                                .toAlignedRect()
+                            )
                 if mode in ("resize_left", "resize_right"):
                     self.setCursor(Qt.SizeHorCursor)
+                elif str(getattr(self.editor, "active_note_tool", "select")) == "erase":
+                    self.setCursor(Qt.PointingHandCursor)
+                elif str(getattr(self.editor, "active_note_tool", "select")) == "split":
+                    self.setCursor(Qt.SplitHCursor)
                 elif mode == "move":
                     self.setCursor(Qt.SizeAllCursor)
                 elif guide_hit is not None:
                     self.setCursor(Qt.PointingHandCursor)
                 else:
-                    self.setCursor(Qt.CrossCursor if self.editor.draw_mode_button.isChecked() else Qt.ArrowCursor)
+                    self.setCursor(
+                        Qt.CrossCursor
+                        if str(getattr(self.editor, "active_note_tool", "select")) == "draw"
+                        else Qt.ArrowCursor
+                    )
             return
         dx, dy = pos.x() - self.press_pos.x(), pos.y() - self.press_pos.y()
         if self.drag_mode in {"candidate_marquee_pending", "candidate_marquee"}:
@@ -4685,6 +4816,12 @@ class PianoRollCanvas(QWidget):
         super().leaveEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            for rect, marker in reversed(self._marker_label_regions):
+                if rect.contains(event.position()):
+                    self.marker_edit_requested.emit({"action": "rename", **marker})
+                    event.accept()
+                    return
         if (
             self.editor.transcription_mode_enabled
             and event.button() == Qt.LeftButton
@@ -4907,14 +5044,20 @@ class PianoRollCanvas(QWidget):
         if command is None:
             return super().keyPressEvent(event)
         if command == "toggle_draw":
-            self.editor.draw_mode_button.toggle()
+            if self.editor.draw_mode_button.isChecked():
+                self.editor.select_tool_button.setChecked(True)
+                self.editor._note_tool_changed(0)
+            else:
+                self.editor.draw_mode_button.setChecked(True)
+                self.editor._note_tool_changed(1)
         elif command == "play_pause":
             if not event.isAutoRepeat():
                 self.editor.toggle_draft_playback()
         elif command == "exit_draw":
             if not self.editor.draw_mode_button.isChecked():
                 return super().keyPressEvent(event)
-            self.editor.draw_mode_button.setChecked(False)
+            self.editor.select_tool_button.setChecked(True)
+            self.editor._note_tool_changed(0)
         elif command == "duplicate":
             self.editor.duplicate_selected()
         elif command in {"adjust_velocity", "adjust_velocity_coarse"}:

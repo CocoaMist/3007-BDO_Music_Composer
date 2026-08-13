@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 1.3.0 - 2026-08-13
+
+- Add a multitrack Clip arrangement workflow with transactional MIDI/BDO
+  imports, move/trim/split/merge operations, instrument groups, timeline
+  markers, and project-safe undo/autosave persistence.
+- Make arrangement snapping an explicit persistent toggle. Snap candidates now
+  use marker, Clip-edge, then grid priority; moving and both trim handles share
+  the same release-time-corrected alignment path, while Alt remains a temporary
+  bypass.
+- Promote Change Game Instrument to the top of the track context menu, remove
+  the standalone Conversion Check workflow, and keep automatic lane/export
+  validation without exposing the removed dialog.
+- Keep moved note blocks clipped to their owning Clip and require explicit
+  confirmation before merging overlapping Clips; rejecting the prompt leaves
+  the project unchanged.
+- Add focused BDO-to-MIDI and standard-MIDI export tools plus bounded stress
+  coverage for Clip edits, imports, autosave, undo, and large-project refresh.
+
 - Move the first low-coupling application slice from the repository root into
   `bdo_music_composer/{app,audio,editor,project,transcription,ui}` without
   compatibility shims, reducing the root Python count from 89 to 69.
@@ -143,7 +161,7 @@
   资源不进入工程、仓库或安装包。游戏注册表证据同时修正 ID 39 为单簧管，
   并把 10,000 音符改为工具软警戒线；730 只表示 v9 物理轨道容量。
 - 主页支持置顶经过隐私清理且带来源标注的本地示例；当前维护者安装的
-  “淘金小镇 · 示例”标注来源 MidiShow，但未经再分发许可的 MIDI 不随程序发布。
+  本机示例默认使用用户自行提供的 “We Are The World.mid”；未经再分发许可的 MIDI 不随程序发布。
 - 旋律声部骨架升级为缩放 LOD：远景半拍轮廓、中景音符/连接、近景弱分支，
   增加连续性主旋律 beam、低音/和声筛选、和弦支撑带和只读点击定位。
 

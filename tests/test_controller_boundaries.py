@@ -22,12 +22,37 @@ from bdo_music_composer.project.project_lifecycle_controller import (
     ProjectLifecycleController,
 )
 from bdo_music_composer.transcription.transcription_workspace_controller import (
+    restored_audio_review_requires_isolation,
     TranscriptionAnalysisCoordinator,
     TranscriptionReviewController,
 )
 
 
 class ControllerBoundaryTests(unittest.TestCase):
+    def test_restored_audio_identity_isolated_only_when_evidence_changes(
+        self,
+    ) -> None:
+        common = {
+            "restoring": True,
+            "saved_fingerprint": "saved",
+            "has_reference_audio": True,
+        }
+        self.assertFalse(restored_audio_review_requires_isolation(
+            restored_audio_fingerprint="saved", **common
+        ))
+        self.assertTrue(restored_audio_review_requires_isolation(
+            restored_audio_fingerprint="changed", **common
+        ))
+        self.assertTrue(restored_audio_review_requires_isolation(
+            restored_audio_fingerprint="", **common
+        ))
+        self.assertFalse(restored_audio_review_requires_isolation(
+            restoring=False,
+            restored_audio_fingerprint="changed",
+            saved_fingerprint="saved",
+            has_reference_audio=True,
+        ))
+
     def test_model_revision_is_explicit_and_monotonic(self) -> None:
         revision = ModelRevision()
         self.assertEqual(revision.value, 0)

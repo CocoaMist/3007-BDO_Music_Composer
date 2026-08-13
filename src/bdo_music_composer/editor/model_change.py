@@ -53,6 +53,19 @@ class ModelChange:
         )
 
     @classmethod
+    def track_meta(cls, *track_ids: int) -> "ModelChange":
+        scope = frozenset(int(track_id) for track_id in track_ids)
+        if not scope:
+            raise ValueError("track metadata changes require at least one track ID")
+        return cls(
+            "track_meta",
+            track_ids=scope,
+            advances_revision=True,
+            affects_preview=True,
+            affects_autosave=True,
+        )
+
+    @classmethod
     def view(cls) -> "ModelChange":
         return cls("view")
 

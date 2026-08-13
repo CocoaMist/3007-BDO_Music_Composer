@@ -221,8 +221,8 @@ class InstrumentEditorUiTests(unittest.TestCase):
             editor.redo()
             assert [note.ntype for note in editor.canvas.notes] == [0, 0, 0]
 
-            # A dropdown-only technique must replace the stale quick-button
-            # highlight with one aligned dynamic selection chip.
+            # A dropdown-only technique must replace stale quick-button state;
+            # the compact context bar does not duplicate it as another chip.
             editor.articulation_combo.setCurrentIndex(
                 editor.articulation_combo.findData(4)
             )
@@ -231,18 +231,17 @@ class InstrumentEditorUiTests(unittest.TestCase):
                 button.isChecked()
                 for button in editor.articulation_buttons.values()
             )
-            assert editor.articulation_overflow_button.isVisible()
             assert editor.articulation_overflow_button.isChecked()
             assert editor.articulation_overflow_button.property("ntype") == 4
             assert previewed[-1] == (60, 4, False)
             controls = [
                 editor.articulation_combo,
                 editor.articulation_preview_button,
-                *editor.articulation_buttons.values(),
-                editor.articulation_overflow_button,
             ]
-            assert {widget.y() for widget in controls} == {0}
-            assert {widget.height() for widget in controls} == {26}
+            assert all(widget.height() >= 24 for widget in controls)
+            assert editor.editor_properties_bar.isAncestorOf(
+                editor.articulation_combo
+            )
             editor.articulation_preview_button.click()
             assert previewed[-1] == (60, 4, True)
 

@@ -15,8 +15,14 @@ class MainWindowStyleMixin:
             QDialog QLabel { color: #ddd7cf; }
             QDialog#SettingsDialog, QDialog#MasterEffectsDialog,
             QDialog#TrackFxDialog,
+            QDialog#TrackPitchDialog, QDialog#TrackVelocityBaseDialog,
+            QDialog#ConversionCheckDialog, QDialog#MidiOptimizeDialog,
             QDialog#ThanksDialog, QDialog#ReleaseNotesDialog,
             QDialog#SelfUpdateDialog, QDialog#MidiNoteEditorDialog {
+                background: #151515;
+                color: #f3f1ea;
+            }
+            QDialog[uiSurface="workflow"] {
                 background: #151515;
                 color: #f3f1ea;
             }
@@ -631,6 +637,10 @@ class MainWindowStyleMixin:
                 background: #1c1c1e;
                 border: 0;
             }
+            QFrame#TimelineBody {
+                background: #171719;
+                border: 0;
+            }
             QFrame#TimelineControlBar {
                 background: #2c2c30;
                 border: 0;
@@ -640,6 +650,17 @@ class MainWindowStyleMixin:
             QFrame#TimelineControlBar QPushButton {
                 min-height: 25px;
                 padding: 2px 9px;
+            }
+            QFrame#TimelineControlBar QPushButton#TimelineSnapToggle {
+                background: #252529;
+                border: 1px solid #4b4843;
+                color: #bdb8ae;
+                font-weight: 700;
+            }
+            QFrame#TimelineControlBar QPushButton#TimelineSnapToggle:checked {
+                background: #61471d;
+                border-color: #e2a83f;
+                color: #fff1cb;
             }
             QFrame#ToolbarGlobalGainGroup {
                 background: #222326;
@@ -807,6 +828,11 @@ class MainWindowStyleMixin:
             QLabel#EnsembleMetric[ensembleState="over"] {
                 color: #ef8178;
             }
+            QLabel#ProjectMusicStatus {
+                color: #d6d0c7;
+                font-size: 10px;
+                font-weight: 700;
+            }
             QFrame#TimelineSeparator {
                 color: #413d38;
                 max-width: 1px;
@@ -966,6 +992,11 @@ class MainWindowStyleMixin:
                 min-height: 22px;
                 padding: 3px 8px;
             }
+            QFrame#EditorToolbar QPushButton:checked {
+                background: #443820;
+                border-color: #9f7837;
+                color: #f2d28d;
+            }
             QLabel#EditorTrackTitle {
                 color: #ffedd4;
                 font-size: 15px;
@@ -992,6 +1023,38 @@ class MainWindowStyleMixin:
                 background: #1c1c1e;
                 border: 0;
                 border-radius: 0;
+            }
+            QFrame#EditorBody {
+                background: #171719;
+                border: 0;
+            }
+            QFrame#EditorToolRail {
+                background: #18191b;
+                border: 0;
+                border-right: 1px solid #34322f;
+            }
+            QFrame#EditorPropertiesBar {
+                background: #19191b;
+                border: 0;
+                border-top: 1px solid #3c3831;
+            }
+            QPushButton#EditorToolButton {
+                background: transparent;
+                border: 1px solid transparent;
+                color: #aaa39a;
+                font-size: 10px;
+                padding: 2px;
+            }
+            QPushButton#EditorToolButton:hover {
+                background: #282725;
+                border-color: #4a443a;
+                color: #eee4d5;
+            }
+            QPushButton#EditorToolButton:checked {
+                background: #4b3b20;
+                border-color: #c39443;
+                color: #ffe3aa;
+                font-weight: 800;
             }
             QFrame#EditorShortcutHud {
                 background: rgba(11, 12, 14, 88);
@@ -1326,10 +1389,16 @@ class MainWindowStyleMixin:
                 font-weight: 800;
                 padding-top: 2px;
             }
-            QFrame#OptimizerHeader, QFrame#OptimizerOptions, QTextEdit#OptimizerReport {
-                background: #201f1c;
-                border: 1px solid #3d3932;
-                border-radius: 9px;
+            QWidget#WorkflowDialogHeader, QFrame#OptimizerHeader {
+                background: #191919;
+                border: 0;
+                border-bottom: 1px solid #4a3b27;
+                border-radius: 0;
+            }
+            QFrame#OptimizerOptions, QTextEdit#OptimizerReport {
+                background: #1c1d1f;
+                border: 1px solid #383630;
+                border-radius: 6px;
             }
             QLabel#OptimizerTitle {
                 color: #f5a524;
@@ -1351,6 +1420,19 @@ class MainWindowStyleMixin:
             QFrame#OptimizerOptions QCheckBox {
                 color: #e5dfd6;
                 min-width: 150px;
+            }
+            QDialog#TrackPitchDialog QLabel#TrackTitle,
+            QDialog#TrackVelocityBaseDialog QLabel#TrackTitle {
+                color: #f2d28d;
+                font-size: 17px;
+                font-weight: 900;
+            }
+            QDialog#TrackPitchDialog QDialogButtonBox,
+            QDialog#TrackVelocityBaseDialog QDialogButtonBox,
+            QDialog#ConversionCheckDialog QDialogButtonBox,
+            QDialog#MidiOptimizeDialog QDialogButtonBox {
+                border-top: 1px solid #34312c;
+                padding-top: 9px;
             }
             QTextEdit#OptimizerReport {
                 padding: 7px;

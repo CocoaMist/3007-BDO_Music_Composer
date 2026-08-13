@@ -242,7 +242,7 @@ class GlobalVelocityGainHostMixin:
         self._toolbar_global_gain_track_signature = (
             self._toolbar_global_gain_model_signature()
         )
-        self._mark_conversion_check_dirty()
+        self._schedule_timeline_validation_refresh()
         if changed_track_ids:
             self._restart_preview_after_timeline_change(
                 ModelChange.notes(*changed_track_ids)
@@ -287,7 +287,7 @@ class GlobalVelocityGainHostMixin:
         self._push_project_snapshot()
         track.notes = next_notes
         track.bdo_source_note_records = next_records
-        self._mark_conversion_check_dirty()
+        self._schedule_timeline_validation_refresh()
         self._restart_preview_after_timeline_change(
             ModelChange.notes(int(track.track_id))
         )

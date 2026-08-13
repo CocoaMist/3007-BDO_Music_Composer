@@ -28,7 +28,7 @@ from bdo_music_composer.core.conversion_settings import (
     VELOCITY_MODE_PRESERVE,
     ConversionSettings,
 )
-from .editor_models import TrackState
+from .editor_models import ArrangementClipState, TrackState
 from bdo_music_composer.editor.game_score_model import (
     bake_game_velocity_transform,
     decode_serialized_game_instrument_id,
@@ -655,6 +655,77 @@ def _optional_project_integer(
     )
 
 
+def _project_clip_bounds(
+    item: Mapping[str, object], *, path: str
+) -> tuple[float | None, float | None]:
+    result: list[float | None] = []
+    for field in ("clip_start_ms", "clip_end_ms"):
+        value = item.get(field)
+        result.append(
+            _finite_number(
+                value,
+                path=f"{path}.{field}",
+                code=EditorImportErrorCode.INVALID_TRACK,
+            )
+            if value is not None else None
+        )
+    return result[0], result[1]
+
+
+def _project_arrangement_clips(
+    item: Mapping[str, object], *, path: str
+) -> list[ArrangementClipState]:
+    raw_clips = item.get("arrangement_clips", ())
+    if not isinstance(raw_clips, (list, tuple)):
+        raise _import_error(
+            EditorImportErrorCode.INVALID_TRACK,
+            f"{path}.arrangement_clips",
+            "expected a list",
+        )
+    clips: list[ArrangementClipState] = []
+    seen_ids: set[str] = set()
+    for index, raw in enumerate(raw_clips):
+        clip_path = f"{path}.arrangement_clips[{index}]"
+        if not isinstance(raw, Mapping):
+            raise _import_error(
+                EditorImportErrorCode.INVALID_TRACK, clip_path, "expected an object"
+            )
+        clip_id = str(raw.get("clip_id", "") or "").strip()
+        if not clip_id or clip_id in seen_ids:
+            raise _import_error(
+                EditorImportErrorCode.INVALID_TRACK,
+                f"{clip_path}.clip_id",
+                "clip ID must be unique and non-empty",
+            )
+        seen_ids.add(clip_id)
+        values = [
+            _finite_number(
+                raw.get(field),
+                path=f"{clip_path}.{field}",
+                code=EditorImportErrorCode.INVALID_TRACK,
+            )
+            for field in (
+                "start_ms", "end_ms", "content_start_ms", "content_end_ms"
+            )
+        ]
+        if values[0] < 0.0 or values[1] <= values[0] or values[3] <= values[2]:
+            raise _import_error(
+                EditorImportErrorCode.INVALID_TRACK, clip_path, "invalid clip bounds"
+            )
+        clips.append(ArrangementClipState(clip_id, *values))
+    ordered = sorted(clips, key=lambda clip: clip.content_start_ms)
+    if any(
+        left.content_end_ms > right.content_start_ms
+        for left, right in zip(ordered, ordered[1:])
+    ):
+        raise _import_error(
+            EditorImportErrorCode.INVALID_TRACK,
+            f"{path}.arrangement_clips",
+            "clip content ranges cannot overlap",
+        )
+    return clips
+
+
 def _project_track_state(
     item: Mapping[str, object],
     *,
@@ -665,6 +736,7 @@ def _project_track_state(
 ) -> TrackState:
     _require_materialized_project_velocity(item, path=path)
     source_group = item.get("bdo_source_group_index")
+    clip_start_ms, clip_end_ms = _project_clip_bounds(item, path=path)
     return TrackState(
         track_id=track_id,
         notes=_project_notes(item, path=path),
@@ -696,6 +768,10 @@ def _project_track_state(
             code=EditorImportErrorCode.INVALID_TRACK,
             positive=True,
         ),
+        clip_start_ms=clip_start_ms,
+        clip_end_ms=clip_end_ms,
+        arrangement_group_id=str(item.get("arrangement_group_id", "") or ""),
+        arrangement_clips=_project_arrangement_clips(item, path=path),
         articulation_type=_optional_project_integer(
             item.get("articulation_type"),
             path=f"{path}.articulation_type",

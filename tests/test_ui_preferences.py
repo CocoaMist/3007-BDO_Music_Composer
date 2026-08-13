@@ -39,7 +39,7 @@ class UiPreferenceModelTests(unittest.TestCase):
                 "rhythm_profile": "strict_1_64",
             },
         })
-        self.assertEqual(result["workspace"]["timeline_zoom_percent"], 800)
+        self.assertEqual(result["workspace"]["timeline_zoom_percent"], 3200)
         self.assertEqual(result["workspace"]["timeline_pan_percent"], 450)
         self.assertEqual(result["workspace"]["reference_volume_percent"], 0)
         self.assertTrue(result["workspace"]["timeline_loop_enabled"])
