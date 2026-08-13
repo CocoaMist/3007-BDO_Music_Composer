@@ -25,6 +25,17 @@ v1.3.0 重点升级多音轨编排：加入可移动、裁切、剃刀切分和�
 `82cea29f1316b943571663e4150b31e353da4ab9f556141ed65b6598a384db63`。
 它仅包含独立许可的 CC0 近似试听素材，不含 Black Desert 客户端音频。
 
+### 发行资产与验证
+
+- `BDO-Music-Composer.exe`：`183,257,906` 字节；SHA-256
+  `d96614c8c01c1645098d3bc9ac607c30b9bc1f0aef4bc98cad035fc39a50ba21`。
+- 游戏映射、Marnian 模式、鼓组语义、BDO v9 编解码和导出回读专项测试
+  102 项通过；本地完整套件 1,267 项通过、1 项跳过。
+- 正式构建的依赖许可清单、冻结 Basic Pitch/CPU 推理和 10 秒 GUI 启动自检通过。
+
+本版本未使用 Authenticode 发布者签名，Windows SmartScreen 可能显示“未知发布者”。
+本项目是非官方社区工具，与 Pearl Abyss 无隶属关系。
+
 ## English
 
 v1.3.0 focuses on multitrack arrangement. Clips can be moved, trimmed, split
@@ -51,3 +62,16 @@ The pack is 753,225,838 bytes with SHA-256
 `82cea29f1316b943571663e4150b31e353da4ab9f556141ed65b6598a384db63`.
 It contains independently licensed CC0 material for approximate preview only,
 not Black Desert client audio.
+
+### Release assets and verification
+
+- `BDO-Music-Composer.exe`: `183,257,906` bytes; SHA-256
+  `d96614c8c01c1645098d3bc9ac607c30b9bc1f0aef4bc98cad035fc39a50ba21`.
+- All 102 focused game-mapping, Marnian-mode, percussion, BDO v9 codec, and
+  export round-trip tests passed; all 1,267 local tests passed with one skipped.
+- The public dependency inventory, frozen Basic Pitch/CPU inference, and
+  ten-second GUI startup self-test passed.
+
+This release is not Authenticode publisher-signed, so Windows SmartScreen may
+show an unknown-publisher warning. This is an unofficial community tool and is
+not affiliated with Pearl Abyss.
