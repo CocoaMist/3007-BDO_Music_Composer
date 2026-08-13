@@ -38,6 +38,8 @@ class TrackGroupUiTests(unittest.TestCase):
                 assert actions.count("group_solo") == 1, actions
                 assert len(window.timeline._arrangement_groups) == 1
                 group_id = window.tracks[0].arrangement_group_id
+                assert window.timeline._track_attention_accent(0).name() == window.tracks[0].color.lower()
+                assert window.timeline._track_attention_accent(1).name() == window.tracks[0].color.lower()
                 window._apply_arrangement_group_control(group_id, "mute")
                 assert all(track.muted for track in window.tracks)
                 assert len(window.project_commands._undo) == 1
