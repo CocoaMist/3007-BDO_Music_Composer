@@ -293,6 +293,35 @@ class PitchTransformPlan:
             ),
         )
 
+    def with_track_semitones(
+        self,
+        track_id: int,
+        semitones: int,
+        *,
+        provenance: str = PITCH_OVERRIDE_PROVENANCE_USER,
+    ) -> "PitchTransformPlan":
+        """Set one user-authored chromatic track offset without changing notes."""
+
+        target = int(track_id)
+        offset = _bounded_offset(semitones)
+        retained = tuple(
+            item for item in self.track_overrides if item.track_id != target
+        )
+        if not offset:
+            return replace(self, track_overrides=retained)
+        return replace(
+            self,
+            track_overrides=(
+                *retained,
+                TrackPitchOverride(
+                    target,
+                    offset,
+                    PITCH_OVERRIDE_MODE_SEMITONE,
+                    provenance,
+                ),
+            ),
+        )
+
     def without_track(self, track_id: int) -> "PitchTransformPlan":
         target = int(track_id)
         return replace(

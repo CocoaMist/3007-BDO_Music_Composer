@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bdo_midi import Note
-from bdo_music_composer.editor.editor_models import TrackState
+from bdo_music_composer.editor.editor_models import ArrangementClipState, TrackState
 from bdo_music_composer.app.home_catalog import IncrementalHomeScan, scan_local_projects
 from bdo_music_composer.project.project_persistence import (
     AUTOSAVE_LOG_MAX_BYTES,
@@ -157,14 +157,14 @@ class ProjectPersistenceTests(unittest.TestCase):
         track.clip_start_ms = 150.0
         track.clip_end_ms = 350.0
         track.arrangement_group_id = "game-instrument:11"
-        from bdo_music_composer.editor.editor_models import ArrangementClipState
-        track.arrangement_clips = [
-            ArrangementClipState("clip-a", 150.0, 350.0, 100.0, 400.0)
-        ]
+        track.arrangement_clips = [ArrangementClipState(
+            "clip-a", 500.0, 750.0, 100.0, 350.0, 400.0
+        )]
         payload = freeze_project_tracks((track,))[0].to_payload()
         self.assertEqual(payload["clip_start_ms"], 150.0)
         self.assertEqual(payload["clip_end_ms"], 350.0)
         self.assertEqual(payload["arrangement_group_id"], "game-instrument:11")
+        self.assertEqual(payload["arrangement_clips"][0]["time_offset_ms"], 400.0)
         self.assertEqual(payload["arrangement_clips"][0]["clip_id"], "clip-a")
 
     def test_project_rename_preserves_identity_and_rewrites_safe_index(self) -> None:

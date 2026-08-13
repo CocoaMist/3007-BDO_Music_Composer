@@ -10,6 +10,7 @@ from bdo_music_composer.editor.pitch_transform import (
     PitchTransformPlan,
     track_uses_percussion_pitch_semantics,
 )
+from bdo_music_composer.editor.arrangement_clip import project_track_notes
 from bdo_music_composer.editor.bdo_instrument_adaptation import (
     articulation_supports_pitch,
 )
@@ -231,7 +232,7 @@ def _track_validation_input(
     )
     serialized_id = int(context.serialize_instrument(track))
     evidence, evidence_status = _evidence(profile, instrument_id)
-    notes = tuple(track.notes)
+    notes = project_track_notes(track)
     return _TrackValidationInput(
         track=track,
         track_id=track_id,

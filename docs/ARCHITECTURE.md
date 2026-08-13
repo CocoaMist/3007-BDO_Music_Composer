@@ -116,7 +116,11 @@ non-destructive trim, Razor split, creation, and cross-track moves. Razor create
 two independently addressable Clips and splits only notes/source records that
 cross its cut. Preview, MIDI projection, offline rendering, validation, velocity
 traces, and BDO export consume the same per-Clip projection. The timeline host
-commits each gesture as one undoable edit. `editor/track_group.py` separately keeps
+commits each gesture as one undoable edit. Clip instances use an immutable
+source-content window plus a timeline offset: razor splits duplicate the complete
+source reference and crop each side non-destructively, so resizing can reveal
+content again; copy/paste creates a detached content range and a new stable Clip
+ID. `editor/track_group.py` separately keeps
 same-game-instrument lanes in a Group container without
 merging their notes or mixer state. Explicit A+B
 track merge still produces one ordinary lane, never a composite-track

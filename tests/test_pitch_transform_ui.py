@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PitchTransformUiTests(unittest.TestCase):
-    def test_track_octave_is_undoable_persisted_and_used_by_preview(self) -> None:
+    def test_track_transpose_is_undoable_persisted_and_used_by_preview(self) -> None:
         source = textwrap.dedent(
             """
             import json
@@ -33,9 +33,7 @@ class PitchTransformUiTests(unittest.TestCase):
             def accept_dialog():
                 dialog = app.activeModalWidget()
                 assert isinstance(dialog, gui.TrackPitchDialog)
-                index = dialog.octave_offset.findData(12)
-                assert index >= 0
-                dialog.octave_offset.setCurrentIndex(index)
+                dialog.semitone_offset.setValue(12)
                 dialog.accept()
 
             QTimer.singleShot(0, accept_dialog)
@@ -54,7 +52,7 @@ class PitchTransformUiTests(unittest.TestCase):
             assert payload["pitch_transform"]["track_overrides"] == [{
                 "track_id": track.track_id,
                 "semitones": 12,
-                "mode": "octave",
+                "mode": "semitone",
                 "provenance": "user",
             }]
 

@@ -58,7 +58,8 @@ class ArrangementClipUiTests(unittest.TestCase):
                     clip_id="track-1-main",
                 ))
                 assert source.notes == []
-                assert [note.start for note in target.notes] == [50.0, 500.0]
+                from bdo_music_composer.editor.arrangement_clip import project_track_notes
+                assert [note.start for note in project_track_notes(target)] == [50.0, 500.0]
                 assert len(window.project_commands._undo) == 1
                 window._undo_project()
                 assert len(window.tracks[0].notes) == 1
@@ -108,7 +109,7 @@ class ArrangementClipUiTests(unittest.TestCase):
                     clip_id="track-4-main",
                 ))
                 notice = window.timeline.track_validation_notices[5]
-                assert risky_target.notes[0].start == 300.0
+                assert project_track_notes(risky_target)[0].start == 300.0
                 assert notice["errors"]
                 assert notice["invalid_note_keys"] == (
                     (100, 90, 300.0, 100.0, 0),

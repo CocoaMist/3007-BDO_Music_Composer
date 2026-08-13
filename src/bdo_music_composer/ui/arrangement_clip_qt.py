@@ -6,8 +6,10 @@ from PySide6.QtWidgets import QMessageBox
 
 from bdo_music_composer.editor.arrangement_clip import (
     ClipEditPlan,
+    copy_clip,
     plan_clip_create,
     plan_clip_edit,
+    plan_clip_paste,
     plan_clip_split,
     overlapping_clip_ids,
 )
@@ -17,6 +19,8 @@ from bdo_music_composer.ui.i18n import tr, trf
 
 
 class ArrangementClipHostMixin:
+    _arrangement_clip_clipboard = None
+
     def _publish_clip_plan(self, plan: ClipEditPlan, reason: str) -> None:
         tracks_by_id = {int(track.track_id): track for track in self.tracks}
         if any(update.track_id not in tracks_by_id for update in plan.updates):
@@ -35,6 +39,7 @@ class ArrangementClipHostMixin:
             track.arrangement_clips = list(update.arrangement_clips)
         selected = tracks_by_id[plan.selected_track_id]
         self._select_track(selected)
+        self.timeline.set_selected_clip(selected, plan.selected_clip_id)
         self._apply_workspace_change(ModelChange.notes(
             *(update.track_id for update in plan.updates)
         ))
@@ -113,6 +118,30 @@ class ArrangementClipHostMixin:
             )
             return
         self.show_toast(tr("片段已切分"), kind="success")
+
+    def _copy_timeline_clip(self, track, clip_id: str) -> None:
+        try:
+            self._arrangement_clip_clipboard = copy_clip(track, clip_id)
+        except (TypeError, ValueError) as exc:
+            self.show_toast(trf("无法复制片段：{error}", error=exc), kind="error")
+            return
+        self.show_toast(tr("片段已复制"), kind="success")
+
+    def _paste_timeline_clip(self, track, start_ms: float) -> None:
+        if self._arrangement_clip_clipboard is None:
+            self.show_toast(tr("没有可粘贴的片段"))
+            return
+        try:
+            plan = plan_clip_paste(
+                track,
+                self._arrangement_clip_clipboard,
+                start_ms=start_ms,
+            )
+            self._publish_clip_plan(plan, "paste arrangement clip")
+        except (TypeError, ValueError) as exc:
+            self.show_toast(trf("无法粘贴片段：{error}", error=exc), kind="error")
+            return
+        self.show_toast(tr("片段已粘贴"), kind="success")
 
     def _create_timeline_clip(self, track, start_ms: float) -> None:
         pitches = game_supported_pitches(

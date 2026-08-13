@@ -331,12 +331,12 @@ class HomePageTests(unittest.TestCase):
                         if not action.isSeparator()
                     ] == [
                         "新建项目",
+                        "打开工程",
                         "导入 MIDI",
                         "追加音轨",
-                        "导出标准 MIDI…",
-                        "打开工程",
                         "保存项目",
                         "另存为",
+                        "导出标准 MIDI…",
                     ]
                     assert not window.convert_button.isHidden()
                     assert not window.convert_button.isEnabled()

@@ -122,12 +122,13 @@ class TimelineIntervalIndexUiTests(unittest.TestCase):
                 150_010.0,
             )
             actual = ordered[first:last]
+            from bdo_music_composer.editor.arrangement_clip import project_track_notes
             expected = [
                 note
-                for note in sorted(notes, key=lambda item: item.start)
+                for note in project_track_notes(track)
                 if (
                     note.start <= 150_010.0
-                    and note.start + note.dur * track.duration_scale >= 149_990.0
+                    and note.start + note.dur >= 149_990.0
                 )
             ]
             assert actual == expected

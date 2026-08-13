@@ -73,9 +73,7 @@ def _instrument_name(instrument_id: int) -> str:
 
 
 class TrackPitchDialog(QDialog):
-    """Explicit per-track octave adaptation over the global key transpose."""
-
-    OCTAVE_CHOICES = (-24, -12, 0, 12, 24)
+    """Explicit chromatic per-track transpose over the global transpose."""
 
     def __init__(
         self,
@@ -86,7 +84,7 @@ class TrackPitchDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("TrackPitchDialog")
         self.setProperty("uiSurface", "workflow")
-        self.setWindowTitle(tr("轨道八度"))
+        self.setWindowTitle(tr("轨道移调"))
         self.setModal(True)
         self.setMinimumWidth(420)
         self.track = track
@@ -103,7 +101,7 @@ class TrackPitchDialog(QDialog):
 
         hint = QLabel(
             tr(
-                "只做声部八度适配，不改动工程中的原始音符；试听、检查和导出会使用同一结果。"
+                "只改变当前轨道的试听、检查与导出音高，不改写工程中的原始音符。"
             )
         )
         hint.setWordWrap(True)
@@ -113,31 +111,20 @@ class TrackPitchDialog(QDialog):
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
         layout.addLayout(form)
-        self.octave_offset = QComboBox()
-        self.octave_offset.setObjectName("TrackOctaveOffset")
-        for offset in self.OCTAVE_CHOICES:
-            if offset == 0:
-                label = tr("跟随全局")
-            else:
-                label = trf(
-                    "{octaves:+d} 个八度（{semitones:+d} 半音）",
-                    octaves=offset // 12,
-                    semitones=offset,
-                )
-            self.octave_offset.addItem(label, offset)
+        self.semitone_offset = QSpinBox()
+        self.semitone_offset.setObjectName("TrackSemitoneOffset")
+        self.semitone_offset.setRange(-48, 48)
+        self.semitone_offset.setSuffix(tr(" 半音"))
         current = plan.override_for(track.track_id)
         current_offset = current.semitones if current is not None else 0
-        current_index = self.octave_offset.findData(current_offset)
-        self.octave_offset.setCurrentIndex(
-            current_index if current_index >= 0 else self.octave_offset.findData(0)
-        )
-        form.addRow(tr("声部八度"), self.octave_offset)
+        self.semitone_offset.setValue(current_offset)
+        form.addRow(tr("轨道移调"), self.semitone_offset)
 
         self.effective_label = QLabel()
         self.effective_label.setObjectName("Muted")
         self.effective_label.setWordWrap(True)
         layout.addWidget(self.effective_label)
-        self.octave_offset.currentIndexChanged.connect(
+        self.semitone_offset.valueChanged.connect(
             self._refresh_effective_label
         )
         self._refresh_effective_label()
@@ -149,19 +136,19 @@ class TrackPitchDialog(QDialog):
 
     def _refresh_effective_label(self) -> None:
         effective = (
-            self.plan.global_semitones + self.selected_octave_offset()
+            self.plan.global_semitones + self.selected_semitone_offset()
         )
         self.effective_label.setText(
             trf(
                 "全局 {global_transpose:+d} + 轨道 {track_transpose:+d} = 最终 {effective:+d} 半音",
                 global_transpose=self.plan.global_semitones,
-                track_transpose=self.selected_octave_offset(),
+                track_transpose=self.selected_semitone_offset(),
                 effective=effective,
             )
         )
 
-    def selected_octave_offset(self) -> int:
-        return int(self.octave_offset.currentData() or 0)
+    def selected_semitone_offset(self) -> int:
+        return int(self.semitone_offset.value())
 
 
 class TrackVelocityBaseDialog(QDialog):

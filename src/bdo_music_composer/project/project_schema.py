@@ -18,7 +18,7 @@ from bdo_music_composer.editor.game_score_model import bake_game_velocity_transf
 from bdo_music_composer.editor.pitch_transform import PitchTransformPlan
 
 
-CURRENT_PROJECT_SCHEMA = 13
+CURRENT_PROJECT_SCHEMA = 14
 REFERENCE_LAYER_SETTINGS_VERSION = 10
 
 
@@ -364,6 +364,32 @@ def _normalize_current_velocity_policy(result: dict[str, Any]) -> None:
             )
 
 
+def _migrate_arrangement_schema(
+    result: dict[str, Any], version: int
+) -> int:
+    if version == 11:
+        for track in result.get("tracks") or ():
+            if isinstance(track, dict):
+                track.setdefault("clip_start_ms", None)
+                track.setdefault("clip_end_ms", None)
+                track.setdefault("arrangement_group_id", "")
+        result["schema_version"] = version = 12
+    if version == 12:
+        for track in result.get("tracks") or ():
+            if isinstance(track, dict):
+                track.setdefault("arrangement_clips", [])
+        result["schema_version"] = version = 13
+    if version == 13:
+        for track in result.get("tracks") or ():
+            if not isinstance(track, dict):
+                continue
+            for clip in track.get("arrangement_clips") or ():
+                if isinstance(clip, dict):
+                    clip.setdefault("time_offset_ms", 0.0)
+        result["schema_version"] = version = 14
+    return version
+
+
 def migrate_project(payload: Mapping[str, Any]) -> dict[str, Any]:
     result = deepcopy(dict(payload))
     version = int(result.get("schema_version", result.get("version", 1)))
@@ -429,20 +455,7 @@ def migrate_project(payload: Mapping[str, Any]) -> dict[str, Any]:
         _bake_game_velocity_policy(result)
         result["schema_version"] = 11
         version = 11
-    if version == 11:
-        for track in result.get("tracks") or ():
-            if isinstance(track, dict):
-                track.setdefault("clip_start_ms", None)
-                track.setdefault("clip_end_ms", None)
-                track.setdefault("arrangement_group_id", "")
-        result["schema_version"] = 12
-        version = 12
-    if version == 12:
-        for track in result.get("tracks") or ():
-            if isinstance(track, dict):
-                track.setdefault("arrangement_clips", [])
-        result["schema_version"] = 13
-        version = 13
+    version = _migrate_arrangement_schema(result, version)
     # A hand-written current project can omit optional fields.  Keep migration
     # idempotent and give every current project the same safe defaults.
     result.setdefault("reference_audio_offset_ms", 0.0)
