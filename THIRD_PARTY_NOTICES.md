@@ -120,8 +120,10 @@ Historical/reference acknowledgements also link to their GitHub origin:
 - [Bishop-R](https://github.com/Bishop-R) and
   [Skyro468](https://github.com/Skyro468) are credited for historical public
   BDO-format research; their runtime code is not present in v0.3.0.
-- [OpenAI](https://github.com/openai) is acknowledged for development
-  collaboration. The application contains no OpenAI API or cloud-model runtime.
+- [OpenAI](https://openai.com/) and
+  [ChatGPT](https://chatgpt.com/) are acknowledged for development and
+  documentation collaboration. The application contains no OpenAI API or
+  cloud-model runtime.
 
 The development-only transcription benchmark can download BabySlakh from
 Zenodo record 4603844. BabySlakh is licensed CC BY 4.0. Its audio and MIDI are

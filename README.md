@@ -64,6 +64,29 @@ Desert client audio or game-original sound. Provenance, configuration, and the
 v1.2.1 pack checksum are documented in
 [Audio source strategy](docs/AUDIO_SOURCE_STRATEGY.md).
 
+## Thanks
+
+BDO Music Composer is possible because many authors and maintainers publish
+their work openly. Thank you to every contributor behind these projects and
+communities.
+
+### Third-party support
+
+| Area | Projects and contributors |
+|---|---|
+| Application foundation | [Python / CPython](https://github.com/python/cpython), [PySide6 / Qt](https://github.com/qt), [NumPy](https://github.com/numpy/numpy), [SciPy](https://github.com/scipy/scipy), and [Mido](https://github.com/mido/mido) |
+| Transcription and music analysis | [Spotify Basic Pitch](https://github.com/spotify/basic-pitch), [Microsoft ONNX Runtime](https://github.com/microsoft/onnxruntime), [librosa](https://github.com/librosa/librosa), [scikit-learn](https://github.com/scikit-learn/scikit-learn), [Numba](https://github.com/numba/numba), [llvmlite](https://github.com/numba/llvmlite), [mir_eval](https://github.com/mir-evaluation/mir_eval), and [pretty_midi](https://github.com/craffel/pretty-midi) |
+| Audio and resampling | [SoundFile](https://github.com/bastibe/python-soundfile), [libsndfile](https://github.com/libsndfile/libsndfile), [python-soxr](https://github.com/dofuuz/python-soxr), [libsoxr](https://github.com/chirlu/soxr), and [resampy](https://github.com/bmcfee/resampy) |
+| Packaging and development | [PyInstaller](https://github.com/pyinstaller/pyinstaller), [Pillow](https://github.com/python-pillow/Pillow), [Setuptools](https://github.com/pypa/setuptools), and [typing_extensions](https://github.com/python/typing_extensions) |
+| Optional preview samples | The authors and contributors of [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE), [Versilian Community Sample Library](https://github.com/sgossner/VCSL), [FreePats](https://freepats.zenvoid.org/), and [Creative Commons](https://creativecommons.org/publicdomain/zero/1.0/) |
+| Format research and community knowledge | [Bishop-R](https://github.com/Bishop-R), [Skyro468](https://github.com/Skyro468), and [iDevelopThings / bdo-data-extractor](https://github.com/iDevelopThings/bdo-data-extractor) |
+| AI development collaboration | [OpenAI](https://openai.com/) and [ChatGPT](https://chatgpt.com/) for assistance during development and documentation. No OpenAI API or cloud-model runtime is embedded in the application. |
+
+This is a human-readable acknowledgement, not a replacement for license text.
+The complete release-relevant inventory, authorship context, licenses, model
+terms, and historical references are maintained in
+[Third-party notices](THIRD_PARTY_NOTICES.md).
+
 ## Status and license
 
 Core editing, autosave, optimization, preview, transcription assistance, and
