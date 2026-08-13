@@ -580,6 +580,12 @@ class TimelineCanvas(QWidget):
             )
         return "\n\n".join(sections)
 
+    def _track_attention_accent(self, row: int) -> QColor:
+        """Use an arrangement Group's identity color for its merge notice."""
+
+        group = self._arrangement_group_by_row.get(int(row))
+        return QColor(group.color if group is not None else "#d1a24d")
+
     def set_reference_audio(self, controller: "ReferenceAudioView") -> None:
         if self.reference_audio is controller:
             return
@@ -1551,13 +1557,17 @@ class TimelineCanvas(QWidget):
                     QColor("#d9635d"),
                 )
             elif validation_attentions:
+                attention_accent = self._track_attention_accent(row)
+                attention_tint = QColor(attention_accent)
+                attention_tint.setAlpha(24)
                 painter.fillRect(
                     QRectF(left, y, header_w, lane_h),
-                    QColor(184, 128, 47, 24),
+                    attention_tint,
                 )
+                attention_accent.setAlpha(255)
                 painter.fillRect(
                     QRectF(left, y, 5.0, lane_h),
-                    QColor("#d1a24d"),
+                    attention_accent,
                 )
             else:
                 track_identity_color = QColor(
@@ -1574,7 +1584,7 @@ class TimelineCanvas(QWidget):
                 )
             elif validation_attentions:
                 validation_badges.append(
-                    ("=", QColor("#d1a24d"), y + 7.0)
+                    ("=", self._track_attention_accent(row), y + 7.0)
                 )
             for marker, accent, badge_y in validation_badges:
                 badge_rect = QRectF(left + 8.0, badge_y, 18.0, 18.0)
