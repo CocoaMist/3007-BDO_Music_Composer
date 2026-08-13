@@ -442,8 +442,8 @@ optimizer cannot block repainting the main UI. `registry.py` and
 The preview validator distinguishes imported compatibility debt from newly
 created unsafe output: an unchanged out-of-map pitch, manual articulation, or
 legacy drum encoding may be timing/velocity-cleaned but cannot be duplicated or
-invented.  Such source issues stay visible as diagnostics and remain owned by
-the conversion-check/export gate rather than disabling the optimizer dialog.
+invented. Such source issues stay visible through automatic timeline/export
+validation rather than disabling the optimizer dialog.
 
 `src/bdo_music_composer/ui/dialogs/optimizer_dialog.py` exposes one **MIDI Optimization** workbench instead of
 separate global and track dialogs. Scope is a first-level control shown before
@@ -910,9 +910,9 @@ projected onto each affected lane. Red rails and `!` badges are reserved for har
 export errors; amber rails and merge badges are non-blocking attention marks for
 same-instrument export merges. Each lane renders only its highest severity: an
 error lane stays fully red, while its lower-priority merge information remains
-in the tooltip/check dialog instead of splitting the lane red/amber. Hover exposes
-the localized reasons and clicking a badge opens the matching conversion-check
-item. There is no dedicated persistent validation row above the canvas; only a
+in the lane tooltip instead of splitting the lane red/amber. Hover exposes the
+localized reasons. There is no conversion-check menu or dedicated persistent
+validation row above the canvas; only a
 deduplicated global toast appears when the highest validation state changes, then
 automatically clears. Validation remains owned by `src/bdo_music_composer/export/bdo_validation.py`.
 
@@ -984,8 +984,8 @@ name, and destination gates. `build_export_request()` then freezes every formal
 worker starts. It derives articulation, Volume and dual-velocity maps from that
 same snapshot, preserves per-track Aux bytes, and overlays the single Master
 layer. A malformed eight-byte source setting fails closed instead of being
-silently replaced. The worker therefore never races later editor mutations. `prepare_export()` owns
-Conversion diagnostics are advisory at this boundary: users may explicitly
+silently replaced. The worker therefore never races later editor mutations.
+Automatic conversion diagnostics are advisory at this boundary: users may explicitly
 confirm an export with note/range/mapping errors, while Owner ID, `/4` meter,
 destination, serializer, verification, and atomic-publication failures remain
 hard stops. `prepare_export()` owns
