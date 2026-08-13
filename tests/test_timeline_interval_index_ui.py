@@ -163,6 +163,45 @@ class TimelineIntervalIndexUiTests(unittest.TestCase):
             roll.close()
             editor.close()
 
+            # Clip painting and static-cache keys must scale with the visible
+            # range, not with every Clip in a long arrangement.
+            from bdo_music_composer.editor.editor_models import ArrangementClipState
+
+            class CountingClips(list):
+                def __init__(self, values):
+                    super().__init__(values)
+                    self.iterations = 0
+
+                def __iter__(self):
+                    self.iterations += 1
+                    return super().__iter__()
+
+            clip_track = TrackState(2, [], 0, False, "clips", 0x12)
+            clip_track.arrangement_clips = CountingClips([
+                ArrangementClipState(
+                    f"clip-{index}",
+                    float(index * 100), float(index * 100 + 50),
+                    float(index * 100), float(index * 100 + 50),
+                )
+                for index in range(12_000)
+            ])
+            timeline.set_tracks([clip_track])
+            clip_track.arrangement_clips.iterations = 0
+            visible_clips = timeline._visible_track_clips(
+                clip_track, 590_000.0, 591_000.0
+            )
+            assert 0 < len(visible_clips) < 20
+            assert (
+                timeline._last_track_clip_query_inspections
+                <= timeline.TRACK_CLIP_QUERY_BLOCK_SIZE * 2
+            )
+            timeline._static_timeline_key(
+                grid_h=300.0,
+                visible_start=590_000.0,
+                visible_duration=1_000.0,
+            )
+            assert clip_track.arrangement_clips.iterations == 0
+
             timeline.close()
             app.processEvents()
             app.quit()

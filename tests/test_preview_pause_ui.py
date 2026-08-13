@@ -77,6 +77,13 @@ class PreviewPauseUiTests(unittest.TestCase):
             assert not window.preview_transport_coordinator.pause_requested
             assert fake.play_count == 1
             assert fake.status.state == "playing"
+            assert window.realtime_status_timer.isActive()
+            fake.status.position_ms = 175.0
+            window._pause_preview()
+            assert fake.pause_count == 1
+            assert fake.status.state == "paused"
+            assert not window.realtime_status_timer.isActive()
+            assert window.timeline.playhead_ms == 175.0
             window.preview_transport_coordinator.clear_session()
             window.close()
             app.processEvents()

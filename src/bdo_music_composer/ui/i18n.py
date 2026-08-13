@@ -529,11 +529,14 @@ EN.update({
     "只改变当前轨道的试听、检查与导出音高，不改写工程中的原始音符。": "Changes preview, validation, and export pitch for this track without rewriting its source notes.",
     "复制片段": "Copy Clip",
     "在播放头粘贴片段": "Paste Clip at Playhead",
+    "删除片段": "Delete Clip",
     "没有可粘贴的片段": "No clip is available to paste",
     "片段已复制": "Clip copied",
     "片段已粘贴": "Clip pasted",
+    "片段已删除": "Clip deleted",
     "无法复制片段：{error}": "Unable to copy clip: {error}",
     "无法粘贴片段：{error}": "Unable to paste clip: {error}",
+    "无法删除片段：{error}": "Unable to delete clip: {error}",
     "MIDI 已载入，可在多音轨中继续编辑。": "MIDI loaded. Continue editing in the multitrack view.",
     "已应用 {scope} 优化{effects}。": "Applied {scope} optimization{effects}.",
     "视图": "View", "时间轴视图": "Timeline View",
@@ -670,11 +673,14 @@ JA.update({
     "只改变当前轨道的试听、检查与导出音高，不改写工程中的原始音符。": "元のノートを書き換えず、このトラックの試聴・検証・書き出し音高だけを変更します。",
     "复制片段": "クリップをコピー",
     "在播放头粘贴片段": "再生ヘッド位置にクリップを貼り付け",
+    "删除片段": "クリップを削除",
     "没有可粘贴的片段": "貼り付け可能なクリップがありません",
     "片段已复制": "クリップをコピーしました",
     "片段已粘贴": "クリップを貼り付けました",
+    "片段已删除": "クリップを削除しました",
     "无法复制片段：{error}": "クリップをコピーできません：{error}",
     "无法粘贴片段：{error}": "クリップを貼り付けできません：{error}",
+    "无法删除片段：{error}": "クリップを削除できません：{error}",
     "MIDI 已载入，可在多音轨中继续编辑。": "MIDIを読み込みました。マルチトラック画面で編集を続けられます。",
     "已应用 {scope} 优化{effects}。": "{scope}の最適化{effects}を適用しました。",
     "视图": "表示", "时间轴视图": "タイムライン表示",
@@ -809,11 +815,14 @@ KO.update({
     "只改变当前轨道的试听、检查与导出音高，不改写工程中的原始音符。": "원본 음표를 다시 쓰지 않고 이 트랙의 미리듣기, 검사 및 내보내기 음높이만 변경합니다.",
     "复制片段": "클립 복사",
     "在播放头粘贴片段": "재생 헤드에 클립 붙여넣기",
+    "删除片段": "클립 삭제",
     "没有可粘贴的片段": "붙여넣을 클립이 없습니다",
     "片段已复制": "클립을 복사했습니다",
     "片段已粘贴": "클립을 붙여넣었습니다",
+    "片段已删除": "클립을 삭제했습니다",
     "无法复制片段：{error}": "클립을 복사할 수 없습니다: {error}",
     "无法粘贴片段：{error}": "클립을 붙여넣을 수 없습니다: {error}",
+    "无法删除片段：{error}": "클립을 삭제할 수 없습니다: {error}",
     "MIDI 已载入，可在多音轨中继续编辑。": "MIDI를 불러왔습니다. 멀티트랙 화면에서 계속 편집할 수 있습니다.",
     "已应用 {scope} 优化{effects}。": "{scope} 최적화{effects}를 적용했습니다.",
     "视图": "보기", "时间轴视图": "타임라인 보기",
@@ -8302,6 +8311,51 @@ for _source, (_english, _japanese, _korean) in _OWNER_IDENTITY_TRANSLATIONS.item
 
 del _source, _english, _japanese, _korean
 
+_CLIP_EDITOR_SCOPE_TRANSLATIONS = {
+    "片段编辑无法安全应用：{error}": (
+        "The clip edit cannot be applied safely: {error}",
+        "クリップ編集を安全に適用できません：{error}",
+        "클립 편집을 안전하게 적용할 수 없습니다: {error}",
+    ),
+    "目标片段已在外部发生变化。请关闭并重新打开编辑器后再试。": (
+        "The target clip changed outside this editor. Close and reopen the editor, then try again.",
+        "対象クリップが外部で変更されました。エディターを閉じて開き直してから再試行してください。",
+        "대상 클립이 편집기 밖에서 변경되었습니다. 편집기를 닫았다가 다시 연 후 재시도하세요.",
+    ),
+    "草稿中有音符超出当前片段的时间范围。请将音符移回片段内。": (
+        "The draft contains notes outside the current clip. Move them back inside the clip.",
+        "下書きに現在のクリップ範囲外のノートがあります。クリップ内へ戻してください。",
+        "초안에 현재 클립 범위를 벗어난 음표가 있습니다. 클립 안으로 이동하세요.",
+    ),
+    "目标片段已不存在。": (
+        "The target clip no longer exists.",
+        "対象クリップは存在しません。",
+        "대상 클립이 더 이상 존재하지 않습니다.",
+    ),
+    "草稿包含无效的音符时间。": (
+        "The draft contains invalid note timing.",
+        "下書きに無効なノート時刻があります。",
+        "초안에 잘못된 음표 시간이 있습니다.",
+    ),
+    "无法应用优化": (
+        "Cannot Apply Optimization",
+        "最適化を適用できません",
+        "최적화를 적용할 수 없음",
+    ),
+    "优化结果超出当前片段的时间范围，未修改草稿。": (
+        "The optimization result exceeds the current clip's time range. The draft was not changed.",
+        "最適化結果が現在のクリップ範囲を超えたため、下書きは変更されませんでした。",
+        "최적화 결과가 현재 클립의 시간 범위를 벗어나 초안을 변경하지 않았습니다.",
+    ),
+}
+
+for _source, (_english, _japanese, _korean) in _CLIP_EDITOR_SCOPE_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
 _TRACK_ORDER_TRANSLATIONS = {
     "上移轨道": ("Move Track Up", "トラックを上へ移動", "트랙 위로 이동"),
     "下移轨道": ("Move Track Down", "トラックを下へ移動", "트랙 아래로 이동"),
@@ -8715,6 +8769,35 @@ for _source, (
 del _source, _english, _japanese, _korean
 
 _ARRANGEMENT_CLIP_TRANSLATIONS = {
+    "在此处创建片段": ("Create Clip Here", "ここにクリップを作成", "여기에 클립 만들기"),
+    "片段左边界": ("Clip Start", "クリップ左端", "클립 왼쪽 경계"),
+    "片段右边界": ("Clip End", "クリップ右端", "클립 오른쪽 경계"),
+    "完成并关闭": ("Done and Close", "完了して閉じる", "완료하고 닫기"),
+    "音符与片段边界已实时同步；关闭编辑器": (
+        "Notes and clip boundaries are already synchronized; close the editor",
+        "ノートとクリップ境界は同期済みです。エディターを閉じます",
+        "음표와 클립 경계가 이미 동기화되었습니다. 편집기를 닫습니다",
+    ),
+    "片段已从混音台同步；请继续编辑。": (
+        "The clip was synchronized from the mixer; you can continue editing.",
+        "ミキサーからクリップを同期しました。編集を続けられます。",
+        "믹서에서 클립을 동기화했습니다. 계속 편집할 수 있습니다.",
+    ),
+    "无法实时同步片段：{error}": (
+        "Could not synchronize clip in real time: {error}",
+        "クリップをリアルタイム同期できません：{error}",
+        "클립을 실시간으로 동기화할 수 없습니다: {error}",
+    ),
+    "片段边界不能越过已有音符。": (
+        "A clip boundary cannot cross an existing note.",
+        "クリップ境界を既存ノートより内側へ移動できません。",
+        "클립 경계는 기존 음표를 지나갈 수 없습니다.",
+    ),
+    "无法调整片段边界：{error}": (
+        "Could not adjust clip boundary: {error}",
+        "クリップ境界を調整できません：{error}",
+        "클립 경계를 조정할 수 없습니다: {error}",
+    ),
     "无法编辑片段：{error}": ("Could not edit clip: {error}", "クリップを編集できません：{error}", "클립을 편집할 수 없습니다: {error}"),
     "片段编辑已应用": ("Clip edit applied", "クリップ編集を適用しました", "클립 편집을 적용했습니다"),
     "无法创建片段：{error}": ("Could not create clip: {error}", "クリップを作成できません：{error}", "클립을 만들 수 없습니다: {error}"),

@@ -5,28 +5,157 @@ from __future__ import annotations
 from PySide6.QtWidgets import QMessageBox
 
 from bdo_music_composer.editor.arrangement_clip import (
+    ClipEditError,
     ClipEditPlan,
+    clip_edit_fingerprint,
+    clip_editor_notes,
+    clip_editor_scope,
     copy_clip,
     plan_clip_create,
+    plan_clip_delete,
     plan_clip_edit,
     plan_clip_paste,
     plan_clip_split,
+    plan_clip_note_edit,
     overlapping_clip_ids,
 )
 from bdo_music_composer.editor.editor_models import game_supported_pitches
+from bdo_music_composer.editor.game_score_model import (
+    reconcile_track_game_velocity_records,
+)
 from bdo_music_composer.editor.model_change import ModelChange
+from bdo_music_composer.transcription.bdo_transcription_session import (
+    TranscriptionEditorCommitReport,
+)
 from bdo_music_composer.ui.i18n import tr, trf
 
 
 class ArrangementClipHostMixin:
     _arrangement_clip_clipboard = None
 
-    def _publish_clip_plan(self, plan: ClipEditPlan, reason: str) -> None:
+    def _commit_arrangement_clip_note_editor(
+        self, request, track, draft_notes
+    ) -> TranscriptionEditorCommitReport | None:
+        """Publish one explicit Clip draft without touching sibling Clips."""
+
+        if request.routes or request.new_track_specs:
+            QMessageBox.warning(
+                self,
+                tr("无法应用音符编辑"),
+                tr("片段编辑不能同时提交转录路由。"),
+            )
+            return None
+        try:
+            if (
+                clip_edit_fingerprint(track, request.arrangement_clip_id)
+                != request.arrangement_clip_fingerprint
+            ):
+                raise ClipEditError(
+                    "clip_stale",
+                    "clip changed after the note editor was opened",
+                )
+            if tuple(clip_editor_notes(
+                track, request.arrangement_clip_id
+            )) == tuple(draft_notes):
+                return TranscriptionEditorCommitReport(
+                    project_changed=False
+                )
+            plan = plan_clip_note_edit(
+                track,
+                clip_id=request.arrangement_clip_id,
+                notes=draft_notes,
+            )
+            self._publish_clip_plan(
+                plan,
+                "edit arrangement clip notes",
+                reconcile_velocity=True,
+            )
+        except (TypeError, ValueError) as exc:
+            error_text = str(exc)
+            if isinstance(exc, ClipEditError):
+                error_text = {
+                    "clip_stale": tr(
+                        "目标片段已在外部发生变化。请关闭并重新打开编辑器后再试。"
+                    ),
+                    "note_out_of_scope": tr(
+                        "草稿中有音符超出当前片段的时间范围。请将音符移回片段内。"
+                    ),
+                    "clip_missing": tr("目标片段已不存在。"),
+                    "invalid_timing": tr("草稿包含无效的音符时间。"),
+                }.get(exc.code, error_text)
+            QMessageBox.warning(
+                self,
+                tr("无法应用音符编辑"),
+                trf("片段编辑无法安全应用：{error}", error=error_text),
+            )
+            return None
+        return TranscriptionEditorCommitReport(project_changed=True)
+
+    @staticmethod
+    def _clip_update_matches_track(update, track) -> bool:
+        return (
+            tuple(track.notes) == tuple(update.notes)
+            and tuple(track.performance_controls)
+            == tuple(update.performance_controls)
+            and tuple(track.bdo_source_note_records)
+            == tuple(update.source_note_records)
+            and track.bdo_source_group_index == update.source_group_index
+            and track.clip_start_ms == update.clip_start_ms
+            and track.clip_end_ms == update.clip_end_ms
+            and tuple(track.arrangement_clips)
+            == tuple(update.arrangement_clips)
+        )
+
+    def _synchronize_open_clip_editors(
+        self,
+        plan: ClipEditPlan,
+        *,
+        source_editor=None,
+    ) -> None:
+        updated_ids = {int(update.track_id) for update in plan.updates}
+        tracks_by_id = {int(track.track_id): track for track in self.tracks}
+        for editor in tuple(getattr(self, "_note_editors", {}).values()):
+            clip_id = str(
+                getattr(editor, "arrangement_clip_id", "") or ""
+            )
+            track_id = int(getattr(editor.track, "track_id", -1))
+            if not clip_id or track_id not in updated_ids:
+                continue
+            track = tracks_by_id.get(track_id)
+            if track is None:
+                continue
+            try:
+                scope = clip_editor_scope(track, clip_id)
+                notes = (
+                    None
+                    if editor is source_editor
+                    else clip_editor_notes(track, clip_id)
+                )
+                editor.synchronize_clip_scope(scope, notes)
+            except ClipEditError as exc:
+                # A delete or overlap-merge can remove the exact Clip an
+                # editor owns.  Do not leave a writable orphan dialog behind.
+                if exc.code == "clip_missing":
+                    editor.close()
+                continue
+            except (AttributeError, TypeError, ValueError):
+                continue
+
+    def _publish_clip_plan(
+        self,
+        plan: ClipEditPlan,
+        reason: str,
+        *,
+        push_snapshot: bool = True,
+        source_editor=None,
+        reconcile_velocity: bool = False,
+    ) -> None:
         tracks_by_id = {int(track.track_id): track for track in self.tracks}
         if any(update.track_id not in tracks_by_id for update in plan.updates):
             raise ValueError("clip target track is no longer available")
         self._stop_preview(reset_playhead=False)
-        self._push_project_snapshot()
+        if push_snapshot:
+            self._push_project_snapshot()
         for update in plan.updates:
             track = tracks_by_id[update.track_id]
             track.notes = list(update.notes)
@@ -37,6 +166,8 @@ class ArrangementClipHostMixin:
             track.clip_start_ms = update.clip_start_ms
             track.clip_end_ms = update.clip_end_ms
             track.arrangement_clips = list(update.arrangement_clips)
+            if reconcile_velocity:
+                reconcile_track_game_velocity_records(track, track.notes)
         selected = tracks_by_id[plan.selected_track_id]
         self._select_track(selected)
         self.timeline.set_selected_clip(selected, plan.selected_clip_id)
@@ -50,7 +181,138 @@ class ArrangementClipHostMixin:
         refresh_validation = getattr(self, "_refresh_timeline_validation", None)
         if callable(refresh_validation):
             refresh_validation()
+        self._synchronize_open_clip_editors(
+            plan, source_editor=source_editor
+        )
+        if push_snapshot:
+            updated_ids = {int(update.track_id) for update in plan.updates}
+            for editor in tuple(
+                getattr(self, "_note_editors", {}).values()
+            ):
+                if int(editor.track.track_id) in updated_ids:
+                    editor._clip_live_snapshot_pushed = False
         self._autosave_project(reason, immediate=True)
+
+    def _ensure_clip_editor_project_snapshot(self, editor) -> None:
+        if bool(getattr(editor, "_clip_live_snapshot_pushed", False)):
+            return
+        self._push_project_snapshot()
+        editor._clip_live_snapshot_pushed = True
+
+    def _sync_arrangement_clip_editor(
+        self, editor, draft_notes
+    ) -> bool:
+        """Publish one completed piano-roll transaction immediately."""
+
+        if editor not in getattr(self, "_note_editors", {}).values():
+            return False
+        track_id = int(editor.track.track_id)
+        track = next((
+            value for value in self.tracks
+            if int(value.track_id) == track_id
+        ), None)
+        clip_id = str(getattr(editor, "arrangement_clip_id", "") or "")
+        if track is None or not clip_id:
+            return False
+        try:
+            if (
+                clip_edit_fingerprint(track, clip_id)
+                != str(editor.arrangement_clip_fingerprint or "")
+            ):
+                editor.synchronize_clip_scope(
+                    clip_editor_scope(track, clip_id),
+                    clip_editor_notes(track, clip_id),
+                )
+                self.show_toast(
+                    tr("片段已从混音台同步；请继续编辑。"),
+                    kind="warning",
+                )
+                return False
+            plan = plan_clip_note_edit(
+                track, clip_id=clip_id, notes=tuple(draft_notes)
+            )
+            if self._clip_update_matches_track(plan.updates[0], track):
+                editor.synchronize_clip_scope(
+                    clip_editor_scope(track, clip_id)
+                )
+                return True
+            self._ensure_clip_editor_project_snapshot(editor)
+            self._publish_clip_plan(
+                plan,
+                "live arrangement clip note edit",
+                push_snapshot=False,
+                source_editor=editor,
+                reconcile_velocity=True,
+            )
+            return True
+        except (AttributeError, TypeError, ValueError) as exc:
+            self.show_toast(
+                trf("无法实时同步片段：{error}", error=exc),
+                kind="error",
+            )
+            return False
+
+    def _resize_arrangement_clip_from_editor(
+        self, editor, mode: str, value: float
+    ) -> bool:
+        track = next((
+            item for item in self.tracks
+            if int(item.track_id) == int(editor.track.track_id)
+        ), None)
+        clip_id = str(getattr(editor, "arrangement_clip_id", "") or "")
+        if track is None or not clip_id:
+            return False
+        try:
+            if clip_edit_fingerprint(track, clip_id) != str(
+                editor.arrangement_clip_fingerprint or ""
+            ):
+                raise ClipEditError(
+                    "clip_stale", "clip changed before boundary edit"
+                )
+            scope = clip_editor_scope(track, clip_id)
+            start = (
+                float(value)
+                if mode == "resize_start"
+                else scope.timeline_start_ms
+            )
+            end = (
+                float(value)
+                if mode == "resize_end"
+                else scope.timeline_end_ms
+            )
+            plan = plan_clip_edit(
+                track,
+                mode=str(mode),
+                new_start_ms=start,
+                new_end_ms=end,
+                clip_id=clip_id,
+            )
+            self._ensure_clip_editor_project_snapshot(editor)
+            self._publish_clip_plan(
+                plan,
+                "live arrangement clip boundary edit",
+                push_snapshot=False,
+            )
+            return True
+        except (AttributeError, TypeError, ValueError) as exc:
+            try:
+                editor.synchronize_clip_scope(
+                    clip_editor_scope(track, clip_id),
+                    clip_editor_notes(track, clip_id),
+                )
+            except (AttributeError, TypeError, ValueError):
+                pass
+            message = (
+                tr("片段边界不能越过已有音符。")
+                if isinstance(exc, ClipEditError)
+                and exc.code == "clip_resize_over_notes"
+                else str(exc)
+            )
+            self.show_toast(
+                trf("无法调整片段边界：{error}", error=message),
+                kind="error",
+            )
+            return False
 
     def _commit_timeline_clip_edit(self, request) -> None:
         overlap_ids: tuple[str, ...] = ()
@@ -126,6 +388,17 @@ class ArrangementClipHostMixin:
             self.show_toast(trf("无法复制片段：{error}", error=exc), kind="error")
             return
         self.show_toast(tr("片段已复制"), kind="success")
+
+    def _delete_timeline_clip(self, track, clip_id: str) -> None:
+        try:
+            plan = plan_clip_delete(track, clip_id=clip_id)
+            self._publish_clip_plan(plan, "delete arrangement clip")
+        except (TypeError, ValueError) as exc:
+            self.show_toast(
+                trf("无法删除片段：{error}", error=exc), kind="error"
+            )
+            return
+        self.show_toast(tr("片段已删除"), kind="success")
 
     def _paste_timeline_clip(self, track, start_ms: float) -> None:
         if self._arrangement_clip_clipboard is None:

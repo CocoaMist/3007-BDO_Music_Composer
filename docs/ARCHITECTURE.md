@@ -121,7 +121,34 @@ commits each gesture as one undoable edit. Clip instances use an immutable
 source-content window plus a timeline offset: razor splits duplicate the complete
 source reference and crop each side non-destructively, so resizing can reveal
 content again; copy/paste creates a detached content range and a new stable Clip
-ID. `editor/track_group.py` separately keeps
+ID. A note editor opened for one Clip receives one immutable
+`ClipEditorScope`; its canvas, note commands, optimization preflight, preview,
+commit gate, and recovery overlay all use that exact timeline window. Every
+completed Clip-editor note transaction publishes immediately into the formal
+Track and refreshes the arrangement; the first live edit captures one project
+undo snapshot while the editor's own undo/redo remains transaction-granular.
+Right-click Delete and the focused timeline's Delete/Backspace keys share one
+domain transaction: exclusive notes/controls/source records are removed,
+content still owned by a sibling Clip survives, selection moves to a surviving
+Clip, and any editor whose Clip identity disappeared is closed rather than left
+writable and orphaned.
+Mixer edge drags and the editor's left/right boundary controls share one
+Qt-free occupied-note constraint: empty leading/trailing space may be resized,
+but an edge cannot cross a visible note. Any accepted mixer resize immediately
+updates the open editor's scope, scroll domain, controls, and fingerprint. Track
+lane context menus can create a Clip at the clicked timeline position. Adding,
+moving, resizing, pasting, optimizing, undoing, or redoing a note in previously
+empty extended Clip space expands that Clip's source-content ownership; if the
+new range would collide with shared/sibling content, the complete target Clip
+is first materialized into a private content range. A legacy note left outside
+all content ranges by the former live-sync bug is projected and repaired only
+when exactly one Clip source window can own it; ambiguous orphans remain
+fail-closed. Notes
+crossing a trim edge use the same visible projection as the arrangement, while
+an unchanged boundary projection remains lossless. Stale, missing,
+invalid-timing, and out-of-scope drafts remain distinct failures. Editors use
+Track plus Clip identity, so sibling Clips on one Track can remain open without
+redirecting each other. `editor/track_group.py` separately keeps
 same-game-instrument lanes in a Group container without
 merging their notes or mixer state. Explicit A+B
 track merge still produces one ordinary lane, never a composite-track
@@ -1104,14 +1131,20 @@ account limit; the native composition UI receives `noteCount` dynamically.
   `ProjectMetadataSnapshot` on the GUI thread. Metadata capture recursively
   detaches JSON-compatible mappings/sequences, rejects non-string keys,
   non-finite numbers and non-portable source references, while `to_payload()`
-  gives the writer fresh containers. A frozen outer dataclass never substitutes
-  for this deep freeze. A single coalescing writer then serializes JSON, copies a missing recovery source,
+  gives the writer fresh containers. A Clip-local draft is first planned back
+  into a complete Track recovery view, preserving sibling Clips and rejecting a
+  stale target; it is never serialized as if it were the complete Track. A
+  frozen outer dataclass never substitutes for this deep freeze. A single
+  coalescing writer then serializes JSON, copies a missing recovery source,
   and atomically replaces `project.json` off-thread. `project.index.json`
   contains only the stable project UUID, display name, save time, and distinct
   BDO instrument IDs so the home page never has to parse multi-megabyte note
   payloads. Note transactions bypass the ordinary 700 ms metadata debounce but
   still use the single latest-state coalescing writer; a drag writes once on
-  release, not once per mouse-move frame. Transient writer failures retry the
+  release, not once per mouse-move frame. A successful Clip live publication
+  is already the formal recovery checkpoint and must not enqueue a duplicate
+  active-draft checkpoint; inactive sibling Clip editors publish by identity
+  through the same path. Transient writer failures retry the
   same immutable request up to three times, while a newer pending request takes
   precedence. Final window close drains the last writer.
 - Personal/game files are never bundled.
@@ -1157,7 +1190,9 @@ account limit; the native composition UI receives `noteCount` dynamically.
 - Timeline and piano-roll canvases use time-sorted visible-range indexes. The
   timeline's shared Qt-free `IntervalIndex` stores start/end projections once,
   uses block maxima for long-note overlap, and exposes inspection counts to
-  regression tests.
+  regression tests. Notes and Clips have separate per-track indexes: painting,
+  dense summary clipping, timeline-end lookup, and static-cache identity never
+  scan every Clip outside the viewport.
 - Each formal track replacement rebuilds the multi-track time index once;
   `_refresh_tracks()` is the single refresh boundary rather than being followed
   by duplicate `set_tracks()` calls.
