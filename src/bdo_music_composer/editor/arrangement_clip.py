@@ -1305,6 +1305,106 @@ def plan_clip_delete(track: TrackState, *, clip_id: str) -> ClipEditPlan:
     )
 
 
+def plan_clips_delete(
+    track: TrackState, *, clip_ids: Sequence[str]
+) -> ClipEditPlan:
+    """Delete several Clips from one track as one immutable transaction."""
+
+    requested = tuple(dict.fromkeys(str(value) for value in clip_ids))
+    if not requested:
+        raise ValueError("at least one clip must be selected")
+    available = {clip.clip_id for clip in track_clips(track)}
+    missing = tuple(value for value in requested if value not in available)
+    if missing:
+        raise ClipEditError(
+            "clip_missing",
+            f"selected clips are unavailable: {', '.join(missing)}",
+        )
+
+    working = deepcopy(track)
+    for clip_id in requested:
+        plan = plan_clip_delete(working, clip_id=clip_id)
+        update = plan.updates[0]
+        working.notes = list(update.notes)
+        working.performance_controls = list(update.performance_controls)
+        working.bdo_source_note_records = update.source_note_records
+        working.bdo_source_group_index = update.source_group_index
+        working.clip_start_ms = update.clip_start_ms
+        working.clip_end_ms = update.clip_end_ms
+        working.arrangement_clips = list(update.arrangement_clips)
+
+    update = _base_update(working)
+    selected_clip_id = (
+        update.arrangement_clips[0].clip_id
+        if update.arrangement_clips
+        else ""
+    )
+    return ClipEditPlan(
+        (update,), int(track.track_id), selected_clip_id
+    )
+
+
+def plan_clips_move(
+    track: TrackState,
+    *,
+    clip_ids: Sequence[str],
+    delta_ms: float,
+) -> ClipEditPlan:
+    """Move several same-track Clip views by one common timeline delta."""
+
+    requested = tuple(dict.fromkeys(str(value) for value in clip_ids))
+    if not requested:
+        raise ValueError("at least one clip must be selected")
+    delta = float(delta_ms)
+    if not math.isfinite(delta):
+        raise ValueError("clip move delta must be finite")
+    clips = track_clips(track)
+    selected_ids = set(requested)
+    available = {clip.clip_id for clip in clips}
+    missing = tuple(value for value in requested if value not in available)
+    if missing:
+        raise ClipEditError(
+            "clip_missing",
+            f"selected clips are unavailable: {', '.join(missing)}",
+        )
+    moved_by_id = {
+        clip.clip_id: replace(
+            clip,
+            start_ms=clip.start_ms + delta,
+            end_ms=clip.end_ms + delta,
+            time_offset_ms=clip.time_offset_ms + delta,
+        )
+        for clip in clips
+        if clip.clip_id in selected_ids
+    }
+    if any(clip.start_ms < 0.0 for clip in moved_by_id.values()):
+        raise ClipEditError(
+            "clip_group_before_zero",
+            "selected clips cannot move before the timeline start",
+        )
+    unselected = tuple(
+        clip for clip in clips if clip.clip_id not in selected_ids
+    )
+    for moved in moved_by_id.values():
+        if any(
+            moved.start_ms < other.end_ms
+            and other.start_ms < moved.end_ms
+            for other in unselected
+        ):
+            raise ClipEditError(
+                "clip_group_overlap",
+                "selected clips would overlap an unselected clip",
+            )
+    update = _base_update(track)
+    primary_id = requested[0]
+    return ClipEditPlan((replace(
+        update,
+        arrangement_clips=tuple(
+            moved_by_id.get(clip.clip_id, clip) for clip in clips
+        ),
+    ),), int(track.track_id), primary_id)
+
+
 __all__ = [
     "ClipBounds",
     "ClipEditError",
@@ -1323,6 +1423,8 @@ __all__ = [
     "clip_for_note",
     "plan_clip_create",
     "plan_clip_delete",
+    "plan_clips_delete",
+    "plan_clips_move",
     "plan_clip_edit",
     "plan_clip_note_edit",
     "plan_clip_paste",

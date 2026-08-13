@@ -13,6 +13,8 @@ from bdo_music_composer.editor.arrangement_clip import (
     copy_clip,
     plan_clip_create,
     plan_clip_delete,
+    plan_clips_delete,
+    plan_clips_move,
     plan_clip_edit,
     plan_clip_paste,
     plan_clip_split,
@@ -32,6 +34,37 @@ from bdo_music_composer.ui.i18n import tr, trf
 
 class ArrangementClipHostMixin:
     _arrangement_clip_clipboard = None
+
+    def _capture_arrangement_selection(self):
+        timeline = self.timeline
+        primary = (
+            int(timeline._selected_clip_track_id),
+            str(timeline._selected_clip_id),
+        ) if timeline._selected_clip_id else None
+        selected_track_id = (
+            int(self.selected_track.track_id)
+            if self.selected_track is not None
+            else (primary[0] if primary is not None else None)
+        )
+        return (
+            selected_track_id,
+            tuple(timeline.selected_clip_keys),
+            primary,
+        )
+
+    def _restore_arrangement_selection(self, state) -> None:
+        selected_track_id, clip_keys, primary = state
+        tracks_by_id = {int(track.track_id): track for track in self.tracks}
+        selected = tracks_by_id.get(selected_track_id)
+        if clip_keys:
+            self.timeline.set_selected_clip_keys(
+                clip_keys, primary_key=primary
+            )
+            selected = self.timeline.selected_track or selected
+        if selected is None:
+            self._clear_track_selection()
+        else:
+            self._select_track(selected)
 
     def _commit_arrangement_clip_note_editor(
         self, request, track, draft_notes
@@ -69,6 +102,7 @@ class ArrangementClipHostMixin:
                 plan,
                 "edit arrangement clip notes",
                 reconcile_velocity=True,
+                preserve_clip_selection=True,
             )
         except (TypeError, ValueError) as exc:
             error_text = str(exc)
@@ -149,7 +183,23 @@ class ArrangementClipHostMixin:
         push_snapshot: bool = True,
         source_editor=None,
         reconcile_velocity: bool = False,
+        selected_clip_keys=(),
+        preserve_clip_selection: bool = False,
     ) -> None:
+        preserved_clip_keys = (
+            tuple(self.timeline.selected_clip_keys)
+            if preserve_clip_selection
+            else ()
+        )
+        preserved_primary_key = (
+            (
+                int(self.timeline._selected_clip_track_id),
+                str(self.timeline._selected_clip_id),
+            )
+            if preserve_clip_selection
+            and self.timeline._selected_clip_id
+            else None
+        )
         tracks_by_id = {int(track.track_id): track for track in self.tracks}
         if any(update.track_id not in tracks_by_id for update in plan.updates):
             raise ValueError("clip target track is no longer available")
@@ -170,7 +220,18 @@ class ArrangementClipHostMixin:
                 reconcile_track_game_velocity_records(track, track.notes)
         selected = tracks_by_id[plan.selected_track_id]
         self._select_track(selected)
-        self.timeline.set_selected_clip(selected, plan.selected_clip_id)
+        restored_clip_keys = selected_clip_keys or preserved_clip_keys
+        if restored_clip_keys:
+            self.timeline.set_selected_clip_keys(
+                restored_clip_keys,
+                primary_key=(
+                    preserved_primary_key
+                    if preserved_clip_keys
+                    else (plan.selected_track_id, plan.selected_clip_id)
+                ),
+            )
+        else:
+            self.timeline.set_selected_clip(selected, plan.selected_clip_id)
         self._apply_workspace_change(ModelChange.notes(
             *(update.track_id for update in plan.updates)
         ))
@@ -243,6 +304,7 @@ class ArrangementClipHostMixin:
                 push_snapshot=False,
                 source_editor=editor,
                 reconcile_velocity=True,
+                preserve_clip_selection=True,
             )
             return True
         except (AttributeError, TypeError, ValueError) as exc:
@@ -292,6 +354,7 @@ class ArrangementClipHostMixin:
                 plan,
                 "live arrangement clip boundary edit",
                 push_snapshot=False,
+                preserve_clip_selection=True,
             )
             return True
         except (AttributeError, TypeError, ValueError) as exc:
@@ -390,15 +453,168 @@ class ArrangementClipHostMixin:
         self.show_toast(tr("片段已复制"), kind="success")
 
     def _delete_timeline_clip(self, track, clip_id: str) -> None:
+        self._delete_timeline_clips(((track, clip_id),))
+
+    def _delete_timeline_clips(self, selections) -> None:
+        """Delete a visible multi-selection with one undo/autosave boundary."""
+
+        selected_by_track: dict[int, tuple[object, list[str]]] = {}
+        current_by_id = {
+            int(track.track_id): track for track in self.tracks
+        }
+        for selected_track, clip_id in tuple(selections or ()):
+            track_id = int(getattr(selected_track, "track_id", -1))
+            track = current_by_id.get(track_id)
+            if track is None:
+                continue
+            entry = selected_by_track.setdefault(
+                track_id, (track, [])
+            )
+            if str(clip_id) not in entry[1]:
+                entry[1].append(str(clip_id))
+        if not selected_by_track:
+            return
+
         try:
-            plan = plan_clip_delete(track, clip_id=clip_id)
+            plans = [
+                plan_clips_delete(track, clip_ids=clip_ids)
+                for track, clip_ids in (
+                    selected_by_track[int(item.track_id)]
+                    for item in self.tracks
+                    if int(item.track_id) in selected_by_track
+                )
+            ]
+            preferred_track_id = int(
+                getattr(self.selected_track, "track_id", plans[0].selected_track_id)
+            )
+            preferred = next(
+                (
+                    plan for plan in plans
+                    if plan.selected_track_id == preferred_track_id
+                ),
+                plans[0],
+            )
+            selection_owner = (
+                preferred
+                if preferred.selected_clip_id
+                else next(
+                    (
+                        item for item in plans
+                        if item.selected_clip_id
+                    ),
+                    preferred,
+                )
+            )
+            plan = ClipEditPlan(
+                tuple(
+                    update
+                    for item in plans
+                    for update in item.updates
+                ),
+                selection_owner.selected_track_id,
+                selection_owner.selected_clip_id,
+            )
             self._publish_clip_plan(plan, "delete arrangement clip")
         except (TypeError, ValueError) as exc:
             self.show_toast(
-                trf("无法删除片段：{error}", error=exc), kind="error"
+                trf("无法删除所选片段：{error}", error=exc), kind="error"
             )
             return
-        self.show_toast(tr("片段已删除"), kind="success")
+        deleted_count = sum(
+            len(clip_ids)
+            for _track, clip_ids in selected_by_track.values()
+        )
+        if deleted_count == 1:
+            self.show_toast(tr("片段已删除"), kind="success")
+        else:
+            self.show_toast(
+                trf("已删除 {count} 个片段", count=deleted_count),
+                kind="success",
+            )
+
+    def _move_timeline_clips(self, request) -> None:
+        """Publish a multi-Clip horizontal move as one project transaction."""
+
+        current_by_id = {
+            int(track.track_id): track for track in self.tracks
+        }
+        selected_by_track: dict[int, tuple[object, list[str]]] = {}
+        for selected_track, clip_id in tuple(request.selections or ()):
+            track_id = int(getattr(selected_track, "track_id", -1))
+            track = current_by_id.get(track_id)
+            if track is None:
+                continue
+            entry = selected_by_track.setdefault(track_id, (track, []))
+            if str(clip_id) not in entry[1]:
+                entry[1].append(str(clip_id))
+        if not selected_by_track:
+            return
+        try:
+            plans = [
+                plan_clips_move(
+                    track,
+                    clip_ids=clip_ids,
+                    delta_ms=float(request.delta_ms),
+                )
+                for track, clip_ids in (
+                    selected_by_track[int(item.track_id)]
+                    for item in self.tracks
+                    if int(item.track_id) in selected_by_track
+                )
+            ]
+            preferred_id = int(getattr(
+                self.selected_track, "track_id", plans[0].selected_track_id
+            ))
+            preferred = next((
+                plan for plan in plans
+                if plan.selected_track_id == preferred_id
+            ), plans[0])
+            selected_keys = {
+                (track_id, clip_id)
+                for track_id, (_track, clip_ids)
+                in selected_by_track.items()
+                for clip_id in clip_ids
+            }
+            requested_primary = getattr(request, "primary_key", None)
+            if requested_primary is not None:
+                requested_primary = (
+                    int(requested_primary[0]), str(requested_primary[1])
+                )
+            primary = (
+                requested_primary
+                if requested_primary in selected_keys
+                else (
+                    preferred.selected_track_id,
+                    preferred.selected_clip_id,
+                )
+            )
+            plan = ClipEditPlan(
+                tuple(update for item in plans for update in item.updates),
+                primary[0],
+                primary[1],
+            )
+            self._publish_clip_plan(
+                plan,
+                "move selected arrangement clips",
+                selected_clip_keys=tuple(
+                    (track_id, clip_id)
+                    for track_id, (_track, clip_ids)
+                    in selected_by_track.items()
+                    for clip_id in clip_ids
+                ),
+            )
+        except (AttributeError, TypeError, ValueError) as exc:
+            self.show_toast(
+                trf("无法移动所选片段：{error}", error=exc), kind="error"
+            )
+            return
+        self.show_toast(
+            trf("已移动 {count} 个片段", count=sum(
+                len(clip_ids)
+                for _track, clip_ids in selected_by_track.values()
+            )),
+            kind="success",
+        )
 
     def _paste_timeline_clip(self, track, start_ms: float) -> None:
         if self._arrangement_clip_clipboard is None:

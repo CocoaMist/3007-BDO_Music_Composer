@@ -127,8 +127,22 @@ commit gate, and recovery overlay all use that exact timeline window. Every
 completed Clip-editor note transaction publishes immediately into the formal
 Track and refreshes the arrangement; the first live edit captures one project
 undo snapshot while the editor's own undo/redo remains transaction-granular.
-Right-click Delete and the focused timeline's Delete/Backspace keys share one
-domain transaction: exclusive notes/controls/source records are removed,
+The timeline defaults to marquee mode: Ctrl/Shift-click and marquee gestures
+that start on empty lane space or directly over an unselected Clip select across
+Tracks. Dragging an already-selected Clip translates the complete selection
+horizontally while retaining its Track membership and relative timing. The move
+publishes as one undo/autosave transaction and fails atomically if any member
+would cross time zero or overlap an unselected Clip.
+The complete selection and its primary Clip survive publication, repeated
+drags, editor-only live synchronization, and project undo/redo; the main-window
+and timeline Track selections are rebound together by stable IDs after snapshot
+restoration.
+Move/trim and Razor are mutually exclusive optional toggles; clicking the active
+toggle again returns to marquee mode. The marquee queries only the visible Clip
+hit index and keeps its preview out of the static timeline cache. Right-click
+Delete and the focused timeline's
+Delete/Backspace keys delete the complete selection in one ownership-preserving
+undo/autosave transaction: exclusive notes/controls/source records are removed,
 content still owned by a sibling Clip survives, selection moves to a surviving
 Clip, and any editor whose Clip identity disappeared is closed rather than left
 writable and orphaned.

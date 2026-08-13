@@ -115,6 +115,13 @@ class TimelineClipSplitRequest:
     split_ms: float
 
 
+@dataclass(frozen=True, slots=True)
+class TimelineClipsMoveRequest:
+    selections: tuple[tuple[TrackState, str], ...]
+    delta_ms: float
+    primary_key: tuple[int, str] | None = None
+
+
 class ReferenceAudioView(Protocol):
     audio_path: Path | None
     display_name: str
@@ -172,6 +179,8 @@ class TimelineCanvas(QWidget):
     clip_copy_requested = Signal(object, str)
     clip_paste_requested = Signal(object, float)
     clip_delete_requested = Signal(object, str)
+    clips_delete_requested = Signal(object)
+    clips_move_requested = Signal(object)
     marker_edit_requested = Signal(object)
     group_control_requested = Signal(object, str)
     TRACK_NOTE_QUERY_BLOCK_SIZE = 128
@@ -237,12 +246,25 @@ class TimelineCanvas(QWidget):
         self._clip_drag_occupied_start_ms: float | None = None
         self._clip_drag_occupied_end_ms: float | None = None
         self._clip_drag_id = ""
+        self._clip_group_drag_keys: tuple[tuple[int, str], ...] = ()
+        self._clip_group_drag_origins: dict[
+            tuple[int, str], tuple[float, float]
+        ] = {}
         self._selected_clip_id = ""
         self._selected_clip_track_id: int | None = None
+        self._selected_clip_keys: set[tuple[int, str]] = set()
+        self._marquee_press_pos: QPointF | None = None
+        self._marquee_current_pos = QPointF()
+        self._marquee_active = False
+        self._marquee_modifiers = Qt.NoModifier
+        self._marquee_base_clip_keys: set[tuple[int, str]] = set()
+        self._marquee_preview_clip_keys: set[tuple[int, str]] = set()
+        self._marquee_origin_track: TrackState | None = None
+        self._marquee_origin_clip: tuple[TrackState, str] | None = None
         self.snap_enabled = True
         self._clip_snap_targets = ArrangementSnapIndex((), ())
         self._clip_snap_result = ArrangementSnapResult(0.0)
-        self.arrangement_tool = "select"
+        self.arrangement_tool = "marquee"
         self._merge_overlap_track_id: int | None = None
         self._merge_overlap_regions: tuple[object, ...] = ()
         self.selected_track: TrackState | None = None
@@ -290,9 +312,9 @@ class TimelineCanvas(QWidget):
         self.setMinimumHeight(380)
 
     def set_arrangement_tool(self, tool: str) -> None:
-        normalized = str(tool or "select")
-        if normalized not in {"select", "razor"}:
-            normalized = "select"
+        normalized = str(tool or "marquee")
+        if normalized not in {"marquee", "select", "razor"}:
+            normalized = "marquee"
         self.arrangement_tool = normalized
         self.unsetCursor()
         self.update()
@@ -317,25 +339,37 @@ class TimelineCanvas(QWidget):
         self._rebuild_arrangement_group_views()
         self.clear_merge_overlap_regions()
         self.velocity_curve_overlay.synchronize_tracks(tracks)
-        selected_track_is_current = any(
-            track is self.selected_track for track in tracks
+        tracks_by_id = {int(track.track_id): track for track in tracks}
+        selected_track_id = (
+            int(self.selected_track.track_id)
+            if self.selected_track is not None
+            else None
         )
-        if not selected_track_is_current:
-            self.selected_track = None
-            self._selected_clip_id = ""
-            self._selected_clip_track_id = None
-        elif self._selected_clip_id:
-            selected_clip_track = next((
-                track for track in tracks
-                if int(track.track_id) == self._selected_clip_track_id
-            ), None)
-            try:
-                if selected_clip_track is None:
-                    raise ValueError("selected Clip track is unavailable")
-                clip_by_id(selected_clip_track, self._selected_clip_id)
-            except ValueError:
-                self._selected_clip_id = ""
-                self._selected_clip_track_id = None
+        self.selected_track = tracks_by_id.get(selected_track_id)
+        valid_clip_keys = {
+            (int(track.track_id), str(clip.clip_id))
+            for track in tracks
+            for clip in track_clips(track)
+        }
+        self._selected_clip_keys.intersection_update(valid_clip_keys)
+        primary_key = (
+            self._selected_clip_track_id,
+            self._selected_clip_id,
+        )
+        if self._selected_clip_keys:
+            if primary_key not in self._selected_clip_keys:
+                primary_key = next(
+                    (int(track.track_id), str(clip.clip_id))
+                    for track in tracks
+                    for clip in track_clips(track)
+                    if (int(track.track_id), str(clip.clip_id))
+                    in self._selected_clip_keys
+                )
+            self._selected_clip_track_id = primary_key[0]
+            self._selected_clip_id = primary_key[1]
+            self.selected_track = tracks_by_id[primary_key[0]]
+        else:
+            self._clear_clip_selection()
         valid_track_ids = {int(track.track_id) for track in tracks}
         self.track_validation_notices = {
             track_id: notice
@@ -444,8 +478,17 @@ class TimelineCanvas(QWidget):
                 duration,
                 modifiers,
             )
+            if self._clip_group_drag_origins:
+                earliest = min(
+                    value[0]
+                    for value in self._clip_group_drag_origins.values()
+                )
+                start = max(
+                    start,
+                    self._clip_drag_origin_start_ms - earliest,
+                )
             target = self._track_at_position(pos)
-            if target is not None:
+            if target is not None and not self._clip_group_drag_keys:
                 self._clip_drag_target = target
             self._clip_drag_start_ms = start
             self._clip_drag_end_ms = start + duration
@@ -483,12 +526,20 @@ class TimelineCanvas(QWidget):
             )
 
     def _build_clip_snap_targets(
-        self, source: TrackState, clip_id: str
+        self,
+        source: TrackState,
+        clip_id: str,
+        *,
+        ignored_keys: frozenset[tuple[int, str]] = frozenset(),
     ) -> ArrangementSnapIndex:
         targets: list[ArrangementSnapTarget] = []
         for track in self.tracks:
             for clip in track_clips(track):
-                if track is source and clip.clip_id == clip_id:
+                key = (int(track.track_id), str(clip.clip_id))
+                if (
+                    key in ignored_keys
+                    or (track is source and clip.clip_id == clip_id)
+                ):
                     continue
                 label = str(getattr(track, "display_name", "") or "")
                 targets.extend((
@@ -902,33 +953,143 @@ class TimelineCanvas(QWidget):
     def set_selected_track(self, track: TrackState | None) -> None:
         self._select_track(track, emit=False)
 
+    @property
+    def selected_clip_keys(self) -> frozenset[tuple[int, str]]:
+        return frozenset(self._selected_clip_keys)
+
+    def selected_clip_items(self) -> tuple[tuple[TrackState, str], ...]:
+        """Return selected Clips in stable track/Clip display order."""
+
+        return tuple(
+            (track, str(clip.clip_id))
+            for track in self.tracks
+            for clip in track_clips(track)
+            if (int(track.track_id), str(clip.clip_id))
+            in self._selected_clip_keys
+        )
+
+    def _clear_clip_selection(self) -> None:
+        self._selected_clip_keys.clear()
+        self._selected_clip_id = ""
+        self._selected_clip_track_id = None
+        self._static_timeline_cache_key = None
+
+    def _set_clip_selection(
+        self,
+        keys: set[tuple[int, str]],
+        *,
+        primary_key: tuple[int, str] | None = None,
+        emit_track: bool,
+    ) -> None:
+        available = {
+            (int(track.track_id), str(clip.clip_id))
+            for track in self.tracks
+            for clip in track_clips(track)
+        }
+        normalized = set(keys) & available
+        if not normalized:
+            self._clear_clip_selection()
+            self._update_accessible_track_state()
+            self.update()
+            return
+        ordered = tuple(
+            (int(track.track_id), str(clip.clip_id))
+            for track in self.tracks
+            for clip in track_clips(track)
+            if (int(track.track_id), str(clip.clip_id)) in normalized
+        )
+        primary = (
+            primary_key if primary_key in normalized else ordered[0]
+        )
+        track = next(
+            item for item in self.tracks
+            if int(item.track_id) == primary[0]
+        )
+        self._selected_clip_keys = normalized
+        self._selected_clip_track_id = primary[0]
+        self._selected_clip_id = primary[1]
+        self._static_timeline_cache_key = None
+        self._select_track(
+            track,
+            emit=emit_track,
+            preserve_clip_selection=True,
+        )
+
+    def _select_pointer_clip(
+        self,
+        track: TrackState,
+        clip_id: str,
+        modifiers: Qt.KeyboardModifiers,
+    ) -> None:
+        key = (int(track.track_id), str(clip_id))
+        additive = bool(
+            modifiers & (Qt.ControlModifier | Qt.ShiftModifier)
+        )
+        if not additive:
+            selected = {key}
+        elif modifiers & Qt.ControlModifier:
+            selected = set(self._selected_clip_keys)
+            if key in selected:
+                selected.remove(key)
+            else:
+                selected.add(key)
+        else:
+            selected = {*self._selected_clip_keys, key}
+        self._set_clip_selection(
+            selected,
+            primary_key=(key if key in selected else None),
+            emit_track=True,
+        )
+
     def set_selected_clip(
         self, track: TrackState | None, clip_id: str = ""
     ) -> None:
         """Select one Clip without opening its note editor."""
 
-        self._select_track(track, emit=False)
         if track is None or not clip_id:
-            self._selected_clip_id = ""
-            self._selected_clip_track_id = None
+            self._select_track(track, emit=False)
+            self._clear_clip_selection()
             self.update()
             return
         try:
             clip_by_id(track, clip_id)
         except ValueError:
-            self._selected_clip_id = ""
-            self._selected_clip_track_id = None
+            self._select_track(track, emit=False)
+            self._clear_clip_selection()
             self.update()
             return
-        self._selected_clip_id = str(clip_id)
-        self._selected_clip_track_id = int(track.track_id)
-        self.update()
+        key = (int(track.track_id), str(clip_id))
+        self._set_clip_selection(
+            {key}, primary_key=key, emit_track=False
+        )
+
+    def set_selected_clip_keys(
+        self,
+        keys,
+        *,
+        primary_key: tuple[int, str] | None = None,
+    ) -> None:
+        """Restore a stable multi-selection after a model transaction."""
+
+        self._set_clip_selection(
+            {
+                (int(track_id), str(clip_id))
+                for track_id, clip_id in tuple(keys or ())
+            },
+            primary_key=(
+                (int(primary_key[0]), str(primary_key[1]))
+                if primary_key is not None
+                else None
+            ),
+            emit_track=False,
+        )
 
     def _select_track(
         self,
         track: TrackState | None,
         *,
         emit: bool,
+        preserve_clip_selection: bool = False,
     ) -> None:
         if (
             track is None
@@ -937,12 +1098,11 @@ class TimelineCanvas(QWidget):
         ):
             self._selected_arrangement_group_id = ""
         self.selected_track = track
-        if (
+        if not preserve_clip_selection and (
             track is None
             or self._selected_clip_track_id != int(track.track_id)
         ):
-            self._selected_clip_id = ""
-            self._selected_clip_track_id = None
+            self._clear_clip_selection()
         self.velocity_curve_overlay.selected_track_changed(track)
         if emit and track is not None:
             self.selected.emit(track)
@@ -1960,9 +2120,8 @@ class TimelineCanvas(QWidget):
             track, visible_start, visible_start + visible_duration
         ):
             selected = (
-                self._selected_clip_id == clip.clip_id
-                and self._selected_clip_track_id == int(track.track_id)
-            )
+                int(track.track_id), str(clip.clip_id)
+            ) in self._selected_clip_keys
             clip_x = region_rect.left() + (
                 (clip.start_ms - visible_start) / visible_duration
             ) * region_rect.width()
@@ -2544,6 +2703,7 @@ class TimelineCanvas(QWidget):
             id(self.selected_track),
             self._selected_clip_track_id,
             self._selected_clip_id,
+            tuple(sorted(self._selected_clip_keys)),
             self._selected_arrangement_group_id,
             bool(self.hasFocus()),
             self.arrangement_tool,
@@ -2758,29 +2918,60 @@ class TimelineCanvas(QWidget):
         target = self._clip_drag_target
         if self._clip_drag_source is None or target is None:
             return
-        try:
-            row = self.tracks.index(target)
-        except ValueError:
-            return
         scroll_y = self.track_scroll.value() if self.track_scroll.isVisible() else 0
-        x = grid_left + (
-            (self._clip_drag_start_ms - visible_start) / visible_duration
-        ) * grid_w
-        width = max(
-            8.0,
-            (self._clip_drag_end_ms - self._clip_drag_start_ms)
-            / visible_duration * grid_w,
-        )
-        rect = QRectF(
-            x,
-            grid_top + row * lane_h - scroll_y + 11.0,
-            width,
-            lane_h - 22.0,
-        )
         painter.save()
         painter.setBrush(QColor(214, 184, 103, 66))
         painter.setPen(QPen(QColor("#f0d887"), 2, Qt.DashLine))
-        painter.drawRoundedRect(rect, 4.0, 4.0)
+        if self._clip_group_drag_keys:
+            delta = (
+                self._clip_drag_start_ms
+                - self._clip_drag_origin_start_ms
+            )
+            rows_by_id = {
+                int(track.track_id): row
+                for row, track in enumerate(self.tracks)
+            }
+            for key in self._clip_group_drag_keys:
+                row = rows_by_id.get(key[0])
+                origin = self._clip_group_drag_origins.get(key)
+                if row is None or origin is None:
+                    continue
+                x = grid_left + (
+                    (origin[0] + delta - visible_start)
+                    / visible_duration
+                ) * grid_w
+                width = max(
+                    8.0,
+                    (origin[1] - origin[0])
+                    / visible_duration * grid_w,
+                )
+                painter.drawRoundedRect(QRectF(
+                    x,
+                    grid_top + row * lane_h - scroll_y + 11.0,
+                    width,
+                    lane_h - 22.0,
+                ), 4.0, 4.0)
+        else:
+            try:
+                row = self.tracks.index(target)
+            except ValueError:
+                painter.restore()
+                return
+            x = grid_left + (
+                (self._clip_drag_start_ms - visible_start)
+                / visible_duration
+            ) * grid_w
+            width = max(
+                8.0,
+                (self._clip_drag_end_ms - self._clip_drag_start_ms)
+                / visible_duration * grid_w,
+            )
+            painter.drawRoundedRect(QRectF(
+                x,
+                grid_top + row * lane_h - scroll_y + 11.0,
+                width,
+                lane_h - 22.0,
+            ), 4.0, 4.0)
         snap = self._clip_snap_result
         if snap.target_ms is not None:
             guide_x = grid_left + (
@@ -2827,6 +3018,67 @@ class TimelineCanvas(QWidget):
             ):
                 return item
         return None
+
+    def _clip_hit_at(
+        self, position
+    ) -> tuple[TrackState, str] | None:
+        for rect, action, item in reversed(self.hit_regions):
+            action_kind, _separator, clip_id = action.partition("|")
+            if (
+                action_kind in {"clip_body", "clip_start", "clip_end"}
+                and isinstance(item, TrackState)
+                and rect.contains(position)
+            ):
+                return item, str(clip_id)
+        return None
+
+    def _marquee_rect(self) -> QRectF:
+        if self._marquee_press_pos is None:
+            return QRectF()
+        return QRectF(
+            self._marquee_press_pos,
+            self._marquee_current_pos,
+        ).normalized().intersected(self.grid_rect)
+
+    def _clip_keys_intersecting(self, rect: QRectF) -> set[tuple[int, str]]:
+        if rect.isEmpty():
+            return set()
+        return {
+            (int(item.track_id), action.split("|", 1)[1])
+            for region, action, item in self.hit_regions
+            if (
+                action.startswith("clip_body|")
+                and isinstance(item, TrackState)
+                and region.intersects(rect)
+            )
+        }
+
+    def _paint_marquee_selection(self, painter: QPainter) -> None:
+        if not self._marquee_active:
+            return
+        preview = self._marquee_preview_clip_keys
+        painter.save()
+        for rect, action, item in self.hit_regions:
+            if not (
+                action.startswith("clip_body|")
+                and isinstance(item, TrackState)
+                and (
+                    int(item.track_id), action.split("|", 1)[1]
+                ) in preview
+            ):
+                continue
+            painter.fillRect(rect, QColor(255, 215, 102, 34))
+            painter.setPen(QPen(QColor("#ffe68a"), 2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 3, 3)
+        marquee = self._marquee_rect()
+        painter.fillRect(marquee, QColor(226, 168, 63, 30))
+        pen = QPen(QColor("#f0d887"), 1)
+        pen.setStyle(Qt.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(marquee)
+        painter.restore()
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
@@ -2897,6 +3149,7 @@ class TimelineCanvas(QWidget):
             visible_start=visible_start,
             visible_duration=visible_duration,
         )
+        self._paint_marquee_selection(painter)
         self._paint_playhead(
             painter, top, grid_left, grid_top, grid_w, grid_h,
             visible_start, visible_duration, visible_end, grid_h
@@ -3030,8 +3283,16 @@ class TimelineCanvas(QWidget):
                         return
                     action_kind, _separator, clip_id = action.partition("|")
                     if action_kind in {"clip_body", "clip_start", "clip_end"}:
-                        self._select_track(track, emit=True)
-                        self.set_selected_clip(track, clip_id)
+                        key = (int(track.track_id), str(clip_id))
+                        self._set_clip_selection(
+                            (
+                                set(self._selected_clip_keys)
+                                if key in self._selected_clip_keys
+                                else {key}
+                            ),
+                            primary_key=key,
+                            emit_track=True,
+                        )
                         menu, actions = self._build_clip_context_menu()
                         selected = menu.exec(event.globalPosition().toPoint())
                         if selected is actions["copy"]:
@@ -3039,7 +3300,11 @@ class TimelineCanvas(QWidget):
                         elif selected is actions["paste"]:
                             self.clip_paste_requested.emit(track, self.playhead_ms)
                         elif selected is actions["delete"]:
-                            self.clip_delete_requested.emit(track, clip_id)
+                            items = self.selected_clip_items()
+                            if len(items) > 1:
+                                self.clips_delete_requested.emit(items)
+                            else:
+                                self.clip_delete_requested.emit(track, clip_id)
                         return
                     self._select_track(track, emit=True)
                     self._show_instrument_menu(
@@ -3060,6 +3325,82 @@ class TimelineCanvas(QWidget):
             ):
                 return
             self._show_create_track_menu(event.globalPosition().toPoint())
+            return
+        clip_hit = self._clip_hit_at(pos)
+        clip_hit_key = (
+            (int(clip_hit[0].track_id), str(clip_hit[1]))
+            if clip_hit is not None
+            else None
+        )
+        if (
+            event.button() == Qt.LeftButton
+            and self.arrangement_tool == "marquee"
+            and clip_hit is not None
+            and clip_hit_key in self._selected_clip_keys
+            and not event.modifiers()
+        ):
+            track, clip_id = clip_hit
+            try:
+                anchor = clip_by_id(track, clip_id)
+                selected_items = self.selected_clip_items()
+                origins = {
+                    (int(item.track_id), str(selected_id)): (
+                        float(selected_clip.start_ms),
+                        float(selected_clip.end_ms),
+                    )
+                    for item, selected_id in selected_items
+                    for selected_clip in (clip_by_id(item, selected_id),)
+                }
+            except ValueError:
+                return
+            self._clip_group_drag_keys = tuple(origins)
+            self._clip_group_drag_origins = origins
+            self._clip_drag_source = track
+            self._clip_drag_target = track
+            self._clip_drag_id = str(clip_id)
+            self._clip_drag_mode = "move"
+            self._clip_drag_press_ms = self._time_at_x(pos.x())
+            self._clip_drag_press_pos = QPointF(pos)
+            self._clip_drag_start_ms = float(anchor.start_ms)
+            self._clip_drag_end_ms = float(anchor.end_ms)
+            self._clip_drag_origin_press_ms = self._clip_drag_press_ms
+            self._clip_drag_origin_start_ms = float(anchor.start_ms)
+            self._clip_drag_origin_end_ms = float(anchor.end_ms)
+            self._clip_snap_targets = self._build_clip_snap_targets(
+                track,
+                str(clip_id),
+                ignored_keys=frozenset(origins),
+            )
+            self._clip_snap_result = ArrangementSnapResult(anchor.start_ms)
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
+        if (
+            event.button() == Qt.LeftButton
+            and self.arrangement_tool in {"marquee", "select"}
+            and self.grid_rect.contains(pos)
+            and self._track_at_position(pos) is not None
+            and (
+                self.arrangement_tool == "marquee"
+                or clip_hit is None
+            )
+        ):
+            self._marquee_press_pos = QPointF(pos)
+            self._marquee_current_pos = QPointF(pos)
+            self._marquee_active = False
+            self._marquee_modifiers = event.modifiers()
+            self._marquee_base_clip_keys = (
+                set(self._selected_clip_keys)
+                if event.modifiers()
+                & (Qt.ControlModifier | Qt.ShiftModifier)
+                else set()
+            )
+            self._marquee_preview_clip_keys = set(
+                self._marquee_base_clip_keys
+            )
+            self._marquee_origin_track = self._track_at_position(pos)
+            self._marquee_origin_clip = clip_hit
+            event.accept()
             return
         for rect, action, track in reversed(self.hit_regions):
             if rect.contains(pos):
@@ -3105,12 +3446,20 @@ class TimelineCanvas(QWidget):
                         clip = clip_by_id(track, clip_id)
                     except ValueError:
                         return
-                    self._select_track(track, emit=True)
-                    self.set_selected_clip(track, clip.clip_id)
                     if self.arrangement_tool == "razor":
+                        self._select_pointer_clip(
+                            track, clip.clip_id, Qt.NoModifier
+                        )
                         self.clip_split_requested.emit(TimelineClipSplitRequest(
                             track, clip.clip_id, self._time_at_x(pos.x())
                         ))
+                        return
+                    self._select_pointer_clip(
+                        track, clip.clip_id, event.modifiers()
+                    )
+                    if event.modifiers() & (
+                        Qt.ControlModifier | Qt.ShiftModifier
+                    ):
                         return
                     self._clip_drag_source = track
                     self._clip_drag_target = track
@@ -3478,6 +3827,32 @@ class TimelineCanvas(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
+        if self._marquee_press_pos is not None:
+            self._marquee_current_pos = QPointF(pos)
+            if (
+                not self._marquee_active
+                and (pos - self._marquee_press_pos).manhattanLength()
+                >= QApplication.startDragDistance()
+            ):
+                self._marquee_active = True
+            if self._marquee_active:
+                hits = self._clip_keys_intersecting(
+                    self._marquee_rect()
+                )
+                if self._marquee_modifiers & Qt.ControlModifier:
+                    self._marquee_preview_clip_keys = (
+                        self._marquee_base_clip_keys ^ hits
+                    )
+                elif self._marquee_modifiers & Qt.ShiftModifier:
+                    self._marquee_preview_clip_keys = (
+                        self._marquee_base_clip_keys | hits
+                    )
+                else:
+                    self._marquee_preview_clip_keys = hits
+            self.setCursor(Qt.CrossCursor)
+            self.update()
+            event.accept()
+            return
         if self.velocity_curve_overlay.mouse_move(pos):
             return
         if self._volume_drag_track is not None:
@@ -3568,6 +3943,11 @@ class TimelineCanvas(QWidget):
         clip_hover_kind = clip_hover.partition("|")[0]
         if self.arrangement_tool == "razor" and clip_hover_kind.startswith("clip_"):
             self.setCursor(Qt.CrossCursor)
+        elif (
+            self.arrangement_tool == "marquee"
+            and self.grid_rect.contains(pos)
+        ):
+            self.setCursor(Qt.CrossCursor)
         elif clip_hover_kind in {"clip_start", "clip_end"}:
             self.setCursor(Qt.SizeHorCursor)
         elif clip_hover_kind == "clip_body":
@@ -3585,6 +3965,55 @@ class TimelineCanvas(QWidget):
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if (
+            event.button() == Qt.LeftButton
+            and self._marquee_press_pos is not None
+        ):
+            press_pos = QPointF(self._marquee_press_pos)
+            origin_track = self._marquee_origin_track
+            origin_clip = self._marquee_origin_clip
+            active = self._marquee_active
+            preview = set(self._marquee_preview_clip_keys)
+            primary_key = (
+                (self._selected_clip_track_id, self._selected_clip_id)
+                if self._selected_clip_id
+                else None
+            )
+            modifiers = self._marquee_modifiers
+            self._marquee_press_pos = None
+            self._marquee_current_pos = QPointF()
+            self._marquee_active = False
+            self._marquee_modifiers = Qt.NoModifier
+            self._marquee_base_clip_keys.clear()
+            self._marquee_preview_clip_keys.clear()
+            self._marquee_origin_track = None
+            self._marquee_origin_clip = None
+            self.unsetCursor()
+            if active:
+                self._set_clip_selection(
+                    preview,
+                    primary_key=primary_key,
+                    emit_track=True,
+                )
+                if not preview and origin_track is not None:
+                    self._select_track(origin_track, emit=True)
+            else:
+                if origin_clip is not None:
+                    self._select_pointer_clip(
+                        origin_clip[0], origin_clip[1], modifiers
+                    )
+                elif origin_track is not None:
+                    self._select_track(origin_track, emit=True)
+                    if not modifiers & (
+                        Qt.ControlModifier | Qt.ShiftModifier
+                    ):
+                        self._clear_clip_selection()
+                    target = self._time_at_x(press_pos.x())
+                    self.set_playhead(target)
+                    self.seek_requested.emit(self.playhead_ms)
+            self.update()
+            event.accept()
+            return
         if self.velocity_curve_overlay.mouse_release(event.button()):
             return
         if self._volume_drag_track is not None:
@@ -3623,10 +4052,21 @@ class TimelineCanvas(QWidget):
                 self._clip_drag_end_ms,
                 self._clip_drag_id,
             )
+            group_selections = (
+                self.selected_clip_items()
+                if self._clip_group_drag_keys
+                else ()
+            )
+            group_delta = (
+                self._clip_drag_start_ms
+                - self._clip_drag_origin_start_ms
+            )
             self._clip_drag_source = None
             self._clip_drag_target = None
             self._clip_drag_mode = ""
             self._clip_drag_id = ""
+            self._clip_group_drag_keys = ()
+            self._clip_group_drag_origins.clear()
             self._clip_drag_occupied_start_ms = None
             self._clip_drag_occupied_end_ms = None
             self._clip_drag_press_pos = QPointF()
@@ -3650,7 +4090,19 @@ class TimelineCanvas(QWidget):
                 )
             )
             if changed:
-                self.clip_edit_requested.emit(request)
+                if group_selections:
+                    self.clips_move_requested.emit(
+                        TimelineClipsMoveRequest(
+                            group_selections,
+                            group_delta,
+                            (
+                                self._selected_clip_track_id,
+                                self._selected_clip_id,
+                            ) if self._selected_clip_id else None,
+                        )
+                    )
+                else:
+                    self.clip_edit_requested.emit(request)
             self.update()
             return
         if self._range_drag_anchor_ms is not None:
@@ -3740,12 +4192,13 @@ class TimelineCanvas(QWidget):
         if (
             key in (Qt.Key_Delete, Qt.Key_Backspace)
             and modifiers == Qt.NoModifier
-            and self._selected_clip_id
-            and self._selected_clip_track_id == int(track.track_id)
+            and self._selected_clip_keys
         ):
-            self.clip_delete_requested.emit(
-                track, self._selected_clip_id
-            )
+            items = self.selected_clip_items()
+            if len(items) > 1:
+                self.clips_delete_requested.emit(items)
+            elif items:
+                self.clip_delete_requested.emit(*items[0])
             event.accept()
             return
         plain_shortcut = not (

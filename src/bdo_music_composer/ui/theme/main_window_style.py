@@ -651,6 +651,21 @@ class MainWindowStyleMixin:
                 min-height: 25px;
                 padding: 2px 9px;
             }
+            QFrame#TimelineControlBar QPushButton#TimelineToolButton {
+                background: #252529;
+                border: 1px solid #4b4843;
+                color: #bdb8ae;
+                padding: 2px;
+            }
+            QFrame#TimelineControlBar QPushButton#TimelineToolButton:hover {
+                background: #37332c;
+                border-color: #8b7346;
+            }
+            QFrame#TimelineControlBar QPushButton#TimelineToolButton:checked {
+                background: #61471d;
+                border-color: #e2a83f;
+                color: #fff1cb;
+            }
             QFrame#TimelineControlBar QPushButton#TimelineSnapToggle {
                 background: #252529;
                 border: 1px solid #4b4843;

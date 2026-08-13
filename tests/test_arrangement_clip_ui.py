@@ -35,6 +35,79 @@ class ArrangementClipUiTests(unittest.TestCase):
 
                 app = QApplication([])
                 window = MidiToBdoWindow()
+                group_first = track(11, [Note(60, 90, 100.0, 100.0, 0)])
+                group_second = track(12, [Note(64, 90, 500.0, 100.0, 0)])
+                window.tracks = [group_first, group_second]
+                window._refresh_tracks()
+                window._select_track(group_second)
+                window.timeline.set_selected_clip_keys({
+                    (11, "track-11-main"), (12, "track-12-main")
+                }, primary_key=(12, "track-12-main"))
+                autosaves = []
+                window._autosave_project = lambda reason, immediate=False: (
+                    autosaves.append((reason, immediate))
+                )
+                window._move_timeline_clips(SimpleNamespace(
+                    selections=(
+                        (group_first, "track-11-main"),
+                        (group_second, "track-12-main"),
+                    ),
+                    delta_ms=125.0,
+                ))
+                assert window.timeline.selected_clip_keys == frozenset({
+                    (11, "track-11-main"), (12, "track-12-main")
+                })
+                assert window.timeline.arrangement_tool == "marquee"
+                assert window.selected_track is group_second
+                assert autosaves == [
+                    ("move selected arrangement clips", True)
+                ]
+                window._move_timeline_clips(SimpleNamespace(
+                    selections=(
+                        (group_first, "track-11-main"),
+                        (group_second, "track-12-main"),
+                    ),
+                    delta_ms=25.0,
+                    primary_key=(12, "track-12-main"),
+                ))
+                assert window.timeline.selected_clip_keys == frozenset({
+                    (11, "track-11-main"), (12, "track-12-main")
+                })
+                assert window.timeline._selected_clip_track_id == 12
+                assert autosaves == [
+                    ("move selected arrangement clips", True),
+                    ("move selected arrangement clips", True),
+                ]
+                window._undo_project()
+                assert window.selected_track.track_id == 12
+                assert window.timeline.selected_track.track_id == 12
+                assert window.timeline.selected_clip_keys == frozenset({
+                    (11, "track-11-main"), (12, "track-12-main")
+                })
+                window._redo_project()
+                assert window.selected_track.track_id == 12
+                assert window.timeline.selected_clip_keys == frozenset({
+                    (11, "track-11-main"), (12, "track-12-main")
+                })
+                from bdo_music_composer.editor.arrangement_clip import plan_clip_edit
+                sync_plan = plan_clip_edit(
+                    window.tracks[0],
+                    mode="resize_end",
+                    new_start_ms=225.0,
+                    new_end_ms=350.0,
+                    clip_id="track-11-main",
+                )
+                window._publish_clip_plan(
+                    sync_plan,
+                    "test live clip synchronization",
+                    push_snapshot=False,
+                    preserve_clip_selection=True,
+                )
+                assert window.timeline.selected_clip_keys == frozenset({
+                    (11, "track-11-main"), (12, "track-12-main")
+                })
+                window.project_commands.clear()
+
                 source = track(1, [Note(60, 90, 100.0, 200.0, 0)])
                 target = track(2, [Note(67, 80, 50.0, 100.0, 0)])
                 window.tracks = [source, target]

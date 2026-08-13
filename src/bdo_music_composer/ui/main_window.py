@@ -292,6 +292,7 @@ from bdo_music_composer.ui.editor_import_qt import (  # noqa: E402
 )
 from bdo_music_composer.ui.timeline_velocity_curve_host import TimelineVelocityCurveHostMixin  # noqa: E402
 from bdo_music_composer.ui.timeline_toolbar_qt import (  # noqa: E402
+    bind_arrangement_tool_buttons,
     build_arrangement_tool_buttons,
     build_timeline_popup_buttons,
 )
@@ -489,7 +490,7 @@ from bdo_music_composer.ui.theme.fluent_theme import (  # noqa: E402
     system_uses_dark_theme,
 )
 from bdo_music_composer.app.application_metadata import (  # noqa: E402
-    APP_NAME,
+    APP_DISPLAY_VERSION, APP_NAME,
     APP_VERSION,
     RELEASE_NOTES_UI_ENABLED,
     WINDOWS_APP_USER_MODEL_ID,
@@ -1018,7 +1019,7 @@ class MidiToBdoWindow(
             app.aboutToQuit.connect(self._wait_for_background_writers_on_quit)
         else:
             self.widget_style_name = ""
-        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
+        self.setWindowTitle(f"{APP_NAME} v{APP_DISPLAY_VERSION}")
         self.resize(1360, 820)
         self.setMinimumSize(1160, 720)
 
@@ -1521,7 +1522,7 @@ class MidiToBdoWindow(
         self.home_library_stack.addWidget(game_card)
         library_surface_layout.addWidget(self.home_library_stack, stretch=1)
 
-        self.home_footer = HomeFooter(APP_VERSION)
+        self.home_footer = HomeFooter(APP_DISPLAY_VERSION)
         if RELEASE_NOTES_UI_ENABLED:
             self.home_footer.release_notes_requested.connect(
                 self._show_release_notes
@@ -2523,14 +2524,18 @@ class MidiToBdoWindow(
         self.timeline.clip_copy_requested.connect(self._copy_timeline_clip)
         self.timeline.clip_paste_requested.connect(self._paste_timeline_clip)
         self.timeline.clip_delete_requested.connect(self._delete_timeline_clip)
+        self.timeline.clips_delete_requested.connect(
+            self._delete_timeline_clips
+        )
+        self.timeline.clips_move_requested.connect(
+            self._move_timeline_clips
+        )
         self.timeline.marker_edit_requested.connect(self._edit_timeline_marker)
         self.timeline.group_control_requested.connect(self._apply_arrangement_group_control)
         self.timeline_snap_tool.toggled.connect(self.timeline.set_snap_enabled)
         self.timeline.set_snap_enabled(self.timeline_snap_tool.isChecked())
-        self.timeline_tool_group.idClicked.connect(
-            lambda tool_id: self.timeline.set_arrangement_tool(
-                "razor" if int(tool_id) == 1 else "select"
-            )
+        bind_arrangement_tool_buttons(
+            self.timeline, self.timeline_select_tool, self.timeline_razor_tool
         )
         self.timeline.seek_requested.connect(self._seek_preview)
         self.timeline.time_range_changed.connect(self._timeline_range_changed)
@@ -2556,6 +2561,7 @@ class MidiToBdoWindow(
         )
         self.timeline.set_reference_audio(self.reference_audio)
         return workspace
+
     def _build_performance_strip(self) -> QWidget:
         """Compact process/audio telemetry below the multitrack timeline."""
 
@@ -5889,6 +5895,7 @@ class MidiToBdoWindow(
         self.project_commands.push(self._project_snapshot())
 
     def _restore_project_snapshot(self, snapshot: ProjectSnapshot, action: str) -> None:
+        arrangement_selection = self._capture_arrangement_selection()
         self._stop_preview(reset_playhead=False)
         tracks_changed = tuple(self.tracks) != snapshot.tracks
         if tracks_changed:
@@ -5952,6 +5959,7 @@ class MidiToBdoWindow(
         self._clear_transcription_review_history()
         self.selected_track = None
         self._refresh_tracks()
+        self._restore_arrangement_selection(arrangement_selection)
         self._synchronize_timeline_markers()
         self.timeline.set_time_range(
             *(
@@ -8542,7 +8550,7 @@ def main() -> int:
             pass
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    app.setApplicationVersion(APP_VERSION)
+    app.setApplicationVersion(APP_DISPLAY_VERSION)
     install_localizer(app, str(load_config().get("language", "auto")))
     icon_path = ASSETS_DIR / "icons" / "app_icon.png"
     if icon_path.is_file():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from types import SimpleNamespace
 import unittest
 
 from bdo_midi import Note
@@ -12,6 +13,8 @@ from bdo_music_composer.editor.arrangement_clip import (
     default_empty_clip,
     plan_clip_create,
     plan_clip_delete,
+    plan_clips_delete,
+    plan_clips_move,
     plan_clip_edit,
     plan_clip_note_edit,
     plan_clip_paste,
@@ -22,6 +25,7 @@ from bdo_music_composer.editor.arrangement_clip import (
     project_track_performance_controls,
 )
 from bdo_music_composer.editor.editor_models import ArrangementClipState, TrackState
+from bdo_music_composer.ui.arrangement_clip_qt import ArrangementClipHostMixin
 
 
 def _track(track_id: int, notes=None) -> TrackState:
@@ -36,6 +40,207 @@ def _track(track_id: int, notes=None) -> TrackState:
 
 
 class ArrangementClipTests(unittest.TestCase):
+    def test_host_batches_cross_track_move_into_one_publication(self) -> None:
+        first = _track(1)
+        first.arrangement_clips = [
+            ArrangementClipState("first", 100.0, 200.0, 100.0, 200.0)
+        ]
+        second = _track(2)
+        second.arrangement_clips = [
+            ArrangementClipState("second", 500.0, 600.0, 500.0, 600.0)
+        ]
+
+        class Host(ArrangementClipHostMixin):
+            def __init__(self) -> None:
+                self.tracks = [first, second]
+                self.selected_track = second
+                self.publications = []
+                self.publish_kwargs = []
+                self.toasts = []
+
+            def _publish_clip_plan(self, plan, reason, **kwargs) -> None:
+                self.publications.append((plan, reason))
+                self.publish_kwargs.append(kwargs)
+
+            def show_toast(self, message, **kwargs) -> None:
+                self.toasts.append((message, kwargs))
+
+        host = Host()
+        host._move_timeline_clips(SimpleNamespace(
+            selections=((first, "first"), (second, "second")),
+            delta_ms=125.0,
+            primary_key=(1, "first"),
+        ))
+
+        self.assertEqual(len(host.publications), 1)
+        plan, reason = host.publications[0]
+        self.assertEqual(reason, "move selected arrangement clips")
+        self.assertEqual(
+            host.publications[0][0].selected_clip_id, "first"
+        )
+        self.assertEqual(
+            host.publish_kwargs,
+            [{"selected_clip_keys": ((1, "first"), (2, "second"))}],
+        )
+        self.assertEqual(plan.selected_track_id, 1)
+        self.assertEqual(
+            tuple(
+                update.arrangement_clips[0].start_ms
+                for update in plan.updates
+            ),
+            (225.0, 625.0),
+        )
+        self.assertEqual(len(host.toasts), 1)
+
+    def test_move_multiple_clips_preserves_relative_layout_and_notes(self) -> None:
+        source = _track(1, [
+            Note(60, 90, 100.0, 100.0, 0),
+            Note(62, 90, 500.0, 100.0, 0),
+        ])
+        source.arrangement_clips = [
+            ArrangementClipState("first", 100.0, 200.0, 100.0, 200.0),
+            ArrangementClipState("second", 500.0, 600.0, 500.0, 600.0),
+        ]
+
+        plan = plan_clips_move(
+            source, clip_ids=("first", "second"), delta_ms=250.0
+        )
+
+        update = plan.updates[0]
+        self.assertEqual(update.notes, tuple(source.notes))
+        self.assertEqual(
+            tuple((clip.start_ms, clip.end_ms) for clip in update.arrangement_clips),
+            ((350.0, 450.0), (750.0, 850.0)),
+        )
+        self.assertEqual(
+            tuple(clip.time_offset_ms for clip in update.arrangement_clips),
+            (250.0, 250.0),
+        )
+        moved = deepcopy(source)
+        moved.arrangement_clips = list(update.arrangement_clips)
+        self.assertEqual(
+            tuple(
+                (note.pitch, note.vel, note.start, note.dur, note.ntype)
+                for note in project_track_notes(moved)
+            ),
+            (
+                (60, 90, 350.0, 100.0, 0),
+                (62, 90, 750.0, 100.0, 0),
+            ),
+        )
+        self.assertEqual(moved.bdo_instrument_id, source.bdo_instrument_id)
+
+    def test_move_multiple_clips_rejects_unselected_overlap_atomically(self) -> None:
+        source = _track(1)
+        source.arrangement_clips = [
+            ArrangementClipState("move", 100.0, 200.0, 100.0, 200.0),
+            ArrangementClipState("keep", 300.0, 400.0, 300.0, 400.0),
+        ]
+
+        with self.assertRaisesRegex(ClipEditError, "overlap"):
+            plan_clips_move(source, clip_ids=("move",), delta_ms=150.0)
+
+        self.assertEqual(source.arrangement_clips[0].start_ms, 100.0)
+
+    def test_host_batches_cross_track_selection_into_one_publication(self) -> None:
+        first = _track(1, [
+            Note(60, 90, 100.0, 100.0, 0),
+            Note(64, 90, 900.0, 100.0, 0),
+        ])
+        first.arrangement_clips = [
+            ArrangementClipState("first", 100.0, 200.0, 100.0, 200.0),
+            ArrangementClipState("keep", 900.0, 1000.0, 900.0, 1000.0),
+        ]
+        second = _track(2, [Note(62, 90, 500.0, 100.0, 0)])
+        second.arrangement_clips = [
+            ArrangementClipState("second", 500.0, 600.0, 500.0, 600.0)
+        ]
+
+        class Host(ArrangementClipHostMixin):
+            def __init__(self) -> None:
+                self.tracks = [first, second]
+                self.selected_track = second
+                self.publications = []
+                self.toasts = []
+
+            def _publish_clip_plan(self, plan, reason, **_kwargs) -> None:
+                self.publications.append((plan, reason))
+
+            def show_toast(self, message, **kwargs) -> None:
+                self.toasts.append((message, kwargs))
+
+        host = Host()
+        host._delete_timeline_clips((
+            (second, "second"),
+            (first, "first"),
+            (second, "second"),
+        ))
+
+        self.assertEqual(len(host.publications), 1)
+        plan, reason = host.publications[0]
+        self.assertEqual(reason, "delete arrangement clip")
+        self.assertEqual(plan.selected_track_id, 1)
+        self.assertEqual(plan.selected_clip_id, "keep")
+        self.assertEqual(
+            tuple(update.track_id for update in plan.updates), (1, 2)
+        )
+        self.assertEqual(
+            tuple(note.pitch for note in plan.updates[0].notes), (64,)
+        )
+        self.assertEqual(
+            tuple(
+                clip.clip_id
+                for clip in plan.updates[0].arrangement_clips
+            ),
+            ("keep",),
+        )
+        self.assertFalse(plan.updates[1].notes)
+        self.assertFalse(plan.updates[1].arrangement_clips)
+        self.assertEqual(len(host.toasts), 1)
+
+    def test_delete_multiple_clips_is_atomic_and_preserves_sibling(self) -> None:
+        source = _track(1, [
+            Note(60, 90, 100.0, 100.0, 0),
+            Note(62, 90, 500.0, 100.0, 0),
+            Note(64, 90, 900.0, 100.0, 0),
+        ])
+        source.arrangement_clips = [
+            ArrangementClipState("first", 100.0, 200.0, 100.0, 200.0),
+            ArrangementClipState("second", 500.0, 600.0, 500.0, 600.0),
+            ArrangementClipState("keep", 900.0, 1000.0, 900.0, 1000.0),
+        ]
+
+        plan = plan_clips_delete(
+            source, clip_ids=("second", "first", "second")
+        )
+
+        self.assertEqual(plan.selected_clip_id, "keep")
+        self.assertEqual(
+            plan.updates[0].notes,
+            (Note(64, 90, 900.0, 100.0, 0),),
+        )
+        self.assertEqual(
+            tuple(
+                clip.clip_id
+                for clip in plan.updates[0].arrangement_clips
+            ),
+            ("keep",),
+        )
+        self.assertEqual(source.note_count, 3)
+        self.assertEqual(len(source.arrangement_clips), 3)
+
+    def test_delete_multiple_clips_rejects_stale_selection_before_mutation(self) -> None:
+        source = _track(1, [Note(60, 90, 100.0, 100.0, 0)])
+        source.arrangement_clips = [
+            ArrangementClipState("first", 100.0, 200.0, 100.0, 200.0)
+        ]
+
+        with self.assertRaisesRegex(ClipEditError, "unavailable"):
+            plan_clips_delete(source, clip_ids=("first", "missing"))
+
+        self.assertEqual(source.note_count, 1)
+        self.assertEqual(source.arrangement_clips[0].clip_id, "first")
+
     def test_delete_clip_removes_exclusive_notes_controls_and_records(self) -> None:
         source = _track(1, [
             Note(60, 90, 100.0, 100.0, 0),

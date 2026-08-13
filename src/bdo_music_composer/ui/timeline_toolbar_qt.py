@@ -12,21 +12,61 @@ from bdo_music_composer.ui.ui_controls import PillButton
 from bdo_music_composer.ui.theme.fluent_theme import FluentSymbol
 
 
+def apply_arrangement_tool_toggle(
+    timeline,
+    select: PillButton,
+    razor: PillButton,
+    tool: str,
+    checked: bool,
+) -> None:
+    """Keep optional Clip-edit/Razor toggles mutually exclusive."""
+
+    current = select if tool == "select" else razor
+    other = razor if tool == "select" else select
+    if checked and other.isChecked():
+        was_blocked = other.blockSignals(True)
+        other.setChecked(False)
+        other.blockSignals(was_blocked)
+    if current.isChecked():
+        active_tool = tool
+    elif other.isChecked():
+        active_tool = "razor" if tool == "select" else "select"
+    else:
+        active_tool = "marquee"
+    timeline.set_arrangement_tool(active_tool)
+
+
+def bind_arrangement_tool_buttons(
+    timeline, select: PillButton, razor: PillButton
+) -> None:
+    """Bind optional tool buttons without growing the main-window owner."""
+
+    select.toggled.connect(lambda checked: apply_arrangement_tool_toggle(
+        timeline, select, razor, "select", checked
+    ))
+    razor.toggled.connect(lambda checked: apply_arrangement_tool_toggle(
+        timeline, select, razor, "razor", checked
+    ))
+
+
 def build_arrangement_tool_buttons(
     parent: QWidget,
 ) -> tuple[QFrame, PillButton, PillButton, PillButton, QButtonGroup]:
     """Build compact icon-only Select/Razor controls for Track/Clip editing."""
 
     select = PillButton("", "ghost", FluentSymbol.SELECT)
+    select.setObjectName("TimelineToolButton")
     select.setCheckable(True)
-    select.setChecked(True)
     select.setFixedSize(34, 30)
-    select.setToolTip(tr("选择工具：移动或裁剪片段"))
-    select.setAccessibleName(tr("选择工具"))
+    select.setToolTip(tr(
+        "片段编辑：开启后拖动片段可移动或裁剪；再次点击关闭"
+    ))
+    select.setAccessibleName(tr("片段编辑"))
     razor = PillButton("", "ghost", FluentSymbol.RAZOR)
+    razor.setObjectName("TimelineToolButton")
     razor.setCheckable(True)
     razor.setFixedSize(34, 30)
-    razor.setToolTip(tr("剃刀工具：单击片段进行切分"))
+    razor.setToolTip(tr("剃刀工具：单击片段进行切分；再次点击关闭"))
     razor.setAccessibleName(tr("剃刀工具"))
     snap = PillButton(tr("吸附"), "ghost", FluentSymbol.MAGNET)
     snap.setObjectName("TimelineSnapToggle")
@@ -39,7 +79,9 @@ def build_arrangement_tool_buttons(
     )
     _sync_snap_toggle_presentation(snap, snap.isChecked())
     group = QButtonGroup(parent)
-    group.setExclusive(True)
+    # Both modes are optional. With neither checked the timeline stays in its
+    # default marquee mode; the host keeps these two toggles mutually exclusive.
+    group.setExclusive(False)
     group.addButton(select, 0)
     group.addButton(razor, 1)
     tool_panel = QFrame(parent)

@@ -127,7 +127,7 @@ class TimelineClipSelectionUiTests(unittest.TestCase):
                 canvas._selected_clip_id, canvas._selected_clip_track_id
             )
             assert canvas._selected_clip_track_id == int(track.track_id)
-            assert canvas.arrangement_tool == "select", canvas.arrangement_tool
+            assert canvas.arrangement_tool == "marquee", canvas.arrangement_tool
             canvas.repaint()
             app.processEvents()
             painted_regions = {
@@ -145,8 +145,8 @@ class TimelineClipSelectionUiTests(unittest.TestCase):
 
             selected_colors = painted_colors(painted_regions["first"])
             sibling_colors = painted_colors(painted_regions["second"])
-            assert "#f0d887" in selected_colors, selected_colors
-            assert "#f0d887" not in sibling_colors, sibling_colors
+            assert "#ffd766" in selected_colors, selected_colors
+            assert "#ffd766" not in sibling_colors, sibling_colors
             assert canvas._selected_clip_id == "first"
 
             lane = next(
