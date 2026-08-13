@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
+import hashlib
 import math
 from collections.abc import Mapping, Sequence
 from uuid import uuid4
@@ -57,6 +58,23 @@ class ClipClipboard:
 
 def _new_clip_id(track_id: int) -> str:
     return f"track-{int(track_id)}-{uuid4().hex[:12]}"
+
+
+def default_empty_clip(
+    track_id: int, *, duration_ms: float
+) -> ArrangementClipState:
+    """Create the stable initial Clip owned by a newly authored track."""
+
+    duration = max(MIN_CLIP_DURATION_MS, float(duration_ms))
+    if not math.isfinite(duration):
+        raise ValueError("default clip duration must be finite")
+    return ArrangementClipState(
+        f"track-{int(track_id)}-main",
+        0.0,
+        duration,
+        0.0,
+        duration,
+    )
 
 
 def copy_clip(track: TrackState, clip_id: str) -> ClipClipboard:
@@ -261,27 +279,215 @@ def reconcile_track_clips_after_note_edit(
     return tuple(reconciled)
 
 
-def project_track_notes(track: TrackState) -> tuple[Note, ...]:
-    """Project every independent clip without rewriting authored note content."""
+def project_track_note_refs(track: TrackState) -> tuple[tuple[int, Note], ...]:
+    """Project Clips while retaining each authored note's stable list index."""
 
     scale = float(getattr(track, "duration_scale", 1.0))
-    projected: list[Note] = []
+    projected: list[tuple[int, Note]] = []
     for clip in track_clips(track):
         source_start, source_end = _clip_source_window(clip)
-        for note in track.notes:
+        for note_index, note in enumerate(track.notes):
             if not _note_belongs_to_clip(note, clip):
                 continue
             start = max(float(note.start), source_start)
             end = min(_note_end(note, scale), source_end)
             if end - start >= 1.0:
-                projected.append(_note_with_times(
-                    note,
-                    start=start + clip.time_offset_ms,
-                    duration=end - start,
+                projected.append((note_index, _note_with_times(
+                    note, start=start + clip.time_offset_ms, duration=end - start,
+                )))
+    return tuple(sorted(
+        projected,
+        key=lambda item: (
+            item[1].start, item[1].pitch, item[1].dur,
+            item[1].vel, item[1].ntype, item[0],
+        ),
+    ))
+
+
+def project_track_notes(track: TrackState) -> tuple[Note, ...]:
+    """Project every independent clip without rewriting authored note content."""
+
+    return tuple(note for _index, note in project_track_note_refs(track))
+
+
+def clip_editor_notes(
+    track: TrackState, clip_id: str
+) -> tuple[Note, ...]:
+    """Project editable onsets in one Clip without exposing sibling content."""
+
+    clip = clip_by_id(track, clip_id)
+    source_start, source_end = _clip_source_window(clip)
+    return tuple(sorted(
+        (
+            _note_with_times(
+                note,
+                start=float(note.start) + clip.time_offset_ms,
+                duration=float(note.dur),
+            )
+            for note in track.notes
+            if _note_belongs_to_clip(note, clip)
+            and source_start <= float(note.start) < source_end
+        ),
+        key=lambda note: (note.start, note.pitch, note.dur, note.vel, note.ntype),
+    ))
+
+
+def clip_edit_fingerprint(track: TrackState, clip_id: str) -> str:
+    """Identify the exact Clip/note state used to open a note-editor draft."""
+
+    clip = clip_by_id(track, clip_id)
+    payload = (
+        tuple((
+            clip.clip_id,
+            clip.start_ms,
+            clip.end_ms,
+            clip.content_start_ms,
+            clip.content_end_ms,
+            clip.time_offset_ms,
+        )),
+        tuple(
+            tuple(note)
+            for note in track.notes
+            if _note_belongs_to_clip(note, clip)
+        ),
+    )
+    return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()
+
+
+def plan_clip_note_edit(
+    track: TrackState,
+    *,
+    clip_id: str,
+    notes: Sequence[Note],
+) -> ClipEditPlan:
+    """Replace only the authored note-onsets visible in one Clip window."""
+
+    clip = clip_by_id(track, clip_id)
+    source_start, source_end = _clip_source_window(clip)
+    projected = tuple(notes)
+    if any(
+        not math.isfinite(float(value))
+        for note in projected
+        for value in (note.start, note.dur)
+    ):
+        raise ValueError("clip notes must have finite timing")
+    if any(
+        not (clip.start_ms <= float(note.start) < clip.end_ms)
+        for note in projected
+    ):
+        raise ValueError("edited notes must remain inside the clip")
+    replacement = tuple(
+        note._replace(start=float(note.start) - clip.time_offset_ms)
+        for note in projected
+    )
+    shared_source = any(
+        value.clip_id != clip.clip_id
+        and value.content_start_ms < clip.content_end_ms
+        and clip.content_start_ms < value.content_end_ms
+        for value in track_clips(track)
+    )
+    if shared_source:
+        content_end = max(
+            (value.content_end_ms for value in track_clips(track)),
+            default=max((_note_end(note) for note in track.notes), default=0.0),
+        )
+        content_shift = (
+            max(0.0, content_end + MIN_CLIP_DURATION_MS)
+            - clip.content_start_ms
+        )
+        detached_clip = replace(
+            clip,
+            content_start_ms=clip.content_start_ms + content_shift,
+            content_end_ms=clip.content_end_ms + content_shift,
+            time_offset_ms=clip.time_offset_ms - content_shift,
+        )
+        hidden_notes = tuple(
+            deepcopy(note)._replace(start=float(note.start) + content_shift)
+            for note in track.notes
+            if _note_belongs_to_clip(note, clip)
+            and not (source_start <= float(note.start) < source_end)
+        )
+        detached_replacement = tuple(
+            note._replace(start=float(note.start) + content_shift)
+            for note in replacement
+        )
+        controls = tuple(
+            _mapping_time(value, lambda time: time + content_shift)
+            for value in track.performance_controls
+            if clip.content_start_ms
+            <= float(value.get("time", -1.0))
+            < clip.content_end_ms
+        )
+        records = tuple(
+            _record_time(value, lambda time: time + content_shift, 1.0)
+            for value in track.bdo_source_note_records
+            if clip.content_start_ms <= float(value[2]) < clip.content_end_ms
+        )
+        update = replace(
+            _base_update(track),
+            notes=tuple(sorted(
+                (*track.notes, *hidden_notes, *detached_replacement),
+                key=lambda note: (
+                    note.start, note.pitch, note.dur, note.vel, note.ntype
+                ),
+            )),
+            performance_controls=tuple(sorted(
+                (*track.performance_controls, *controls),
+                key=lambda value: float(value.get("time", 0.0)),
+            )),
+            source_note_records=tuple(sorted(
+                (*track.bdo_source_note_records, *records),
+                key=lambda value: float(value[2]),
+            )),
+            source_group_index=None,
+            arrangement_clips=_replace_clip(
+                track_clips(track), clip.clip_id, detached_clip
+            ),
+        )
+        return ClipEditPlan(
+            (update,), int(track.track_id), detached_clip.clip_id
+        )
+    kept = tuple(
+        deepcopy(note)
+        for note in track.notes
+        if not (
+            _note_belongs_to_clip(note, clip)
+            and source_start <= float(note.start) < source_end
+        )
+    )
+    update = replace(
+        _base_update(track),
+        notes=tuple(sorted(
+            (*kept, *replacement),
+            key=lambda note: (note.start, note.pitch, note.dur, note.vel, note.ntype),
+        )),
+        source_group_index=None,
+    )
+    return ClipEditPlan((update,), int(track.track_id), clip.clip_id)
+
+
+def project_track_performance_controls(track: TrackState) -> tuple[dict, ...]:
+    """Project point-in-time MIDI controls through independent Clip windows."""
+
+    projected: list[dict] = []
+    for clip in track_clips(track):
+        source_start, source_end = _clip_source_window(clip)
+        for control in track.performance_controls:
+            try:
+                time_ms = float(control.get("time", -1.0))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if (
+                clip.content_start_ms <= time_ms < clip.content_end_ms
+                and source_start <= time_ms < source_end
+            ):
+                projected.append(_mapping_time(
+                    control,
+                    lambda value, offset=clip.time_offset_ms: value + offset,
                 ))
     return tuple(sorted(
         projected,
-        key=lambda note: (note.start, note.pitch, note.dur, note.vel, note.ntype),
+        key=lambda value: float(value.get("time", 0.0)),
     ))
 
 
@@ -306,6 +512,54 @@ def project_track_source_records(track: TrackState) -> tuple[tuple, ...]:
             value[2], value[3] = start + clip.time_offset_ms, end - start
             projected.append(tuple(value))
     return tuple(sorted(projected, key=lambda value: (float(value[2]), int(value[0]))))
+
+
+def _clip_projection(
+    track: TrackState,
+    clips: Sequence[ArrangementClipState],
+) -> tuple[tuple[Note, ...], tuple[dict, ...], tuple[tuple, ...]]:
+    preview = deepcopy(track)
+    preview.arrangement_clips = list(clips)
+    return (
+        project_track_notes(preview),
+        project_track_performance_controls(preview),
+        project_track_source_records(preview),
+    )
+
+
+def _detached_merged_content(
+    track: TrackState,
+    *,
+    clip_id: str,
+    start_ms: float,
+    end_ms: float,
+    notes: Sequence[Note],
+    controls: Sequence[Mapping],
+    records: Sequence[Sequence[object]],
+) -> tuple[
+    ArrangementClipState, tuple[Note, ...], tuple[dict, ...], tuple[tuple, ...]
+]:
+    """Store one flattened merge away from every existing content window."""
+
+    content_base = max(
+        (value.content_end_ms for value in track_clips(track)),
+        default=max((_note_end(note) for note in track.notes), default=0.0),
+    ) + MIN_CLIP_DURATION_MS
+    shift = content_base - start_ms
+    merged_clip = ArrangementClipState(
+        clip_id,
+        start_ms,
+        end_ms,
+        content_base,
+        content_base + (end_ms - start_ms),
+        start_ms - content_base,
+    )
+    return (
+        merged_clip,
+        tuple(note._replace(start=float(note.start) + shift) for note in notes),
+        tuple(_mapping_time(value, lambda time: time + shift) for value in controls),
+        tuple(_record_time(value, lambda time: time + shift, 1.0) for value in records),
+    )
 
 
 def _mapping_time(value: Mapping, transform) -> dict:
@@ -435,14 +689,6 @@ def plan_clip_edit(
             moved_clip,
             start_ms=min(moved_clip.start_ms, *(value.start_ms for value in overlapping)),
             end_ms=max(moved_clip.end_ms, *(value.end_ms for value in overlapping)),
-            content_start_ms=min(
-                moved_clip.content_start_ms,
-                *(value.content_start_ms for value in overlapping),
-            ),
-            content_end_ms=max(
-                moved_clip.content_end_ms,
-                *(value.content_end_ms for value in overlapping),
-            ),
         )
 
     def in_content(value: float) -> bool:
@@ -483,6 +729,44 @@ def plan_clip_edit(
 
     if destination is source:
         update = _base_update(source)
+        if overlap_ids:
+            moved_preview = deepcopy(source)
+            moved_preview.arrangement_clips = [moved_clip]
+            overlap_projection = _clip_projection(source, overlapping)
+            moved_projection = _clip_projection(moved_preview, (moved_clip,))
+            merged_clip, merged_notes, merged_controls, merged_records = (
+                _detached_merged_content(
+                    source,
+                    clip_id=clip.clip_id,
+                    start_ms=moved_clip.start_ms,
+                    end_ms=moved_clip.end_ms,
+                    notes=(*overlap_projection[0], *moved_projection[0]),
+                    controls=(*overlap_projection[1], *moved_projection[1]),
+                    records=(*overlap_projection[2], *moved_projection[2]),
+                )
+            )
+            return ClipEditPlan((replace(
+                update,
+                notes=tuple(sorted(
+                    (*update.notes, *merged_notes), key=lambda note: note.start
+                )),
+                performance_controls=tuple(sorted(
+                    (*update.performance_controls, *merged_controls),
+                    key=lambda value: float(value.get("time", 0.0)),
+                )),
+                source_note_records=tuple(sorted(
+                    (*update.source_note_records, *merged_records),
+                    key=lambda value: float(value[2]),
+                )),
+                source_group_index=None,
+                arrangement_clips=(
+                    *(
+                        value for value in source_clips
+                        if value.clip_id not in {*overlap_ids, clip.clip_id}
+                    ),
+                    merged_clip,
+                ),
+            ),), int(source.track_id), merged_clip.clip_id)
         remaining_clips = tuple(
             value for value in source_clips
             if value.clip_id not in overlap_ids
@@ -527,30 +811,22 @@ def plan_clip_edit(
     if overlap_ids:
         moved_preview = deepcopy(source)
         moved_preview.notes = list(moved_notes)
+        moved_preview.performance_controls = list(moved_controls)
+        moved_preview.bdo_source_note_records = tuple(moved_records)
         moved_preview.arrangement_clips = [moved_clip]
-        flattened_notes = tuple(sorted(
-            (*project_track_notes(destination), *project_track_notes(moved_preview)),
-            key=lambda note: (note.start, note.pitch, note.dur),
-        ))
-        merged_start = moved_clip.start_ms
-        merged_end = moved_clip.end_ms
-        moved_clip = ArrangementClipState(
-            moved_clip.clip_id,
-            merged_start,
-            merged_end,
-            merged_start,
-            merged_end,
-            0.0,
+        overlap_projection = _clip_projection(destination, overlapping)
+        moved_projection = _clip_projection(moved_preview, (moved_clip,))
+        moved_clip, moved_notes, moved_controls, moved_records = (
+            _detached_merged_content(
+                destination,
+                clip_id=moved_clip.clip_id,
+                start_ms=moved_clip.start_ms,
+                end_ms=moved_clip.end_ms,
+                notes=(*overlap_projection[0], *moved_projection[0]),
+                controls=(*overlap_projection[1], *moved_projection[1]),
+                records=(*overlap_projection[2], *moved_projection[2]),
+            )
         )
-        destination_update = replace(
-            destination_update,
-            notes=flattened_notes,
-            performance_controls=(),
-            source_note_records=(),
-        )
-        moved_notes = ()
-        moved_controls = ()
-        moved_records = ()
     source_update = replace(
         _base_update(source),
         notes=kept_notes,
@@ -597,13 +873,53 @@ def plan_clip_split(
         clip_id=left_id,
         end_ms=split,
     )
+    existing_content_end = max(
+        (value.content_end_ms for value in track_clips(track)),
+        default=max((_note_end(note) for note in track.notes), default=0.0),
+    )
+    content_shift = (
+        max(0.0, existing_content_end + MIN_CLIP_DURATION_MS)
+        - clip.content_start_ms
+    )
     right = replace(
         clip,
         clip_id=right_id,
         start_ms=split,
+        content_start_ms=clip.content_start_ms + content_shift,
+        content_end_ms=clip.content_end_ms + content_shift,
+        time_offset_ms=clip.time_offset_ms - content_shift,
+    )
+    belongs = lambda value: (
+        clip.content_start_ms <= float(value) < clip.content_end_ms
+    )
+    duplicated_notes = tuple(
+        deepcopy(note)._replace(start=float(note.start) + content_shift)
+        for note in track.notes if belongs(note.start)
+    )
+    duplicated_controls = tuple(
+        _mapping_time(value, lambda time: time + content_shift)
+        for value in track.performance_controls
+        if belongs(value.get("time", -1.0))
+    )
+    duplicated_records = tuple(
+        _record_time(value, lambda time: time + content_shift, 1.0)
+        for value in track.bdo_source_note_records
+        if belongs(value[2])
     )
     update = replace(
         _base_update(track),
+        notes=tuple(sorted(
+            (*track.notes, *duplicated_notes), key=lambda note: note.start
+        )),
+        performance_controls=tuple(sorted(
+            (*track.performance_controls, *duplicated_controls),
+            key=lambda value: float(value.get("time", 0.0)),
+        )),
+        source_note_records=tuple(sorted(
+            (*track.bdo_source_note_records, *duplicated_records),
+            key=lambda value: float(value[2]),
+        )),
+        source_group_index=None,
         arrangement_clips=tuple(
             value for original in track_clips(track)
             for value in ((left, right) if original.clip_id == clip.clip_id else (original,))
@@ -646,14 +962,20 @@ __all__ = [
     "ClipTrackUpdate",
     "MIN_CLIP_DURATION_MS",
     "clip_by_id",
+    "clip_editor_notes",
+    "clip_edit_fingerprint",
     "copy_clip",
+    "default_empty_clip",
     "clip_for_note",
     "plan_clip_create",
     "plan_clip_edit",
+    "plan_clip_note_edit",
     "plan_clip_paste",
     "plan_clip_split",
     "overlapping_clip_ids",
     "project_track_notes",
+    "project_track_note_refs",
+    "project_track_performance_controls",
     "project_track_source_records",
     "reconcile_track_clips_after_note_edit",
     "track_clip_bounds",

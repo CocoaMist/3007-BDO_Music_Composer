@@ -4,7 +4,8 @@ from copy import deepcopy
 import unittest
 
 from bdo_midi import Note
-from bdo_music_composer.editor.editor_models import TrackState
+from bdo_music_composer.editor.editor_models import ArrangementClipState, TrackState
+from bdo_music_composer.editor.arrangement_clip import project_track_notes
 from bdo_music_composer.editor.output_routing import game_output_route_identity
 from bdo_music_composer.editor.track_merge import plan_track_merge
 
@@ -88,6 +89,25 @@ class TrackMergeTests(unittest.TestCase):
         self.assertEqual(
             plan.report.route, game_output_route_identity(plan.merged_track)
         )
+
+    def test_merge_bakes_clip_positions_and_clears_stale_clip_windows(self) -> None:
+        left = _track(1, [Note(60, 90, 100.0, 100.0, 0)])
+        left.arrangement_clips = [
+            ArrangementClipState("left", 700.0, 800.0, 100.0, 200.0, 600.0)
+        ]
+        left.performance_controls = [{"time": 120.0, "kind": "pitchwheel"}]
+        left.bdo_source_note_records = ((60, 90, 100.0, 100.0, 0, 77),)
+        right = _track(2, [Note(64, 80, 400.0, 100.0, 0)])
+
+        merged = plan_track_merge(left, right).merged_track
+
+        self.assertEqual(merged.arrangement_clips, [])
+        self.assertEqual(
+            [(note.pitch, note.start) for note in project_track_notes(merged)],
+            [(64, 400.0), (60, 700.0)],
+        )
+        self.assertEqual(merged.performance_controls[0]["time"], 720.0)
+        self.assertEqual(merged.bdo_source_note_records[-1][2:], (700.0, 100.0, 0, 77))
 
 
 if __name__ == "__main__":

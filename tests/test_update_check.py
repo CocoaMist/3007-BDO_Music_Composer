@@ -96,7 +96,7 @@ class SemanticVersionTests(unittest.TestCase):
 
 class UpdatePayloadTests(unittest.TestCase):
     def test_metadata_is_fixed_to_public_project(self) -> None:
-        self.assertEqual(APP_VERSION, "1.3.0")
+        self.assertEqual(APP_VERSION, "1.3.1")
         self.assertFalse(RELEASE_NOTES_UI_ENABLED)
         self.assertEqual(
             WINDOWS_APP_USER_MODEL_ID,
@@ -211,7 +211,7 @@ class UpdatePayloadTests(unittest.TestCase):
         headers = github_request_headers()
         self.assertEqual(headers["Accept"], "application/vnd.github+json")
         self.assertEqual(headers["X-GitHub-Api-Version"], "2026-03-10")
-        self.assertEqual(headers["User-Agent"], "BDO-Music-Composer/1.3.0")
+        self.assertEqual(headers["User-Agent"], "BDO-Music-Composer/1.3.1")
         self.assertNotIn("Authorization", headers)
         self.assertNotIn("Owner", " ".join(headers))
 

@@ -113,9 +113,10 @@ one undoable workspace edit. Arrangement Tracks own one or more persisted
 `ArrangementClipState` modules over canonical `TrackState.notes`, not a second
 note model. `editor/arrangement_clip.py` plans independent Clip move,
 non-destructive trim, Razor split, creation, and cross-track moves. Razor creates
-two independently addressable Clips and splits only notes/source records that
-cross its cut. Preview, MIDI projection, offline rendering, validation, velocity
-traces, and BDO export consume the same per-Clip projection. The timeline host
+two independently addressable cropped views without splitting or rewriting the
+authored notes, controls, or source records. Preview, MIDI projection, offline
+rendering, validation, velocity traces, and BDO export consume the same per-Clip
+projection. The timeline host
 commits each gesture as one undoable edit. Clip instances use an immutable
 source-content window plus a timeline offset: razor splits duplicate the complete
 source reference and crop each side non-destructively, so resizing can reveal

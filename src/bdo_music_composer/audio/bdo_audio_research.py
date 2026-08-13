@@ -10,6 +10,7 @@ import numpy as np
 
 from bdo_music_composer.audio.bdo_instrument_samples import bank_for_instrument, resolve_bdo_pitch
 from bdo_music_composer.audio.bdo_sample_renderer import BdoSampleMap
+from bdo_music_composer.editor.arrangement_clip import project_track_notes
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +38,8 @@ def sample_coverage_for_tracks(tracks: list[object], map_path: Path) -> tuple[In
         missing = []
         instrument_id = int(track.bdo_instrument_id)
         bank = bank_for_instrument(instrument_id, str(getattr(track, "marnian_synth_mode", "basic")))
-        for index, note in enumerate(track.notes):
+        notes = project_track_notes(track)
+        for index, note in enumerate(notes):
             # Coverage follows the velocity byte visible in the editor.  The
             # retired ``volume_scale`` field is only an input-migration aid.
             velocity = max(0, min(127, round(note.vel)))
@@ -46,7 +48,7 @@ def sample_coverage_for_tracks(tracks: list[object], map_path: Path) -> tuple[In
             )
             if sample_map.choose_bank(bank, pitch, velocity) is None:
                 missing.append(index)
-        total = len(track.notes)
+        total = len(notes)
         covered = total - len(missing)
         status = "verified_zone" if total and covered == total else ("partial" if covered else "unmapped")
         result.append(InstrumentCoverage(

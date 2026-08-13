@@ -8,7 +8,10 @@ from pathlib import Path
 import mido
 
 from .editor_models import TrackState
-from .arrangement_clip import project_track_notes
+from .arrangement_clip import (
+    project_track_notes,
+    project_track_performance_controls,
+)
 
 
 _TICKS_PER_BEAT = 480
@@ -110,7 +113,7 @@ def _track_events(
             channel=channel,
             program=track_state.gm_program,
         )))
-    for control in track_state.performance_controls:
+    for control in project_track_performance_controls(track_state):
         try:
             tick = _milliseconds_to_ticks(
                 float(control.get("time", 0.0)),

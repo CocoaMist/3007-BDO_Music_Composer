@@ -186,6 +186,38 @@ class PreviewMidiWriterTests(unittest.TestCase):
             },
         )
 
+    def test_moved_clip_projects_its_controls_with_its_notes(self) -> None:
+        track = _track(
+            1,
+            notes=[Note(60, 90, 100.0, 100.0, 0)],
+            gm_program=10,
+        )
+        track.performance_controls = [
+            {"time": 120.0, "kind": "pitchwheel", "pitch": 1234}
+        ]
+        from bdo_music_composer.editor.arrangement_clip import plan_clip_edit
+
+        plan = plan_clip_edit(
+            track,
+            mode="move",
+            new_start_ms=500.0,
+            new_end_ms=600.0,
+        )
+        track.arrangement_clips = list(plan.updates[0].arrangement_clips)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "moved-controls.mid"
+            build_filtered_midi([track], 120, 4, path)
+            midi = mido.MidiFile(path)
+
+        absolute_tick = 0
+        events = []
+        for message in midi.tracks[1]:
+            absolute_tick += message.time
+            if message.type in {"pitchwheel", "note_on"}:
+                events.append((message.type, absolute_tick))
+        self.assertEqual(events, [("note_on", 480), ("pitchwheel", 499)])
+
     def test_main_gui_keeps_friendly_missing_mido_error(self) -> None:
         script = textwrap.dedent(
             """

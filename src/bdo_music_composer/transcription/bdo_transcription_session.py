@@ -325,6 +325,8 @@ class TranscriptionEditorCommit:
     cache_key: str = ""
     analysis_fingerprint: str = ""
     new_track_specs: tuple[tuple[int, int], ...] = ()
+    arrangement_clip_id: str = ""
+    arrangement_clip_fingerprint: str = ""
 
     def __post_init__(self) -> None:
         current_track_id = _normalise_track_id(self.current_track_id)
@@ -368,6 +370,14 @@ class TranscriptionEditorCommit:
             self,
             "new_track_specs",
             tuple(sorted(track_specs)),
+        )
+        object.__setattr__(
+            self, "arrangement_clip_id", str(self.arrangement_clip_id or "")
+        )
+        object.__setattr__(
+            self,
+            "arrangement_clip_fingerprint",
+            str(self.arrangement_clip_fingerprint or ""),
         )
 
     @property

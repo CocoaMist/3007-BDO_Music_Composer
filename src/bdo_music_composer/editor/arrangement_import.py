@@ -87,6 +87,7 @@ def plan_arrangement_append(
                 clip.end_ms + normalized_offset,
                 clip.content_start_ms + normalized_offset,
                 clip.content_end_ms + normalized_offset,
+                clip.time_offset_ms,
             )
             for clip_index, clip in enumerate(track_clips(source))
         ]

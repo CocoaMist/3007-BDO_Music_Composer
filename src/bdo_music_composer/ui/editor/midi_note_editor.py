@@ -5903,6 +5903,10 @@ class MidiNoteEditorDialog(QDialog):
                     )
                 ),
                 tuple(sorted(self.staged_new_track_specs.items())),
+                str(getattr(self, "arrangement_clip_id", "") or ""),
+                str(
+                    getattr(self, "arrangement_clip_fingerprint", "") or ""
+                ),
             )
             report = commit(request)
             if report is None:
