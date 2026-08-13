@@ -31,9 +31,9 @@ guides, and historical evidence. User-facing guides live in
 ## Evidence and history
 
 - [`releases/`](releases/) contains versioned release scope and verification
-  records. The latest packaged sample-preview record is
-  [v1.2.1](releases/RELEASE_NOTES_V1.2.1.md); the source application is currently
-  v1.3.0.
+  records. The current application record is
+  [v1.3.0](releases/RELEASE_NOTES_V1.3.0.md), which reuses the compatible
+  [v1.2.1](releases/RELEASE_NOTES_V1.2.1.md) optional CC0 sample-pack asset.
 - [`benchmarks/`](benchmarks/) contains reproducible performance protocols and
   result snapshots.
 - [`history/`](history/) contains dated implementation and audit records.
