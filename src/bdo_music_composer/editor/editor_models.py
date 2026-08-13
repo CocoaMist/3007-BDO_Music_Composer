@@ -157,6 +157,17 @@ def note_name(midi_note: int) -> str:
     return f"{names[int(midi_note) % 12]}{octave}"
 
 
+@dataclass(frozen=True, slots=True)
+class ArrangementClipState:
+    """One independently movable/trimmed module inside an arrangement track."""
+
+    clip_id: str
+    start_ms: float
+    end_ms: float
+    content_start_ms: float
+    content_end_ms: float
+
+
 @dataclass
 class TrackState:
     track_id: int
@@ -179,6 +190,10 @@ class TrackState:
     bdo_track_settings: tuple[int, ...] = (0,) * 8
     bdo_source_group_index: int | None = None
     bdo_source_note_records: tuple[tuple, ...] = ()
+    clip_start_ms: float | None = None
+    clip_end_ms: float | None = None
+    arrangement_group_id: str = ""
+    arrangement_clips: list[ArrangementClipState] = field(default_factory=list)
 
     @property
     def note_count(self) -> int:

@@ -20,7 +20,6 @@ class GuiModuleBoundaryTests(unittest.TestCase):
         )
         import bdo_music_composer.ui.dialogs.acknowledgements_dialog as acknowledgements_dialog
         import bdo_music_composer.ui.dialogs.application_settings_dialog as application_settings_dialog
-        import bdo_music_composer.ui.dialogs.conversion_check_dialog as conversion_check_dialog
         import bdo_music_composer.ui.dialogs.optimizer_dialog as optimizer_dialog
         import bdo_music_composer.ui.dialogs.release_notes_dialog as release_notes_dialog
         import bdo_music_composer.ui.dialogs.track_settings_dialogs as track_settings_dialogs
@@ -50,7 +49,6 @@ class GuiModuleBoundaryTests(unittest.TestCase):
             "PianoRollCanvas": piano_roll_canvas.PianoRollCanvas,
             "VelocityLaneCanvas": piano_roll_canvas.VelocityLaneCanvas,
             "MidiNoteEditorDialog": midi_note_editor.MidiNoteEditorDialog,
-            "ConversionCheckDialog": conversion_check_dialog.ConversionCheckDialog,
             "ConversionValidationController": conversion_validation_controller.ConversionValidationController,
             "ModelRevision": model_revision.ModelRevision,
             "MainWindowStyleMixin": main_window_style.MainWindowStyleMixin,
@@ -78,6 +76,7 @@ class GuiModuleBoundaryTests(unittest.TestCase):
             "HomeFooter": home_widgets.HomeFooter,
         }
         source = (SOURCE_ROOT / "bdo_music_composer/ui/main_window.py").read_text(encoding="utf-8-sig")
+        self.assertNotIn("conversion_check_dialog", source)
         defined_classes = {
             node.name for node in ast.parse(source).body if isinstance(node, ast.ClassDef)
         }

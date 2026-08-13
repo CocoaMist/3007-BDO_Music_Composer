@@ -105,7 +105,68 @@ while all package initializers remain inert.
 migrated project payloads to complete `TrackState` values. It injects names and
 colors through `TrackImportPresentation` and reports malformed authoritative
 data through a path-aware `EditorImportError`; callers commit only a completely
-prepared result. `src/bdo_music_composer/app/project_document.py` composes
+prepared result. `src/bdo_music_composer/editor/arrangement_import.py` then owns
+the isolated append plan for external MIDI/BDO tracks: it allocates fresh track
+IDs, shifts notes, controls, lyrics, and BDO secondary-velocity records together,
+and reconciles the destination's score-wide effects before the Qt host publishes
+one undoable workspace edit. Arrangement Tracks own one or more persisted
+`ArrangementClipState` modules over canonical `TrackState.notes`, not a second
+note model. `editor/arrangement_clip.py` plans independent Clip move,
+non-destructive trim, Razor split, creation, and cross-track moves. Razor creates
+two independently addressable Clips and splits only notes/source records that
+cross its cut. Preview, MIDI projection, offline rendering, validation, velocity
+traces, and BDO export consume the same per-Clip projection. The timeline host
+commits each gesture as one undoable edit. `editor/track_group.py` separately keeps
+same-game-instrument lanes in a Group container without
+merging their notes or mixer state. Explicit A+B
+track merge still produces one ordinary lane, never a composite-track
+container. `editor/output_routing.py` projects the BDO fields currently stored
+on `TrackState` into a `GameOutputRouteIdentity` (serialized instrument/mode,
+pitch semantics, volume, and complete mixer settings). The Qt-free merge plan
+requires identical route identities, preserves duplicate notes, reports
+cross-lane overlap regions and projected 730-note physical splits, and commits
+as one undo step after a warning; overlap regions remain highlighted for manual
+adjustment. This route boundary is the migration seam for a later DAW-style
+model where a general Track owns clips/automation and a separate output route
+owns BDO mapping; the merge analyzer needs neither a composite track nor a
+second note model when that split happens. The workspace makes this boundary
+stable by recomputing Group membership and contiguous ordering on every
+structural refresh: project/MIDI/BDO load, appended material, and live
+instrument or Marnian-mode changes all share the same path. Saved legacy group
+IDs are never trusted as classification input, and singleton groups do not paint.
+visible directly in each Track row and its themed context menu, so no persistent
+side inspector competes with arrangement width. Multiple color-keyed note
+editors may stay open; the activated editor is the only owner allowed to claim
+the shared preview engine. Project-wide markers paint through every Track lane.
+They also paint in every open note editor and share one bounded, sanitized
+project payload; visible close affordances and context actions make deletion
+discoverable, while add/rename/delete participate in project undo. Select-tool
+Clip moves build one bounded snap-target set at drag start and may align either
+edge to the 1/16 grid, another Clip edge, or a marker (Alt bypasses snapping).
+That drag-lifetime index collapses equal-time targets by semantic priority and
+uses binary neighbor lookup on pointer moves; it must not renormalize or scan
+the full target set in the frame-time path. Marker canvases likewise retain a
+sorted time index and slice only the visible marker interval before painting.
+Move geometry remains anchored to the original pointer-down state so a snapped
+preview never becomes the next frame's input. A drop that overlaps an occupied
+Clip asks for explicit confirmation: Yes merges the two Clip containers, while
+No cancels the gesture without automatic alignment or model changes. Cross-track moves
+are permissive across instrument/pitch semantics: the canonical notes move
+unchanged, validation runs synchronously after publication, and the destination
+Clip, lane, badge, and offending notes turn red instead of rejecting the edit.
+Dense timeline note summaries are intersected with every individual Clip, never
+only the track-wide first/last bounds, so note blocks cannot paint across gaps.
+Group presentation never consumes lane height: the first member owns a compact
+instrument-group control with an explicit count plus group Mute/Solo, while
+subtle shared boundaries and selection tint connect every member. Group views
+and row membership are built once during `set_tracks`; paint-time lookup is O(1).
+Mute/Solo uses a track-metadata refresh plan, invalidating presentation and
+preview without rebuilding any note interval or overview index, and the whole
+group mutation remains one project-undo step.
+The bottom strip prioritizes musical/game capacity state while keeping process
+telemetry available but hidden from the default authoring hierarchy. Standard MIDI
+publication serializes the current editor model to memory before atomically
+replacing the chosen destination. `src/bdo_music_composer/app/project_document.py` composes
 schema migration, project-path validation, track import, and every saved
 metadata domain into one typed `ProjectLoadPlan` before the main window mutates
 state. `src/bdo_music_composer/project/project_persistence.py` recursively freezes
@@ -924,6 +985,10 @@ worker starts. It derives articulation, Volume and dual-velocity maps from that
 same snapshot, preserves per-track Aux bytes, and overlays the single Master
 layer. A malformed eight-byte source setting fails closed instead of being
 silently replaced. The worker therefore never races later editor mutations. `prepare_export()` owns
+Conversion diagnostics are advisory at this boundary: users may explicitly
+confirm an export with note/range/mapping errors, while Owner ID, `/4` meter,
+destination, serializer, verification, and atomic-publication failures remain
+hard stops. `prepare_export()` owns
 the pure transform/encoding phase. Production export then runs the Qt-free
 `export_verification` gate in strict order: prepared bytes must match the frozen
 editor projection; the atomically written primary must match both those bytes

@@ -79,7 +79,7 @@ def normalize_ui_preferences(value: object) -> dict[str, Any]:
     numeric_fields = (
         (result["workspace"], workspace, "window_width", 920, 7680),
         (result["workspace"], workspace, "window_height", 680, 4320),
-        (result["workspace"], workspace, "timeline_zoom_percent", 100, 800),
+        (result["workspace"], workspace, "timeline_zoom_percent", 25, 3200),
         (result["workspace"], workspace, "timeline_pan_percent", 0, 1000),
         (result["workspace"], workspace, "reference_volume_percent", 0, 100),
         (result["editor"], editor, "window_width", 920, 7680),

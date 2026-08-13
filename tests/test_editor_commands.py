@@ -125,6 +125,30 @@ class EditorCommandTests(unittest.TestCase):
         self.assertEqual(restored, plan)
         self.assertIsNot(restored, plan)
 
+    def test_snapshot_restores_lyrics_atomically(self) -> None:
+        lyrics = [{"time": 120.0, "kind": "lyrics", "text": "hello"}]
+        snapshot = ProjectSnapshot.capture(
+            [Track(1, [])], 0, 0, None, lyric_events=lyrics
+        )
+        lyrics[0]["text"] = "changed"
+
+        restored = snapshot.restored_lyric_events()
+
+        self.assertEqual(restored[0]["text"], "hello")
+        restored[0]["text"] = "again"
+        self.assertEqual(snapshot.restored_lyric_events()[0]["text"], "hello")
+
+    def test_snapshot_restores_timeline_markers_atomically(self) -> None:
+        markers = [{"id": "m1", "label": "Verse", "time_ms": 1200.0}]
+        snapshot = ProjectSnapshot.capture(
+            [Track(1, [])], 0, 0, None, timeline_markers=markers
+        )
+        markers[0]["label"] = "changed"
+        restored = snapshot.restored_timeline_markers()
+        self.assertEqual(restored[0]["label"], "Verse")
+        restored[0]["label"] = "again"
+        self.assertEqual(snapshot.restored_timeline_markers()[0]["label"], "Verse")
+
 
 if __name__ == "__main__":
     unittest.main()

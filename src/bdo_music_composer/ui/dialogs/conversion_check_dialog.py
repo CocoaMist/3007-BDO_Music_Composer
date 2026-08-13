@@ -48,6 +48,8 @@ class ConversionCheckDialog(QDialog):
         super().__init__(parent)
         self.parent_window = parent
         self.report = ""
+        self.setObjectName("ConversionCheckDialog")
+        self.setProperty("uiSurface", "workflow")
         self.setWindowTitle(tr("转换检查"))
         self.resize(1000, 700)
         self.setMinimumSize(760, 560)
@@ -56,14 +58,18 @@ class ConversionCheckDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        title_row = QHBoxLayout()
+        header = QWidget()
+        header.setObjectName("WorkflowDialogHeader")
+        header.setProperty("uiRole", "dialogHeader")
+        title_row = QHBoxLayout(header)
+        title_row.setContentsMargins(14, 10, 14, 10)
         title = QLabel(tr("转换检查"))
         title.setObjectName("PanelTitle")
         title_row.addWidget(title)
         subtitle = QLabel(tr("先处理阻断项，再逐条确认预期变化；双击问题可定位。"))
         subtitle.setObjectName("Muted")
         title_row.addWidget(subtitle, stretch=1)
-        layout.addLayout(title_row)
+        layout.addWidget(header)
 
         summary = QHBoxLayout()
         summary.setSpacing(8)

@@ -181,7 +181,7 @@ class LocaleResponsiveUiTests(unittest.TestCase):
                     window.pause_button,
                     editor.draft_play_button,
                     editor.cancel_button,
-                    editor.note_mode_button,
+                    editor.editor_view_button,
                 ):
                     assert button.toolTip()
                     assert button.accessibleName()

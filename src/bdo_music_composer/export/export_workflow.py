@@ -43,6 +43,10 @@ from bdo_music_composer.editor.pitch_transform import (
     track_uses_percussion_pitch_semantics,
     transpose_notes,
 )
+from bdo_music_composer.editor.arrangement_clip import (
+    project_track_notes,
+    project_track_source_records,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,16 +86,26 @@ def freeze_export_tracks(tracks: Sequence[object]) -> tuple[ExportTrackSnapshot,
                 "legacy volume_scale must be baked into note velocities "
                 "before freezing an export"
             )
+        has_clip_bounds = any(
+            getattr(track, name, None) is not None
+            for name in ("clip_start_ms", "clip_end_ms")
+        ) or bool(getattr(track, "arrangement_clips", ()))
         snapshots.append(ExportTrackSnapshot(
             track_id=int(getattr(track, "track_id", index)),
-            notes=tuple(getattr(track, "notes", ())),
+            notes=(
+                project_track_notes(track)
+                if has_clip_bounds else tuple(getattr(track, "notes", ()))
+            ),
             gm_program=int(getattr(track, "gm_program", 0)),
             is_percussion=bool(getattr(track, "is_percussion", False)),
             bdo_instrument_id=int(getattr(track, "bdo_instrument_id", 0)),
             marnian_synth_mode=str(
                 getattr(track, "marnian_synth_mode", "basic") or "basic"
             ),
-            duration_scale=float(getattr(track, "duration_scale", 1.0)),
+            duration_scale=(
+                1.0 if has_clip_bounds
+                else float(getattr(track, "duration_scale", 1.0))
+            ),
             # Retained on the compatibility snapshot shape.  Formal exports
             # always carry the already-baked neutral value.
             volume_scale=1.0,
@@ -113,9 +127,12 @@ def freeze_export_tracks(tracks: Sequence[object]) -> tuple[ExportTrackSnapshot,
                 is not None
                 else None
             ),
-            bdo_source_note_records=tuple(
-                tuple(record)
-                for record in getattr(track, "bdo_source_note_records", ())
+            bdo_source_note_records=(
+                project_track_source_records(track)
+                if has_clip_bounds else tuple(
+                    tuple(record)
+                    for record in getattr(track, "bdo_source_note_records", ())
+                )
             ),
         ))
     return tuple(snapshots)

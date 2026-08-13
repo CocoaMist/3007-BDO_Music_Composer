@@ -78,6 +78,7 @@ class EditorShortcutHud(QFrame):
         self._canvas = canvas
         self._context = self.SELECT_CONTEXT
         self._shortcut_active = bool(canvas.hasFocus())
+        self._user_visible = False
         self.setObjectName("EditorShortcutHud")
         self.setProperty("hudMode", self._context)
         self.setProperty("shortcutActive", self._shortcut_active)
@@ -109,12 +110,20 @@ class EditorShortcutHud(QFrame):
         if application is not None:
             application.focusChanged.connect(self._focus_changed)
         self._refresh_copy()
-        self.show()
+        self.hide()
         QTimer.singleShot(0, self.reposition)
 
     @property
     def context(self) -> str:
         return self._context
+
+    @property
+    def user_visible(self) -> bool:
+        return self._user_visible
+
+    def set_user_visible(self, visible: bool) -> None:
+        self._user_visible = bool(visible)
+        self.reposition()
 
     def set_context(self, context: str) -> None:
         if context not in HUD_CONTEXT_COPY:
@@ -171,6 +180,10 @@ class EditorShortcutHud(QFrame):
 
     def reposition(self) -> None:
         """Keep the HUD inside the editable grid and below the time ruler."""
+
+        if not self._user_visible:
+            self.hide()
+            return
 
         canvas_width = self._canvas.width()
         key_width = int(getattr(self._canvas, "KEY_W", 0))

@@ -257,7 +257,7 @@ class BdoEffectsUiTests(unittest.TestCase):
             """
         )
 
-    def test_track_fx_commit_marks_conversion_check_dirty(self) -> None:
+    def test_track_fx_commit_schedules_validation_refresh(self) -> None:
         self._run_offscreen(
             """
             from unittest.mock import patch
@@ -280,7 +280,7 @@ class BdoEffectsUiTests(unittest.TestCase):
             window.tracks = [track]
             dirty_calls = []
             preview_calls = []
-            window._mark_conversion_check_dirty = lambda: dirty_calls.append(True)
+            window._schedule_timeline_validation_refresh = lambda: dirty_calls.append(True)
             window._on_preview_mapping_changed = lambda: preview_calls.append(True)
 
             with patch("bdo_music_composer.ui.main_window.TrackFxDialog") as dialog_type:

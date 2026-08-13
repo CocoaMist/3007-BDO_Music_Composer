@@ -128,9 +128,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("project", type=Path)
     parser.add_argument("--destination", type=Path, default=USER_DATA_DIR / "examples")
-    parser.add_argument("--id", default="gold-rush-town")
-    parser.add_argument("--title", default="淘金小镇 · 示例")
-    parser.add_argument("--source", default="MidiShow")
+    parser.add_argument("--id", default="we-are-the-world")
+    parser.add_argument("--title", default="We Are The World 示例歌曲")
+    parser.add_argument("--source", default="游戏曲谱（本机）")
     parser.add_argument("--replace", action="store_true")
     args = parser.parse_args(argv)
     installed = install_example_project(

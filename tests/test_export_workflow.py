@@ -262,6 +262,15 @@ class ExportWorkflowTests(unittest.TestCase):
         self.assertEqual(snapshot[0].notes, (original,))
         self.assertEqual(snapshot[0].duration_scale, 1.0)
 
+    def test_export_snapshot_projects_clip_trim_without_mutating_notes(self) -> None:
+        original = Note(60, 90, 100.0, 300.0, 0)
+        track = MutableTrack([original])
+        track.clip_start_ms = 200.0
+        track.clip_end_ms = 350.0
+        snapshot = freeze_export_tracks([track])
+        self.assertEqual(snapshot[0].notes, (Note(60, 90, 200.0, 150.0, 0),))
+        self.assertEqual(track.notes, [original])
+
     def test_all_export_entry_points_reject_retired_hidden_velocity_scale(
         self,
     ) -> None:

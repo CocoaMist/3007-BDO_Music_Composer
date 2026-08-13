@@ -332,6 +332,8 @@ class HomePageTests(unittest.TestCase):
                     ] == [
                         "新建项目",
                         "导入 MIDI",
+                        "追加音轨",
+                        "导出标准 MIDI…",
                         "打开工程",
                         "保存项目",
                         "另存为",

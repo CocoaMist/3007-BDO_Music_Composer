@@ -33,10 +33,21 @@ def apply_workspace_refresh(host: WorkspaceRefreshHost, plan: RefreshPlan) -> No
 
     timeline_invalidated = False
     if plan.rebuild_timeline:
+        auto_group = getattr(host, "_auto_group_same_instrument_tracks", None)
+        if callable(auto_group):
+            auto_group()
         host.timeline.set_tracks(host.tracks)
+        synchronize_markers = getattr(
+            host, "_synchronize_timeline_markers", None
+        )
+        if callable(synchronize_markers):
+            synchronize_markers()
         timeline_invalidated = True
     elif plan.changed_track_ids:
-        host.timeline.update_tracks(plan.changed_track_ids)
+        if plan.reindex_track_ids:
+            host.timeline.update_tracks(plan.reindex_track_ids)
+        else:
+            host.timeline.update_track_presentation(plan.changed_track_ids)
         timeline_invalidated = True
 
     if plan.refresh_grid:

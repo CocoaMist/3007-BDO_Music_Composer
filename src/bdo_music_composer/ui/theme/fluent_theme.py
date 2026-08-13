@@ -189,6 +189,9 @@ class FluentSymbol(str, Enum):
     ADD_TRACK = "add_track"
     DELETE = "delete"
     CURVE = "curve"
+    SELECT = "select"
+    RAZOR = "razor"
+    MAGNET = "magnet"
 
 
 def _draw_fluent_symbol(symbol: FluentSymbol, color: str, size: int = 16) -> QPixmap:
@@ -301,6 +304,30 @@ def _draw_fluent_symbol(symbol: FluentSymbol, color: str, size: int = 16) -> QPi
                 round(1.8 * scale),
                 round(1.8 * scale),
             )
+    elif symbol == FluentSymbol.SELECT:
+        painter.drawPolygon([
+            _point(3.0, 2.5, scale),
+            _point(12.5, 8.0, scale),
+            _point(8.2, 9.0, scale),
+            _point(10.8, 13.0, scale),
+            _point(8.8, 14.0, scale),
+            _point(6.4, 9.8, scale),
+            _point(3.0, 12.5, scale),
+        ])
+    elif symbol == FluentSymbol.RAZOR:
+        painter.drawEllipse(round(2 * scale), round(2.5 * scale), round(4 * scale), round(4 * scale))
+        painter.drawEllipse(round(2 * scale), round(9.5 * scale), round(4 * scale), round(4 * scale))
+        line(5.5, 5.5, 13.5, 12.5)
+        line(5.5, 10.5, 13.5, 3.5)
+    elif symbol == FluentSymbol.MAGNET:
+        painter.drawArc(
+            round(3 * scale), round(2 * scale),
+            round(10 * scale), round(11 * scale), 0, 180 * 16,
+        )
+        line(3, 7, 3, 13)
+        line(13, 7, 13, 13)
+        line(2, 13, 5, 13)
+        line(11, 13, 14, 13)
 
     painter.end()
     return pixmap

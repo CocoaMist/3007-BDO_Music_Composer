@@ -63,9 +63,13 @@ class ProjectLoadError(ValueError):
 class ProjectResearchPlan:
     profile_id: str
     experiments: tuple[tuple[tuple[str, object], ...], ...]
+    timeline_markers: tuple[tuple[tuple[str, object], ...], ...] = ()
 
     def experiments_payload(self) -> list[dict[str, object]]:
         return [dict(item) for item in self.experiments]
+
+    def timeline_markers_payload(self) -> list[dict[str, object]]:
+        return [dict(item) for item in self.timeline_markers]
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,10 +349,11 @@ def _meter_denominator(
 def _research_plan(payload: Mapping[str, object]) -> ProjectResearchPlan:
     raw_research = payload.get("research")
     if not isinstance(raw_research, Mapping):
-        return ProjectResearchPlan("", ())
+        return ProjectResearchPlan("", (), ())
     return ProjectResearchPlan(
         profile_id=str(raw_research.get("profile_id") or ""),
         experiments=_event_payloads(raw_research.get("ab_experiments")),
+        timeline_markers=_event_payloads(raw_research.get("timeline_markers")),
     )
 
 

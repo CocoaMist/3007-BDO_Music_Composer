@@ -79,6 +79,7 @@ from bdo_music_composer.audio.bdo_preview_effects import (
     PreviewEffectSettings,
     preview_send_gain,
 )
+from bdo_music_composer.editor.arrangement_clip import project_track_notes
 
 
 PLAYBACK_ATTACK_MS = 3.0
@@ -1356,8 +1357,8 @@ class BdoRealtimeAudioEngine(QObject):
                 delay_send,
                 chorus_send,
             ))
-            duration_scale = float(getattr(track, "duration_scale", 1.0))
-            for note_index, note in enumerate(getattr(track, "notes", ())):
+            duration_scale = 1.0
+            for note_index, note in enumerate(project_track_notes(track)):
                 if note_index % 256 == 0:
                     self._raise_if_preload_cancelled(cancel_event)
                 frame = round(
@@ -1559,7 +1560,7 @@ class BdoRealtimeAudioEngine(QObject):
                 unverified.add(
                     f"0x{instrument_id:02x}/{synth_mode}: provisional synth routing; game A/B required"
                 )
-            for note_index, note in enumerate(track.notes):
+            for note_index, note in enumerate(project_track_notes(track)):
                 if note_index % 256 == 0:
                     self._raise_if_preload_cancelled(cancel_event)
                 velocity = max(0, min(127, round(float(note.vel))))

@@ -34,7 +34,7 @@ class TimelineVelocityCurveHostMixin:
         reconcile_track_game_velocity_records(track, next_notes)
         track.notes = next_notes
         self._select_track(track)
-        self._mark_conversion_check_dirty()
+        self._schedule_timeline_validation_refresh()
         self._restart_preview_after_timeline_change(
             ModelChange.notes(track.track_id)
         )

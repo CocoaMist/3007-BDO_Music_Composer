@@ -13,6 +13,7 @@ class _Counter:
 
     def set_tracks(self, tracks) -> None: self.calls.append(("set_tracks", tuple(tracks)))
     def update_tracks(self, track_ids) -> None: self.calls.append(("update_tracks", frozenset(track_ids)))
+    def update_track_presentation(self, track_ids) -> None: self.calls.append(("presentation", frozenset(track_ids)))
     def set_pitch_transform_plan(self, plan) -> None: self.calls.append(("pitch", plan))
     def set_musical_grid(self, bpm, meter, origin) -> None: self.calls.append(("grid", (bpm, meter, origin)))
     def update(self) -> None: self.calls.append(("update", None))
@@ -48,6 +49,13 @@ class WorkspaceRefreshQtTests(unittest.TestCase):
         host = _Host()
         apply_workspace_refresh(host, RefreshPlan(refresh_view=True))
         self.assertEqual(host.timeline.calls, [("update", None)])
+
+    def test_meta_refresh_skips_note_index_rebuild(self) -> None:
+        host = _Host()
+        apply_workspace_refresh(host, RefreshPlan(
+            changed_track_ids=frozenset({1, 2}), refresh_view=True,
+        ))
+        self.assertEqual(host.timeline.calls, [("presentation", frozenset({1, 2}))])
 
 
 if __name__ == "__main__":

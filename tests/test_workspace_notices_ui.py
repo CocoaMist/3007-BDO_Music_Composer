@@ -131,9 +131,15 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
             # The timeline's left-rail creation request is wired to the same
             # safe track factory as the toolbar menu.
             track_count = len(window.tracks)
+            previous_track_ids = {track.track_id for track in window.tracks}
             window.timeline.create_track_requested.emit(0x11)
             assert len(window.tracks) == track_count + 1
-            assert window.tracks[-1].bdo_instrument_id == 0x11
+            created_from_timeline = next(
+                track for track in window.tracks
+                if track.track_id not in previous_track_ids
+            )
+            assert created_from_timeline.bdo_instrument_id == 0x11
+            assert window.selected_track is created_from_timeline
 
             first = TrackState(
                 1, [Note(60, 90, 0.0, 300.0, 0)], 0, False, "one", 0x0B
@@ -187,37 +193,12 @@ class WorkspaceNoticesUiTests(unittest.TestCase):
             window.show()
             app.processEvents()
             window.timeline.grab()
-            badges = [
-                (rect, action, track)
-                for rect, action, track in window.timeline.hit_regions
-                if action in {"validation_error", "validation_attention"}
-            ]
-            assert sum(action == "validation_error" for _, action, _ in badges) == 1
-            assert sum(action == "validation_attention" for _, action, _ in badges) == 1
-            assert all(
-                track is not first
-                for _rect, action, track in badges
-                if action == "validation_attention"
+            assert not hasattr(window.timeline, "validation_requested")
+            assert not any(
+                action in {"validation_error", "validation_attention"}
+                for _rect, action, _track in window.timeline.hit_regions
             )
-
-            window.timeline.validation_requested.disconnect(
-                window._open_track_conversion_check
-            )
-            requests = []
-            window.timeline.validation_requested.connect(requests.append)
-            error_rect = next(
-                rect for rect, action, _track in badges
-                if action == "validation_error"
-            )
-            QTest.mouseMove(window.timeline, error_rect.center().toPoint())
-            assert "导出错误" in window.timeline.toolTip()
-            QTest.mouseClick(
-                window.timeline,
-                Qt.LeftButton,
-                pos=error_rect.center().toPoint(),
-            )
-            assert requests and requests[0][0] is first
-            assert requests[0][1] == "error"
+            assert "导出错误" in window.timeline._track_validation_tooltip(first)
 
             window.close()
             app.processEvents()

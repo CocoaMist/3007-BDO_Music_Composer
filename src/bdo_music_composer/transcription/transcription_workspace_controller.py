@@ -36,6 +36,28 @@ class CandidateReviewSession(Protocol):
     def annotation_for_id(self, candidate_id: str) -> object | None: ...
 
 
+def restored_audio_review_requires_isolation(
+    *,
+    restoring: bool,
+    restored_audio_fingerprint: str,
+    saved_fingerprint: str,
+    has_reference_audio: bool,
+) -> bool:
+    """Return whether restored review belongs to different audio evidence."""
+
+    return bool(
+        restoring
+        and (
+            (
+                restored_audio_fingerprint
+                and saved_fingerprint
+                and restored_audio_fingerprint != saved_fingerprint
+            )
+            or (has_reference_audio and not restored_audio_fingerprint)
+        )
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class CandidateReviewPlan:
     kind: Literal["eligible", "reject", "restore", "select_fragments"]
@@ -331,6 +353,7 @@ class TranscriptionReviewController(Generic[ReviewStateT]):
 __all__ = [
     "AssistRestartRequest",
     "CandidateReviewPlan",
+    "restored_audio_review_requires_isolation",
     "TranscriptionAnalysisCoordinator",
     "TranscriptionReviewController",
 ]

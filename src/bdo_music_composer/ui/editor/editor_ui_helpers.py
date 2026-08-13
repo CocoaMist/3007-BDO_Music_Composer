@@ -50,8 +50,10 @@ def add_instrument_submenus(
     instrument_names: dict[int, str],
 ) -> None:
     used_ids: set[int] = set()
+    submenus: list[QMenu] = []
     for type_name, instrument_ids in BDO_INSTRUMENT_MENU_GROUPS:
         type_menu = menu.addMenu(tr(type_name))
+        submenus.append(type_menu)
         for instrument_id in instrument_ids:
             name = instrument_names.get(instrument_id)
             if not name:
@@ -64,8 +66,12 @@ def add_instrument_submenus(
     remaining = [value for value in instrument_names if value not in used_ids]
     if remaining:
         other_menu = menu.addMenu(tr("其他"))
+        submenus.append(other_menu)
         for instrument_id in remaining:
             action = other_menu.addAction(instrument_names[instrument_id])
             action.setCheckable(True)
             action.setChecked(instrument_id == current_id)
             action.setData(instrument_id)
+    # Preserve PySide wrappers for menus created in this helper. The C++ menu
+    # owns them visually, while this reference keeps deferred callers safe.
+    menu._instrument_submenus = submenus

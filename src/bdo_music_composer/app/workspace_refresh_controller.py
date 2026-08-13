@@ -13,6 +13,7 @@ class RefreshPlan:
     advance_revision: bool = False
     rebuild_timeline: bool = False
     changed_track_ids: frozenset[int] = frozenset()
+    reindex_track_ids: frozenset[int] = frozenset()
     refresh_view: bool = False
     refresh_grid: bool = False
     refresh_metadata: bool = False
@@ -33,13 +34,18 @@ class WorkspaceRefreshController:
         track_ids = frozenset().union(
             *(change.track_ids for change in changes)
         )
+        reindex_track_ids = frozenset().union(*(
+            change.track_ids for change in changes if change.kind == "notes"
+        ))
         if rebuild_timeline:
             track_ids = frozenset()
+            reindex_track_ids = frozenset()
         model_changed = any(change.advances_revision for change in changes)
         return RefreshPlan(
             advance_revision=model_changed,
             rebuild_timeline=rebuild_timeline,
             changed_track_ids=track_ids,
+            reindex_track_ids=reindex_track_ids,
             refresh_view=True,
             refresh_grid=bool(kinds & {"structure", "grid"}),
             refresh_metadata=bool(kinds & {"structure", "notes", "track_meta", "mixer", "grid"}),

@@ -23,6 +23,7 @@ from bdo_music_composer.audio.bdo_sample_renderer import (
     SAMPLE_RATE,
     _resample_for_note,
     render_preview,
+    sample_map_evidence_sha256,
     sample_map_velocity_boundaries,
     sample_map_supported_pitches,
     sample_map_supports_note,
@@ -49,6 +50,41 @@ def _row(
 
 
 class BdoSampleRendererTests(unittest.TestCase):
+    def test_mapping_caches_reload_a_replaced_path(self) -> None:
+        bank = bank_for_instrument(0x0A)
+        first = _row(bank, 10, 36, 48)
+        first.update({"velocity_min": 0, "velocity_max": 63})
+        second = _row(bank, 20, 60, 72)
+        second.update({"velocity_min": 0, "velocity_max": 95})
+        with tempfile.TemporaryDirectory() as directory:
+            mapping = Path(directory) / "mapping.json"
+            mapping.write_text(json.dumps({
+                "evidence_sha256": "first",
+                "banks": {bank: [first]},
+            }), encoding="utf-8")
+            self.assertEqual(sample_map_evidence_sha256(mapping), "first")
+            self.assertIn(40, sample_map_supported_pitches(mapping, 0x0A))
+            self.assertEqual(
+                sample_map_velocity_boundaries(mapping, 0x0A, 40),
+                (),
+            )
+
+            mapping.write_text(json.dumps({
+                "evidence_sha256": "second-revision",
+                "banks": {bank: [second]},
+            }), encoding="utf-8")
+            self.assertEqual(
+                sample_map_evidence_sha256(mapping),
+                "second-revision",
+            )
+            pitches = sample_map_supported_pitches(mapping, 0x0A)
+            self.assertNotIn(40, pitches)
+            self.assertIn(64, pitches)
+            self.assertEqual(
+                sample_map_velocity_boundaries(mapping, 0x0A, 64),
+                (),
+            )
+
     def test_velocity_boundary_hint_uses_mapping_metadata_only(self) -> None:
         bank = bank_for_instrument(0x0A)
         rows = []

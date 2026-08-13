@@ -9,11 +9,18 @@ import json
 import math
 import uuid
 
-from bdo_common.atomic_io import atomic_copy_file, atomic_write_json
+from bdo_common.atomic_io import (
+    atomic_copy_file,
+    atomic_write_bytes,
+    atomic_write_json,
+)
 from bdo_common.bdo_track_effects import DEFAULT_TRACK_VOLUME
 
 
 PROJECT_INDEX_NAME = "project.index.json"
+AUTOSAVE_LOG_MAX_BYTES = 256 * 1024
+AUTOSAVE_LOG_RETAIN_BYTES = 128 * 1024
+AUTOSAVE_LOG_LINE_MAX_CHARS = 1024
 _PROJECT_ID_NAMESPACE = uuid.UUID("f6b6ffb5-c43f-4d7f-a4cc-1fc0f460be98")
 
 
@@ -149,6 +156,10 @@ class ProjectTrackSnapshot:
     muted: bool
     solo: bool
     duration_scale: float
+    clip_start_ms: float | None
+    clip_end_ms: float | None
+    arrangement_group_id: str
+    arrangement_clips: FrozenJsonArray
     bdo_track_volume: int
     bdo_track_settings: tuple[int, ...]
     bdo_source_group_index: int | None
@@ -169,6 +180,14 @@ class ProjectTrackSnapshot:
         duration_scale = float(getattr(track, "duration_scale", 1.0))
         if not math.isfinite(duration_scale):
             raise ValueError(f"{path}.duration_scale must be finite")
+        clip_start_ms = getattr(track, "clip_start_ms", None)
+        clip_end_ms = getattr(track, "clip_end_ms", None)
+        if clip_start_ms is not None:
+            clip_start_ms = float(clip_start_ms)
+        if clip_end_ms is not None:
+            clip_end_ms = float(clip_end_ms)
+        if any(value is not None and not math.isfinite(value) for value in (clip_start_ms, clip_end_ms)):
+            raise ValueError(f"{path}.clip bounds must be finite")
         raw_group_index = getattr(track, "bdo_source_group_index", None)
         raw_articulation = getattr(track, "articulation_type", None)
         raw_notes = tuple(getattr(track, "notes", ()))
@@ -181,6 +200,24 @@ class ProjectTrackSnapshot:
             muted=bool(getattr(track, "muted", False)),
             solo=bool(getattr(track, "solo", False)),
             duration_scale=duration_scale,
+            clip_start_ms=clip_start_ms,
+            clip_end_ms=clip_end_ms,
+            arrangement_group_id=str(
+                getattr(track, "arrangement_group_id", "") or ""
+            ),
+            arrangement_clips=_frozen_array(
+                [
+                    {
+                        "clip_id": str(clip.clip_id),
+                        "start_ms": float(clip.start_ms),
+                        "end_ms": float(clip.end_ms),
+                        "content_start_ms": float(clip.content_start_ms),
+                        "content_end_ms": float(clip.content_end_ms),
+                    }
+                    for clip in getattr(track, "arrangement_clips", ())
+                ],
+                path=f"{path}.arrangement_clips",
+            ),
             bdo_track_volume=int(
                 getattr(track, "bdo_track_volume", DEFAULT_TRACK_VOLUME)
             ),
@@ -226,6 +263,10 @@ class ProjectTrackSnapshot:
             "solo": self.solo,
             "volume_scale": 1.0,
             "duration_scale": self.duration_scale,
+            "clip_start_ms": self.clip_start_ms,
+            "clip_end_ms": self.clip_end_ms,
+            "arrangement_group_id": self.arrangement_group_id,
+            "arrangement_clips": thaw_json_value(self.arrangement_clips),
             "bdo_track_volume": self.bdo_track_volume,
             "bdo_track_settings": list(self.bdo_track_settings),
             "bdo_source_group_index": self.bdo_source_group_index,
@@ -441,6 +482,29 @@ def _safe_instrument_ids(values: Sequence[object]) -> list[int]:
     return instrument_ids
 
 
+def _append_bounded_autosave_log(path: Path, line: str) -> None:
+    """Keep diagnostic history bounded; it must never invalidate a save."""
+
+    encoded = (str(line)[:AUTOSAVE_LOG_LINE_MAX_CHARS] + "\n").encode("utf-8")
+    try:
+        if path.is_file() and path.stat().st_size >= AUTOSAVE_LOG_MAX_BYTES:
+            with path.open("rb") as stream:
+                stream.seek(max(0, path.stat().st_size - AUTOSAVE_LOG_RETAIN_BYTES))
+                retained = stream.read(AUTOSAVE_LOG_RETAIN_BYTES)
+            newline = retained.find(b"\n")
+            if newline >= 0:
+                retained = retained[newline + 1:]
+            atomic_write_bytes(path, retained + encoded)
+            return
+        with path.open("ab") as stream:
+            stream.write(encoded)
+    except OSError:
+        # project.json and its safe index are the recovery contract. A
+        # diagnostic-log permission or disk error after those atomic writes
+        # must not trigger retries or claim that the project was not saved.
+        return
+
+
 def write_autosave(request: AutosaveRequest) -> Path:
     request.project_dir.mkdir(parents=True, exist_ok=True)
     if request.source_path is not None and request.source_copy is not None:
@@ -465,12 +529,10 @@ def write_autosave(request: AutosaveRequest) -> Path:
             "instrument_ids": _safe_instrument_ids(request.tracks),
         },
     )
-    with (request.project_dir / "autosave.log").open(
-        "a", encoding="utf-8"
-    ) as stream:
-        stream.write(
-            f"[{request.metadata.saved_at}] {request.metadata.reason}\n"
-        )
+    _append_bounded_autosave_log(
+        request.project_dir / "autosave.log",
+        f"[{request.metadata.saved_at}] {request.metadata.reason}",
+    )
     return project_path
 
 

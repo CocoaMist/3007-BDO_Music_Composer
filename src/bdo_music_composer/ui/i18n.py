@@ -517,6 +517,9 @@ KO = {
 }
 
 EN.update({
+    "MIDI 已载入，可在多音轨中继续编辑。": "MIDI loaded. Continue editing in the multitrack view.",
+    "已应用 {scope} 优化{effects}。": "Applied {scope} optimization{effects}.",
+    "视图": "View", "时间轴视图": "Timeline View",
     "选择音源包…": "Choose Sample Pack…",
     "内置通用音源": "Built-in General Source",
     "配套近似音源": "Companion Approximate Source",
@@ -638,6 +641,9 @@ EN.update({
 })
 
 JA.update({
+    "MIDI 已载入，可在多音轨中继续编辑。": "MIDIを読み込みました。マルチトラック画面で編集を続けられます。",
+    "已应用 {scope} 优化{effects}。": "{scope}の最適化{effects}を適用しました。",
+    "视图": "表示", "时间轴视图": "タイムライン表示",
     "选择音源包…": "音源パックを選択…",
     "内置通用音源": "内蔵汎用音源",
     "配套近似音源": "コンパニオン近似音源",
@@ -757,6 +763,9 @@ JA.update({
 })
 
 KO.update({
+    "MIDI 已载入，可在多音轨中继续编辑。": "MIDI를 불러왔습니다. 멀티트랙 화면에서 계속 편집할 수 있습니다.",
+    "已应用 {scope} 优化{effects}。": "{scope} 최적화{effects}를 적용했습니다.",
+    "视图": "보기", "时间轴视图": "타임라인 보기",
     "选择音源包…": "음원 팩 선택…",
     "内置通用音源": "내장 범용 음원",
     "配套近似音源": "동반 근사 음원",
@@ -1190,6 +1199,61 @@ KO.update({
     "正在准备音符试听… {note}": "음표 미리듣기 준비 중… {note}",
     "试听 {note}": "{note} 미리듣기",
     "音符试听不可用：{message}": "음표 미리듣기를 사용할 수 없음: {message}",
+})
+
+EN.update({
+    "擦除": "Erase Note", "切分": "Split", "适应": "Fit View",
+    "单击音符即可删除": "Click a note to erase it",
+    "单击音符内部即可切分": "Click inside a note to split it",
+    "适应所选音符；未选择时适应整轨": "Fit selected notes, or the whole track when nothing is selected",
+    "删除所选音符": "Delete selected notes",
+    "跟随播放头": "Follow Playhead",
+    "播放时保持播放头在可见范围内": "Keep the playhead visible during playback",
+    "检查器": "Inspector",
+    "音阶高亮": "Scale Highlight",
+    "音阶高亮：关闭": "Scale Highlight: Off",
+    "C 大调": "C Major", "G 大调": "G Major", "D 大调": "D Major",
+    "F 大调": "F Major", "A 小调": "A Minor",
+    "游戏检查：所选音符中有 {count} 个超出当前乐器音域；应用不会自动修正。": "Game check: {count} selected notes are outside this instrument's range; Apply will not repair them automatically.",
+    "游戏检查：所选音符符合当前乐器音域。": "Game check: selected notes fit this instrument's range.",
+    "游戏检查：整轨有 {count} 个音符超出当前乐器音域。": "Game check: {count} notes in this track are outside the instrument range.",
+    "游戏检查：当前轨道音符均符合乐器音域。": "Game check: all notes in this track fit the instrument range.",
+})
+JA.update({
+    "擦除": "ノート消去", "切分": "分割", "适应": "表示調整",
+    "单击音符即可删除": "ノートをクリックして削除",
+    "单击音符内部即可切分": "ノート内部をクリックして分割",
+    "适应所选音符；未选择时适应整轨": "選択ノート、未選択時はトラック全体に合わせる",
+    "删除所选音符": "選択ノートを削除",
+    "跟随播放头": "再生ヘッドを追従",
+    "播放时保持播放头在可见范围内": "再生中に再生ヘッドを表示範囲内に保つ",
+    "检查器": "インスペクタ",
+    "音阶高亮": "スケール強調",
+    "音阶高亮：关闭": "スケール強調：オフ",
+    "C 大调": "Cメジャー", "G 大调": "Gメジャー", "D 大调": "Dメジャー",
+    "F 大调": "Fメジャー", "A 小调": "Aマイナー",
+    "游戏检查：所选音符中有 {count} 个超出当前乐器音域；应用不会自动修正。": "ゲーム確認：選択中の{count}ノートが楽器音域外です。適用しても自動修正されません。",
+    "游戏检查：所选音符符合当前乐器音域。": "ゲーム確認：選択ノートは現在の楽器音域内です。",
+    "游戏检查：整轨有 {count} 个音符超出当前乐器音域。": "ゲーム確認：トラック内の{count}ノートが楽器音域外です。",
+    "游戏检查：当前轨道音符均符合乐器音域。": "ゲーム確認：現在のトラックはすべて楽器音域内です。",
+})
+KO.update({
+    "擦除": "음표 지우기", "切分": "분할", "适应": "보기 맞춤",
+    "单击音符即可删除": "음표를 클릭해 삭제",
+    "单击音符内部即可切分": "음표 안을 클릭해 분할",
+    "适应所选音符；未选择时适应整轨": "선택 음표에 맞추고, 선택이 없으면 전체 트랙에 맞춤",
+    "删除所选音符": "선택한 음표 삭제",
+    "跟随播放头": "재생 헤드 따라가기",
+    "播放时保持播放头在可见范围内": "재생 중 재생 헤드를 보이는 범위에 유지",
+    "检查器": "검사기",
+    "音阶高亮": "스케일 강조",
+    "音阶高亮：关闭": "스케일 강조: 끔",
+    "C 大调": "C 장조", "G 大调": "G 장조", "D 大调": "D 장조",
+    "F 大调": "F 장조", "A 小调": "A 단조",
+    "游戏检查：所选音符中有 {count} 个超出当前乐器音域；应用不会自动修正。": "게임 검사: 선택한 음표 중 {count}개가 악기 음역을 벗어났습니다. 적용해도 자동 수정되지 않습니다.",
+    "游戏检查：所选音符符合当前乐器音域。": "게임 검사: 선택한 음표가 현재 악기 음역에 맞습니다.",
+    "游戏检查：整轨有 {count} 个音符超出当前乐器音域。": "게임 검사: 트랙의 음표 {count}개가 악기 음역을 벗어났습니다.",
+    "游戏检查：当前轨道音符均符合乐器音域。": "게임 검사: 현재 트랙의 모든 음표가 악기 음역에 맞습니다.",
 })
 
 EN.update({
@@ -7433,10 +7497,6 @@ def _build_traditional_catalog() -> dict[str, str]:
     return catalog
 
 
-ZH_TW = _build_traditional_catalog()
-TRANSLATIONS["zh_TW"] = ZH_TW
-
-
 def _translation_reverse_maps() -> dict[str, dict[str, str]]:
     """Build translated-text mappings when every candidate is equivalent.
 
@@ -7464,10 +7524,6 @@ def _translation_reverse_maps() -> dict[str, dict[str, str]]:
                 reverse[translated] = sorted(sources)[0]
         reverse_maps[language] = reverse
     return reverse_maps
-
-
-_TRANSLATION_SOURCES = frozenset(EN)
-_REVERSE_TRANSLATIONS = _translation_reverse_maps()
 
 
 class Localizer(QObject):
@@ -8189,6 +8245,117 @@ for _source, (_english, _japanese, _korean) in _TRACK_ORDER_TRANSLATIONS.items()
 
 del _source, _english, _japanese, _korean
 
+_TRACK_MERGE_TRANSLATIONS = {
+    "剃刀": ("Razor", "はさみ", "자르기"),
+    "选择工具": ("Select Tool", "選択ツール", "선택 도구"),
+    "剃刀工具": ("Razor Tool", "はさみツール", "자르기 도구"),
+    "选择工具：移动或裁剪片段": ("Select: move or trim clips", "選択：クリップを移動またはトリム", "선택: 클립 이동 또는 트림"),
+    "剃刀工具：单击片段进行切分": ("Razor: click a clip to split it", "はさみ：クリップをクリックして分割", "자르기: 클립을 클릭해 분할"),
+    "无法切分片段：{error}": ("Cannot split clip: {error}", "クリップを分割できません：{error}", "클립을 분할할 수 없음: {error}"),
+    "片段已切分": ("Clip split", "クリップを分割しました", "클립 분할됨"),
+    "单击音符内部即可用剃刀切分": ("Click inside a note to split it with the Razor tool", "ノート内部をクリックしてはさみツールで分割", "음표 안을 클릭해 자르기 도구로 분할"),
+    "剃刀：单击音符内部即可切分": ("Razor: click inside a note to split it", "はさみ：ノート内部をクリックして分割", "자르기: 음표 안을 클릭해 분할"),
+    "同乐器 Group · {instrument} · {count} 轨": ("Same-instrument Group · {instrument} · {count} tracks", "同じ楽器のGroup · {instrument} · {count}トラック", "같은 악기 Group · {instrument} · {count}개 트랙"),
+    "对齐": ("Align", "整列", "정렬"),
+    "自然": ("Humanize", "ヒューマナイズ", "휴머나이즈"),
+    "扫弦": ("Strum", "ストラム", "스트럼"),
+    "按当前网格量化所选音符；未选择时处理全部": ("Quantize selected notes to the current grid; all notes when none are selected", "選択ノートを現在のグリッドにクオンタイズ。未選択時はすべて", "선택 음표를 현재 그리드에 퀀타이즈하며 선택이 없으면 전체 적용"),
+    "轻微改变时间与力度，使演奏更自然": ("Add subtle timing and velocity variation", "タイミングとベロシティをわずかに変えて自然にします", "타이밍과 벨로시티를 미세하게 바꿔 자연스럽게 연주합니다"),
+    "将同起点和弦按低音到高音错开": ("Spread simultaneous chord notes from low to high", "同時発音のコードを低音から高音へずらします", "동시 시작 코드를 낮은 음부터 높은 음까지 펼칩니다"),
+    "添加时间轴标记…": ("Add Timeline Marker…", "タイムラインマーカーを追加…", "타임라인 마커 추가…"),
+    "重命名时间轴标记…": ("Rename Timeline Marker…", "タイムラインマーカー名を変更…", "타임라인 마커 이름 변경…"),
+    "删除时间轴标记": ("Delete Timeline Marker", "タイムラインマーカーを削除", "타임라인 마커 삭제"),
+    "时间轴标记": ("Timeline Marker", "タイムラインマーカー", "타임라인 마커"),
+    "标记名称": ("Marker name", "マーカー名", "마커 이름"),
+    "检查发现 {count} 项错误、近似结果或预期变化。\n仍可尝试导出，但可能出现丢音、音域或映射异常；Owner ID、非 /4 拍号等格式硬约束仍会阻止导出。确认继续吗？": ("The check found {count} errors, approximations, or expected changes.\nYou may still try to export, but notes, ranges, or mappings may be affected. Hard format requirements such as Owner ID and /4 meter still block export. Continue?", "チェックで{count}件のエラー、近似結果、または予想される変更が見つかりました。\n書き出しは試行できますが、ノート、音域、マッピングに影響する可能性があります。Owner IDや/4拍子などの形式要件は引き続き書き出しを停止します。続行しますか？", "검사에서 오류, 근사 결과 또는 예상 변경 {count}건을 찾았습니다.\n내보내기를 시도할 수 있지만 음표, 음역 또는 매핑에 문제가 생길 수 있습니다. Owner ID와 /4 박자표 같은 형식 필수 조건은 계속 내보내기를 차단합니다. 계속할까요?"),
+    "工程状态": ("Project Status", "プロジェクト状態", "프로젝트 상태"),
+    "轨道检查器": ("Track Inspector", "トラックインスペクター", "트랙 인스펙터"),
+    "检查器": ("Inspector", "インスペクター", "인스펙터"),
+    "显示或隐藏轨道检查器": ("Show or hide the track inspector", "トラックインスペクターを表示または非表示", "트랙 인스펙터 표시 또는 숨기기"),
+    "未选择轨道": ("No track selected", "トラックが選択されていません", "선택한 트랙 없음"),
+    "选择时间轴中的轨道以查看内容和游戏输出。": ("Select a timeline track to inspect its content and game output.", "タイムラインのトラックを選択すると内容とゲーム出力を確認できます。", "타임라인 트랙을 선택해 콘텐츠와 게임 출력을 확인하세요."),
+    "轨道内容": ("Track Content", "トラック内容", "트랙 콘텐츠"),
+    "八度与音高": ("Octave & Pitch", "オクターブと音高", "옥타브 및 음높이"),
+    "游戏输出路由": ("Game Output Route", "ゲーム出力ルート", "게임 출력 라우트"),
+    "路由与 FX": ("Route & FX", "ルートとFX", "라우트 및 FX"),
+    "游戏检查": ("Game Check", "ゲームチェック", "게임 검사"),
+    "合并同路由轨道…": ("Merge Same-Route Track…", "同じルートのトラックを結合…", "같은 라우트 트랙 병합…"),
+    "Track 保存音乐内容；游戏输出路由决定导出乐器、音量与 FX。": ("Track stores musical content; the game output route determines the exported instrument, volume, and FX.", "Trackは音楽内容を保持し、ゲーム出力ルートが書き出す楽器、音量、FXを決定します。", "Track은 음악 콘텐츠를 저장하고 게임 출력 라우트가 내보낼 악기, 음량과 FX를 결정합니다."),
+    "Track {track_id} · {state}": ("Track {track_id} · {state}", "Track {track_id} · {state}", "Track {track_id} · {state}"),
+    "{count} 个音符\n音域 {pitch_range}": ("{count} notes\nRange {pitch_range}", "{count}ノート\n音域 {pitch_range}", "음표 {count}개\n음역 {pitch_range}"),
+    "路由 ID {route_id} · 模式 {mode}\n音量 {volume} · Reverb {reverb} · Delay {delay} · Chorus {chorus}": ("Route ID {route_id} · Mode {mode}\nVolume {volume} · Reverb {reverb} · Delay {delay} · Chorus {chorus}", "ルートID {route_id} · モード {mode}\n音量 {volume} · Reverb {reverb} · Delay {delay} · Chorus {chorus}", "라우트 ID {route_id} · 모드 {mode}\n음량 {volume} · Reverb {reverb} · Delay {delay} · Chorus {chorus}"),
+    "{track} · {count} 个音符": ("{track} · {count} notes", "{track} · {count}ノート", "{track} · 음표 {count}개"),
+    "操作提示": ("Hints", "操作ヒント", "작업 힌트"),
+    "在画布右上角显示当前操作提示": ("Show contextual operation hints at the top-right of the canvas", "現在の操作ヒントをキャンバス右上に表示", "현재 작업 힌트를 캔버스 오른쪽 위에 표시"),
+    "游戏输出": ("Game Output", "ゲーム出力", "게임 출력"),
+    "更换游戏乐器": ("Change Game Instrument", "ゲーム楽器を変更", "게임 악기 변경"),
+    "合并同乐器轨道…": ("Merge Same-Instrument Track…", "同じ楽器のトラックを結合…", "같은 악기 트랙 병합…"),
+    "没有可合并的同游戏乐器轨道": ("No track with the same game instrument is available", "結合できる同じゲーム楽器のトラックがありません", "병합할 수 있는 같은 게임 악기 트랙이 없습니다"),
+    "{name} · {count} 个音符 · #{track_id}": ("{name} · {count} notes · #{track_id}", "{name} · {count}ノート · #{track_id}", "{name} · 음표 {count}개 · #{track_id}"),
+    "合并同乐器轨道": ("Merge Same-Instrument Tracks", "同じ楽器のトラックを結合", "같은 악기 트랙 병합"),
+    "选择要并入“{name}”的轨道：": ("Choose the track to merge into “{name}”: ", "「{name}」へ結合するトラックを選択：", "“{name}”에 병합할 트랙 선택:"),
+    "无法合并轨道": ("Tracks Cannot Be Merged", "トラックを結合できません", "트랙을 병합할 수 없음"),
+    "两条轨道必须使用相同游戏乐器、游戏音高映射、音量和全部混音参数。可先统一同乐器音量和 FX。": ("Both tracks must use the same game instrument, game pitch mapping, volume, and all mixer parameters. You can unify same-instrument volume and FX first.", "両方のトラックでゲーム楽器、ゲーム音高マッピング、音量、すべてのミキサー設定が一致している必要があります。先に同じ楽器の音量とFXを統一できます。", "두 트랙의 게임 악기, 게임 음높이 매핑, 음량 및 모든 믹서 설정이 같아야 합니다. 먼저 같은 악기의 음량과 FX를 통일할 수 있습니다."),
+    "检测到 {regions} 个重叠区域，共 {duration:.0f} ms；涉及 {pairs} 对音块，其中同音高 {same_pitch} 对、完全重复 {duplicates} 个。合并不会自动删除或降音量：重叠可能造成叠音、突出的起音和更高复音占用，合并后会在时间轴高亮这些区域供你调节。": ("Found {regions} overlap regions totaling {duration:.0f} ms, involving {pairs} note-block pairs: {same_pitch} same-pitch pairs and {duplicates} exact duplicates. Merge will not delete notes or lower velocity automatically; overlaps can cause layering, pronounced attacks, and higher polyphony use. These regions will be highlighted on the timeline for adjustment.", "{regions}個の重複領域（合計{duration:.0f} ms）、{pairs}組のノートブロックを検出しました。同音高は{same_pitch}組、完全重複は{duplicates}個です。結合時に自動削除や音量低下は行いません。重なりによる二重発音、強いアタック、同時発音数の増加があり得るため、結合後にタイムラインで強調表示します。", "총 {duration:.0f}ms의 겹침 영역 {regions}개와 음표 블록 {pairs}쌍을 찾았습니다. 같은 음높이 {same_pitch}쌍, 완전 중복 {duplicates}개입니다. 병합 시 자동 삭제나 음량 감소는 하지 않습니다. 겹침은 중첩음, 강한 어택, 동시 발음 사용 증가를 일으킬 수 있어 병합 후 타임라인에 강조 표시합니다."),
+    "未检测到两条轨道之间的重叠音块。": ("No overlapping note blocks were found between the tracks.", "2つのトラック間に重複するノートブロックはありません。", "두 트랙 사이에 겹치는 음표 블록이 없습니다."),
+    "合并后共 {count} 个音符；游戏导出仍是 1 个乐器组，内部会拆为 {tracks} 条承载音符轨道（另有格式要求的空尾轨）。": ("The merge will contain {count} notes. Game export remains one instrument group, split internally into {tracks} note-bearing tracks (plus the format-required empty trailing track).", "結合後は{count}ノートです。ゲーム書き出しでは1つの楽器グループのまま、内部でノートを持つ{tracks}本のトラックに分割されます（形式上必要な空の末尾トラックが別に付きます）。", "병합 후 음표는 {count}개입니다. 게임 내보내기에서는 하나의 악기 그룹으로 유지되며 내부적으로 음표가 있는 트랙 {tracks}개로 분할됩니다(형식상 필요한 빈 마지막 트랙 별도)."),
+    "合并后共 {count} 个音符，并导出为 1 个游戏乐器组。": ("The merge will contain {count} notes and export as one game instrument group.", "結合後は{count}ノートで、1つのゲーム楽器グループとして書き出されます。", "병합 후 음표는 {count}개이며 하나의 게임 악기 그룹으로 내보냅니다."),
+    "确认合并轨道": ("Confirm Track Merge", "トラック結合の確認", "트랙 병합 확인"),
+    "该操作可撤销。": ("This action can be undone.", "この操作は元に戻せます。", "이 작업은 실행 취소할 수 있습니다."),
+    "轨道已合并；{count} 个重叠区域已标记": ("Tracks merged; {count} overlap regions marked", "トラックを結合し、{count}個の重複領域をマークしました", "트랙을 병합하고 겹침 영역 {count}개를 표시했습니다"),
+}
+
+for _source, (_english, _japanese, _korean) in _TRACK_MERGE_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+_CLIP_MERGE_CONFIRMATION_TRANSLATIONS = {
+    "确认合并片段": (
+        "Confirm Clip Merge",
+        "クリップ結合の確認",
+        "클립 병합 확인",
+    ),
+    "目标位置与已有片段重叠。确认后会把两个片段合并；选择“否”将取消本次拖动，不会自动对齐或修改工程。": (
+        "The target overlaps an existing clip. Confirm to merge the two clips; choose No to cancel this drag without automatic alignment or any project changes.",
+        "移動先は既存のクリップと重なっています。確認すると2つのクリップを結合します。「いいえ」を選ぶと今回のドラッグを取り消し、自動整列もプロジェクトの変更も行いません。",
+        "대상 위치가 기존 클립과 겹칩니다. 확인하면 두 클립을 병합합니다. 아니요를 선택하면 이번 드래그를 취소하며 자동 정렬이나 프로젝트 변경을 하지 않습니다.",
+    ),
+}
+
+for _source, (_english, _japanese, _korean) in _CLIP_MERGE_CONFIRMATION_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+_ARRANGEMENT_REFINEMENT_TRANSLATIONS = {
+    "自动吸附已激活：移动或裁切片段时自动对齐；再次点击关闭（Alt 临时关闭）": ("Auto snap is on: clips align while moving or trimming; click again to turn it off (hold Alt to bypass)", "自動スナップはオンです。クリップの移動・トリミング時に整列します。もう一度クリックするとオフになります（Altで一時解除）", "자동 스냅이 켜져 있습니다. 클립 이동 또는 자르기 시 자동 정렬됩니다. 다시 클릭하면 꺼집니다(Alt로 일시 해제)"),
+    "自动吸附未激活：移动和裁切片段时不会自动对齐；点击开启": ("Auto snap is off: clips will not align while moving or trimming; click to turn it on", "自動スナップはオフです。クリップの移動・トリミング時に整列しません。クリックするとオンになります", "자동 스냅이 꺼져 있습니다. 클립 이동 또는 자르기 시 자동 정렬되지 않습니다. 클릭하면 켜집니다"),
+    "自动吸附已激活": ("Auto snap on", "自動スナップ オン", "자동 스냅 켜짐"),
+    "自动吸附未激活": ("Auto snap off", "自動スナップ オフ", "자동 스냅 꺼짐"),
+    "磁吸：对齐网格、其他片段边界与时间轴标记（Alt 临时关闭）": ("Snap to grid, clip edges, and timeline markers (hold Alt to bypass)", "グリッド、クリップ境界、タイムラインマーカーにスナップ（Altで一時解除）", "그리드, 클립 경계, 타임라인 마커에 스냅(Alt로 일시 해제)"),
+    "磁吸对齐": ("Snap", "スナップ", "스냅"),
+    "片段边界": ("Clip edge", "クリップ境界", "클립 경계"),
+    "音符编辑器仍有未应用修改；请先应用或关闭，再撤销工程。": ("A note editor still has unapplied changes. Apply or close it before undoing the project.", "ノートエディターに未適用の変更があります。適用または閉じてからプロジェクトを元に戻してください。", "음표 편집기에 적용되지 않은 변경 사항이 있습니다. 적용하거나 닫은 후 프로젝트 실행을 취소하세요."),
+    "片段已移动；目标乐器存在音高或映射问题，已标红": ("Clip moved; pitch or mapping problems on the target instrument are marked red", "クリップを移動しました。移動先の楽器にある音高またはマッピングの問題を赤で表示しました", "클립을 이동했습니다. 대상 악기의 음높이 또는 매핑 문제를 빨간색으로 표시했습니다"),
+    "乐器组 ×{count}": ("Group ×{count}", "楽器グループ ×{count}", "악기 그룹 ×{count}"),
+    "乐器组 · {instrument} · {count} 轨": ("Group · {instrument} · {count} tracks", "楽器グループ · {instrument} · {count}トラック", "악기 그룹 · {instrument} · {count}개 트랙"),
+    "乐器组 · {instrument} · {count} 轨；点击组名选择整组，M/S 控制整组": ("Group · {instrument} · {count} tracks; click the group name to select it, M/S controls the group", "楽器グループ · {instrument} · {count}トラック。グループ名で選択、M/Sでグループ全体を操作", "악기 그룹 · {instrument} · {count}개 트랙. 그룹 이름으로 선택하고 M/S로 그룹 전체를 제어합니다"),
+    "整组静音": ("Mute Group", "グループをミュート", "그룹 음소거"),
+    "取消整组静音": ("Unmute Group", "グループのミュートを解除", "그룹 음소거 해제"),
+    "整组独奏": ("Solo Group", "グループをソロ", "그룹 솔로"),
+    "取消整组独奏": ("Unsolo Group", "グループのソロを解除", "그룹 솔로 해제"),
+}
+for _source, (_english, _japanese, _korean) in _ARRANGEMENT_REFINEMENT_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+del _source, _english, _japanese, _korean
+
 _WORKSPACE_TEMPO_TRANSLATIONS = {
     "全局 BPM": ("Global BPM", "グローバル BPM", "글로벌 BPM"),
     "自动跟随": ("Follow", "追従", "따라가기"),
@@ -8444,6 +8611,58 @@ for _source, (
     _japanese,
     _korean,
 ) in _TRACK_GLOBAL_GAIN_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+_ARRANGEMENT_IMPORT_TRANSLATIONS = {
+    "追加音轨": ("Append External Tracks", "外部トラックを追加", "외부 트랙 추가"),
+    "从 MIDI 文件…": ("From MIDI File…", "MIDIファイルから…", "MIDI 파일에서…"),
+    "从游戏曲谱…": ("From Game Score…", "ゲーム楽譜から…", "게임 악보에서…"),
+    "选择要追加的 MIDI 文件": ("Select MIDI File to Append", "追加するMIDIファイルを選択", "추가할 MIDI 파일 선택"),
+    "选择要追加的游戏曲谱": ("Select Game Score to Append", "追加するゲーム楽譜を選択", "추가할 게임 악보 선택"),
+    "游戏曲谱 (*.bdo);;所有文件 (*.*)": ("Game Score (*.bdo);;All Files (*.*)", "ゲーム楽譜 (*.bdo);;すべてのファイル (*.*)", "게임 악보 (*.bdo);;모든 파일 (*.*)"),
+    "当前播放头": ("Current Playhead", "現在の再生ヘッド", "현재 재생 헤드"),
+    "工程开头": ("Project Start", "プロジェクト先頭", "프로젝트 시작"),
+    "放置追加音轨": ("Place Appended Tracks", "追加トラックを配置", "추가 트랙 배치"),
+    "选择导入内容的起始位置": ("Choose where the imported material starts", "読み込む素材の開始位置を選択", "가져온 콘텐츠의 시작 위치 선택"),
+    "追加音轨失败": ("Could Not Append Tracks", "トラックを追加できませんでした", "트랙을 추가하지 못했습니다"),
+    "无法追加 {file}：{error}": ("Could not append {file}: {error}", "{file}を追加できません：{error}", "{file}을(를) 추가할 수 없습니다: {error}"),
+    " · 已按源文件实际时间保留，工程 BPM/拍号未改变": (" · Source timing preserved; project BPM/meter unchanged", "・元ファイルの実時間を保持し、プロジェクトのBPM/拍子は変更していません", " · 원본 파일의 실제 시간을 유지했으며 프로젝트 BPM/박자는 변경하지 않았습니다"),
+    "已追加 {file} · {tracks} 轨 · {notes} 音符{timing_note}": ("Appended {file} · {tracks} tracks · {notes} notes{timing_note}", "{file}を追加・{tracks}トラック・{notes}ノート{timing_note}", "{file} 추가됨 · {tracks}트랙 · 음표 {notes}개{timing_note}"),
+}
+
+for _source, (
+    _english,
+    _japanese,
+    _korean,
+) in _ARRANGEMENT_IMPORT_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+_ARRANGEMENT_CLIP_TRANSLATIONS = {
+    "无法编辑片段：{error}": ("Could not edit clip: {error}", "クリップを編集できません：{error}", "클립을 편집할 수 없습니다: {error}"),
+    "片段编辑已应用": ("Clip edit applied", "クリップ編集を適用しました", "클립 편집을 적용했습니다"),
+    "无法创建片段：{error}": ("Could not create clip: {error}", "クリップを作成できません：{error}", "클립을 만들 수 없습니다: {error}"),
+    "导出标准 MIDI…": ("Export Standard MIDI…", "標準MIDIを書き出す…", "표준 MIDI 내보내기…"),
+    "导出标准 MIDI": ("Export Standard MIDI", "標準MIDIを書き出す", "표준 MIDI 내보내기"),
+    "未命名曲谱": ("Untitled Score", "名称未設定の楽譜", "제목 없는 악보"),
+    "当前工程没有可导出的轨道": ("The project has no tracks to export", "書き出せるトラックがありません", "내보낼 트랙이 없습니다"),
+    "导出 MIDI 失败": ("MIDI Export Failed", "MIDIの書き出しに失敗", "MIDI 내보내기 실패"),
+    "无法导出 MIDI：{error}": ("Could not export MIDI: {error}", "MIDIを書き出せません：{error}", "MIDI를 내보낼 수 없습니다: {error}"),
+    "已导出 {file} · {tracks} 轨": ("Exported {file} · {tracks} tracks", "{file}を書き出しました・{tracks}トラック", "{file} 내보냄 · {tracks}트랙"),
+}
+
+for _source, (
+    _english,
+    _japanese,
+    _korean,
+) in _ARRANGEMENT_CLIP_TRANSLATIONS.items():
     EN[_source] = _english
     JA[_source] = _japanese
     KO[_source] = _korean

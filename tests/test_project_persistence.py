@@ -9,6 +9,7 @@ from bdo_midi import Note
 from bdo_music_composer.editor.editor_models import TrackState
 from bdo_music_composer.app.home_catalog import IncrementalHomeScan, scan_local_projects
 from bdo_music_composer.project.project_persistence import (
+    AUTOSAVE_LOG_MAX_BYTES,
     AutosaveRequest,
     PROJECT_INDEX_NAME,
     ProjectMetadataSnapshot,
@@ -54,6 +55,33 @@ class ProjectPersistenceTests(unittest.TestCase):
                 write_autosave(request).read_text("utf-8")
             )["project_id"]
             self.assertEqual(second_id, payload["project_id"])
+
+    def test_diagnostic_log_is_bounded_and_never_invalidates_project_save(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            project_dir = Path(temp) / "demo"
+            track = TrackState(1, [Note(60, 90, 0, 250, 0)], 0, False, "Lead", 0x0B)
+            request = AutosaveRequest(
+                project_dir,
+                ProjectMetadataSnapshot.capture(
+                    schema_version=13, saved_at="now",
+                    reason="x" * 10_000, output_name="Bounded",
+                ),
+                freeze_project_tracks((track,)),
+            )
+            project_dir.mkdir()
+            log_path = project_dir / "autosave.log"
+            log_path.write_bytes(b"old-line\n" * (AUTOSAVE_LOG_MAX_BYTES // 9 + 2))
+
+            write_autosave(request)
+
+            self.assertLess(log_path.stat().st_size, AUTOSAVE_LOG_MAX_BYTES)
+            self.assertEqual(
+                json.loads((project_dir / "project.json").read_text("utf-8"))["output_name"],
+                "Bounded",
+            )
+            log_path.unlink()
+            log_path.mkdir()
+            self.assertTrue(write_autosave(request).is_file())
 
     def test_metadata_snapshot_recursively_detaches_mutable_ui_values(
         self,
@@ -123,6 +151,21 @@ class ProjectPersistenceTests(unittest.TestCase):
             payload["performance_controls"][0]["metadata"]["label"],
             "before",
         )
+
+    def test_track_snapshot_preserves_clip_bounds_and_arrangement_group(self) -> None:
+        track = TrackState(4, [Note(64, 95, 100.0, 300.0, 0)], 12, False, "Clip", 0x0B)
+        track.clip_start_ms = 150.0
+        track.clip_end_ms = 350.0
+        track.arrangement_group_id = "game-instrument:11"
+        from bdo_music_composer.editor.editor_models import ArrangementClipState
+        track.arrangement_clips = [
+            ArrangementClipState("clip-a", 150.0, 350.0, 100.0, 400.0)
+        ]
+        payload = freeze_project_tracks((track,))[0].to_payload()
+        self.assertEqual(payload["clip_start_ms"], 150.0)
+        self.assertEqual(payload["clip_end_ms"], 350.0)
+        self.assertEqual(payload["arrangement_group_id"], "game-instrument:11")
+        self.assertEqual(payload["arrangement_clips"][0]["clip_id"], "clip-a")
 
     def test_project_rename_preserves_identity_and_rewrites_safe_index(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

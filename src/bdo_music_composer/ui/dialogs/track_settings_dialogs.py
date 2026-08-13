@@ -84,6 +84,8 @@ class TrackPitchDialog(QDialog):
         plan: PitchTransformPlan,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("TrackPitchDialog")
+        self.setProperty("uiSurface", "workflow")
         self.setWindowTitle(tr("轨道八度"))
         self.setModal(True)
         self.setMinimumWidth(420)
@@ -167,6 +169,8 @@ class TrackVelocityBaseDialog(QDialog):
 
     def __init__(self, parent: QWidget, track: TrackDialogState) -> None:
         super().__init__(parent)
+        self.setObjectName("TrackVelocityBaseDialog")
+        self.setProperty("uiSurface", "workflow")
         self.setWindowTitle(tr("轨道力度基数"))
         self.setModal(True)
         self.setMinimumWidth(380)

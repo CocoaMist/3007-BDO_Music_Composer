@@ -16,6 +16,7 @@ from bdo_music_composer.audio.pcm_wav import (
     pcm_bytes_to_float32,
     stereo_pcm,
 )
+from bdo_music_composer.editor.arrangement_clip import project_track_notes
 
 from bdo_music_composer.audio.bdo_audio_mixing import (
     apply_articulation_preview_in_place,
@@ -54,6 +55,44 @@ from bdo_common.bdo_track_effects import DEFAULT_TRACK_VOLUME, track_volume_prev
 
 
 SAMPLE_RATE = 36000
+
+
+@lru_cache(maxsize=4)
+def _cached_mapping_payload(
+    map_path: str,
+    modified_ns: int,
+    size: int,
+) -> dict:
+    """Read one immutable packaged mapping once per runtime path.
+
+    The mapping is large and is consulted by preview validation, the editor
+    velocity hints, and optimisation preflight.  Callers treat rows as source
+    metadata; code that needs to amend a resolved path makes its own copy.
+    """
+
+    return json.loads(Path(map_path).read_text(encoding="utf-8"))
+
+
+def _mapping_payload(map_path: str | Path) -> dict:
+    path, modified_ns, size = _mapping_revision(map_path)
+    return _cached_mapping_payload(
+        str(path),
+        modified_ns,
+        size,
+    )
+
+
+def _mapping_revision(map_path: str | Path) -> tuple[Path, int, int]:
+    path = Path(map_path)
+    metadata = path.stat()
+    return path, int(metadata.st_mtime_ns), int(metadata.st_size)
+
+
+def sample_map_evidence_sha256(map_path: str | Path) -> str | None:
+    """Return the mapping evidence identity without reparsing its JSON."""
+
+    value = _mapping_payload(map_path).get("evidence_sha256")
+    return str(value) if isinstance(value, str) and value else None
 
 
 @dataclass(frozen=True)
@@ -143,7 +182,7 @@ class BdoSampleMap:
         audio_root: str | Path | None = None,
     ) -> None:
         mapping_path = Path(map_path)
-        payload = json.loads(mapping_path.read_text(encoding="utf-8"))
+        payload = _mapping_payload(mapping_path)
         configured_root = (
             Path(audio_root)
             if audio_root
@@ -310,25 +349,45 @@ class BdoSampleMap:
 
 
 @lru_cache(maxsize=4)
-def _cached_sample_map(map_path: str) -> BdoSampleMap:
+def _cached_sample_map(
+    map_path: str,
+    modified_ns: int,
+    size: int,
+) -> BdoSampleMap:
+    del modified_ns, size
     return BdoSampleMap(map_path)
 
 
 @lru_cache(maxsize=4)
-def _cached_mapping_banks(map_path: str) -> dict[str, tuple[dict, ...]]:
+def _cached_mapping_banks(
+    map_path: str,
+    modified_ns: int,
+    size: int,
+) -> dict[str, tuple[dict, ...]]:
     """Load routing metadata without probing thousands of local WAV paths."""
-    payload = json.loads(Path(map_path).read_text(encoding="utf-8"))
+    del modified_ns, size
+    payload = _mapping_payload(map_path)
     return {
         str(bank): tuple(rows)
         for bank, rows in payload.get("banks", {}).items()
     }
 
 
+def _sample_map(map_path: str | Path) -> BdoSampleMap:
+    path, modified_ns, size = _mapping_revision(map_path)
+    return _cached_sample_map(str(path), modified_ns, size)
+
+
+def _mapping_banks(map_path: str | Path) -> dict[str, tuple[dict, ...]]:
+    path, modified_ns, size = _mapping_revision(map_path)
+    return _cached_mapping_banks(str(path), modified_ns, size)
+
+
 def sample_map_covers(
     map_path: str | Path,
     instrument_ids: tuple[int, ...] | list[int],
 ) -> bool:
-    sample_map = _cached_sample_map(str(map_path))
+    sample_map = _sample_map(map_path)
     return all(sample_map.has_instrument(instrument_id) for instrument_id in instrument_ids)
 
 
@@ -344,7 +403,7 @@ def sample_map_velocity_boundaries(
     route_ntype = preview_route_ntype(instrument_id, ntype)
     resolved_pitch = resolve_bdo_pitch(instrument_id, pitch, ntype)
     return velocity_zone_boundaries(
-        _cached_mapping_banks(str(map_path)).get(bank or "", ()),
+        _mapping_banks(map_path).get(bank or "", ()),
         resolved_pitch,
         route_ntype,
         bank=bank,
@@ -357,7 +416,7 @@ def sample_map_supported_pitches(
     synth_mode: str = "basic",
 ) -> frozenset[int]:
     """Return the exact MIDI keys with a Wwise source zone for an instrument."""
-    return _cached_sample_map(str(map_path)).supported_pitches(
+    return _sample_map(map_path).supported_pitches(
         instrument_id, synth_mode
     )
 
@@ -372,7 +431,7 @@ def sample_map_supports_note(
 ) -> bool:
     """Whether Wwise has an exact key-and-velocity zone for this note."""
     return (
-        _cached_sample_map(str(map_path)).choose(
+        _sample_map(map_path).choose(
             instrument_id,
             pitch,
             velocity,
@@ -460,7 +519,7 @@ def render_preview(
         ):
             missing.add(track.bdo_instrument_id)
             continue
-        for note_order, note in enumerate(track.notes):
+        for note_order, note in enumerate(project_track_notes(track)):
             requests.append(_RenderRequest(
                 float(note.start),
                 track_order,
@@ -512,7 +571,6 @@ def render_preview(
             1,
             round(
                 note.dur
-                * track.duration_scale
                 * SAMPLE_RATE
                 / 1000.0
             )

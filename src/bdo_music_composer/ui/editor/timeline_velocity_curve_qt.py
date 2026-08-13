@@ -17,6 +17,7 @@ from bdo_music_composer.editor.velocity_curve import (
     velocity_envelope_samples,
     velocity_time_points,
 )
+from bdo_music_composer.editor.arrangement_clip import project_track_notes
 from bdo_music_composer.ui.i18n import tr, trf
 
 
@@ -110,10 +111,11 @@ class TimelineVelocityCurveOverlay(QObject):
         )
         self._note_onsets[track_key] = onsets
         velocity_groups: dict[float, list[float]] = {}
-        for onset, index in onsets:
+        for note in project_track_notes(track):
+            onset = float(note.start)
             key = round(onset, 3)
             group = velocity_groups.setdefault(key, [0.0, 0.0])
-            group[0] += float(track.notes[index].vel)
+            group[0] += float(note.vel)
             group[1] += 1.0
         points = tuple(
             (onset, total / count)
@@ -228,13 +230,31 @@ class TimelineVelocityCurveOverlay(QObject):
             return tuple(
                 (onset, average)
                 for onset, _indices, average in velocity_time_points(
-                    track.notes,
-                    indices,
+                    project_track_notes(track), indices,
                 )
             )
         lower = bisect_left(trace.starts, float(start_ms))
         upper = bisect_right(trace.starts, float(end_ms))
         return trace.points[lower:upper]
+
+    @staticmethod
+    def _clip_velocity_trace(
+        track: TrackState,
+        points: tuple[tuple[float, float], ...],
+    ) -> tuple[tuple[tuple[float, float], ...], ...]:
+        """Keep trend-line segments inside independent clips; never bridge gaps."""
+
+        from bdo_music_composer.editor.arrangement_clip import track_clips
+
+        segments: list[tuple[tuple[float, float], ...]] = []
+        for clip in track_clips(track):
+            segment = tuple(
+                point for point in points
+                if clip.start_ms <= point[0] <= clip.end_ms
+            )
+            if segment:
+                segments.append(segment)
+        return tuple(segments)
 
     @staticmethod
     def _bounded_velocity_trace(
@@ -292,30 +312,33 @@ class TimelineVelocityCurveOverlay(QObject):
             visible_duration,
             max(64, int(geometry.width() / 12.0)),
         )
-        path = QPainterPath()
-        screens: list[QPointF] = []
-        for onset, velocity in points:
-            x = geometry.left() + (
-                (onset - visible_start) / max(1.0, visible_duration)
-            ) * geometry.width()
-            y = geometry.bottom() - velocity / 127.0 * geometry.height()
-            screens.append(QPointF(x, y))
-        path.moveTo(screens[0])
-        for point in screens[1:]:
-            path.lineTo(point)
         painter.save()
         painter.setClipRect(region)
         color = QColor("#bca76b" if active else "#77715f")
         color.setAlpha(126 if active else 62)
         painter.setPen(QPen(color, 1.15, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-        painter.drawPath(path)
         painter.setBrush(color)
-        painter.setPen(Qt.NoPen)
-        stride = max(1, len(screens) // 32)
-        for point in screens[::stride]:
-            painter.drawEllipse(
-                QRectF(point.x() - 1.5, point.y() - 1.5, 3.0, 3.0)
-            )
+        for segment in self._clip_velocity_trace(track, points):
+            screens = [
+                QPointF(
+                    geometry.left() + (
+                        (onset - visible_start) / max(1.0, visible_duration)
+                    ) * geometry.width(),
+                    geometry.bottom() - velocity / 127.0 * geometry.height(),
+                )
+                for onset, velocity in segment
+            ]
+            path = QPainterPath(screens[0])
+            for point in screens[1:]:
+                path.lineTo(point)
+            painter.setPen(QPen(color, 1.15, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.drawPath(path)
+            painter.setPen(Qt.NoPen)
+            stride = max(1, len(screens) // 32)
+            for point in screens[::stride]:
+                painter.drawEllipse(
+                    QRectF(point.x() - 1.5, point.y() - 1.5, 3.0, 3.0)
+                )
         painter.restore()
 
     def _paint_inline_actions(
