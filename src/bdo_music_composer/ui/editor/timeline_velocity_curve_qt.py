@@ -17,7 +17,10 @@ from bdo_music_composer.editor.velocity_curve import (
     velocity_envelope_samples,
     velocity_time_points,
 )
-from bdo_music_composer.editor.arrangement_clip import project_track_notes
+from bdo_music_composer.editor.arrangement_clip import (
+    project_track_note_refs,
+    project_track_notes,
+)
 from bdo_music_composer.ui.i18n import tr, trf
 
 
@@ -28,6 +31,7 @@ class _CurveContext:
     start_ms: float
     end_ms: float
     note_indices: tuple[int, ...]
+    projected_starts: tuple[tuple[int, float], ...]
     scope_source: str
 
 
@@ -38,6 +42,7 @@ class _CurveSession:
     start_ms: float
     end_ms: float
     note_indices: tuple[int, ...]
+    projected_starts: tuple[tuple[int, float], ...]
     scope_source: str
     points: list[VelocityEnvelopePoint]
     active_point: int = 0
@@ -104,10 +109,8 @@ class TimelineVelocityCurveOverlay(QObject):
         if track_key in self._note_onsets:
             return
         onsets = tuple(
-            sorted(
-                (float(note.start), index)
-                for index, note in enumerate(track.notes)
-            )
+            (float(note.start), index)
+            for index, note in project_track_note_refs(track)
         )
         self._note_onsets[track_key] = onsets
         velocity_groups: dict[float, list[float]] = {}
@@ -142,6 +145,18 @@ class TimelineVelocityCurveOverlay(QObject):
         upper = bisect_right(onsets, (float(end_ms), len(track.notes)))
         return tuple(index for _onset, index in onsets[lower:upper])
 
+    def _projected_starts_between(
+        self,
+        track: TrackState,
+        start_ms: float,
+        end_ms: float,
+    ) -> tuple[tuple[int, float], ...]:
+        self._ensure_track_index(track)
+        onsets = self._note_onsets.get(id(track), ())
+        lower = bisect_left(onsets, (float(start_ms), -1))
+        upper = bisect_right(onsets, (float(end_ms), len(track.notes)))
+        return tuple((index, onset) for onset, index in onsets[lower:upper])
+
     def _target_context(
         self,
         track: TrackState,
@@ -162,30 +177,39 @@ class TimelineVelocityCurveOverlay(QObject):
         ):
             return replace(self._target_cache_value, region=QRectF(region))
         visible_end = visible_start + visible_duration
-        visible_indices = self._indices_between(track, visible_start, visible_end)
+        visible_starts = self._projected_starts_between(
+            track, visible_start, visible_end
+        )
+        visible_indices = tuple(index for index, _onset in visible_starts)
         if visible_indices:
-            visible_onsets = [float(track.notes[index].start) for index in visible_indices]
+            visible_onsets = [onset for _index, onset in visible_starts]
             start_ms, end_ms = min(visible_onsets), max(visible_onsets)
         else:
             start_ms, end_ms = visible_start, visible_end
         scope_source = "当前可见区"
         selected_indices: tuple[int, ...] = ()
+        selected_starts: tuple[tuple[int, float], ...] = ()
         if selected_range is not None and selected_range[1] - selected_range[0] > 0.5:
-            selected_indices = self._indices_between(
+            selected_starts = self._projected_starts_between(
                 track,
                 selected_range[0],
                 selected_range[1],
             )
+            selected_indices = tuple(index for index, _onset in selected_starts)
             if selected_indices:
                 start_ms, end_ms = selected_range
                 scope_source = "A–B 区间"
         note_indices = selected_indices if scope_source == "A–B 区间" else visible_indices
+        projected_starts = (
+            selected_starts if selected_indices else visible_starts
+        )
         context = _CurveContext(
             track,
             QRectF(region),
             float(start_ms),
             float(end_ms),
             note_indices,
+            projected_starts,
             scope_source,
         )
         self._target_cache_key = cache_key
@@ -494,16 +518,20 @@ class TimelineVelocityCurveOverlay(QObject):
         context = self._context
         if context is None or not context.note_indices:
             return
+        timing_notes = list(context.track.notes)
+        for index, onset in context.projected_starts:
+            timing_notes[index] = timing_notes[index]._replace(start=onset)
         self._session = _CurveSession(
             context.track,
             tuple(context.track.notes),
             context.start_ms,
             context.end_ms,
             context.note_indices,
+            context.projected_starts,
             context.scope_source,
             list(
                 velocity_envelope_points_from_notes(
-                    context.track.notes,
+                    timing_notes,
                     context.note_indices,
                     start_ms=context.start_ms,
                     end_ms=context.end_ms,
@@ -530,13 +558,22 @@ class TimelineVelocityCurveOverlay(QObject):
         session = self._session
         if session is None:
             return
-        changed_notes = apply_velocity_level_envelope(
-            session.baseline_notes,
+        timing_notes = list(session.baseline_notes)
+        for index, onset in session.projected_starts:
+            timing_notes[index] = timing_notes[index]._replace(start=onset)
+        projected_changes = apply_velocity_level_envelope(
+            timing_notes,
             session.note_indices,
             session.points,
             start_ms=session.start_ms,
             end_ms=session.end_ms,
         )
+        changed_notes = [
+            note._replace(vel=projected.vel)
+            for note, projected in zip(
+                session.baseline_notes, projected_changes
+            )
+        ]
         track = session.track
         self.cancel()
         if changed_notes != list(session.baseline_notes):

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
@@ -188,6 +189,7 @@ from bdo_music_composer.editor.editor_models import (  # noqa: E402
     BDO_EDITOR_PITCH_RANGES,
     BDO_SAMPLE_ONLY_PERCUSSION,
     GhostNoteProjection,
+    ArrangementClipState,
     TrackState,
     game_supported_pitches,
     note_name,
@@ -196,7 +198,13 @@ from bdo_music_composer.editor.editor_models import (  # noqa: E402
 )
 from bdo_music_composer.editor.preview_midi_writer import build_filtered_midi  # noqa: E402
 from bdo_music_composer.editor.arrangement_clip import (  # noqa: E402
+    clip_edit_fingerprint,
+    clip_editor_notes,
+    default_empty_clip,
+    plan_clip_note_edit,
+    project_track_notes,
     reconcile_track_clips_after_note_edit,
+    track_clips,
 )
 from bdo_music_composer.transcription.transcription_commit_plan import (  # noqa: E402
     CommitCandidateRecord,
@@ -2172,6 +2180,9 @@ class MidiToBdoWindow(
                         "track_effects_enabled": False,
                         "note_effects_reserved": True,
                     },
+                    arrangement_clips=[
+                        default_empty_clip(0, duration_ms=2_000.0)
+                    ],
                 )
             ]
             self.file_label.setProperty("i18nSkip", False)
@@ -2503,6 +2514,9 @@ class MidiToBdoWindow(
             self._show_track_velocity_base_dialog
         )
         self.timeline.note_editor_requested.connect(self._open_note_editor)
+        self.timeline.clip_note_editor_requested.connect(
+            self._open_clip_note_editor
+        )
         self.timeline.velocity_curve_committed.connect(self._commit_timeline_velocity_curve)
         self.timeline.clip_edit_requested.connect(self._commit_timeline_clip_edit)
         self.timeline.clip_create_requested.connect(self._create_timeline_clip)
@@ -5592,11 +5606,7 @@ class MidiToBdoWindow(
         tracks_by_id = {int(track.track_id): track for track in self.tracks}
         current_track = tracks_by_id.get(int(request.current_track_id))
         draft_notes = self._normalise_editor_draft(request.draft_notes)
-        if (
-            len(tracks_by_id) != len(self.tracks)
-            or current_track is None
-            or draft_notes is None
-        ):
+        if len(tracks_by_id) != len(self.tracks) or current_track is None or draft_notes is None:
             QMessageBox.warning(
                 self,
                 tr("无法应用音符编辑"),
@@ -5604,17 +5614,18 @@ class MidiToBdoWindow(
             )
             return None
 
+        if request.arrangement_clip_id:
+            return self._commit_arrangement_clip_note_editor(
+                request, current_track, draft_notes
+            )
+
         state = self.transcription_session.state
         historical_track_ids = {
             int(route.track_id)
             for route in (*state.pending_routes, *state.applied_routes)
         }
-        new_tracks_by_id, failed_new_track_ids = (
-            self._prepare_transcription_commit_tracks(
-                request,
-                tracks_by_id,
-                historical_track_ids,
-            )
+        new_tracks_by_id, failed_new_track_ids = self._prepare_transcription_commit_tracks(
+            request, tracks_by_id, historical_track_ids
         )
         try:
             plan = self._build_transcription_commit_plan(
@@ -5663,6 +5674,46 @@ class MidiToBdoWindow(
             )
         )
         return report
+
+    def _commit_arrangement_clip_note_editor(
+        self,
+        request: TranscriptionEditorCommit,
+        track: TrackState,
+        draft_notes: tuple[Note, ...],
+    ) -> TranscriptionEditorCommitReport | None:
+        """Publish one explicit Clip draft without reconciling sibling Clips."""
+
+        if request.routes or request.new_track_specs:
+            QMessageBox.warning(
+                self,
+                tr("无法应用音符编辑"),
+                tr("片段编辑不能同时提交转录路由。"),
+            )
+            return None
+        try:
+            current_fingerprint = clip_edit_fingerprint(
+                track, request.arrangement_clip_id
+            )
+            if current_fingerprint != request.arrangement_clip_fingerprint:
+                raise ValueError("clip changed after the note editor was opened")
+            plan = plan_clip_note_edit(
+                track,
+                clip_id=request.arrangement_clip_id,
+                notes=draft_notes,
+            )
+            self._publish_clip_plan(plan, "edit arrangement clip notes")
+            reconcile_track_game_velocity_records(track, track.notes)
+            self._autosave_project(
+                "edit arrangement clip notes", immediate=True
+            )
+        except (TypeError, ValueError) as exc:
+            QMessageBox.warning(
+                self,
+                tr("无法应用音符编辑"),
+                trf("片段已发生变化，无法安全应用：{error}", error=exc),
+            )
+            return None
+        return TranscriptionEditorCommitReport(project_changed=True)
 
     def _create_workspace_status_state(self) -> None:
         """Keep legacy status sinks without reserving a visible bottom bar."""
@@ -6378,9 +6429,35 @@ class MidiToBdoWindow(
         selected_note_indices: tuple[int, ...] = (),
         *,
         transcription_mode: bool = False,
+        arrangement_clip_id: str = "",
     ) -> None:
         if track not in self.tracks:
             return
+        if not transcription_mode and not arrangement_clip_id:
+            clips = track_clips(track)
+            if len(clips) == 1:
+                arrangement_clip_id = clips[0].clip_id
+            elif len(clips) > 1:
+                labels = [
+                    trf(
+                        "片段 {number} · {start:.3f}s–{end:.3f}s",
+                        number=index + 1,
+                        start=clip.start_ms / 1000.0,
+                        end=clip.end_ms / 1000.0,
+                    )
+                    for index, clip in enumerate(clips)
+                ]
+                selected, accepted = QInputDialog.getItem(
+                    self,
+                    tr("选择要编辑的片段"),
+                    tr("此轨道包含多个片段，请明确选择编辑范围："),
+                    labels,
+                    0,
+                    False,
+                )
+                if not accepted:
+                    return
+                arrangement_clip_id = clips[labels.index(selected)].clip_id
         track_id = int(track.track_id)
         existing = self._note_editors.get(track_id)
         if existing is not None and existing.isVisible():
@@ -6389,14 +6466,26 @@ class MidiToBdoWindow(
             existing.activateWindow()
             self._activate_note_editor(existing)
             return
+        editor_track = track
+        if arrangement_clip_id:
+            editor_track = deepcopy(track)
+            editor_track.notes = list(
+                clip_editor_notes(track, arrangement_clip_id)
+            )
+            editor_track.arrangement_clips = []
         dialog = MidiNoteEditorDialog(
             self,
-            track,
+            editor_track,
             self.bpm_override or self.bpm,
             self.time_sig,
             self._effective_track_transpose(track),
             transcription_mode=transcription_mode,
             pitch_plan=self._pitch_transform_plan,
+        )
+        dialog.arrangement_clip_id = arrangement_clip_id
+        dialog.arrangement_clip_fingerprint = (
+            clip_edit_fingerprint(track, arrangement_clip_id)
+            if arrangement_clip_id else ""
         )
         if selected_note_indices:
             dialog.canvas.selected = {
@@ -6438,6 +6527,11 @@ class MidiToBdoWindow(
         dialog.finished.connect(editor_finished)
         dialog.show()
 
+    def _open_clip_note_editor(
+        self, track: TrackState, clip_id: str
+    ) -> None:
+        self._open_note_editor(track, arrangement_clip_id=str(clip_id))
+
 
     def _focus_validation_issue(self, issue: ValidationIssue) -> None:
         target_track_id = issue.track_id
@@ -6457,7 +6551,12 @@ class MidiToBdoWindow(
             return
         self._select_track(track)
         if issue.note_indices:
-            self._open_note_editor(track, issue.note_indices)
+            # Validator indices address the projected whole-track sequence;
+            # Clip editors use a local sequence and must not reuse them.
+            self._open_note_editor(
+                track,
+                () if track.arrangement_clips else issue.note_indices,
+            )
 
     def create_midi_optimize_dialog(
         self,
@@ -6482,6 +6581,21 @@ class MidiToBdoWindow(
     def _open_midi_optimizer(self, target_track_id: int | None = None) -> None:
         if not self.tracks:
             QMessageBox.information(self, tr("MIDI 优化"), tr("请先导入 MIDI。"))
+            return
+        scoped_tracks = (
+            self.tracks
+            if target_track_id is None
+            else [
+                track for track in self.tracks
+                if int(track.track_id) == int(target_track_id)
+            ]
+        )
+        if any(track.arrangement_clips for track in scoped_tracks):
+            self.show_toast(
+                tr("包含片段的轨道请双击具体片段，在音符编辑器中执行优化。"),
+                kind="warning",
+                duration_ms=4600,
+            )
             return
         dialog = MidiOptimizeDialog(self, target_track_id)
         if dialog.exec() != QDialog.Accepted:
@@ -6879,6 +6993,14 @@ class MidiToBdoWindow(
                 "track_effects_enabled": False,
                 "note_effects_reserved": True,
             },
+            arrangement_clips=[default_empty_clip(
+                track_id,
+                duration_ms=(
+                    60_000.0
+                    / max(1, int(self.bpm_override or self.bpm))
+                    * max(1, int(self.time_sig))
+                ),
+            )],
         )
         try:
             inherit_game_instrument_mix((*self.tracks, track), track)
@@ -6919,7 +7041,7 @@ class MidiToBdoWindow(
             trf(
                 "确定删除“{track}”及其中的 {count} 个音符吗？\n此操作可通过自动保存工程恢复。",
                 track=track.display_name,
-                count=track.note_count,
+                count=len(project_track_notes(track)),
             ),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -6959,7 +7081,13 @@ class MidiToBdoWindow(
             ))
         self.inspector_text.setText(trf(
             "{track} · {count} 音符 · {pitch_range} · BDO: {instrument} · FX: {articulation}",
-            track=track.display_name, count=track.note_count, pitch_range=track.pitch_range,
+            track=track.display_name,
+            count=len(project_track_notes(track)),
+            pitch_range=(
+                f"{note_name(min(note.pitch for note in project_track_notes(track)))} - "
+                f"{note_name(max(note.pitch for note in project_track_notes(track)))}"
+                if project_track_notes(track) else "-"
+            ),
             instrument=trv(_ui_bdo_instrument_source(track.bdo_instrument_id)),
             articulation=articulation_display_value(
                 track.bdo_instrument_id,
@@ -6969,8 +7097,12 @@ class MidiToBdoWindow(
         self.timeline.update()
 
     def _show_project_summary(self) -> None:
-        notes = [note for track in self.tracks for note in track.notes]
-        end_ms = max((track.end_ms for track in self.tracks), default=0.0)
+        notes = [
+            note for track in self.tracks for note in project_track_notes(track)
+        ]
+        end_ms = max(
+            (note.start + note.dur for note in notes), default=0.0
+        )
         minutes, seconds = divmod(int(end_ms / 1000), 60)
         pitch = "-"
         if notes:

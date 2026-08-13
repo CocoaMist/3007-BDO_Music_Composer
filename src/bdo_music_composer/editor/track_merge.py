@@ -10,7 +10,11 @@ import math
 
 from bdo_midi import Note
 from bdo_music_composer.editor.editor_models import TrackState
-from bdo_music_composer.editor.arrangement_clip import project_track_notes
+from bdo_music_composer.editor.arrangement_clip import (
+    project_track_note_refs,
+    project_track_notes,
+    project_track_performance_controls,
+)
 from bdo_music_composer.editor.game_score_model import bound_game_velocity_b_values
 from bdo_music_composer.editor.output_routing import (
     GameOutputRouteIdentity,
@@ -144,16 +148,15 @@ def _merged_velocity_records(
     source_notes: tuple[Note, ...],
     absorbed_notes: tuple[Note, ...],
 ) -> tuple[tuple, ...]:
-    if not source.bdo_source_note_records and not absorbed.bdo_source_note_records:
-        return ()
     result: list[tuple] = []
-    for track, notes in ((source, source_notes), (absorbed, absorbed_notes)):
+    for track in (source, absorbed):
         velocities_b = bound_game_velocity_b_values(
             track.notes, track.bdo_source_note_records
         )
         result.extend(
             (note.pitch, note.vel, note.start, note.dur, note.ntype, velocity_b)
-            for note, velocity_b in zip(notes, velocities_b)
+            for note_index, note in project_track_note_refs(track)
+            for velocity_b in (velocities_b[note_index],)
         )
     return tuple(sorted(result, key=lambda value: (value[2], value[0], value[3])))
 
@@ -198,7 +201,10 @@ def plan_track_merge(source: TrackState, absorbed: TrackState) -> TrackMergePlan
         ),
     )
     controls = sorted(
-        deepcopy([*source.performance_controls, *absorbed.performance_controls]),
+        deepcopy([
+            *project_track_performance_controls(source),
+            *project_track_performance_controls(absorbed),
+        ]),
         key=lambda value: float(value.get("time", 0.0)),
     )
     merged = replace(
@@ -207,6 +213,9 @@ def plan_track_merge(source: TrackState, absorbed: TrackState) -> TrackMergePlan
         display_name=f"{source.display_name} + {absorbed.display_name}",
         duration_scale=1.0,
         performance_controls=controls,
+        clip_start_ms=None,
+        clip_end_ms=None,
+        arrangement_clips=[],
         notes_optimized=bool(source.notes_optimized and absorbed.notes_optimized),
         bdo_source_group_index=None,
         bdo_source_note_records=_merged_velocity_records(

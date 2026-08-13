@@ -679,7 +679,9 @@ def _merged_instrument_input(
     return _MergedInstrumentInput(
         instrument_id=instrument_id,
         sources=stable_sources,
-        note_count=sum(len(track.notes) for track in stable_sources),
+        note_count=sum(
+            len(project_track_notes(track)) for track in stable_sources
+        ),
         source_names=", ".join(
             str(track.display_name) for track in stable_sources
         ),
@@ -806,7 +808,7 @@ def _validate_score_export_settings(
 
     issues: list[ValidationIssue] = []
     active_note_count = sum(
-        len(track.notes)
+        len(project_track_notes(track))
         for track in tracks
         if int(track.track_id) in context.active_track_ids
     )

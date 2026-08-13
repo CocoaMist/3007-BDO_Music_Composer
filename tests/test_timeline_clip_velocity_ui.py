@@ -79,6 +79,22 @@ class TimelineClipVelocityUiTests(unittest.TestCase):
         )
         self.assertEqual(segments, (((100.0, 40.0),), ((700.0, 80.0),)))
 
+    def test_velocity_selection_uses_moved_clip_display_time(self) -> None:
+        track = TrackState(1, [
+            Note(60, 40, 100.0, 50.0, 0),
+            Note(62, 80, 300.0, 50.0, 0),
+        ], 0, False, "Track", 0x12)
+        track.arrangement_clips = [
+            ArrangementClipState("moved", 700.0, 950.0, 100.0, 350.0, 600.0)
+        ]
+        overlay = TimelineVelocityCurveOverlay(None)
+
+        self.assertEqual(overlay._indices_between(track, 690.0, 760.0), (0,))
+        self.assertEqual(
+            overlay._projected_starts_between(track, 690.0, 920.0),
+            ((0, 700.0), (1, 900.0)),
+        )
+
     def test_dense_note_overview_is_clipped_to_each_clip_not_track_union(self) -> None:
         script = textwrap.dedent(
             """

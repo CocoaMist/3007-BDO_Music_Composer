@@ -41,10 +41,14 @@ class TimelineClipSelectionUiTests(unittest.TestCase):
             )
             point = QPoint(int(body.center().x()), int(body.center().y()))
             opened = []
+            opened_clips = []
             committed = []
             copied = []
             pasted = []
             canvas.note_editor_requested.connect(opened.append)
+            canvas.clip_note_editor_requested.connect(
+                lambda item, clip_id: opened_clips.append((item, clip_id))
+            )
             canvas.clip_edit_requested.connect(committed.append)
             canvas.clip_copy_requested.connect(
                 lambda item, clip_id: copied.append((item, clip_id))
@@ -68,7 +72,8 @@ class TimelineClipSelectionUiTests(unittest.TestCase):
 
             QTest.mouseDClick(canvas, Qt.LeftButton, pos=point)
             app.processEvents()
-            assert opened == [track]
+            assert not opened
+            assert opened_clips == [(track, "track-1-main")]
             assert not committed
             canvas.close()
             app.processEvents()

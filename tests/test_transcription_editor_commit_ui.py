@@ -28,6 +28,105 @@ def _run_offscreen(
 
 
 class TranscriptionEditorCommitUiTests(unittest.TestCase):
+    def test_clip_editor_rejects_stale_draft_after_concurrent_change(self) -> None:
+        completed = _run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication, QMessageBox
+            from bdo_midi import Note
+            from bdo_music_composer.editor.arrangement_clip import clip_edit_fingerprint
+            from bdo_music_composer.editor.editor_models import ArrangementClipState, TrackState
+            from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionEditorCommit
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow
+
+            app = QApplication([])
+            warnings = []
+            QMessageBox.warning = lambda *args, **kwargs: warnings.append(args)
+            window = MidiToBdoWindow()
+            window._stop_preview = lambda *_args, **_kwargs: None
+            window._autosave_project = lambda *_args, **_kwargs: None
+            window._apply_workspace_change = lambda *_args, **_kwargs: None
+            window._schedule_timeline_validation_refresh = lambda: None
+            window._refresh_timeline_validation = lambda: None
+            original = Note(60, 80, 100.0, 100.0, 0)
+            track = TrackState(1, [original], 0, False, "Track", 0x12)
+            track.arrangement_clips = [
+                ArrangementClipState("clip", 100.0, 200.0, 100.0, 200.0)
+            ]
+            window.tracks = [track]
+            fingerprint = clip_edit_fingerprint(track, "clip")
+
+            track.notes[0] = original._replace(vel=110)
+            report = window._commit_note_editor(TranscriptionEditorCommit(
+                current_track_id=1,
+                draft_notes=(original._replace(pitch=62),),
+                arrangement_clip_id="clip",
+                arrangement_clip_fingerprint=fingerprint,
+            ))
+
+            assert report is None
+            assert track.notes == [original._replace(vel=110)]
+            assert len(warnings) == 1
+            window.close()
+            app.processEvents()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
+    def test_clip_editor_accepts_unchanged_target_after_sibling_change(self) -> None:
+        completed = _run_offscreen(
+            """
+            from PySide6.QtWidgets import QApplication
+            from bdo_midi import Note
+            from bdo_music_composer.editor.arrangement_clip import clip_edit_fingerprint
+            from bdo_music_composer.editor.editor_models import ArrangementClipState, TrackState
+            from bdo_music_composer.transcription.bdo_transcription_session import TranscriptionEditorCommit
+            from bdo_music_composer.ui.main_window import MidiToBdoWindow
+
+            app = QApplication([])
+            window = MidiToBdoWindow()
+            window._stop_preview = lambda *_args, **_kwargs: None
+            window._autosave_project = lambda *_args, **_kwargs: None
+            window._apply_workspace_change = lambda *_args, **_kwargs: None
+            window._schedule_timeline_validation_refresh = lambda: None
+            window._refresh_timeline_validation = lambda: None
+            target_note = Note(60, 80, 100.0, 100.0, 0)
+            sibling_note = Note(64, 90, 500.0, 100.0, 0)
+            track = TrackState(
+                1, [target_note, sibling_note], 0, False, "Track", 0x12
+            )
+            track.arrangement_clips = [
+                ArrangementClipState("target", 100.0, 200.0, 100.0, 200.0),
+                ArrangementClipState("sibling", 500.0, 600.0, 500.0, 600.0),
+            ]
+            window.tracks = [track]
+            fingerprint = clip_edit_fingerprint(track, "target")
+            track.notes[1] = sibling_note._replace(vel=70)
+
+            report = window._commit_note_editor(TranscriptionEditorCommit(
+                current_track_id=1,
+                draft_notes=(target_note._replace(pitch=62),),
+                arrangement_clip_id="target",
+                arrangement_clip_fingerprint=fingerprint,
+            ))
+
+            assert report is not None and report.project_changed
+            assert [(note.pitch, note.vel) for note in track.notes] == [
+                (62, 80), (64, 70)
+            ]
+            window.close()
+            app.processEvents()
+            """
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+
     def test_note_block_edits_keep_velocity_b_until_velocity_changes(self) -> None:
         completed = _run_offscreen(
             """

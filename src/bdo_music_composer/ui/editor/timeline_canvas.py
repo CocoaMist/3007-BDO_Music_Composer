@@ -22,7 +22,7 @@ from bdo_midi.instruments import (
     localized_bdo_instrument_name,
     localized_bdo_instrument_names,
 )
-from bdo_music_composer.editor.editor_models import TrackState
+from bdo_music_composer.editor.editor_models import TrackState, note_name
 from .editor_ui_helpers import (
     add_instrument_submenus,
     articulation_color,
@@ -159,6 +159,7 @@ class TimelineCanvas(QWidget):
     midi_tools_requested = Signal(object)
     velocity_base_requested = Signal(object)
     note_editor_requested = Signal(object)
+    clip_note_editor_requested = Signal(object, str)
     seek_requested = Signal(float)
     time_range_changed = Signal(object)
     playhead_changed = Signal(float)
@@ -1815,8 +1816,15 @@ class TimelineCanvas(QWidget):
             painter.setPen(QColor("#b8a487" if active else "#69645f"))
             metadata = trf(
                 "{count} 音符 · {pitch_range}",
-                count=track.note_count,
-                pitch_range=track.pitch_range,
+                count=(
+                    len(index.intervals.items)
+                    if (index := self._track_note_indexes.get(id(track)))
+                    is not None else 0
+                ),
+                pitch_range=(
+                    f"{note_name(index.pitch_min)} - {note_name(index.pitch_max)}"
+                    if index is not None and index.intervals.items else "-"
+                ),
             )
             metadata_font = painter.font()
             metadata_font.setPointSize(max(7, metadata_font.pointSize() - 1))
@@ -3312,7 +3320,15 @@ class TimelineCanvas(QWidget):
                 ):
                     self.setFocus(Qt.MouseFocusReason)
                     self._select_track(track, emit=True)
-                    if not track.notes and event.position().x() >= self.grid_rect.left():
+                    clip_id = (
+                        action.split("|", 1)[1]
+                        if action.startswith(("clip_body|", "clip_start|", "clip_end|"))
+                        else ""
+                    )
+                    if clip_id:
+                        self.set_selected_clip(track, clip_id)
+                        self.clip_note_editor_requested.emit(track, clip_id)
+                    elif not track.notes and event.position().x() >= self.grid_rect.left():
                         self.clip_create_requested.emit(
                             track, self._time_at_x(event.position().x())
                         )

@@ -7,6 +7,8 @@ from bdo_common.bdo_track_effects import MasterEffects
 from bdo_midi import Note
 from bdo_music_composer.editor.arrangement_import import plan_arrangement_append
 from bdo_music_composer.editor.editor_models import TrackState
+from bdo_music_composer.editor.editor_models import ArrangementClipState
+from bdo_music_composer.editor.arrangement_clip import project_track_notes
 
 
 def _track(track_id: int, instrument_id: int = 0x12) -> TrackState:
@@ -74,6 +76,21 @@ class ArrangementImportTests(unittest.TestCase):
             tuple(appended.bdo_track_settings[index] for index in (1, 3, 5, 6, 7)),
             (21, 22, 23, 24, 25),
         )
+
+    def test_append_preserves_moved_clip_display_time(self) -> None:
+        source = _track(0)
+        source.arrangement_clips = [
+            ArrangementClipState(
+                "moved", 700.0, 940.0, 100.0, 340.0, 600.0
+            )
+        ]
+
+        appended = plan_arrangement_append(
+            [], [source], offset_ms=500.0
+        ).tracks[0]
+
+        self.assertEqual(appended.arrangement_clips[0].time_offset_ms, 600.0)
+        self.assertEqual(project_track_notes(appended)[0].start, 1200.0)
 
     def test_conflicting_destination_mix_fails_without_mutating_sources(self) -> None:
         first = _track(1)

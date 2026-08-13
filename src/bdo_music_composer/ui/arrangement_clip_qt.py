@@ -169,7 +169,10 @@ class ArrangementClipHostMixin:
                 trf("无法创建片段：{error}", error=exc), kind="error"
             )
             return
-        self._open_note_editor(track)
+        if "_open_note_editor" in getattr(self, "__dict__", {}):
+            self._open_note_editor(track)
+        else:
+            self._open_clip_note_editor(track, plan.selected_clip_id)
 
 
 __all__ = ["ArrangementClipHostMixin"]
