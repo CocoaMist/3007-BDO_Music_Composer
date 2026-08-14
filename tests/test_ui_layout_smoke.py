@@ -199,7 +199,9 @@ class UiLayoutSmokeTests(unittest.TestCase):
             assert shell_rect.bottom() == home_rect.bottom()
             assert window.home_sidebar.geometry().topLeft() == QPoint(0, 0)
             assert window.home_sidebar.height() == home_shell.height()
-            assert window.home_sidebar.width() == 584
+            assert window.home_sidebar.width() == max(
+                560, min(760, round(window.width() * 0.45))
+            )
             assert window.home_sidebar.width() < home_shell.width()
             assert abs(
                 window.home_library_surface.geometry().bottom()
@@ -233,17 +235,23 @@ class UiLayoutSmokeTests(unittest.TestCase):
             ) <= 1
             window.resize(1360, 820)
             app.processEvents()
-            assert window.home_sidebar.width() == 632
+            assert window.home_sidebar.width() == max(
+                560, min(760, round(window.width() * 0.45))
+            )
             window.resize(1600, 900)
             app.processEvents()
-            assert window.home_sidebar.width() == 680
+            assert window.home_sidebar.width() == max(
+                560, min(760, round(window.width() * 0.45))
+            )
             assert abs(
                 window.home_library_surface.geometry().bottom()
                 - (window.home_sidebar.contentsRect().bottom() - 16)
             ) <= 1
             window.resize(window.minimumSize())
             app.processEvents()
-            assert window.home_sidebar.width() == 584
+            assert window.home_sidebar.width() == max(
+                560, min(760, round(window.width() * 0.45))
+            )
             window.home_game_nav.click()
             app.processEvents()
             assert home_stack.currentIndex() == 1

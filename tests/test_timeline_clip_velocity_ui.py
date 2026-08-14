@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TimelineClipVelocityUiTests(unittest.TestCase):
-    def test_move_and_both_trim_handles_snap_to_grid(self) -> None:
+    def test_move_and_left_anchored_region_resize_snap_to_grid(self) -> None:
         script = textwrap.dedent(
             """
             from PySide6.QtCore import QPointF, QRectF, Qt
@@ -43,15 +43,17 @@ class TimelineClipVelocityUiTests(unittest.TestCase):
             canvas._clip_drag_origin_start_ms = 250.0
             canvas._clip_drag_origin_end_ms = 1000.0
             canvas._update_clip_drag_geometry(QPointF(60.0, 20.0), Qt.NoModifier)
-            assert canvas._clip_drag_start_ms == 500.0
+            assert canvas._clip_drag_start_ms == 250.0
             assert canvas._clip_drag_end_ms == 1000.0
 
             canvas._clip_drag_mode = "resize_end"
+            canvas._clip_drag_max_end_ms = 1250.0
+            canvas._clip_drag_origin_press_ms = 0.0
             canvas._clip_drag_origin_start_ms = 0.0
             canvas._clip_drag_origin_end_ms = 1000.0
             canvas._update_clip_drag_geometry(QPointF(122.5, 20.0), Qt.NoModifier)
             assert canvas._clip_drag_start_ms == 0.0
-            assert canvas._clip_drag_end_ms == 1500.0
+            assert canvas._clip_drag_end_ms == 1250.0
 
             canvas.close()
             app.processEvents()

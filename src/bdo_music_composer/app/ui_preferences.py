@@ -13,7 +13,7 @@ from typing import Any, Mapping, MutableMapping
 
 
 UI_PREFERENCES_KEY = "ui_preferences"
-UI_PREFERENCES_VERSION = 1
+UI_PREFERENCES_VERSION = 2
 
 DEFAULT_UI_PREFERENCES: dict[str, Any] = {
     "version": UI_PREFERENCES_VERSION,
@@ -25,6 +25,9 @@ DEFAULT_UI_PREFERENCES: dict[str, Any] = {
         "timeline_pan_percent": 0,
         "timeline_loop_enabled": False,
         "reference_volume_percent": 50,
+        "timeline_header_width": 276,
+        "timeline_lane_height": 68,
+        "reference_lane_height": 68,
     },
     "editor": {
         "window_width": 1440,
@@ -38,6 +41,7 @@ DEFAULT_UI_PREFERENCES: dict[str, Any] = {
         "inspector_mode": "note",
         "loop_enabled": False,
         "velocity_visible": False,
+        "velocity_panel_height": 180,
         "velocity_mode": "brush",
         "velocity_radius_beats": 2.0,
         "velocity_scope": "track",
@@ -82,11 +86,15 @@ def normalize_ui_preferences(value: object) -> dict[str, Any]:
         (result["workspace"], workspace, "timeline_zoom_percent", 25, 3200),
         (result["workspace"], workspace, "timeline_pan_percent", 0, 1000),
         (result["workspace"], workspace, "reference_volume_percent", 0, 100),
+        (result["workspace"], workspace, "timeline_header_width", 220, 420),
+        (result["workspace"], workspace, "timeline_lane_height", 44, 104),
+        (result["workspace"], workspace, "reference_lane_height", 44, 180),
         (result["editor"], editor, "window_width", 920, 7680),
         (result["editor"], editor, "window_height", 680, 4320),
         (result["editor"], editor, "horizontal_zoom", 8, 1600),
         (result["editor"], editor, "note_row_height", 10, 72),
         (result["editor"], editor, "velocity_radius_beats", 0.5, 8.0),
+        (result["editor"], editor, "velocity_panel_height", 96, 420),
         (result["transcription"], transcription, "confidence_percent", 0, 100),
     )
     for target, raw, key, minimum, maximum in numeric_fields:

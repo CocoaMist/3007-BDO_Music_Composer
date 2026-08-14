@@ -76,12 +76,18 @@ class WorkspaceUiPreferenceBinding(_PreferenceBinding):
         window.reference_audio.set_volume_percent(
             values["reference_volume_percent"], notify=False
         )
+        window.timeline.set_layout_metrics(
+            header_width=values["timeline_header_width"],
+            lane_height=values["timeline_lane_height"],
+            reference_lane_height=values["reference_lane_height"],
+        )
         if values["window_maximized"]:
             QTimer.singleShot(0, window.showMaximized)
         window.timeline_zoom.valueChanged.connect(self.schedule)
         window.timeline_pan.valueChanged.connect(self.schedule)
         window.timeline_loop_box.toggled.connect(self.schedule)
         window.reference_audio.volume_changed.connect(self.schedule)
+        window.timeline.layout_preferences_changed.connect(self.schedule)
         window.installEventFilter(self)
 
     @property
@@ -107,6 +113,11 @@ class WorkspaceUiPreferenceBinding(_PreferenceBinding):
         values["timeline_pan_percent"] = window.timeline_pan.value()
         values["timeline_loop_enabled"] = window.timeline_loop_box.isChecked()
         values["reference_volume_percent"] = window.reference_audio.volume_percent
+        values.update({
+            "timeline_header_width": window.timeline.header_width,
+            "timeline_lane_height": window.timeline.lane_height,
+            "reference_lane_height": window.timeline.reference_lane_height,
+        })
 
     def reset_timeline_position(self, *, fit: bool = False) -> None:
         window = self.owner
@@ -169,6 +180,7 @@ class EditorUiPreferenceBinding(_PreferenceBinding):
             editor.velocity_brush_button,
         ):
             button.clicked.connect(self.schedule)
+        editor.editor_splitter.splitterMoved.connect(self.schedule)
         editor.installEventFilter(self)
         editor.canvas.installEventFilter(self)
         editor.velocity_lane.installEventFilter(self)
@@ -193,6 +205,7 @@ class EditorUiPreferenceBinding(_PreferenceBinding):
         editor._set_top_inspector_mode(values["inspector_mode"])
         editor.loop_box.setChecked(values["loop_enabled"])
         editor.velocity_toggle.setChecked(values["velocity_visible"])
+        editor.set_velocity_panel_height(values["velocity_panel_height"])
         editor._set_velocity_mode(values["velocity_mode"])
         radius_index = editor.velocity_radius_combo.findData(values["velocity_radius_beats"])
         editor.velocity_radius_combo.setCurrentIndex(max(0, radius_index))
@@ -227,6 +240,7 @@ class EditorUiPreferenceBinding(_PreferenceBinding):
             "inspector_mode": self._inspector_mode(editor),
             "loop_enabled": editor.loop_box.isChecked(),
             "velocity_visible": editor.velocity_toggle.isChecked(),
+            "velocity_panel_height": editor.velocity_panel_height(),
             "velocity_mode": editor.velocity_lane.edit_mode,
             "velocity_radius_beats": editor.velocity_lane.influence_beats,
             "velocity_scope": editor.velocity_lane.scope_mode,

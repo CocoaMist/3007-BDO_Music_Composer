@@ -18,7 +18,7 @@ from bdo_music_composer.editor.game_score_model import bake_game_velocity_transf
 from bdo_music_composer.editor.pitch_transform import PitchTransformPlan
 
 
-CURRENT_PROJECT_SCHEMA = 14
+CURRENT_PROJECT_SCHEMA = 16
 REFERENCE_LAYER_SETTINGS_VERSION = 10
 
 
@@ -387,6 +387,20 @@ def _migrate_arrangement_schema(
                 if isinstance(clip, dict):
                     clip.setdefault("time_offset_ms", 0.0)
         result["schema_version"] = version = 14
+    if version == 14:
+        # Schema 15 was briefly used by development builds for Clip trim
+        # limits.  Keep the version readable, but the corrected left-anchored
+        # scaling model needs no persisted fields of its own.
+        result["schema_version"] = version = 15
+    if version == 15:
+        for track in result.get("tracks") or ():
+            if not isinstance(track, dict):
+                continue
+            for clip in track.get("arrangement_clips") or ():
+                if isinstance(clip, dict):
+                    clip.setdefault("display_name", "")
+                    clip.setdefault("color", "")
+        result["schema_version"] = version = 16
     return version
 
 

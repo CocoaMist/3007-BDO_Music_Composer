@@ -68,8 +68,16 @@ class TimelineClipSelectionUiTests(unittest.TestCase):
             assert [
                 action.text() for action in menu.actions()
                 if not action.isSeparator()
-            ] == ["复制片段", "在播放头粘贴片段", "删除片段"]
-            assert set(actions) == {"copy", "paste", "delete"}
+            ] == [
+                "打开音符编辑器", "复制音块", "重复音块…",
+                "在播放头切分", "复制片段", "在播放头粘贴片段",
+                "收紧右边界到最后音符", "合并所选音块",
+                "重命名音块…", "音块颜色…", "删除片段",
+            ]
+            assert set(actions) == {
+                "open", "duplicate", "repeat", "split", "copy", "paste",
+                "crop", "consolidate", "rename", "color", "delete",
+            }
 
             QTest.mouseClick(canvas, Qt.LeftButton, pos=point)
             app.processEvents()
@@ -145,8 +153,8 @@ class TimelineClipSelectionUiTests(unittest.TestCase):
 
             selected_colors = painted_colors(painted_regions["first"])
             sibling_colors = painted_colors(painted_regions["second"])
-            assert "#f0d887" in selected_colors, selected_colors
-            assert "#f0d887" not in sibling_colors, sibling_colors
+            assert "#ffd766" in selected_colors, selected_colors
+            assert "#ffd766" not in sibling_colors, sibling_colors
             assert canvas._selected_clip_id == "first"
 
             lane = next(
@@ -173,6 +181,64 @@ class TimelineClipSelectionUiTests(unittest.TestCase):
             app.processEvents()
             assert canvas._selected_clip_id == ""
             assert canvas._selected_clip_track_id is None
+
+            # Clip region resizing exposes only the right handle. The left edge
+            # is the fixed anchor even when the Clip is empty.
+            track.notes = []
+            track.arrangement_clips = [
+                ArrangementClipState(
+                    "empty", 0.0, 3000.0, 0.0, 3000.0
+                )
+            ]
+            canvas.set_tracks([track])
+            canvas.set_arrangement_tool("select")
+            canvas.repaint()
+            app.processEvents()
+            assert not any(
+                action == "clip_start|empty"
+                for _rect, action, item in canvas.hit_regions
+                if item is track
+            )
+            end_handle = next(
+                rect for rect, action, item in canvas.hit_regions
+                if item is track and action == "clip_end|empty"
+            )
+            end_point = QPoint(
+                int(end_handle.center().x()),
+                int(end_handle.center().y()),
+            )
+            committed.clear()
+            assert canvas._clip_action_at(end_point)[2] == "clip_body"
+            QTest.mouseClick(canvas, Qt.LeftButton, pos=end_point)
+            app.processEvents()
+            assert canvas._selected_clip_id == "empty"
+            assert not committed
+            assert canvas.cursor().shape() == Qt.SizeHorCursor
+            canvas.repaint()
+            app.processEvents()
+            end_handle = next(
+                rect for rect, action, item in canvas.hit_regions
+                if item is track and action == "clip_end|empty"
+            )
+            end_point = QPoint(
+                int(end_handle.center().x()),
+                int(end_handle.center().y()),
+            )
+            QTest.mouseMove(canvas, pos=end_point)
+            app.processEvents()
+            assert canvas.cursor().shape() == Qt.SizeHorCursor
+            trimmed_point = QPoint(end_point.x() - 45, end_point.y())
+            QTest.mousePress(canvas, Qt.LeftButton, pos=end_point)
+            assert canvas._clip_drag_mode == "resize_end"
+            assert canvas._clip_group_drag_keys == ()
+            QTest.mouseMove(canvas, pos=trimmed_point)
+            QTest.mouseRelease(canvas, Qt.LeftButton, pos=trimmed_point)
+            app.processEvents()
+            assert len(committed) == 1
+            assert committed[0].mode == "resize_end"
+            assert 10.0 <= committed[0].new_end_ms < 3000.0
+            assert committed[0].clip_id == "empty"
+            assert canvas.cursor().shape() == Qt.SizeHorCursor
             canvas.close()
             app.processEvents()
             """

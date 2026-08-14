@@ -64,6 +64,31 @@ def physical_track(
 
 
 class ProjectEditorImportTests(unittest.TestCase):
+    def test_deprecated_clip_trim_fields_are_ignored(self) -> None:
+        tracks = tracks_from_project_payload({
+            "tracks": [project_track(
+                notes=[],
+                bdo_source_note_records=[],
+                arrangement_clips=[{
+                    "clip_id": "legacy-development-clip",
+                    "start_ms": 300.0,
+                    "end_ms": 600.0,
+                    "content_start_ms": 700.0,
+                    "content_end_ms": 1_000.0,
+                    "time_offset_ms": -400.0,
+                    "display_name": "Verse",
+                    "color": "#123456",
+                    "trim_start_limit_ms": 100.0,
+                    "trim_end_limit_ms": 600.0,
+                }],
+            )],
+        }, PRESENTATION)
+
+        clip = tracks[0].arrangement_clips[0]
+        self.assertEqual((clip.start_ms, clip.end_ms), (300.0, 600.0))
+        self.assertEqual((clip.display_name, clip.color), ("Verse", "#123456"))
+        self.assertFalse(hasattr(clip, "trim_start_limit_ms"))
+
     def test_valid_project_restores_zero_velocity_and_dual_wire_velocity(self) -> None:
         payload = {"tracks": [project_track()]}
         original = deepcopy(payload)

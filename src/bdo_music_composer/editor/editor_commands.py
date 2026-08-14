@@ -100,6 +100,7 @@ class ProjectSnapshot:
     pitch_transform_plan: object | None = None
     lyric_events: object | None = None
     timeline_markers: object | None = None
+    arrangement_selection: object | None = None
 
     @classmethod
     def capture(cls, tracks: Sequence[object], reverb: int, delay: int,
@@ -108,8 +109,9 @@ class ProjectSnapshot:
                 transcription_assist_state: object | None = None,
                 conversion_settings: object | None = None,
                 pitch_transform_plan: object | None = None,
-                lyric_events: object | None = None,
-                timeline_markers: object | None = None,
+                 lyric_events: object | None = None,
+                 timeline_markers: object | None = None,
+                 arrangement_selection: object | None = None,
                 ) -> "ProjectSnapshot":
         return cls(
             tuple(deepcopy(list(tracks))),
@@ -122,6 +124,7 @@ class ProjectSnapshot:
             deepcopy(pitch_transform_plan),
             deepcopy(lyric_events),
             deepcopy(timeline_markers),
+            deepcopy(arrangement_selection),
         )
 
     def restored_tracks(self) -> list:
@@ -144,6 +147,9 @@ class ProjectSnapshot:
 
     def restored_timeline_markers(self) -> object | None:
         return deepcopy(self.timeline_markers)
+
+    def restored_arrangement_selection(self) -> object | None:
+        return deepcopy(self.arrangement_selection)
 
 
 class ProjectCommandStack:

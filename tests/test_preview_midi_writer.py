@@ -12,7 +12,8 @@ import unittest
 import mido
 
 from bdo_midi import Note
-from bdo_music_composer.editor.editor_models import TrackState
+from bdo_music_composer.editor.arrangement_clip import plan_clip_edit
+from bdo_music_composer.editor.editor_models import ArrangementClipState, TrackState
 from bdo_music_composer.editor.preview_midi_writer import (
     build_filtered_midi,
     build_filtered_midi_bytes,
@@ -49,6 +50,41 @@ def _absolute_messages(track: mido.MidiTrack) -> list[tuple[int, object]]:
 
 
 class PreviewMidiWriterTests(unittest.TestCase):
+    def test_clip_region_resize_keeps_standard_midi_note_alignment(self) -> None:
+        track = _track(
+            1,
+            notes=[Note(60, 77, 100.0, 125.0, 5)],
+            gm_program=17,
+        )
+        track.arrangement_clips = [ArrangementClipState(
+            "resized", 100.0, 300.0, 100.0, 300.0
+        )]
+        update = plan_clip_edit(
+            track,
+            clip_id="resized",
+            mode="resize_end",
+            new_start_ms=100.0,
+            new_end_ms=700.0,
+        ).updates[0]
+        track.notes = list(update.notes)
+        track.arrangement_clips = list(update.arrangement_clips)
+
+        midi = mido.MidiFile(file=BytesIO(
+            build_filtered_midi_bytes([track], 120, 4)
+        ))
+        messages = _absolute_messages(midi.tracks[1])
+        note_on = next(
+            (tick, message) for tick, message in messages
+            if message.type == "note_on" and message.velocity > 0
+        )
+        note_off = next(
+            (tick, message) for tick, message in messages
+            if message.type == "note_off"
+        )
+
+        self.assertEqual((note_on[0], note_off[0]), (96, 216))
+        self.assertEqual((note_on[1].note, note_on[1].velocity), (60, 77))
+
     def test_duration_scale_and_same_tick_note_order_are_preserved(self) -> None:
         lead = _track(
             1,

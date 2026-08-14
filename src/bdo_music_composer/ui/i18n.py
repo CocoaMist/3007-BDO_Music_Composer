@@ -8368,14 +8368,79 @@ for _source, (_english, _japanese, _korean) in _TRACK_ORDER_TRANSLATIONS.items()
 
 del _source, _english, _japanese, _korean
 
+_ARRANGEMENT_WORKSPACE_TRANSLATIONS = {
+    "窗口": ("Windows", "ウィンドウ", "창"),
+    "音块编辑区域": ("Clip Edit Range", "クリップ編集範囲", "클립 편집 범위"),
+    "切换或平铺已打开的音块编辑器": (
+        "Switch or tile open clip editors",
+        "開いているクリップエディターの切り替え・整列",
+        "열린 클립 편집기 전환 또는 바둑판식 배열",
+    ),
+    "已打开 {count} 个音块编辑器": (
+        "{count} clip editors open",
+        "クリップエディターを{count}個開いています",
+        "클립 편집기 {count}개 열림",
+    ),
+    "平铺编辑器窗口": (
+        "Tile Editor Windows", "エディターを整列", "편집기 창 바둑판식 배열",
+    ),
+    "返回轨道时间轴": (
+        "Return to Track Timeline", "トラックタイムラインへ戻る", "트랙 타임라인으로 돌아가기",
+    ),
+    "展开乐器组": ("Expand Instrument Group", "楽器グループを展開", "악기 그룹 펼치기"),
+    "折叠乐器组": ("Collapse Instrument Group", "楽器グループを折りたたむ", "악기 그룹 접기"),
+    "拖动调整轨道头宽度": (
+        "Drag to resize track headers", "ドラッグでトラックヘッダー幅を変更", "드래그하여 트랙 헤더 너비 조절",
+    ),
+    "拖动调整轨道高度": (
+        "Drag to resize track height", "ドラッグでトラックの高さを変更", "드래그하여 트랙 높이 조절",
+    ),
+    "拖动调整参考音频高度": (
+        "Drag to resize reference audio", "ドラッグで参照オーディオの高さを変更", "드래그하여 참조 오디오 높이 조절",
+    ),
+    "F1 快捷键；Ctrl+D 复制片段；Ctrl+E 在播放头切分；Enter 编辑焦点；方向键导航；Alt+左右调整音量": (
+        "F1 shortcuts; Ctrl+D duplicate clip; Ctrl+E split at playhead; Enter edits focus; arrows navigate; Alt+Left/Right adjusts volume",
+        "F1 ショートカット、Ctrl+D クリップ複製、Ctrl+E 再生位置で分割、Enter フォーカス編集、矢印で移動、Alt+左右で音量調整",
+        "F1 단축키, Ctrl+D 클립 복제, Ctrl+E 재생 헤드에서 분할, Enter 포커스 편집, 화살표 탐색, Alt+좌우 음량 조절",
+    ),
+}
+
+for _source, (_english, _japanese, _korean) in _ARRANGEMENT_WORKSPACE_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
 _TRACK_MERGE_TRANSLATIONS = {
+    "框选工具": ("Marquee Tool", "範囲選択ツール", "영역 선택 도구"),
+    "框选工具：拖动框选多个片段；所选片段只在片段编辑状态下移动": (
+        "Marquee: drag to select multiple clips; selected clips move only in Clip Edit mode",
+        "範囲選択：ドラッグで複数クリップを選択します。選択したクリップの移動はクリップ編集モードでのみ行えます",
+        "영역 선택: 드래그하여 여러 클립을 선택합니다. 선택한 클립은 클립 편집 모드에서만 이동합니다",
+    ),
     "剃刀": ("Razor", "はさみ", "자르기"),
     "选择工具": ("Select Tool", "選択ツール", "선택 도구"),
+    "片段编辑": ("Clip Edit", "クリップ編集", "클립 편집"),
     "剃刀工具": ("Razor Tool", "はさみツール", "자르기 도구"),
     "选择工具：移动或裁剪片段": ("Select: move or trim clips", "選択：クリップを移動またはトリム", "선택: 클립 이동 또는 트림"),
+    "片段编辑：开启后拖动片段可移动或裁剪；再次点击关闭": (
+        "Clip edit: enable to move or trim by dragging; click again to turn off",
+        "クリップ編集：有効にするとドラッグで移動・トリムできます。もう一度クリックすると解除します",
+        "클립 편집: 켜면 드래그로 이동하거나 트리밍할 수 있습니다. 다시 클릭하면 꺼집니다",
+    ),
     "剃刀工具：单击片段进行切分": ("Razor: click a clip to split it", "はさみ：クリップをクリックして分割", "자르기: 클립을 클릭해 분할"),
+    "剃刀工具：单击片段进行切分；再次点击关闭": (
+        "Razor: click a clip to split it; click again to turn off",
+        "はさみ：クリップをクリックして分割します。もう一度クリックすると解除します",
+        "자르기: 클립을 클릭해 분할합니다. 다시 클릭하면 꺼집니다",
+    ),
     "无法切分片段：{error}": ("Cannot split clip: {error}", "クリップを分割できません：{error}", "클립을 분할할 수 없음: {error}"),
     "片段已切分": ("Clip split", "クリップを分割しました", "클립 분할됨"),
+    "无法删除所选片段：{error}": ("Cannot delete selected clips: {error}", "選択したクリップを削除できません：{error}", "선택한 클립을 삭제할 수 없음: {error}"),
+    "已删除 {count} 个片段": ("Deleted {count} clips", "{count}個のクリップを削除しました", "클립 {count}개 삭제됨"),
+    "无法移动所选片段：{error}": ("Cannot move selected clips: {error}", "選択したクリップを移動できません：{error}", "선택한 클립을 이동할 수 없음: {error}"),
+    "已移动 {count} 个片段": ("Moved {count} clips", "{count}個のクリップを移動しました", "클립 {count}개 이동됨"),
     "单击音符内部即可用剃刀切分": ("Click inside a note to split it with the Razor tool", "ノート内部をクリックしてはさみツールで分割", "음표 안을 클릭해 자르기 도구로 분할"),
     "剃刀：单击音符内部即可切分": ("Razor: click inside a note to split it", "はさみ：ノート内部をクリックして分割", "자르기: 음표 안을 클릭해 분할"),
     "同乐器 Group · {instrument} · {count} 轨": ("Same-instrument Group · {instrument} · {count} tracks", "同じ楽器のGroup · {instrument} · {count}トラック", "같은 악기 Group · {instrument} · {count}개 트랙"),
@@ -8472,6 +8537,21 @@ _ARRANGEMENT_REFINEMENT_TRANSLATIONS = {
     "取消整组静音": ("Unmute Group", "グループのミュートを解除", "그룹 음소거 해제"),
     "整组独奏": ("Solo Group", "グループをソロ", "그룹 솔로"),
     "取消整组独奏": ("Unsolo Group", "グループのソロを解除", "그룹 솔로 해제"),
+    "折叠所有乐器组": ("Collapse All Instrument Groups", "すべての楽器グループを折りたたむ", "모든 악기 그룹 접기"),
+    "展开所有乐器组": ("Expand All Instrument Groups", "すべての楽器グループを展開", "모든 악기 그룹 펼치기"),
+    "折叠所有组": ("Collapse All Groups", "すべてのグループを折りたたむ", "모든 그룹 접기"),
+    "展开所有组": ("Expand All Groups", "すべてのグループを展開", "모든 그룹 펼치기"),
+    "乐器组 · {instrument}": ("Instrument Group · {instrument}", "楽器グループ · {instrument}", "악기 그룹 · {instrument}"),
+    "{tracks} 轨 · {clips} 音块 · {notes} 音符": ("{tracks} tracks · {clips} clips · {notes} notes", "{tracks}トラック · {clips}クリップ · {notes}ノート", "트랙 {tracks}개 · 클립 {clips}개 · 음표 {notes}개"),
+    "组摘要 · {instrument} · {count} 轨；双击或 Enter 展开，U 折叠/展开，M/S 控制整组": ("Group summary · {instrument} · {count} tracks; double-click or press Enter to expand, U folds/unfolds, M/S controls the group", "グループ概要 · {instrument} · {count}トラック。ダブルクリックまたはEnterで展開、Uで折りたたみ／展開、M/Sでグループ全体を操作", "그룹 요약 · {instrument} · 트랙 {count}개. 두 번 클릭하거나 Enter로 펼치고 U로 접기/펼치며 M/S로 그룹 전체를 제어합니다"),
+    "适配宽度 W": ("Fit Width W", "幅に合わせる W", "너비 맞춤 W"),
+    "显示整首歌曲并回到时间轴起点（W）": ("Show the full song and return to the timeline start (W)", "曲全体を表示してタイムライン先頭へ戻ります（W）", "전체 곡을 표시하고 타임라인 시작으로 돌아갑니다(W)"),
+    "适配整首歌曲宽度": ("Fit Full Song Width", "曲全体を幅に合わせる", "전체 곡 너비 맞춤"),
+    "适配轨道 H": ("Fit Tracks H", "トラックを合わせる H", "트랙 맞춤 H"),
+    "让当前轨道尽量填满可用高度（H）": ("Fit the current tracks into the available height (H)", "現在のトラックを利用可能な高さに合わせます（H）", "현재 트랙을 사용 가능한 높이에 맞춥니다(H)"),
+    "适配全部轨道高度": ("Fit All Track Heights", "すべてのトラック高さを合わせる", "모든 트랙 높이 맞춤"),
+    "恢复标准布局": ("Restore Standard Layout", "標準レイアウトに戻す", "표준 레이아웃 복원"),
+    "恢复标准轨头宽度、轨道高度和参考音频高度": ("Restore standard track-header width, track height, and reference-audio height", "トラックヘッダー幅、トラック高さ、参照オーディオ高さを標準に戻します", "트랙 헤더 너비, 트랙 높이, 참조 오디오 높이를 표준으로 복원합니다"),
 }
 for _source, (_english, _japanese, _korean) in _ARRANGEMENT_REFINEMENT_TRANSLATIONS.items():
     EN[_source] = _english
@@ -8798,6 +8878,41 @@ _ARRANGEMENT_CLIP_TRANSLATIONS = {
         "クリップ境界を調整できません：{error}",
         "클립 경계를 조정할 수 없습니다: {error}",
     ),
+    "片段左边界固定；调整右边界只会扩展或收缩编辑区域，不会缩放音符。": (
+        "The clip's left edge is fixed; adjusting the right edge only expands or contracts the edit region and never scales notes.",
+        "クリップの左端は固定され、右端の調整では編集領域だけが伸縮し、ノートは拡大縮小されません。",
+        "클립의 왼쪽 경계는 고정되며 오른쪽 경계를 조절하면 편집 영역만 늘거나 줄고 음표는 비례 조정되지 않습니다.",
+    ),
+    "粘贴内容超出当前片段边界；请先扩展右侧编辑区域或移动编辑光标。": (
+        "The pasted notes exceed the current clip boundary; expand the right edit region or move the edit cursor first.",
+        "貼り付けるノートが現在のクリップ境界を超えています。先に右側の編集領域を広げるか、編集カーソルを移動してください。",
+        "붙여넣을 음표가 현재 클립 경계를 벗어납니다. 먼저 오른쪽 편집 영역을 확장하거나 편집 커서를 이동하세요.",
+    ),
+    "目标位置存在同音高重叠，已将整组音符移至右侧最近空位。": (
+        "The target has overlapping notes at the same pitch; the complete group was moved to the nearest free position on the right.",
+        "貼り付け先で同じピッチのノートが重なるため、グループ全体を右側の最も近い空き位置へ移動しました。",
+        "대상 위치에 같은 음높이의 음표가 겹쳐 전체 그룹을 오른쪽의 가장 가까운 빈 위치로 이동했습니다.",
+    ),
+    "无法复制音符：选择内容过大或包含无效音符。": (
+        "Could not copy notes: the selection is too large or contains invalid notes.",
+        "ノートをコピーできません。選択内容が大きすぎるか、無効なノートが含まれています。",
+        "음표를 복사할 수 없습니다. 선택 내용이 너무 크거나 잘못된 음표가 포함되어 있습니다.",
+    ),
+    "已保留粘贴音符的原始音高与奏法；其中部分内容不适用于目标乐器，请检查红色提示后再导出。": (
+        "The pasted notes kept their original pitches and articulations; some are not valid for the target instrument, so review the red warnings before export.",
+        "貼り付けたノートの元のピッチと奏法を保持しました。対象楽器に適さない内容があるため、書き出す前に赤い警告を確認してください。",
+        "붙여넣은 음표의 원래 음높이와 주법을 유지했습니다. 일부는 대상 악기에 맞지 않으므로 내보내기 전에 빨간 경고를 확인하세요.",
+    ),
+    "片段左边界固定，请调整右边界。": (
+        "The clip's left edge is fixed; adjust the right edge.",
+        "クリップの左端は固定されています。右端を調整してください。",
+        "클립의 왼쪽 경계는 고정됩니다. 오른쪽 경계를 조절하세요.",
+    ),
+    "调整后的片段不能与其他片段重叠。": (
+        "A resized clip cannot overlap another clip.",
+        "調整後のクリップを別のクリップと重ねることはできません。",
+        "조절된 클립은 다른 클립과 겹칠 수 없습니다.",
+    ),
     "无法编辑片段：{error}": ("Could not edit clip: {error}", "クリップを編集できません：{error}", "클립을 편집할 수 없습니다: {error}"),
     "片段编辑已应用": ("Clip edit applied", "クリップ編集を適用しました", "클립 편집을 적용했습니다"),
     "无法创建片段：{error}": ("Could not create clip: {error}", "クリップを作成できません：{error}", "클립을 만들 수 없습니다: {error}"),
@@ -8839,6 +8954,215 @@ for _source, (
     _japanese,
     _korean,
 ) in _CONTENT_BOUNDARY_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+_FILE_DROP_IMPORT_TRANSLATIONS = {
+    "拖入文件失败": (
+        "File Drop Failed",
+        "ファイルのドロップに失敗しました",
+        "파일 끌어놓기 실패",
+    ),
+    "一次只能拖入一个 MIDI 或游戏曲谱文件。": (
+        "Drop only one MIDI or game-score file at a time.",
+        "MIDIまたはゲーム楽譜ファイルは一度に1つだけドロップしてください。",
+        "MIDI 또는 게임 악보 파일을 한 번에 하나만 끌어놓으세요.",
+    ),
+    "仅支持 MIDI 文件（.mid、.midi）和游戏曲谱（.bdo）。": (
+        "Only MIDI files (.mid, .midi) and game scores (.bdo) are supported.",
+        "MIDIファイル（.mid、.midi）とゲーム楽譜（.bdo）のみ対応しています。",
+        "MIDI 파일(.mid, .midi)과 게임 악보(.bdo)만 지원합니다.",
+    ),
+    "导入文件": ("Import File", "ファイルを読み込む", "파일 가져오기"),
+    "当前混音台已有内容。如何处理 {file}？": (
+        "The mixer already contains material. How should {file} be handled?",
+        "ミキサーには既に内容があります。{file}をどう処理しますか？",
+        "믹서에 이미 내용이 있습니다. {file}을(를) 어떻게 처리할까요?",
+    ),
+    "保存当前工程后打开该文件，或将它追加到现有混音台。": (
+        "Save the current project and open this file, or append it to the existing mixer.",
+        "現在のプロジェクトを保存してこのファイルを開くか、既存のミキサーに追加します。",
+        "현재 프로젝트를 저장하고 이 파일을 열거나 기존 믹서에 추가합니다.",
+    ),
+    "保存并打开": ("Save and Open", "保存して開く", "저장하고 열기"),
+    "追加": ("Append", "追加", "추가"),
+    "关闭": ("Close", "閉じる", "닫기"),
+    "保存当前工程失败": (
+        "Could Not Save Current Project",
+        "現在のプロジェクトを保存できませんでした",
+        "현재 프로젝트 저장 실패",
+    ),
+    "当前工程未能安全保存，已取消打开 {file}。": (
+        "The current project could not be saved safely, so opening {file} was cancelled.",
+        "現在のプロジェクトを安全に保存できなかったため、{file}を開く操作を取り消しました。",
+        "현재 프로젝트를 안전하게 저장하지 못해 {file} 열기를 취소했습니다.",
+    ),
+    "暂时无法导入文件": (
+        "File Import Is Temporarily Unavailable",
+        "現在ファイルを読み込めません",
+        "현재 파일을 가져올 수 없음",
+    ),
+    "当前有导出或分析任务正在运行。请等待任务完成后再拖入文件。": (
+        "An export or analysis task is running. Wait for it to finish before dropping a file.",
+        "書き出しまたは解析を実行中です。完了してからファイルをドロップしてください。",
+        "내보내기 또는 분석 작업이 실행 중입니다. 완료된 후 파일을 끌어놓으세요.",
+    ),
+}
+
+for _source, (
+    _english,
+    _japanese,
+    _korean,
+) in _FILE_DROP_IMPORT_TRANSLATIONS.items():
+    EN[_source] = _english
+    JA[_source] = _japanese
+    KO[_source] = _korean
+
+del _source, _english, _japanese, _korean
+
+_DAW_WORKFLOW_TRANSLATIONS = {
+    "F1 快捷键；W/H 适配视图；U 折叠/展开组；Ctrl+D 复制片段；Ctrl+E 在播放头切分；Enter 编辑焦点；方向键导航": (
+        "F1 shortcuts; W/H fit the view; U folds/unfolds groups; Ctrl+D duplicates a clip; Ctrl+E splits at the playhead; Enter edits the focus; arrows navigate",
+        "F1 ショートカット。W/Hで表示を合わせ、Uでグループを折りたたみ／展開、Ctrl+Dでクリップ複製、Ctrl+Eで再生ヘッド位置を分割、Enterでフォーカスを編集、矢印キーで移動",
+        "F1 단축키, W/H 보기 맞춤, U 그룹 접기/펼치기, Ctrl+D 클립 복제, Ctrl+E 재생 헤드에서 분할, Enter 포커스 편집, 화살표 탐색",
+    ),
+    "Ctrl+C 复制片段 · Ctrl+V 粘贴到播放头 · Ctrl+D 向后复制\nCtrl+E 在播放头切分 · Delete 删除 · Enter 打开编辑器\nCtrl+L 重复 · Ctrl+J 合并 · Ctrl+Shift+J 收紧右边界\nF2 重命名 · Ctrl+Shift+D 复制轨道\n↑/↓ 选择轨道 · Home/End 首尾轨道 · M 静音 · S 独奏\n←/→ 移动播放头或音块 · Shift 扩展范围/粗调\nCtrl+←/→ 上/下一个音块或标记边界 · Alt+←/→ 调整音量\nZ 缩放到范围/音块 · X 恢复视图 · F 轨道效果\nW 适配整首宽度 · H 适配轨道高度 · U 折叠/展开当前组\nCtrl+滚轮缩放 · Shift+滚轮横向滚动 · Alt 临时取消吸附": (
+        "Ctrl+C Copy clip · Ctrl+V Paste at playhead · Ctrl+D Duplicate forward\nCtrl+E Split at playhead · Delete Remove · Enter Open editor\nCtrl+L Repeat · Ctrl+J Consolidate · Ctrl+Shift+J Tighten right edge\nF2 Rename · Ctrl+Shift+D Duplicate track\n↑/↓ Select track · Home/End First/last track · M Mute · S Solo\n←/→ Move playhead or clip · Shift Extend range/coarse step\nCtrl+←/→ Previous/next clip or marker boundary · Alt+←/→ Adjust volume\nZ Fit range/clip · X Restore view · F Track effects\nW Fit full-song width · H Fit track heights · U Fold/unfold current group\nCtrl+wheel Zoom · Shift+wheel Horizontal scroll · Alt Temporarily bypass snap",
+        "Ctrl+C クリップをコピー · Ctrl+V 再生ヘッドへペースト · Ctrl+D 後方へ複製\nCtrl+E 再生ヘッド位置で分割 · Delete 削除 · Enter エディターを開く\nCtrl+L 反復 · Ctrl+J 結合 · Ctrl+Shift+J 右端を詰める\nF2 名前変更 · Ctrl+Shift+D トラック複製\n↑/↓ トラック選択 · Home/End 先頭/末尾 · M ミュート · S ソロ\n←/→ 再生ヘッドまたはクリップ移動 · Shift 範囲拡張／粗調整\nCtrl+←/→ 前後のクリップまたはマーカー境界 · Alt+←/→ 音量調整\nZ 範囲／クリップに合わせる · X 表示を戻す · F トラックエフェクト\nW 曲全体を幅に合わせる · H トラック高さを合わせる · U 現在のグループを折りたたみ／展開\nCtrl+ホイール ズーム · Shift+ホイール 横スクロール · Alt 一時的にスナップ解除",
+        "Ctrl+C 클립 복사 · Ctrl+V 재생 헤드에 붙여넣기 · Ctrl+D 뒤로 복제\nCtrl+E 재생 헤드에서 분할 · Delete 삭제 · Enter 편집기 열기\nCtrl+L 반복 · Ctrl+J 합치기 · Ctrl+Shift+J 오른쪽 경계 조이기\nF2 이름 변경 · Ctrl+Shift+D 트랙 복제\n↑/↓ 트랙 선택 · Home/End 처음/마지막 트랙 · M 음소거 · S 솔로\n←/→ 재생 헤드 또는 클립 이동 · Shift 범위 확장/거친 조절\nCtrl+←/→ 이전/다음 클립 또는 마커 경계 · Alt+←/→ 음량 조절\nZ 범위/클립 맞춤 · X 보기 복원 · F 트랙 효과\nW 전체 곡 너비 맞춤 · H 트랙 높이 맞춤 · U 현재 그룹 접기/펼치기\nCtrl+휠 확대/축소 · Shift+휠 가로 스크롤 · Alt 임시 스냅 해제",
+    ),
+    "打开音符编辑器": (
+        "Open Note Editor", "ノートエディターを開く", "음표 편집기 열기",
+    ),
+    "复制音块": ("Duplicate Clip", "クリップを複製", "클립 복제"),
+    "在播放头切分": (
+        "Split at Playhead", "再生ヘッド位置で分割", "재생 헤드에서 분할",
+    ),
+    "重命名音块…": (
+        "Rename Clip…", "クリップ名を変更…", "클립 이름 바꾸기…",
+    ),
+    "音块颜色…": (
+        "Clip Color…", "クリップの色…", "클립 색상…",
+    ),
+    "音块": ("Clip", "クリップ", "클립"),
+    "时间轴快捷键": (
+        "Timeline Shortcuts", "タイムラインのショートカット", "타임라인 단축키",
+    ),
+    "F1 快捷键；Ctrl+D 复制片段；Ctrl+E 在播放头切分；Enter 编辑；M 静音；S 独奏；上下键选择轨道": (
+        "F1 shortcuts; Ctrl+D duplicate clip; Ctrl+E split at playhead; Enter edit; M mute; S solo; Use Up/Down to select a track",
+        "F1 ショートカット；Ctrl+D クリップ複製；Ctrl+E 再生ヘッドで分割；Enter 編集；M ミュート；S ソロ；上下キーでトラック選択",
+        "F1 단축키; Ctrl+D 클립 복제; Ctrl+E 재생 헤드에서 분할; Enter 편집; M 음소거; S 솔로; 위/아래 키로 트랙 선택",
+    ),
+    "时间轴快捷键…": (
+        "Timeline Shortcuts…", "タイムラインのショートカット…", "타임라인 단축키…",
+    ),
+    "Ctrl+C 复制片段 · Ctrl+V 粘贴到播放头 · Ctrl+D 向后复制\nCtrl+E 在播放头切分 · Delete 删除 · Enter 打开编辑器\nCtrl+L 重复 · Ctrl+J 合并 · Ctrl+Shift+J 收紧右边界\nF2 重命名 · Ctrl+Shift+D 复制轨道\n↑/↓ 选择轨道 · Home/End 首尾轨道 · M 静音 · S 独奏\nF 轨道效果 · ←/→ 调整音量 · Shift 每次调整 5\nCtrl+滚轮缩放 · Shift+滚轮横向滚动 · Alt 临时取消吸附": (
+        "Ctrl+C Copy clip · Ctrl+V Paste at playhead · Ctrl+D Duplicate forward\nCtrl+E Split at playhead · Delete Remove · Enter Open editor\nCtrl+L Repeat · Ctrl+J Consolidate · Ctrl+Shift+J Tighten right edge\nF2 Rename · Ctrl+Shift+D Duplicate track\n↑/↓ Select track · Home/End First/last track · M Mute · S Solo\nF Track effects · ←/→ Adjust volume · Shift changes by 5\nCtrl+wheel Zoom · Shift+wheel Horizontal scroll · Alt temporarily bypass snap",
+        "Ctrl+C クリップをコピー · Ctrl+V 再生ヘッドへペースト · Ctrl+D 後方へ複製\nCtrl+E 再生ヘッド位置で分割 · Delete 削除 · Enter エディターを開く\nCtrl+L 反復 · Ctrl+J 統合 · Ctrl+Shift+J 右端を詰める\nF2 名前変更 · Ctrl+Shift+D トラックを複製\n↑/↓ トラック選択 · Home/End 先頭/末尾 · M ミュート · S ソロ\nF トラックエフェクト · ←/→ 音量調整 · Shift で5ずつ変更\nCtrl+ホイール ズーム · Shift+ホイール 横スクロール · Alt 一時的にスナップ解除",
+        "Ctrl+C 클립 복사 · Ctrl+V 재생 헤드에 붙여넣기 · Ctrl+D 뒤로 복제\nCtrl+E 재생 헤드에서 분할 · Delete 삭제 · Enter 편집기 열기\nCtrl+L 반복 · Ctrl+J 통합 · Ctrl+Shift+J 오른쪽 경계 조이기\nF2 이름 변경 · Ctrl+Shift+D 트랙 복제\n↑/↓ 트랙 선택 · Home/End 처음/마지막 트랙 · M 음소거 · S 솔로\nF 트랙 효과 · ←/→ 볼륨 조절 · Shift는 5씩 변경\nCtrl+휠 확대/축소 · Shift+휠 가로 스크롤 · Alt 임시 스냅 해제",
+    ),
+    "Ctrl+C 复制片段 · Ctrl+V 粘贴到播放头 · Ctrl+D 向后复制\nCtrl+E 在播放头切分 · Delete 删除 · Enter 打开编辑器\nCtrl+L 重复 · Ctrl+J 合并 · Ctrl+Shift+J 收紧右边界\n↑/↓ 选择轨道 · Home/End 首尾轨道 · M 静音 · S 独奏\nF 轨道效果 · ←/→ 调整音量 · Shift 每次调整 5\nCtrl+滚轮缩放 · Shift+滚轮横向滚动 · Alt 临时取消吸附": (
+        "Ctrl+C Copy clip · Ctrl+V Paste at playhead · Ctrl+D Duplicate forward\nCtrl+E Split at playhead · Delete Remove · Enter Open editor\nCtrl+L Repeat · Ctrl+J Consolidate · Ctrl+Shift+J Tighten right edge\n↑/↓ Select track · Home/End First/last track · M Mute · S Solo\nF Track effects · ←/→ Adjust volume · Shift changes by 5\nCtrl+wheel Zoom · Shift+wheel Horizontal scroll · Alt temporarily bypass snap",
+        "Ctrl+C クリップをコピー · Ctrl+V 再生ヘッドへペースト · Ctrl+D 後方へ複製\nCtrl+E 再生ヘッド位置で分割 · Delete 削除 · Enter エディターを開く\nCtrl+L 反復 · Ctrl+J 結合 · Ctrl+Shift+J 右端を詰める\n↑/↓ トラック選択 · Home/End 先頭/末尾 · M ミュート · S ソロ\nF トラックエフェクト · ←/→ 音量調整 · Shift は5ずつ変更\nCtrl+ホイール ズーム · Shift+ホイール 横スクロール · Alt 一時的にスナップ解除",
+        "Ctrl+C 클립 복사 · Ctrl+V 재생 헤드에 붙여넣기 · Ctrl+D 뒤로 복제\nCtrl+E 재생 헤드에서 분할 · Delete 삭제 · Enter 편집기 열기\nCtrl+L 반복 · Ctrl+J 합치기 · Ctrl+Shift+J 오른쪽 경계 조이기\n↑/↓ 트랙 선택 · Home/End 처음/마지막 트랙 · M 음소거 · S 솔로\nF 트랙 효과 · ←/→ 음량 조절 · Shift는 5씩 변경\nCtrl+휠 확대/축소 · Shift+휠 가로 스크롤 · Alt 일시적으로 스냅 해제",
+    ),
+    "重命名轨道…": (
+        "Rename Track…", "トラック名を変更…", "트랙 이름 바꾸기…",
+    ),
+    "复制轨道": ("Duplicate Track", "トラックを複製", "트랙 복제"),
+    "轨道颜色…": ("Track Color…", "トラックの色…", "트랙 색상…"),
+    "移动/调整音块": (
+        "Move/Resize Clips", "クリップの移動／サイズ変更", "클립 이동/크기 조절",
+    ),
+    "移动/调整音块：拖动主体移动，拖动右边界改变编辑区域": (
+        "Move/resize clips: drag the body to move; drag the right edge to change the edit region",
+        "クリップの移動／サイズ変更：本体をドラッグして移動し、右端をドラッグして編集領域を変更します",
+        "클립 이동/크기 조절: 본문을 끌어 이동하고 오른쪽 경계를 끌어 편집 영역을 바꿉니다",
+    ),
+    "小节与拍位置；左边界锁定，右边界只改变编辑区域": (
+        "Bar and beat positions; the left edge is locked and the right edge changes only the edit region",
+        "小節と拍の位置。左端は固定され、右端は編集領域だけを変更します",
+        "마디와 박 위치입니다. 왼쪽 경계는 잠겨 있고 오른쪽 경계는 편집 영역만 바꿉니다",
+    ),
+    "范围 {start} → {end} · 左侧锁定": (
+        "Range {start} → {end} · Left locked",
+        "範囲 {start} → {end} · 左端固定",
+        "범위 {start} → {end} · 왼쪽 잠김",
+    ),
+    "🔒 {start} → {end}": (
+        "🔒 {start} → {end}", "🔒 {start} → {end}", "🔒 {start} → {end}",
+    ),
+    "左边界 {left:.1f} ms 已锁定；右边界 {right:.1f} ms 只改变编辑区域": (
+        "Left edge {left:.1f} ms is locked; right edge {right:.1f} ms changes only the edit region",
+        "左端 {left:.1f} ms は固定されています。右端 {right:.1f} ms は編集領域だけを変更します",
+        "왼쪽 경계 {left:.1f}ms는 잠겨 있습니다. 오른쪽 경계 {right:.1f}ms는 편집 영역만 바꿉니다",
+    ),
+    "音块已向后复制": (
+        "Clip duplicated forward", "クリップを後方へ複製しました", "클립을 뒤로 복제했습니다",
+    ),
+    "无法复制音块：{error}": (
+        "Could not duplicate clip: {error}",
+        "クリップを複製できません：{error}",
+        "클립을 복제할 수 없습니다: {error}",
+    ),
+    "重命名音块": ("Rename Clip", "クリップ名を変更", "클립 이름 바꾸기"),
+    "音块名称：": ("Clip name:", "クリップ名：", "클립 이름:"),
+    "无法重命名音块：{error}": (
+        "Could not rename clip: {error}",
+        "クリップ名を変更できません：{error}",
+        "클립 이름을 바꿀 수 없습니다: {error}",
+    ),
+    "音块颜色": ("Clip Color", "クリップの色", "클립 색상"),
+    "重复音块…": ("Repeat Clip…", "クリップを反復…", "클립 반복…"),
+    "收紧右边界到最后音符": (
+        "Tighten Right Edge to Last Note", "右端を最後のノートまで詰める", "오른쪽 경계를 마지막 음표까지 조이기",
+    ),
+    "合并所选音块": (
+        "Consolidate Selected Clips", "選択クリップを結合", "선택한 클립 합치기",
+    ),
+    "重复音块": ("Repeat Clip", "クリップを反復", "클립 반복"),
+    "追加副本数量：": (
+        "Additional copies:", "追加するコピー数：", "추가 복사본 수:",
+    ),
+    "无法重复音块：{error}": (
+        "Could not repeat clip: {error}", "クリップを反復できません：{error}", "클립을 반복할 수 없습니다: {error}",
+    ),
+    "已追加 {count} 个音块副本": (
+        "Added {count} clip copies", "クリップのコピーを{count}個追加しました", "클립 복사본 {count}개를 추가했습니다",
+    ),
+    "无法收紧音块边界：{error}": (
+        "Could not tighten clip edge: {error}", "クリップ端を詰められません：{error}", "클립 경계를 조일 수 없습니다: {error}",
+    ),
+    "音块右边界已收紧": (
+        "Clip right edge tightened", "クリップの右端を詰めました", "클립 오른쪽 경계를 조였습니다",
+    ),
+    "只能合并同一轨道中的音块": (
+        "Only clips on the same track can be consolidated", "同じトラックのクリップだけを結合できます", "같은 트랙의 클립만 합칠 수 있습니다",
+    ),
+    "无法合并音块：{error}": (
+        "Could not consolidate clips: {error}", "クリップを結合できません：{error}", "클립을 합칠 수 없습니다: {error}",
+    ),
+    "所选音块已合并": (
+        "Selected clips consolidated", "選択したクリップを結合しました", "선택한 클립을 합쳤습니다",
+    ),
+    "{name} · {count} 音符": (
+        "{name} · {count} notes", "{name} · {count}ノート", "{name} · 음표 {count}개",
+    ),
+    "{name} 副本": ("{name} copy", "{name} のコピー", "{name} 복사본"),
+    "轨道已复制": ("Track duplicated", "トラックを複製しました", "트랙을 복제했습니다"),
+    "重命名轨道": ("Rename Track", "トラック名を変更", "트랙 이름 바꾸기"),
+    "轨道名称：": ("Track name:", "トラック名：", "트랙 이름:"),
+    "轨道已重命名": ("Track renamed", "トラック名を変更しました", "트랙 이름을 바꿨습니다"),
+    "轨道颜色": ("Track Color", "トラックの色", "트랙 색상"),
+    "轨道颜色已更新": (
+        "Track color updated", "トラックの色を更新しました", "트랙 색상을 업데이트했습니다",
+    ),
+}
+
+for _source, (_english, _japanese, _korean) in _DAW_WORKFLOW_TRANSLATIONS.items():
     EN[_source] = _english
     JA[_source] = _japanese
     KO[_source] = _korean

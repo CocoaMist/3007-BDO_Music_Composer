@@ -11,6 +11,7 @@ filesystem access.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
 from typing import Mapping
@@ -36,6 +37,8 @@ PRELOAD_MAX_WIDTH = 720
 BUILTIN_INSTRUMENT_ART_DIR = ASSETS_DIR / "instruments" / "ai_v1"
 ACTIVE_HEADER_ART_OPACITY = 0.085
 INACTIVE_HEADER_ART_OPACITY = 0.032
+_DECODED_IMAGE_CACHE_LIMIT = 64
+_DECODED_IMAGE_CACHE: OrderedDict[tuple[str, int, int], QImage] = OrderedDict()
 
 
 def _family_key(visual_key: str) -> str:
@@ -149,39 +152,53 @@ class InstrumentLaneArtwork:
             try:
                 image = decoded_by_path.get(selected)
                 if selected not in decoded_by_path:
-                    if selected.stat().st_size > MAX_ARTWORK_FILE_BYTES:
+                    stat = selected.stat()
+                    if stat.st_size > MAX_ARTWORK_FILE_BYTES:
                         warnings.append(f"0x{instrument_id:02X}: file too large")
                         decoded_by_path[selected] = None
                         continue
-                    reader = QImageReader(str(selected))
-                    reader.setAutoTransform(True)
-                    size = reader.size()
-                    if (
-                        not size.isValid()
-                        or size.width() <= 0
-                        or size.height() <= 0
-                        or size.width() * size.height() > MAX_ARTWORK_PIXELS
-                    ):
-                        warnings.append(f"0x{instrument_id:02X}: invalid image size")
-                        decoded_by_path[selected] = None
-                        continue
-                    scale = min(
-                        PRELOAD_MAX_WIDTH / size.width(),
-                        PRELOAD_HEIGHT / size.height(),
-                        1.0,
+                    cache_key = (
+                        str(selected.resolve()),
+                        int(stat.st_mtime_ns),
+                        int(stat.st_size),
                     )
-                    reader.setScaledSize(QSize(
-                        max(1, round(size.width() * scale)),
-                        max(1, round(size.height() * scale)),
-                    ))
-                    loaded = reader.read()
-                    if loaded.isNull():
-                        warnings.append(f"0x{instrument_id:02X}: unreadable image")
-                        decoded_by_path[selected] = None
-                        continue
-                    # Detach from QImageReader and its source device.  The
-                    # local file may be moved after configuration.
-                    image = loaded.copy()
+                    cached = _DECODED_IMAGE_CACHE.get(cache_key)
+                    if cached is not None:
+                        _DECODED_IMAGE_CACHE.move_to_end(cache_key)
+                        image = QImage(cached)
+                    else:
+                        reader = QImageReader(str(selected))
+                        reader.setAutoTransform(True)
+                        size = reader.size()
+                        if (
+                            not size.isValid()
+                            or size.width() <= 0
+                            or size.height() <= 0
+                            or size.width() * size.height() > MAX_ARTWORK_PIXELS
+                        ):
+                            warnings.append(f"0x{instrument_id:02X}: invalid image size")
+                            decoded_by_path[selected] = None
+                            continue
+                        scale = min(
+                            PRELOAD_MAX_WIDTH / size.width(),
+                            PRELOAD_HEIGHT / size.height(),
+                            1.0,
+                        )
+                        reader.setScaledSize(QSize(
+                            max(1, round(size.width() * scale)),
+                            max(1, round(size.height() * scale)),
+                        ))
+                        loaded = reader.read()
+                        if loaded.isNull():
+                            warnings.append(f"0x{instrument_id:02X}: unreadable image")
+                            decoded_by_path[selected] = None
+                            continue
+                        # Detach from QImageReader and its source device. The
+                        # local file may be moved after configuration.
+                        image = loaded.copy()
+                        _DECODED_IMAGE_CACHE[cache_key] = QImage(image)
+                        while len(_DECODED_IMAGE_CACHE) > _DECODED_IMAGE_CACHE_LIMIT:
+                            _DECODED_IMAGE_CACHE.popitem(last=False)
                     decoded_by_path[selected] = image
                 if image is not None:
                     self._images[int(instrument_id)] = image

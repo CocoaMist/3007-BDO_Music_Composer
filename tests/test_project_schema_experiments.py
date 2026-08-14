@@ -200,6 +200,31 @@ class ProjectSchemaExperimentTests(unittest.TestCase):
             "preserve",
         )
 
+    def test_v15_clip_presentation_metadata_defaults_are_added(self) -> None:
+        payload = migrate_project({
+            "schema_version": 15,
+            "tracks": [{
+                "arrangement_clips": [{
+                    "clip_id": "a",
+                    "start_ms": 0.0,
+                    "end_ms": 100.0,
+                    "content_start_ms": 0.0,
+                    "content_end_ms": 100.0,
+                    "time_offset_ms": 0.0,
+                }],
+            }],
+        })
+
+        self.assertEqual(payload["schema_version"], CURRENT_PROJECT_SCHEMA)
+        self.assertEqual(
+            payload["tracks"][0]["arrangement_clips"][0]["display_name"],
+            "",
+        )
+        self.assertEqual(
+            payload["tracks"][0]["arrangement_clips"][0]["color"],
+            "",
+        )
+
     def test_new_reference_layers_are_bounded_and_quiet(self) -> None:
         self.assertEqual(
             DEFAULT_REFERENCE_LAYER_SETTINGS["ghost_opacity_percent"],

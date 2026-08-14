@@ -4,13 +4,55 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtWidgets import QInputDialog
+from PySide6.QtWidgets import QApplication, QInputDialog
 
 from bdo_music_composer.ui.i18n import tr
 from bdo_music_composer.editor.timeline_markers import normalize_timeline_markers
 
 
 class EditorWorkspaceHostMixin:
+    def _visible_note_editors(self) -> tuple[object, ...]:
+        return tuple(
+            editor
+            for editor in self._note_editors.values()
+            if editor.isVisible()
+        )
+
+    def _tile_note_editors(self) -> None:
+        """Tile open editors within the current screen's usable geometry."""
+
+        editors = self._visible_note_editors()
+        if not editors:
+            return
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry().adjusted(12, 12, -12, -12)
+        columns = max(1, min(len(editors), available.width() // 920))
+        rows = max(1, available.height() // 680)
+        capacity = max(1, columns * rows)
+        cell_width = max(920, available.width() // columns)
+        cell_height = max(680, available.height() // rows)
+        for index, editor in enumerate(editors):
+            slot = min(index, capacity - 1)
+            column = slot % columns
+            row = slot // columns
+            cascade = max(0, index - slot) * 28
+            editor.showNormal()
+            editor.setGeometry(
+                available.left() + column * cell_width + cascade,
+                available.top() + row * cell_height + cascade,
+                cell_width,
+                cell_height,
+            )
+        editors[-1].raise_()
+        editors[-1].activateWindow()
+
+    def _show_timeline_workspace(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
     def _reset_project_timeline_metadata(self) -> None:
         current = self.research_metadata if isinstance(self.research_metadata, dict) else {}
         self.research_metadata = {
@@ -37,6 +79,12 @@ class EditorWorkspaceHostMixin:
     def _route_focused_editor_history(self, *, redo: bool) -> bool:
         editor = self.active_transcription_editor
         if editor is None or not editor.isVisible() or not editor.isActiveWindow():
+            return False
+        stack = getattr(editor, "redo_stack" if redo else "undo_stack", ())
+        if not stack:
+            # External Clip scaling synchronizes the open editor and clears
+            # its note-only history.  Let the owning project command restore
+            # geometry plus payload instead of swallowing Ctrl+Z here.
             return False
         (editor.redo if redo else editor.undo)()
         return True

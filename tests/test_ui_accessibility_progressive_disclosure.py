@@ -57,7 +57,7 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
 
             assert canvas.focusPolicy() == Qt.StrongFocus
             assert canvas.accessibleName() == "轨道时间轴"
-            assert "上下键选择轨道" in canvas.accessibleDescription()
+            assert "方向键导航" in canvas.accessibleDescription()
             assert "Enter" in canvas.toolTip()
 
             selected = []
@@ -96,10 +96,16 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
             assert effects == [1]
             assert editors == [1]
 
-            QTest.keyClick(canvas, Qt.Key_Right)
-            QTest.keyClick(canvas, Qt.Key_Right, Qt.ShiftModifier)
+            QTest.keyClick(canvas, Qt.Key_Right, Qt.AltModifier)
+            QTest.keyClick(
+                canvas, Qt.Key_Right,
+                Qt.AltModifier | Qt.ShiftModifier,
+            )
             assert tracks[1].bdo_track_volume == 76
-            QTest.keyClick(canvas, Qt.Key_Left, Qt.ShiftModifier)
+            QTest.keyClick(
+                canvas, Qt.Key_Left,
+                Qt.AltModifier | Qt.ShiftModifier,
+            )
             assert tracks[1].bdo_track_volume == 71
             assert len(state_changes) == 2
             assert volume_changes == [
@@ -119,7 +125,7 @@ class UiAccessibilityAndDisclosureTests(unittest.TestCase):
             localizer.set_language("en_US")
             app.processEvents()
             assert canvas.accessibleName() == "Track timeline"
-            assert "Use Up/Down" in canvas.accessibleDescription()
+            assert "arrows navigate" in canvas.accessibleDescription()
             assert "track-0" in canvas.accessibleDescription()
 
             canvas.close()

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from bdo_music_composer.ui.i18n import tr
 from .editor_shortcuts import (
@@ -111,7 +112,7 @@ class EditorShortcutHud(QFrame):
             application.focusChanged.connect(self._focus_changed)
         self._refresh_copy()
         self.hide()
-        QTimer.singleShot(0, self.reposition)
+        self._schedule_reposition()
 
     @property
     def context(self) -> str:
@@ -135,7 +136,7 @@ class EditorShortcutHud(QFrame):
         self.style().unpolish(self)
         self.style().polish(self)
         self._refresh_copy()
-        QTimer.singleShot(0, self.reposition)
+        self._schedule_reposition()
 
     def _refresh_copy(self) -> None:
         mode_source, copy_rows = HUD_CONTEXT_COPY[self._context]
@@ -176,7 +177,15 @@ class EditorShortcutHud(QFrame):
         """Refresh contextual copy after an in-place language switch."""
 
         self._refresh_copy()
-        QTimer.singleShot(0, self.reposition)
+        self._schedule_reposition()
+
+    def _schedule_reposition(self) -> None:
+        QTimer.singleShot(0, self._reposition_if_valid)
+
+    def _reposition_if_valid(self) -> None:
+        if not isValid(self) or not isValid(self._canvas):
+            return
+        self.reposition()
 
     def reposition(self) -> None:
         """Keep the HUD inside the editable grid and below the time ruler."""
@@ -221,7 +230,7 @@ class EditorShortcutHud(QFrame):
             QEvent.Resize,
             QEvent.Show,
         }:
-            QTimer.singleShot(0, self.reposition)
+            self._schedule_reposition()
         return super().eventFilter(watched, event)
 
 

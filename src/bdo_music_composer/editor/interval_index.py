@@ -141,3 +141,30 @@ class IntervalIndex(Generic[T]):
             items=tuple(visible),
             inspected_count=inspected_count,
         )
+
+    def intersects_closed(self, start: float, end: float) -> bool:
+        """Return whether any interval overlaps a closed range in O(log n)."""
+
+        candidate_stop = bisect_right(self.starts, end)
+        if candidate_stop <= 0:
+            return False
+
+        full_block_stop = candidate_stop // self.block_size
+        left = self.tree_base
+        right = self.tree_base + full_block_stop
+        maximum_end = float("-inf")
+        while left < right:
+            if left & 1:
+                maximum_end = max(maximum_end, self.block_max_tree[left])
+                left += 1
+            if right & 1:
+                right -= 1
+                maximum_end = max(maximum_end, self.block_max_tree[right])
+            left //= 2
+            right //= 2
+        partial_start = full_block_stop * self.block_size
+        maximum_end = max(
+            maximum_end,
+            max(self.ends[partial_start:candidate_stop], default=float("-inf")),
+        )
+        return maximum_end >= start

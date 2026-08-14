@@ -65,10 +65,31 @@ class ClipEditorScopeUiTests(unittest.TestCase):
             }
             first = editors["first"]
             second = editors["second"]
+            assert first.clip_bounds_frame.parent().objectName() == "EditorClipBoundsInset"
+            assert (
+                first.clip_end_spin.geometry().right()
+                < first.clip_bounds_frame.width() * 0.7
+            )
+            assert first.editor_splitter.count() == 2
+            assert first.editor_windows_button.text() in {"窗口", "▦"}
+            first.set_velocity_panel_height(210)
+            app.processEvents()
+            assert 180 <= first.velocity_panel_height() <= 240
+            window._tile_note_editors()
+            app.processEvents()
+            assert first.geometry().topLeft() != second.geometry().topLeft()
             assert first.clip_scope.timeline_start_ms == 100.0
             assert first.clip_scope.timeline_end_ms == 200.0
+            assert first.clip_scope.resize_end_limit_ms == 900.0
+            assert not first.clip_start_spin.isEnabled()
+            assert first.clip_start_spin.minimum() == 100.0
+            assert first.clip_start_spin.maximum() == 100.0
+            assert first.clip_end_spin.maximum() == 900.0
             assert first.draft_start_ms() == 100.0
             assert first.draft_duration_ms() == 200.0
+            assert first.playback_time_label.text() == "0:00.100 / 0:00.200"
+            assert first.clip_bounds_music_label.text().startswith("🔒 ")
+            assert not first.clip_start_spin.isVisible()
             assert first.time_scroll.minimum() == 100
             assert first.canvas.time_at(first.canvas.width()) == 200.0
             constrained = first.build_created_note(
@@ -89,21 +110,26 @@ class ClipEditorScopeUiTests(unittest.TestCase):
             assert autosaves == [
                 ("live arrangement clip note edit", True)
             ], autosaves
-            assert first.clip_start_spin.maximum() == 120.0
-            assert first.clip_end_spin.minimum() == (
-                first.edited_notes()[0].start + first.edited_notes()[0].dur
-            )
+            assert first.clip_start_spin.maximum() == 100.0
+            assert first.clip_end_spin.minimum() == 110.0
+            note_before_resize = first.edited_notes()[0]
             recovery = window._autosave_track_view()[0]
             assert [(note.pitch, note.start) for note in project_track_notes(recovery)] == [
                 (62, 120.0), (64, 900.0)
             ]
 
-            # Editor boundary controls and mixer handles share one rule: empty
-            # edge space is resizable, occupied note time is not.
+            # Editor and mixer resizing share one rule: the left edge remains
+            # fixed and the right edge changes only the editable region.
             first._request_clip_resize("resize_end", 300.0)
             assert track.arrangement_clips[0].end_ms == 300.0
             assert first.clip_scope.timeline_end_ms == 300.0
             assert first.clip_end_spin.value() == 300.0
+            assert first.edited_notes()[0] == note_before_resize, first.edited_notes()
+            assert autosaves[-1] == (
+                "live arrangement clip boundary edit", True
+            ), autosaves
+            resized_recovery = window._autosave_track_view()[0]
+            assert project_track_notes(resized_recovery)[0] == note_before_resize
 
             # Reproduce the canvas transaction boundary: append a created
             # note, emit the same completed-edit signal, click Done, then
@@ -178,8 +204,8 @@ class ClipEditorScopeUiTests(unittest.TestCase):
                 new_end_ms=300.0,
                 clip_id="first",
             ))
-            assert track.arrangement_clips[0].start_ms == 110.0
-            assert first.clip_scope.timeline_start_ms == 110.0
+            assert track.arrangement_clips[0].start_ms == 100.0
+            assert first.clip_scope.timeline_start_ms == 100.0
             window._commit_timeline_clip_edit(SimpleNamespace(
                 source_track=track,
                 target_track=track,
@@ -188,7 +214,7 @@ class ClipEditorScopeUiTests(unittest.TestCase):
                 new_end_ms=300.0,
                 clip_id="first",
             ))
-            assert track.arrangement_clips[0].start_ms == 110.0
+            assert track.arrangement_clips[0].start_ms == 100.0
 
             # Blank lane context menu exposes clip creation at the clicked time.
             menu, actions = window.timeline._build_track_context_menu(

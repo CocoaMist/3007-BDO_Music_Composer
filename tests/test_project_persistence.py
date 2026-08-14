@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from bdo_midi import Note
+from bdo_music_composer.editor.arrangement_clip import plan_clip_edit
 from bdo_music_composer.editor.editor_models import ArrangementClipState, TrackState
 from bdo_music_composer.app.home_catalog import IncrementalHomeScan, scan_local_projects
 from bdo_music_composer.project.project_persistence import (
@@ -158,7 +159,8 @@ class ProjectPersistenceTests(unittest.TestCase):
         track.clip_end_ms = 350.0
         track.arrangement_group_id = "game-instrument:11"
         track.arrangement_clips = [ArrangementClipState(
-            "clip-a", 500.0, 750.0, 100.0, 350.0, 400.0
+            "clip-a", 500.0, 750.0, 100.0, 350.0, 400.0,
+            "Verse", "#123456",
         )]
         payload = freeze_project_tracks((track,))[0].to_payload()
         self.assertEqual(payload["clip_start_ms"], 150.0)
@@ -166,6 +168,78 @@ class ProjectPersistenceTests(unittest.TestCase):
         self.assertEqual(payload["arrangement_group_id"], "game-instrument:11")
         self.assertEqual(payload["arrangement_clips"][0]["time_offset_ms"], 400.0)
         self.assertEqual(payload["arrangement_clips"][0]["clip_id"], "clip-a")
+        self.assertEqual(payload["arrangement_clips"][0]["display_name"], "Verse")
+        self.assertEqual(payload["arrangement_clips"][0]["color"], "#123456")
+
+    def test_track_snapshot_preserves_empty_three_second_clip(self) -> None:
+        from bdo_music_composer.editor.arrangement_clip import plan_clip_create
+
+        track = TrackState(8, [], 0, False, "Empty Clip", 0x12)
+        plan = plan_clip_create(
+            track, start_ms=750.0, duration_ms=100.0
+        )
+        track.notes = list(plan.updates[0].notes)
+        track.arrangement_clips = list(plan.updates[0].arrangement_clips)
+
+        payload = freeze_project_tracks((track,))[0].to_payload()
+
+        self.assertEqual(payload["notes"], [])
+        self.assertEqual(
+            (
+                payload["arrangement_clips"][0]["start_ms"],
+                payload["arrangement_clips"][0]["end_ms"],
+            ),
+            (750.0, 3_750.0),
+        )
+
+    def test_track_snapshot_preserves_resized_clip_payload_exactly(self) -> None:
+        track = TrackState(
+            9,
+            [Note(60, 77, 100.0, 100.0, 5)],
+            0,
+            False,
+            "Scaled",
+            0x12,
+            performance_controls=[{
+                "time": 150.0,
+                "kind": "control_change",
+                "control": 64,
+                "value": 127,
+            }],
+            bdo_source_note_records=(
+                (60, 77, 100.0, 100.0, 5, 66),
+            ),
+            arrangement_clips=[ArrangementClipState(
+                "scaled", 100.0, 300.0, 100.0, 300.0
+            )],
+        )
+        update = plan_clip_edit(
+            track,
+            clip_id="scaled",
+            mode="resize_end",
+            new_start_ms=100.0,
+            new_end_ms=500.0,
+        ).updates[0]
+        track.notes = list(update.notes)
+        track.performance_controls = list(update.performance_controls)
+        track.bdo_source_note_records = update.source_note_records
+        track.arrangement_clips = list(update.arrangement_clips)
+
+        payload = freeze_project_tracks((track,))[0].to_payload()
+
+        self.assertEqual(payload["notes"], [[60, 77, 100.0, 100.0, 5]])
+        self.assertEqual(payload["performance_controls"][0]["time"], 150.0)
+        self.assertEqual(
+            payload["bdo_source_note_records"],
+            [[60, 77, 100.0, 100.0, 5, 66]],
+        )
+        self.assertEqual(
+            (
+                payload["arrangement_clips"][0]["start_ms"],
+                payload["arrangement_clips"][0]["end_ms"],
+            ),
+            (100.0, 500.0),
+        )
 
     def test_project_rename_preserves_identity_and_rewrites_safe_index(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
