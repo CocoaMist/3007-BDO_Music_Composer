@@ -35,6 +35,10 @@ must not depend on these entry points.
   measures the optional original C++ differential mixer at explicit low-latency
   frame sizes; build it first with `packaging/native_audio/build.ps1`.
 - [`benchmark_realtime_audio.py`](benchmark_realtime_audio.py)
+- [`find_dead_code.py`](find_dead_code.py) reports candidate-dead functions
+  and methods in the application package for manual review. It is intentionally
+  read-only because textual scanning cannot prove that public or dynamically
+  dispatched entry points are unused.
 - [`benchmark_transcription_candidate_queries.py`](benchmark_transcription_candidate_queries.py)
 - [`stress_project_reliability.py`](stress_project_reliability.py) runs a
   deterministic, temporary-directory-only adversarial workload against project

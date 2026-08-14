@@ -47,10 +47,6 @@ class UiPerformanceProbe(QObject):
         self.recorder.heartbeat()
         root.destroyed.connect(self.shutdown)
 
-    def register_root(self, root: QWidget) -> None:
-        if root not in self._roots:
-            self._roots.append(root)
-
     def begin_interaction_window(self) -> None:
         self.recorder.reset_interaction_window()
 

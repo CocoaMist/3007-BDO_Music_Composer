@@ -765,10 +765,6 @@ class CandidateReplaceResult:
     protected_candidate_ids: tuple[str, ...] = ()
     skipped_lineage_candidate_ids: tuple[str, ...] = ()
 
-    @property
-    def skipped_candidate_ids(self) -> tuple[str, ...]:
-        return self.skipped_lineage_candidate_ids
-
 
 @dataclass(frozen=True, slots=True)
 class TranscriptionReviewSnapshot:
@@ -923,10 +919,6 @@ class TranscriptionSession:
     def annotations(self) -> tuple[CandidateAnnotation, ...]:
         return self._ordered_annotations
 
-    @property
-    def candidate_annotations(self) -> tuple[CandidateAnnotation, ...]:
-        return self.annotations
-
     def annotation_for_id(self, candidate_id: str) -> CandidateAnnotation | None:
         valid_id = _valid_candidate_id(candidate_id)
         return None if valid_id is None else self._annotations.get(valid_id)
@@ -1056,26 +1048,6 @@ class TranscriptionSession:
         }
         if clear_history:
             self.commands.clear()
-
-    def set_analysis_identity(
-        self,
-        cache_key: str,
-        analysis_fingerprint: str = "",
-        analysis_mode: str | None = None,
-    ) -> None:
-        candidates = self.candidates
-        self.state = replace(
-            self.state,
-            cache_key=str(cache_key or ""),
-            analysis_fingerprint=str(analysis_fingerprint or ""),
-            analysis_mode=(
-                self.state.analysis_mode
-                if analysis_mode is None
-                else str(analysis_mode)
-            ),
-        )
-        self.set_candidates(candidates, clear_history=False)
-        self.commands.clear()
 
     def set_region(
         self, start_ms: float | None, end_ms: float | None = None
@@ -1466,26 +1438,6 @@ class TranscriptionSession:
             tuple(applied),
             tuple(missing),
         )
-
-    def remove_pending_routes(
-        self, routes: Iterable[CandidateRoute]
-    ) -> tuple[CandidateRoute, ...]:
-        requested = set(routes)
-        removed = tuple(
-            route for route in self.state.pending_routes if route in requested
-        )
-        if removed:
-            self._commit_review(
-                replace(
-                    self.state,
-                    pending_routes=tuple(
-                        route
-                        for route in self.state.pending_routes
-                        if route not in requested
-                    ),
-                )
-            )
-        return removed
 
     def mark_routes_applied(
         self, routes: Iterable[CandidateRoute] | None = None

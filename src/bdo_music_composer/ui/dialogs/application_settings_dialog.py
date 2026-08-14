@@ -751,17 +751,6 @@ class SettingsDialog(QDialog):
             )
         return dict(self._audio_source_values)
 
-    def _browse_audio_folder(self) -> None:
-        current = self.audio_source.text().strip()
-        start = current if current and Path(current).is_dir() else ""
-        selected = QFileDialog.getExistingDirectory(
-            self,
-            tr("选择本地音源目录"),
-            start,
-        )
-        if selected:
-            self.audio_source.setText(selected)
-
     def _browse_instrument_art_folder(self) -> None:
         current = self.instrument_art_dir.text().strip()
         start = current if current and Path(current).is_dir() else ""

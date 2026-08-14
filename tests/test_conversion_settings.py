@@ -111,6 +111,21 @@ class ConversionSettingsTests(unittest.TestCase):
             },
         )
 
+    def test_midi_parse_projection_exposes_only_parser_owned_fields(self) -> None:
+        settings = ConversionSettings(
+            apply_sustain=False,
+            flatten_tempo=True,
+            bpm_override=132,
+            transpose=-8,
+        )
+        self.assertEqual(
+            settings.midi_parse_parameters(),
+            {
+                "apply_sustain": False,
+                "flatten_tempo": True,
+            },
+        )
+
     def test_typed_export_boundary_takes_priority_over_legacy_flat_fields(self) -> None:
         typed = ConversionSettings(
             bpm_override=None,

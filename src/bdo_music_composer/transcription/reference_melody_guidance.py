@@ -57,12 +57,6 @@ class ReferenceMelodyGuidance:
             and self.target_instrument_label
         )
 
-    def is_predicted_group(self, group_id: str) -> bool:
-        return bool(
-            self.predicted_group_id
-            and str(group_id) == self.predicted_group_id
-        )
-
 
 def build_reference_melody_guidance(
     *,

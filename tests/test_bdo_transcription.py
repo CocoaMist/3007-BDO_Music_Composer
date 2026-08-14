@@ -939,6 +939,7 @@ class BdoTranscriptionTests(unittest.TestCase):
     def test_backend_protocol_and_sensitivity_contract(self) -> None:
         backend = BasicPitchTranscriptionBackend()
         self.assertIsInstance(backend, TranscriptionBackend)
+        self.assertTrue(callable(backend.redecode_interval))
         self.assertTrue(
             bdo_transcription.MIXED_ENHANCED_RELEASE_DEFAULT_VERIFIED
         )

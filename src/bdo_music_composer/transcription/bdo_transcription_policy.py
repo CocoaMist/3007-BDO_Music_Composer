@@ -7,9 +7,11 @@ creating authoritative editor ``Note`` values.
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
+from collections import defaultdict
 from dataclasses import dataclass
 import math
-from typing import Collection, Protocol
+from typing import Callable, Collection, Protocol
 
 from bdo_midi import BDO_NOTE_MAX, BDO_NOTE_MIN, Note
 
@@ -112,16 +114,6 @@ class CandidateNotePolicy:
             project_start + float(self.onset_tolerance_ms),
         )
 
-    def duration_tolerance_ms(
-        self,
-        candidate: CandidateLike,
-    ) -> float:
-        duration_ms = self.note_duration_ms(candidate)
-        return max(
-            float(self.onset_tolerance_ms),
-            duration_ms * float(self.duration_relative_tolerance),
-        )
-
     def matches_note(
         self,
         candidate: CandidateLike,
@@ -198,6 +190,84 @@ class CandidateNotePolicy:
 CANDIDATE_NOTE_POLICY = CandidateNotePolicy()
 
 
+def candidate_is_invalid_for_track(
+    candidate: CandidateLike,
+    *,
+    reference_audio_offset_ms: float,
+    is_percussion: bool,
+    instrument_id: int,
+    transpose: int = 0,
+    supported_pitches: Collection[int] | None = None,
+) -> bool:
+    """Return whether a candidate cannot land on the target track."""
+
+    if not CANDIDATE_NOTE_POLICY.project_timing_is_valid(
+        candidate,
+        reference_audio_offset_ms,
+    ):
+        return True
+    return not CANDIDATE_NOTE_POLICY.pitch_is_valid_for_melodic_track(
+        candidate.pitch,
+        is_percussion=is_percussion,
+        instrument_id=instrument_id,
+        transpose=transpose,
+        supported_pitches=supported_pitches,
+    )
+
+
+def candidate_duplicate_flags(
+    notes: Collection[Note],
+    candidates: Collection[CandidateLike],
+    *,
+    reference_audio_offset_ms: float,
+    candidate_id_of: Callable[[CandidateLike], str],
+    is_invalid: Callable[[CandidateLike], bool],
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Classify candidates as invalid or duplicate against editor notes.
+
+    The mixer and note-editor UIs used to own identical inline loops; this is
+    now the single deterministic home for that classification.
+    """
+
+    invalid_values: set[str] = set()
+    duplicate_values: set[str] = set()
+    grouped_notes: dict[int, list[Note]] = defaultdict(list)
+    for note in notes:
+        grouped_notes[int(note.pitch)].append(note)
+    notes_by_pitch: dict[int, tuple[list[float], list[Note]]] = {}
+    for pitch, pitch_notes in grouped_notes.items():
+        ordered = sorted(pitch_notes, key=lambda note: float(note.start))
+        notes_by_pitch[pitch] = (
+            [float(note.start) for note in ordered],
+            ordered,
+        )
+    for candidate in candidates:
+        candidate_id = candidate_id_of(candidate)
+        if is_invalid(candidate):
+            invalid_values.add(candidate_id)
+            continue
+        starts, matched_notes = notes_by_pitch.get(
+            int(candidate.pitch),
+            ([], []),
+        )
+        window_start, window_end = CANDIDATE_NOTE_POLICY.match_window(
+            candidate,
+            reference_audio_offset_ms,
+        )
+        first = bisect_left(starts, window_start)
+        last = bisect_right(starts, window_end)
+        if any(
+            CANDIDATE_NOTE_POLICY.matches_note(
+                candidate,
+                note,
+                reference_audio_offset_ms,
+            )
+            for note in matched_notes[first:last]
+        ):
+            duplicate_values.add(candidate_id)
+    return frozenset(invalid_values), frozenset(duplicate_values)
+
+
 __all__ = [
     "BDO_PERCUSSION_INSTRUMENT_ID",
     "CANDIDATE_NOTE_POLICY",
@@ -205,4 +275,6 @@ __all__ = [
     "CandidateNotePolicy",
     "NoteLike",
     "ProjectedCandidateNote",
+    "candidate_duplicate_flags",
+    "candidate_is_invalid_for_track",
 ]

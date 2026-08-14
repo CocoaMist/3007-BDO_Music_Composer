@@ -758,18 +758,6 @@ def _anchors_in_interval(
     )
 
 
-def _anchors_for_ids(
-    anchors: Sequence[_CandidateAnchor],
-    candidate_ids: Sequence[str],
-    interval: tuple[float, float],
-) -> tuple[_CandidateAnchor, ...]:
-    if candidate_ids:
-        wanted = set(candidate_ids)
-        matched = tuple(item for item in anchors if item.candidate_id in wanted)
-        if matched:
-            return matched
-    return _anchors_in_interval(anchors, interval)
-
 
 def _anchors_for_ids_indexed(
     anchors: Sequence[_CandidateAnchor],

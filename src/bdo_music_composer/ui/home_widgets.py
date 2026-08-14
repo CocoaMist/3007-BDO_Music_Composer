@@ -161,12 +161,6 @@ class HomeIdentityBadge(QPushButton):
         self.setProperty("identityMissing", missing)
         self.update()
 
-    def set_identity(self, name: str, owner_id: int) -> None:
-        """Compatibility wrapper; the home surface intentionally ignores names."""
-
-        del name
-        self.set_owner_id(owner_id)
-
     def sizeHint(self) -> QSize:
         return QSize(154, 30)
 

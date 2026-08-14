@@ -448,9 +448,6 @@ def transcription_backend_quick_status() -> tuple[bool, str]:
     return True, ""
 
 
-def transcription_backend_quick_available() -> bool:
-    return transcription_backend_quick_status()[0]
-
 
 def _compute_transcription_backend_status() -> tuple[bool, str]:
     quick_available, quick_message = transcription_backend_quick_status()
@@ -514,9 +511,6 @@ def _clear_transcription_backend_status_cache() -> None:
     with _BACKEND_STATUS_LOCK:
         _BACKEND_STATUS_CACHE.clear()
 
-
-def transcription_backend_available() -> bool:
-    return transcription_backend_status()[0]
 
 
 def transcription_backend_message() -> str:

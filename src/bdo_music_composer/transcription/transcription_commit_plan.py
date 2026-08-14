@@ -13,7 +13,10 @@ from bdo_music_composer.transcription.bdo_transcription_session import (
     CandidateRoute,
     TranscriptionEditorCommitReport,
 )
-from bdo_music_composer.transcription.bdo_transcription_policy import CANDIDATE_NOTE_POLICY
+from bdo_music_composer.transcription.bdo_transcription_policy import (
+    CANDIDATE_NOTE_POLICY,
+    candidate_is_invalid_for_track,
+)
 from bdo_music_composer.editor.editor_models import game_supported_pitches
 
 
@@ -359,14 +362,13 @@ def _candidate_invalid_for_track(
     track: CommitTrackView,
     offset_ms: float,
 ) -> bool:
-    if not CANDIDATE_NOTE_POLICY.project_timing_is_valid(candidate, offset_ms):
-        return True
     supported = game_supported_pitches(
         track.instrument_id,
         track.marnian_synth_mode,
     )
-    return not CANDIDATE_NOTE_POLICY.pitch_is_valid_for_melodic_track(
-        candidate.pitch,
+    return candidate_is_invalid_for_track(
+        candidate,
+        reference_audio_offset_ms=offset_ms,
         is_percussion=track.is_percussion,
         instrument_id=track.instrument_id,
         transpose=track.effective_transpose,

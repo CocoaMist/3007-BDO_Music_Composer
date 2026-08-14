@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 1.3.5 - 2026-08-14
+
+- Complete the multitrack Clip workflow with marquee and modifier selection,
+  deterministic group move/trim operations, file-drop insertion, keyboard
+  navigation, and cross-editor note clipboard support.
+- Keep the selected arrangement tool visually active and make Clip handles,
+  body gestures, snapping, and mixed-track selection deterministic across
+  refresh, undo, autosave, preview, and export.
+- Preserve current editor notes through project schema migration, Clip
+  projection, standard-MIDI preview, BDO export, and recovery without falling
+  back to the imported source.
+- Reduce maintenance weight by separating the four-locale translation catalog,
+  extracting candidate classification and Clip hit-testing from UI owners, and
+  removing unused compatibility code while retaining documented backend and
+  conversion-setting contracts.
+- Add executable file/method size ratchets, focused pure-logic tests, and a
+  read-only dead-code report so future UI growth and automated deletion remain
+  reviewable.
+
 ## 1.3.0 - 2026-08-13
 
 - Add a multitrack Clip arrangement workflow with transactional MIDI/BDO

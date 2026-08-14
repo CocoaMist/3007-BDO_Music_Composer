@@ -200,21 +200,6 @@ class FragmentPostprocessResult:
     def kept(self) -> tuple[FrameNoteEvent, ...]:
         return self.events
 
-    def flagged_events(
-        self,
-        flag: FragmentFlag,
-        *,
-        include_suppressed: bool = False,
-    ) -> tuple[FrameNoteEvent, ...]:
-        allowed_actions = {"kept", "merged"}
-        if include_suppressed:
-            allowed_actions.add("suppressed")
-        return tuple(
-            item.event
-            for item in self.audit
-            if item.action in allowed_actions and flag in item.flags
-        )
-
 
 @dataclass
 class _WorkingEvent:

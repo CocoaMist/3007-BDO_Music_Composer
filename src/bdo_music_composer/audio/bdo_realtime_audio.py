@@ -2360,13 +2360,6 @@ class BdoRealtimeAudioEngine(QObject):
         release_weight = 0.2 if voice.release_start_age >= 0 else 1.0
         return max(0.0, float(voice.gain)) * remaining_weight * release_weight
 
-    def _voice_steal_score(self, voice: _Voice) -> float:
-        return self._voice_steal_score_at_frame(
-            voice,
-            int(getattr(voice, "start_frame", 0))
-            + int(getattr(voice, "age_frames", 0)),
-        )
-
     def _apply_instance_limit(
         self,
         event: _Event,
