@@ -366,13 +366,6 @@ class WorkspaceTempoHostMixin:
         if worker is not None:
             worker.cancel()
 
-    def _shutdown_reference_tempo_worker(self) -> None:
-        self._pending_reference_tempo_path = ""
-        worker = getattr(self, "reference_tempo_worker", None)
-        if worker is not None and worker.isRunning():
-            worker.cancel()
-            worker.wait(10_000)
-
     def _open_multiplayer_synchronizer(self) -> None:
         from bdo_music_composer.ui.dialogs.multiplayer_sync_dialog import (
             MultiplayerSyncDialog,

@@ -235,6 +235,8 @@ class ConversionSettings:
         }
 
     def midi_parse_parameters(self) -> dict[str, bool]:
+        """Project only the settings owned by MIDI parsing."""
+
         return {
             "apply_sustain": self.apply_sustain,
             "flatten_tempo": self.flatten_tempo,

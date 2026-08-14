@@ -96,7 +96,15 @@ Qt composition / widgets
   `src/bdo_music_composer/transcription/transcription_commit_plan.py` 保持 Qt-free；主窗口不能直接绕过
   `src/bdo_music_composer/export/export_workflow.py` 调用 Codec/导出适配器；
 - 聚焦所有者有可执行的函数跨度预算。超过预算时应拆出有领域名称的 helper，
-  不能通过关闭守卫或把逻辑搬进匿名闭包规避。
+  不能通过关闭守卫或把逻辑搬进匿名闭包规避；已知 UI 怪兽方法（如
+  `MidiNoteEditorDialog.__init__`、`PianoRollCanvas.paintEvent`）同样被
+  冻结在当前尺寸，只可随拆分下调。
+- 已知 UI 单体（主窗口与四个时间轴/钢琴卷帘/转录画布）有可执行的文件行数
+  预算，用于在拆分期间阻止文件继续膨胀；新 UI 逻辑应进入聚焦模块，不得为
+  把行数压回预算以内而机械拆分仍共享可变状态的方法。预算只可随拆分下调，
+  不得上调以吸收新逻辑。四语翻译目录已数据化到
+  `ui/i18n_catalogs.py`（纯数据、不设行数上限），`ui/i18n.py` 现仅保留
+  本地化逻辑并纳入行数守卫。
 
 新增模块时先判断它属于哪一层，再更新守卫中的显式所有者集合。不能只为让测试
 通过而删除禁用项；真正需要反向依赖时，应引入窄协议、不可变 DTO 或由组合根

@@ -452,7 +452,7 @@ from bdo_music_composer.transcription.bdo_transcription_assist import (  # noqa:
     recover_assist_review,
     stable_assist_review_id,
 )
-from bdo_music_composer.transcription.bdo_transcription_policy import CANDIDATE_NOTE_POLICY  # noqa: E402
+from bdo_music_composer.transcription.bdo_transcription_policy import candidate_is_invalid_for_track  # noqa: E402
 from bdo_music_composer.transcription.bdo_transcription_session import (  # noqa: E402
     CandidateAnnotation,
     TranscriptionEditorCommit,
@@ -625,11 +625,6 @@ def load_config() -> dict:
 def save_config(config: dict) -> None:
     _save_application_config(CONFIG_PATH, config)
 
-
-def selected_tracks(tracks: list[TrackState]) -> list[TrackState]:
-    """Compatibility alias for the local preview scope only."""
-
-    return list(preview_tracks(tracks))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1703,12 +1698,6 @@ class MidiToBdoWindow(
         self.project_count.setText(str(self.project_list.count()))
         self._scan_home_batch(generation)
 
-    def _configured_character_name(self) -> str:
-        """Return a meaningful configured identity, excluding the legacy fallback."""
-
-        name = str(self.char_name or "").strip()
-        return "" if name.casefold() == "midi" else name
-
     def _refresh_home_identity(self) -> None:
         if not hasattr(self, "ensemble_capacity_badge"):
             return
@@ -2750,18 +2739,6 @@ class MidiToBdoWindow(
                 return
         self._open_note_editor(target, transcription_mode=True)
 
-    def _transcription_target_track(self) -> TrackState | None:
-        editor = self.active_transcription_editor
-        target = editor.track if editor is not None else self.selected_track
-        if (
-            target in self.tracks
-            and target is not None
-            and not target.is_percussion
-            and int(target.bdo_instrument_id) != 0x0D
-        ):
-            return target
-        return None
-
     def _effective_track_transpose(self, track: TrackState) -> int:
         return self._pitch_transform_plan.effective_track_semitones(
             track
@@ -2794,64 +2771,17 @@ class MidiToBdoWindow(
     ) -> bool:
         if track is None:
             return True
-        if not CANDIDATE_NOTE_POLICY.project_timing_is_valid(
-            candidate,
-            self.reference_audio_offset_ms,
-        ):
-            return True
         supported = game_supported_pitches(
             int(track.bdo_instrument_id), track.marnian_synth_mode
         )
-        return not CANDIDATE_NOTE_POLICY.pitch_is_valid_for_melodic_track(
-            candidate.pitch,
+        return candidate_is_invalid_for_track(
+            candidate,
+            reference_audio_offset_ms=self.reference_audio_offset_ms,
             is_percussion=track.is_percussion,
             instrument_id=track.bdo_instrument_id,
             transpose=self._effective_track_transpose(track),
             supported_pitches=supported,
         )
-
-    def _transcription_candidate_flags(
-        self,
-    ) -> tuple[set[str], set[str]]:
-        track = self._transcription_target_track()
-        invalid: set[str] = set()
-        duplicates: set[str] = set()
-        notes_by_pitch: dict[int, tuple[list[float], list[Note]]] = {}
-        if track is not None:
-            grouped_notes: dict[int, list[Note]] = defaultdict(list)
-            for note in track.notes:
-                grouped_notes[int(note.pitch)].append(note)
-            for pitch, notes in grouped_notes.items():
-                ordered = sorted(notes, key=lambda note: float(note.start))
-                notes_by_pitch[pitch] = (
-                    [float(note.start) for note in ordered],
-                    ordered,
-                )
-        for candidate in self.transcription_session.candidates:
-            candidate_id = self.transcription_session.candidate_id(candidate)
-            if self._candidate_invalid_for_track(candidate, track):
-                invalid.add(candidate_id)
-                continue
-            starts, notes = notes_by_pitch.get(
-                int(candidate.pitch),
-                ([], []),
-            )
-            window_start, window_end = CANDIDATE_NOTE_POLICY.match_window(
-                candidate,
-                self.reference_audio_offset_ms,
-            )
-            first = bisect_left(starts, window_start)
-            last = bisect_right(starts, window_end)
-            if any(
-                CANDIDATE_NOTE_POLICY.matches_note(
-                    candidate,
-                    note,
-                    self.reference_audio_offset_ms,
-                )
-                for note in notes[first:last]
-            ):
-                duplicates.add(candidate_id)
-        return invalid, duplicates
 
     def _refresh_transcription_workspace(self) -> None:
         """Refresh the only transcription view: the active note editor.
@@ -2877,35 +2807,10 @@ class MidiToBdoWindow(
         )
         self._sync_transcription_rhythm_editor(editor)
 
-    def _visible_region_candidate_ids(
-        self,
-        *,
-        include_routed: bool = False,
-    ) -> tuple[str, ...]:
-        return self.transcription_review_controller.plan_eligible_candidates(
-            self.transcription_session,
-            reference_audio_offset_ms=self.reference_audio_offset_ms,
-            include_routed=include_routed,
-        ).candidate_ids
-
     def _refresh_transcription_action_state(self) -> None:
         editor = self.active_transcription_editor
         if editor is not None:
             editor.refresh_transcription_projection()
-
-    def _transcription_target_changed(self, track_id: int) -> None:
-        target = next(
-            (
-                track
-                for track in self.tracks
-                if int(track.track_id) == int(track_id)
-                and not track.is_percussion
-                and int(track.bdo_instrument_id) != 0x0D
-            ),
-            None,
-        )
-        if target is not None:
-            self._select_track(target)
 
     def _transcription_selection_changed(
         self, candidate_ids: Iterable[str],
@@ -2937,18 +2842,6 @@ class MidiToBdoWindow(
         self, value: tuple[float, float] | None,
     ) -> None:
         self._set_transcription_region(value)
-
-    def _workbench_range_changed(
-        self, value: tuple[float, float] | None,
-    ) -> None:
-        self._set_transcription_region(value)
-
-    def _workbench_view_changed(
-        self, view: tuple[float, float],
-    ) -> None:
-        # Kept for source compatibility with pre-embedded callers.  The editor
-        # now owns its own scroll/zoom and no longer drives the main timeline.
-        del view
 
     def _transcription_sensitivity_changed(self, sensitivity: str) -> None:
         editor = self.active_transcription_editor
@@ -3083,19 +2976,6 @@ class MidiToBdoWindow(
                 "transcription analysis mode",
                 immediate=True,
             )
-
-    def _route_transcription_candidates(self, copy: bool) -> None:
-        # Persistent routing is intentionally disabled in embedded mode.
-        # Candidate writes and copies are staged inside the open dialog.
-        editor = self.active_transcription_editor
-        if editor is None:
-            return
-        if copy:
-            editor.set_transcription_status(
-                tr("请从“显式复制到…”选择目标轨")
-            )
-        else:
-            editor.accept_transcription_candidates()
 
     def _reject_transcription_candidates(self) -> None:
         plan = self.transcription_review_controller.plan_reject_candidates(
@@ -3615,17 +3495,6 @@ class MidiToBdoWindow(
             autosave_reason="transcription key review"
         )
 
-    def _clear_assist_key_override(self) -> None:
-        self._set_transcription_assist_review_state(
-            replace(
-                self.transcription_assist_review,
-                key_override=None,
-            ),
-        )
-        self._reapply_transcription_assist_review(
-            autosave_reason="transcription key unlock"
-        )
-
     def _set_assist_chord_review(
         self,
         segment: ChordSegment,
@@ -3697,49 +3566,6 @@ class MidiToBdoWindow(
         return self.transcription_session.candidate_ids_overlapping_audio_range(
             start_audio_ms,
             end_audio_ms,
-        )
-
-    def _remove_assist_chord_review(self, segment_id: str) -> None:
-        segment = next(
-            (
-                item
-                for item in (
-                    self.harmony_analysis.chord_segments
-                    if self.harmony_analysis is not None
-                    else ()
-                )
-                if item.segment_id == str(segment_id)
-            ),
-            None,
-        )
-        retained = tuple(
-            item
-            for item in self.transcription_assist_review.locked_chord_segments
-            if not (
-                item.segment_id == str(segment_id)
-                or (
-                    segment is not None
-                    and math.isclose(
-                        item.start_audio_ms,
-                        segment.start_audio_ms,
-                        abs_tol=0.5,
-                    )
-                    and math.isclose(
-                        item.end_audio_ms,
-                        segment.end_audio_ms,
-                        abs_tol=0.5,
-                    )
-                )
-            )
-        )
-        self._set_transcription_assist_review_state(
-            replace(
-                self.transcription_assist_review,
-                locked_chord_segments=retained,
-            ),
-        )
-        self._reapply_transcription_assist_review(
-            autosave_reason="transcription chord unlock"
         )
 
     def _replace_assist_chord_reviews(
@@ -4290,68 +4116,6 @@ class MidiToBdoWindow(
                     group.group_id,
                 ),
             ).group_id
-
-    def _set_active_voice_group(
-        self,
-        group: VoiceGroup,
-        *,
-        update_range: bool,
-        focus: bool = True,
-    ) -> None:
-        self.active_voice_group_id = group.group_id
-        if update_range:
-            offset_ms = float(self.reference_audio_offset_ms)
-            self._set_transcription_region(
-                (
-                    group.start_audio_ms + offset_ms,
-                    group.end_audio_ms + offset_ms,
-                )
-            )
-        editor = self.active_transcription_editor
-        if editor is not None and focus:
-            editor.focus_transcription_time_range(
-                group.start_audio_ms
-                + float(self.reference_audio_offset_ms),
-                group.end_audio_ms
-                + float(self.reference_audio_offset_ms),
-            )
-        self._refresh_transcription_workspace()
-
-    def _navigate_voice_group(self, direction: int) -> None:
-        analysis = self.instrument_match_analysis
-        if analysis is None or not analysis.groups:
-            return
-        groups = analysis.groups
-        current = self._active_voice_group()
-        current_index = (
-            next(
-                (
-                    index
-                    for index, group in enumerate(groups)
-                    if current is not None
-                    and group.group_id == current.group_id
-                ),
-                0,
-            )
-        )
-        target_index = max(
-            0,
-            min(len(groups) - 1, current_index + int(direction)),
-        )
-        self._set_active_voice_group(
-            groups[target_index],
-            update_range=True,
-        )
-
-    def _set_voice_group_loop(self, enabled: bool) -> None:
-        self.loop_current_voice_group = bool(enabled)
-        group = self._active_voice_group()
-        if enabled and group is not None:
-            self._set_active_voice_group(group, update_range=True)
-        editor = self.active_transcription_editor
-        if editor is not None:
-            editor.loop_box.setChecked(bool(enabled and group is not None))
-        self._refresh_transcription_workspace()
 
     def _open_transcription_review_queue(self) -> None:
         editor = self.active_transcription_editor
@@ -7326,9 +7090,6 @@ class MidiToBdoWindow(
                 self._start_preview_from(position)
             )
 
-    def _can_preview_with_bdo_samples(self, tracks: list[TrackState]) -> bool:
-        return not self._realtime_preview_blockers(tracks)
-
     def _realtime_preview_blockers(self, tracks: list[TrackState]) -> list[str]:
         if not tracks:
             return [tr("没有可试听轨道")]
@@ -7388,76 +7149,6 @@ class MidiToBdoWindow(
             for track in tracks for note in track.notes
         }
         return "verified" if required and required.issubset(passed) else "approximate"
-
-    def _preview_blockers(self, tracks: list[TrackState]) -> list[str]:
-        if not tracks:
-            return [tr("没有可试听轨道")]
-        if not BDO_SAMPLE_MAP_PATH.is_file():
-            return [tr("缺少解包后的 BDO Wwise 映射")]
-        try:
-            missing_banks = [
-                track.display_name
-                for track in tracks
-                if not sample_map_supported_pitches(
-                    BDO_SAMPLE_MAP_PATH,
-                    track.bdo_instrument_id,
-                    track.marnian_synth_mode,
-                )
-            ]
-            if missing_banks:
-                return [tr("存在未绑定游戏 BNK 的乐器")]
-            blockers: list[str] = []
-            if self.reverb or self.delay or self.chorus:
-                blockers.append(
-                    tr("轨道效果（混响、延迟或合唱）尚未由离线 Wwise 渲染器复现")
-                )
-            for track in tracks:
-                if track.is_percussion and track.bdo_instrument_id != 0x0D:
-                    blockers.append(
-                        trf(
-                            "{track} 使用独立打击乐，尚无完整 GM 逐音映射",
-                            track=track.display_name,
-                        )
-                    )
-                    continue
-                if track.articulation_type not in (None, 0):
-                    blockers.append(
-                        trf(
-                            "{track} 使用轨道奏法 type {ntype}",
-                            track=track.display_name,
-                            ntype=track.articulation_type,
-                        )
-                    )
-                for note in track.notes:
-                    ntype = int(getattr(note, "ntype", 0))
-                    if ntype not in (0, 99):
-                        blockers.append(
-                            trf(
-                                "{track} 含音符奏法 type {ntype}",
-                                track=track.display_name,
-                                ntype=ntype,
-                            )
-                        )
-                        break
-                    velocity = max(0, min(127, round(note.vel)))
-                    if not sample_map_supports_note(
-                        BDO_SAMPLE_MAP_PATH,
-                        track.bdo_instrument_id,
-                        note.pitch,
-                        velocity,
-                        ntype,
-                        track.marnian_synth_mode,
-                    ):
-                        blockers.append(
-                            trf(
-                                "{track} 含无对应游戏音源的键位或力度",
-                                track=track.display_name,
-                            )
-                        )
-                        break
-            return list(dict.fromkeys(blockers))
-        except Exception as exc:
-            return [trf("无法读取游戏采样映射：{error}", error=exc)]
 
     def _stop_bdo_audio(self) -> None:
         # Kept as a compatibility shim for callers that previously stopped the
@@ -8442,11 +8133,6 @@ class MidiToBdoWindow(
         worker.deleteLater()
         if self.workspace_close_pending:
             QTimer.singleShot(0, self.close)
-
-    def _open_output_dir(self) -> None:
-        directory = Path(self.output_dir_path or self.last_output_dir)
-        directory.mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve())))
 
     def closeEvent(self, event) -> None:
         self.main_page_transition.finish()

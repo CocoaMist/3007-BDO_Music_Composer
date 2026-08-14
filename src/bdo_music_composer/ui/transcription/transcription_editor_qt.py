@@ -2747,9 +2747,6 @@ class TranscriptionEditorPanel(QWidget):
     def clear_voice_group_matches(self) -> None:
         pass
 
-    def clear_assist_state(self) -> None:
-        pass
-
     @property
     def sensitivity(self) -> str:
         return str(self.sensitivity_combo.currentData() or "balanced")

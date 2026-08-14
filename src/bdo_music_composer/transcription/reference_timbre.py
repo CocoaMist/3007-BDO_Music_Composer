@@ -114,10 +114,6 @@ class ReferenceTimbreAnalysis:
     label_status: str = "disabled"
     evidence_stage: str = "acoustic"
 
-    @property
-    def labelled_group_count(self) -> int:
-        return sum(bool(group.label_family) for group in self.groups)
-
 
 def build_reference_timbre_analysis(
     *,

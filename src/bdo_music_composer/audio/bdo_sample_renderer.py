@@ -311,24 +311,6 @@ class BdoSampleMap:
             bank=bank,
         )
 
-    def velocity_boundaries(
-        self,
-        instrument_id: int,
-        pitch: int,
-        ntype: int = 0,
-        synth_mode: str = "basic",
-    ) -> tuple[int, ...]:
-        """Return mapping-authored velocity transitions for one editor note."""
-        bank = bank_for_instrument(instrument_id, synth_mode)
-        route_ntype = preview_route_ntype(instrument_id, ntype)
-        resolved_pitch = resolve_bdo_pitch(instrument_id, pitch, ntype)
-        return velocity_zone_boundaries(
-            self.by_bank.get(bank or "", []),
-            resolved_pitch,
-            route_ntype,
-            bank=bank,
-        )
-
     def choose_bank(
         self,
         bank: str,
@@ -382,13 +364,6 @@ def _mapping_banks(map_path: str | Path) -> dict[str, tuple[dict, ...]]:
     path, modified_ns, size = _mapping_revision(map_path)
     return _cached_mapping_banks(str(path), modified_ns, size)
 
-
-def sample_map_covers(
-    map_path: str | Path,
-    instrument_ids: tuple[int, ...] | list[int],
-) -> bool:
-    sample_map = _sample_map(map_path)
-    return all(sample_map.has_instrument(instrument_id) for instrument_id in instrument_ids)
 
 
 def sample_map_velocity_boundaries(

@@ -32,6 +32,11 @@ from .editor_ui_helpers import (
     articulation_color,
 )
 from .timeline_velocity_curve_qt import TimelineVelocityCurveOverlay
+from .timeline_clip_hit import (
+    clip_action_at,
+    clip_keys_intersecting,
+    marquee_rect,
+)
 from bdo_music_composer.ui.i18n import tr, trf, trv
 from bdo_music_composer.editor.interval_index import IntervalIndex
 from bdo_music_composer.editor.arrangement_clip import (
@@ -1103,12 +1108,6 @@ class TimelineCanvas(QWidget):
                 spans.append((start, end))
         return tuple(spans)
 
-    def _visible_track_notes(self, track: TrackState, start: float, end: float) -> list:
-        ordered, lo, hi = self._visible_track_note_window(track, start, end)
-        if lo == 0 and hi == len(ordered):
-            return ordered
-        return ordered[lo:hi]
-
     def _visible_track_clips(
         self, track: TrackState, start: float, end: float,
     ) -> tuple[object, ...]:
@@ -1362,11 +1361,6 @@ class TimelineCanvas(QWidget):
                 if validation_description
                 else ""
             )
-        )
-
-    def set_conversion_transpose(self, semitones: int) -> None:
-        self.set_pitch_transform_plan(
-            self.pitch_transform_plan.with_global(semitones)
         )
 
     def set_pitch_transform_plan(self, plan: PitchTransformPlan) -> None:
@@ -3680,35 +3674,17 @@ class TimelineCanvas(QWidget):
                 return item
         return None
 
-    def _clip_hit_at(
-        self, position
-    ) -> tuple[TrackState, str] | None:
-        action = self._clip_action_at(position)
-        return None if action is None else (action[0], action[1])
-
     def _clip_action_at(
         self, position
     ) -> tuple[TrackState, str, str] | None:
         """Resolve one Clip gesture, with visible handles above the body."""
 
-        for rect, action, item in reversed(self.hit_regions):
-            action_kind, _separator, clip_id = action.partition("|")
-            if (
-                action_kind in {"clip_body", "clip_start", "clip_end"}
-                and isinstance(item, TrackState)
-                and rect.contains(position)
-            ):
-                key = (int(item.track_id), str(clip_id))
-                if (
-                    action_kind in {"clip_start", "clip_end"}
-                    and (
-                        self.arrangement_tool != "select"
-                        or key not in self._selected_clip_keys
-                    )
-                ):
-                    action_kind = "clip_body"
-                return item, str(clip_id), action_kind
-        return None
+        return clip_action_at(
+            self.hit_regions,
+            position,
+            arrangement_tool=self.arrangement_tool,
+            selected_clip_keys=self._selected_clip_keys,
+        )
 
     def _restore_arrangement_cursor(self, position) -> bool:
         """Restore the stable hover cursor after a completed gesture."""
@@ -3738,25 +3714,14 @@ class TimelineCanvas(QWidget):
         return False
 
     def _marquee_rect(self) -> QRectF:
-        if self._marquee_press_pos is None:
-            return QRectF()
-        return QRectF(
+        return marquee_rect(
             self._marquee_press_pos,
             self._marquee_current_pos,
-        ).normalized().intersected(self.grid_rect)
+            self.grid_rect,
+        )
 
     def _clip_keys_intersecting(self, rect: QRectF) -> set[tuple[int, str]]:
-        if rect.isEmpty():
-            return set()
-        return {
-            (int(item.track_id), action.split("|", 1)[1])
-            for region, action, item in self.hit_regions
-            if (
-                action.startswith("clip_body|")
-                and isinstance(item, TrackState)
-                and region.intersects(rect)
-            )
-        }
+        return clip_keys_intersecting(self.hit_regions, rect)
 
     def _paint_marquee_selection(self, painter: QPainter) -> None:
         if not self._marquee_active:

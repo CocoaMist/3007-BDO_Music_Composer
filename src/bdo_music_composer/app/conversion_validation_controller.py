@@ -35,10 +35,6 @@ class ConversionValidationController:
         self._validator = validator
         self._snapshot: ValidationSnapshot | None = None
 
-    @property
-    def cached_snapshot(self) -> ValidationSnapshot | None:
-        return self._snapshot
-
     def invalidate(self) -> None:
         self._snapshot = None
 

@@ -920,10 +920,6 @@ def _has_nearby_time(
     )
 
 
-def _supports(supported: set[int], ntype: int) -> bool:
-    return ntype in supported
-
-
 def _beat_ms(bpm: int) -> float:
     return 60000.0 / max(1, min(240, int(bpm or 120)))
 

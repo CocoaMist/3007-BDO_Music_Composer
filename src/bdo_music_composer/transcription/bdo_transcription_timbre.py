@@ -236,14 +236,6 @@ class TimbreProfileIndex:
             nested,
         )
 
-    def as_pitch_mapping(
-        self,
-    ) -> dict[int, dict[int, TimbreFeatureProfile]]:
-        nested: dict[int, dict[int, TimbreFeatureProfile]] = {}
-        for instrument_id, root_note, profile in self.pitch_profiles:
-            nested.setdefault(instrument_id, {})[root_note] = profile
-        return nested
-
     def profile_for_instrument(
         self, instrument_id: int
     ) -> TimbreFeatureProfile | None:

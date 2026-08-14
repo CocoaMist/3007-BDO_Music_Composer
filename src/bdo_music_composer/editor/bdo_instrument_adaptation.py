@@ -121,13 +121,6 @@ class InstrumentEditorAdaptation:
             return None
         return int(pitch) in self.legal_pitches
 
-    def preview_pitch_support(self, pitch: int) -> bool | None:
-        """Return structural Wwise coverage, or ``None`` without a mapping."""
-
-        if not self.preview_pitches:
-            return None
-        return int(pitch) in self.preview_pitches
-
     def should_render_pitch_row(self, pitch: int) -> bool:
         """Whether a piano-roll row may be retained in a compressed view.
 

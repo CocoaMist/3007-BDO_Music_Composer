@@ -230,15 +230,6 @@ def _source_compatibility_diagnostic_specs(
     return tuple(diagnostics)
 
 
-def _source_compatibility_diagnostics(request: OptimizationRequest) -> tuple[str, ...]:
-    """Backward-compatible source-language compatibility report."""
-
-    return tuple(
-        spec.source_text()
-        for spec in _source_compatibility_diagnostic_specs(request)
-    )
-
-
 def discover_host_algorithms() -> HostAlgorithmDiscovery:
     discovery: BundleDiscovery = discover_optimizer_bundles()
     algorithms = [HostAlgorithmDescriptor(

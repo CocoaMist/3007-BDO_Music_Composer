@@ -54,6 +54,23 @@ def _function_spans(path: Path) -> tuple[tuple[str, int], ...]:
     )
 
 
+def _class_method_spans(path: Path) -> dict[tuple[str, str], int]:
+    """Return class-and-method keyed spans for class-aware size checks."""
+
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+    spans: dict[tuple[str, str], int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for method in node.body:
+                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    spans[(node.name, method.name)] = (
+                        int(method.end_lineno or method.lineno)
+                        - method.lineno
+                        + 1
+                    )
+    return spans
+
+
 class ArchitectureDependencyTests(unittest.TestCase):
     """Executable form of the ownership rules in docs/AI_EDITING_GUIDE.md."""
 
@@ -92,6 +109,24 @@ class ArchitectureDependencyTests(unittest.TestCase):
             [],
             f"{path.relative_to(ROOT)} exceeds its {budget}-line focused "
             "function budget; extract a named helper with one responsibility",
+        )
+
+    def assert_file_line_budget(self, path: Path, budget: int) -> None:
+        """Enforce a file-level ceiling so UI monoliths cannot silently grow.
+
+        Function-span budgets stop oversized methods, but a canvas can still
+        accumulate many small methods and balloon past reviewable size.  These
+        ceilings ratchet down as logic moves to focused owners; never raise one
+        to absorb newly appended UI code.
+        """
+
+        line_count = len(path.read_text(encoding="utf-8-sig").splitlines())
+        self.assertLessEqual(
+            line_count,
+            budget,
+            f"{path.relative_to(ROOT)} grew to {line_count} lines, past its "
+            f"{budget}-line ceiling; move the new logic into a focused owner "
+            "instead of appending to a UI monolith",
         )
 
     def test_qt_free_editor_boundaries_do_not_import_ui(self) -> None:
@@ -306,6 +341,38 @@ class ArchitectureDependencyTests(unittest.TestCase):
         }.items():
             with self.subTest(path=relative_path):
                 self.assert_function_span_budget(SOURCE_ROOT / relative_path, budget)
+
+    def test_known_ui_monoliths_do_not_grow(self) -> None:
+        # i18n_catalogs.py is excluded: it is pure four-locale translation data
+        # whose growth tracks legitimate new UI text.  i18n.py is now logic and
+        # is budgeted like the other UI owners.
+        for relative_path, budget in {
+            "bdo_music_composer/ui/main_window.py": 8_450,
+            "bdo_music_composer/ui/editor/timeline_canvas.py": 5_460,
+            "bdo_music_composer/ui/editor/midi_note_editor.py": 6_150,
+            "bdo_music_composer/ui/editor/piano_roll_canvas.py": 5_600,
+            "bdo_music_composer/ui/transcription/transcription_editor_qt.py": 3_900,
+            "bdo_music_composer/ui/i18n.py": 3_650,
+        }.items():
+            with self.subTest(path=relative_path):
+                self.assert_file_line_budget(SOURCE_ROOT / relative_path, budget)
+
+    def test_ui_monster_methods_do_not_grow(self) -> None:
+        # Freeze the largest un-decomposed UI methods so they cannot keep
+        # growing while their files are being decomposed.  Ratchet these down
+        # as bodies are extracted; never raise one to absorb new logic.
+        cases = (
+            ("bdo_music_composer/ui/editor/midi_note_editor.py", "MidiNoteEditorDialog", "__init__", 1_210),
+            ("bdo_music_composer/ui/editor/midi_note_editor.py", "MidiNoteEditorDialog", "_sync_shared_transcription_projection", 595),
+            ("bdo_music_composer/ui/editor/midi_note_editor.py", "MidiNoteEditorDialog", "play_draft", 210),
+            ("bdo_music_composer/ui/editor/piano_roll_canvas.py", "PianoRollCanvas", "paintEvent", 520),
+            ("bdo_music_composer/ui/editor/piano_roll_canvas.py", "PianoRollCanvas", "_paint_transcription_candidates", 360),
+        )
+        for relative_path, class_name, method_name, budget in cases:
+            with self.subTest(path=relative_path, class_=class_name, method=method_name):
+                spans = _class_method_spans(SOURCE_ROOT / relative_path)
+                self.assertIn((class_name, method_name), spans)
+                self.assertLessEqual(spans[(class_name, method_name)], budget)
 
     def test_typed_transaction_hosts_stay_thin(self) -> None:
         spans = dict(

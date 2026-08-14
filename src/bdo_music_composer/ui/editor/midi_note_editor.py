@@ -76,7 +76,11 @@ from bdo_music_composer.transcription.reference_timbre import (
     build_reference_timbre_prediction,
     merge_reference_timbre_evidence,
 )
-from bdo_music_composer.transcription.bdo_transcription_policy import CANDIDATE_NOTE_POLICY
+from bdo_music_composer.transcription.bdo_transcription_policy import (
+    CANDIDATE_NOTE_POLICY,
+    candidate_duplicate_flags,
+    candidate_is_invalid_for_track,
+)
 from bdo_music_composer.transcription.rhythm_alignment import (
     RhythmAlignmentSidecar,
 )
@@ -1053,215 +1057,12 @@ class MidiNoteEditorDialog(QDialog):
         add_inset(inspector, "EditorInspectorInset")
         self._set_top_inspector_mode("note")
 
-        self.transcription_panel = TranscriptionEditorPanel(self)
-        self.transcription_panel.setVisible(False)
-        # Compatibility aliases keep the analysis-worker adapter small while
-        # all visible controls now live in the embedded panel.
-        self.transcription_hint = self.transcription_panel.status_label
-        self.transcription_progress = self.transcription_panel.status_label
-        self.transcription_analyze_button = self.transcription_panel.analyze_button
-        self.transcription_accept_button = (
-            self.transcription_panel.write_current_track_button
-        )
-        self.transcription_clear_button = (
-            self.transcription_panel.clear_staging_button
-        )
-        self.transcription_panel.load_audio_requested.connect(
-            self._load_reference_audio_from_editor
-        )
-        self.transcription_panel.unload_audio_requested.connect(
-            self._unload_reference_audio_from_editor
-        )
-        self.transcription_panel.analyze_requested.connect(
-            self.start_transcription_analysis
-        )
-        self.transcription_panel.redecode_requested.connect(
-            self._redecode_transcription_range
-        )
-        self.transcription_panel.analysis_mode_changed.connect(
-            self._transcription_analysis_mode_changed
-        )
-        self.transcription_panel.sensitivity_changed.connect(
-            self._transcription_sensitivity_changed
-        )
-        self.transcription_panel.cleanup_profile_changed.connect(
-            self._transcription_cleanup_profile_changed
-        )
-        self.transcription_panel.confidence_changed.connect(
-            lambda _value: self._sync_shared_transcription_projection()
-        )
-        self.transcription_panel.candidate_visibility_changed.connect(
-            self._transcription_candidate_visibility_changed
-        )
-        self.transcription_panel.candidate_opacity_changed.connect(
-            self._transcription_candidate_opacity_changed
-        )
-        self.transcription_panel.timbre_grouping_changed.connect(
-            self._transcription_timbre_grouping_changed
-        )
-        self.transcription_panel.external_instrument_labels_changed.connect(
-            self._transcription_external_instrument_labels_changed
-        )
-        self.transcription_panel.contour_denoise_changed.connect(
-            self._transcription_contour_denoise_changed
-        )
-        self.transcription_panel.contour_opacity_changed.connect(
-            self._transcription_contour_opacity_changed
-        )
-        self.transcription_panel.melody_guidance_changed.connect(
-            self._transcription_melody_guidance_changed
-        )
-        self.transcription_panel.show_rejected_changed.connect(
-            lambda _value: self._sync_shared_transcription_projection()
-        )
-        self.transcription_panel.show_suppressed_changed.connect(
-            lambda _value: self._sync_shared_transcription_projection()
-        )
-        self.transcription_panel.select_fragments_requested.connect(
-            self._select_suspected_transcription_fragments
-        )
-        self.transcription_panel.evidence_layers_changed.connect(
-            self._transcription_evidence_layers_changed
-        )
-        self.transcription_panel.melody_lines_visibility_changed.connect(
-            self._transcription_melody_lines_visibility_changed
-        )
-        self.transcription_panel.melody_line_roles_changed.connect(
-            self._transcription_melody_line_roles_changed
-        )
-        self.transcription_panel.spectrogram_visibility_changed.connect(
-            self._transcription_spectrogram_visibility_changed
-        )
-        self.transcription_panel.reference_background_opacity_changed.connect(
-            self._transcription_reference_background_opacity_changed
-        )
-        self.transcription_panel.align_audio_requested.connect(
-            self._align_reference_audio_to_playhead
-        )
-        self.transcription_panel.beat_origin_requested.connect(
-            self._set_playhead_as_beat_origin
-        )
-        self.transcription_panel.rhythm_diagnostic_requested.connect(
-            self._start_transcription_rhythm_diagnostic
-        )
-        self.transcription_panel.rhythm_projection_enabled_changed.connect(
-            self._transcription_rhythm_projection_changed
-        )
-        self.transcription_panel.clear_range_requested.connect(
-            self._clear_transcription_range
-        )
-        self.transcription_panel.review_undo_requested.connect(
-            self._undo_transcription_review
-        )
-        self.transcription_panel.review_redo_requested.connect(
-            self._redo_transcription_review
-        )
-        self.transcription_panel.reject_requested.connect(
-            self._reject_transcription_candidates
-        )
-        self.transcription_panel.restore_requested.connect(
-            self._restore_transcription_candidates
-        )
-        self.transcription_panel.write_current_track_requested.connect(
-            self.accept_transcription_candidates
-        )
-        self.transcription_panel.copy_to_track_requested.connect(
-            self._stage_transcription_copy
-        )
-        self.transcription_panel.clear_staging_requested.connect(
-            self._clear_transcription_staging
-        )
-        root.addWidget(self.transcription_panel)
-        parent_config = getattr(parent, "config", {})
-        if not isinstance(parent_config, dict):
-            parent_config = {}
-        reference_layer_settings = normalize_reference_layer_settings(
-            getattr(parent, "reference_layer_settings", None)
-        )
-        if parent is not None:
-            parent.reference_layer_settings = reference_layer_settings
-        blocked = self.ghost_box.blockSignals(True)
-        self.ghost_box.setChecked(
-            bool(reference_layer_settings["ghost_visible"])
-        )
-        self.ghost_box.blockSignals(blocked)
-        ghost_opacity_percent = int(
-            reference_layer_settings["ghost_opacity_percent"]
-        )
-        blocked = self.ghost_opacity_slider.blockSignals(True)
-        self.ghost_opacity_slider.setValue(ghost_opacity_percent)
-        self.ghost_opacity_slider.blockSignals(blocked)
-        self.ghost_opacity_label.setText(f"{ghost_opacity_percent}%")
-        transcription_ui_config = (
-            parent_config.get("transcription_ui", {})
-            if isinstance(parent_config.get("transcription_ui", {}), dict)
-            else {}
-        )
-        configured_layers = {
-            layer
-            for layer in ("frame", "onset", "contour")
-            if bool(reference_layer_settings[f"{layer}_visible"])
-        }
-        self.transcription_panel.set_evidence_layers(configured_layers)
-        self.transcription_panel.set_melody_lines_visible(
-            bool(reference_layer_settings["melody_lines_visible"])
-        )
-        self.transcription_panel.set_spectrogram_visible(
-            bool(reference_layer_settings["spectrogram_visible"])
-        )
-        self.transcription_panel.set_reference_background_opacity(
-            int(reference_layer_settings["background_opacity_percent"])
-            / 100.0
-        )
-        self.transcription_panel.set_contour_opacity(
-            int(reference_layer_settings["contour_opacity_percent"])
-            / 100.0
-        )
-        self.transcription_panel.set_melody_guidance_enabled(
-            bool(reference_layer_settings["melody_guidance_enabled"])
-        )
-        self.transcription_panel.set_candidate_layer_visible(
-            bool(reference_layer_settings["candidate_visible"])
-        )
-        self.transcription_panel.set_candidate_opacity(
-            int(reference_layer_settings["candidate_opacity_percent"])
-            / 100.0
-        )
-        muscriptor_executable = str(
-            transcription_ui_config.get("muscriptor_executable", "") or ""
-        )
-        external_available, _external_reason = muscriptor_backend_status(
-            muscriptor_executable
-        )
-        self.transcription_panel.set_external_instrument_labels_available(
-            external_available
-        )
-        self.transcription_panel.set_timbre_grouping_enabled(
-            bool(reference_layer_settings["timbre_grouping_enabled"])
-        )
-        self.transcription_panel.set_external_instrument_labels_enabled(
-            bool(
-                reference_layer_settings[
-                    "external_instrument_labels_enabled"
-                ]
-            )
-        )
-        self.transcription_panel.set_contour_denoise(
-            str(reference_layer_settings["contour_denoise"])
-        )
-        configured_guide_roles = transcription_ui_config.get(
-            "melody_line_roles",
-            ("primary_melody",),
-        )
-        if isinstance(configured_guide_roles, (list, tuple, set)):
-            self.transcription_panel.set_melody_line_roles(
-                str(role) for role in configured_guide_roles
-            )
-        # Disclosure is ephemeral: every editor opens in the compact state.
-        # Layer visibility remains persisted independently, but old expanded
-        # panels must not turn the next session back into a wall of controls.
-        self.transcription_panel.set_advanced_controls_expanded(False)
-        self.transcription_panel.set_diagnostic_evidence_expanded(False)
+        (
+            ghost_opacity_percent,
+            reference_layer_settings,
+            parent_config,
+            transcription_ui_config,
+        ) = self._build_transcription_panel(parent, root)
 
         workspace = QFrame()
         workspace.setObjectName("EditorWorkspace")
@@ -1606,6 +1407,223 @@ class MidiNoteEditorDialog(QDialog):
                 0, lambda: self.transcription_mode_toggle.setChecked(True)
             )
 
+    def _build_transcription_panel(self, parent, root):
+        self.transcription_panel = TranscriptionEditorPanel(self)
+        self.transcription_panel.setVisible(False)
+        # Compatibility aliases keep the analysis-worker adapter small while
+        # all visible controls now live in the embedded panel.
+        self.transcription_hint = self.transcription_panel.status_label
+        self.transcription_progress = self.transcription_panel.status_label
+        self.transcription_analyze_button = self.transcription_panel.analyze_button
+        self.transcription_accept_button = (
+            self.transcription_panel.write_current_track_button
+        )
+        self.transcription_clear_button = (
+            self.transcription_panel.clear_staging_button
+        )
+        self.transcription_panel.load_audio_requested.connect(
+            self._load_reference_audio_from_editor
+        )
+        self.transcription_panel.unload_audio_requested.connect(
+            self._unload_reference_audio_from_editor
+        )
+        self.transcription_panel.analyze_requested.connect(
+            self.start_transcription_analysis
+        )
+        self.transcription_panel.redecode_requested.connect(
+            self._redecode_transcription_range
+        )
+        self.transcription_panel.analysis_mode_changed.connect(
+            self._transcription_analysis_mode_changed
+        )
+        self.transcription_panel.sensitivity_changed.connect(
+            self._transcription_sensitivity_changed
+        )
+        self.transcription_panel.cleanup_profile_changed.connect(
+            self._transcription_cleanup_profile_changed
+        )
+        self.transcription_panel.confidence_changed.connect(
+            lambda _value: self._sync_shared_transcription_projection()
+        )
+        self.transcription_panel.candidate_visibility_changed.connect(
+            self._transcription_candidate_visibility_changed
+        )
+        self.transcription_panel.candidate_opacity_changed.connect(
+            self._transcription_candidate_opacity_changed
+        )
+        self.transcription_panel.timbre_grouping_changed.connect(
+            self._transcription_timbre_grouping_changed
+        )
+        self.transcription_panel.external_instrument_labels_changed.connect(
+            self._transcription_external_instrument_labels_changed
+        )
+        self.transcription_panel.contour_denoise_changed.connect(
+            self._transcription_contour_denoise_changed
+        )
+        self.transcription_panel.contour_opacity_changed.connect(
+            self._transcription_contour_opacity_changed
+        )
+        self.transcription_panel.melody_guidance_changed.connect(
+            self._transcription_melody_guidance_changed
+        )
+        self.transcription_panel.show_rejected_changed.connect(
+            lambda _value: self._sync_shared_transcription_projection()
+        )
+        self.transcription_panel.show_suppressed_changed.connect(
+            lambda _value: self._sync_shared_transcription_projection()
+        )
+        self.transcription_panel.select_fragments_requested.connect(
+            self._select_suspected_transcription_fragments
+        )
+        self.transcription_panel.evidence_layers_changed.connect(
+            self._transcription_evidence_layers_changed
+        )
+        self.transcription_panel.melody_lines_visibility_changed.connect(
+            self._transcription_melody_lines_visibility_changed
+        )
+        self.transcription_panel.melody_line_roles_changed.connect(
+            self._transcription_melody_line_roles_changed
+        )
+        self.transcription_panel.spectrogram_visibility_changed.connect(
+            self._transcription_spectrogram_visibility_changed
+        )
+        self.transcription_panel.reference_background_opacity_changed.connect(
+            self._transcription_reference_background_opacity_changed
+        )
+        self.transcription_panel.align_audio_requested.connect(
+            self._align_reference_audio_to_playhead
+        )
+        self.transcription_panel.beat_origin_requested.connect(
+            self._set_playhead_as_beat_origin
+        )
+        self.transcription_panel.rhythm_diagnostic_requested.connect(
+            self._start_transcription_rhythm_diagnostic
+        )
+        self.transcription_panel.rhythm_projection_enabled_changed.connect(
+            self._transcription_rhythm_projection_changed
+        )
+        self.transcription_panel.clear_range_requested.connect(
+            self._clear_transcription_range
+        )
+        self.transcription_panel.review_undo_requested.connect(
+            self._undo_transcription_review
+        )
+        self.transcription_panel.review_redo_requested.connect(
+            self._redo_transcription_review
+        )
+        self.transcription_panel.reject_requested.connect(
+            self._reject_transcription_candidates
+        )
+        self.transcription_panel.restore_requested.connect(
+            self._restore_transcription_candidates
+        )
+        self.transcription_panel.write_current_track_requested.connect(
+            self.accept_transcription_candidates
+        )
+        self.transcription_panel.copy_to_track_requested.connect(
+            self._stage_transcription_copy
+        )
+        self.transcription_panel.clear_staging_requested.connect(
+            self._clear_transcription_staging
+        )
+        root.addWidget(self.transcription_panel)
+        parent_config = getattr(parent, "config", {})
+        if not isinstance(parent_config, dict):
+            parent_config = {}
+        reference_layer_settings = normalize_reference_layer_settings(
+            getattr(parent, "reference_layer_settings", None)
+        )
+        if parent is not None:
+            parent.reference_layer_settings = reference_layer_settings
+        blocked = self.ghost_box.blockSignals(True)
+        self.ghost_box.setChecked(
+            bool(reference_layer_settings["ghost_visible"])
+        )
+        self.ghost_box.blockSignals(blocked)
+        ghost_opacity_percent = int(
+            reference_layer_settings["ghost_opacity_percent"]
+        )
+        blocked = self.ghost_opacity_slider.blockSignals(True)
+        self.ghost_opacity_slider.setValue(ghost_opacity_percent)
+        self.ghost_opacity_slider.blockSignals(blocked)
+        self.ghost_opacity_label.setText(f"{ghost_opacity_percent}%")
+        transcription_ui_config = (
+            parent_config.get("transcription_ui", {})
+            if isinstance(parent_config.get("transcription_ui", {}), dict)
+            else {}
+        )
+        configured_layers = {
+            layer
+            for layer in ("frame", "onset", "contour")
+            if bool(reference_layer_settings[f"{layer}_visible"])
+        }
+        self.transcription_panel.set_evidence_layers(configured_layers)
+        self.transcription_panel.set_melody_lines_visible(
+            bool(reference_layer_settings["melody_lines_visible"])
+        )
+        self.transcription_panel.set_spectrogram_visible(
+            bool(reference_layer_settings["spectrogram_visible"])
+        )
+        self.transcription_panel.set_reference_background_opacity(
+            int(reference_layer_settings["background_opacity_percent"])
+            / 100.0
+        )
+        self.transcription_panel.set_contour_opacity(
+            int(reference_layer_settings["contour_opacity_percent"])
+            / 100.0
+        )
+        self.transcription_panel.set_melody_guidance_enabled(
+            bool(reference_layer_settings["melody_guidance_enabled"])
+        )
+        self.transcription_panel.set_candidate_layer_visible(
+            bool(reference_layer_settings["candidate_visible"])
+        )
+        self.transcription_panel.set_candidate_opacity(
+            int(reference_layer_settings["candidate_opacity_percent"])
+            / 100.0
+        )
+        muscriptor_executable = str(
+            transcription_ui_config.get("muscriptor_executable", "") or ""
+        )
+        external_available, _external_reason = muscriptor_backend_status(
+            muscriptor_executable
+        )
+        self.transcription_panel.set_external_instrument_labels_available(
+            external_available
+        )
+        self.transcription_panel.set_timbre_grouping_enabled(
+            bool(reference_layer_settings["timbre_grouping_enabled"])
+        )
+        self.transcription_panel.set_external_instrument_labels_enabled(
+            bool(
+                reference_layer_settings[
+                    "external_instrument_labels_enabled"
+                ]
+            )
+        )
+        self.transcription_panel.set_contour_denoise(
+            str(reference_layer_settings["contour_denoise"])
+        )
+        configured_guide_roles = transcription_ui_config.get(
+            "melody_line_roles",
+            ("primary_melody",),
+        )
+        if isinstance(configured_guide_roles, (list, tuple, set)):
+            self.transcription_panel.set_melody_line_roles(
+                str(role) for role in configured_guide_roles
+            )
+        # Disclosure is ephemeral: every editor opens in the compact state.
+        # Layer visibility remains persisted independently, but old expanded
+        # panels must not turn the next session back into a wall of controls.
+        self.transcription_panel.set_advanced_controls_expanded(False)
+        self.transcription_panel.set_diagnostic_evidence_expanded(False)
+        return (
+            ghost_opacity_percent,
+            reference_layer_settings,
+            parent_config,
+            transcription_ui_config,
+        )
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._apply_editor_responsive_density()
@@ -1874,17 +1892,6 @@ class MidiNoteEditorDialog(QDialog):
         else:
             self._release_transcription_visual_resources()
         self.update_scrollbars()
-
-    def _toggle_transcription_analysis(self) -> None:
-        parent_worker = getattr(
-            self.parent(),
-            "workspace_transcription_worker",
-            None,
-        )
-        if parent_worker is not None and parent_worker.isRunning():
-            self._cancel_transcription_analysis()
-            return
-        self.start_transcription_analysis()
 
     def _has_transcription_staging(self) -> bool:
         return bool(
@@ -2394,49 +2401,13 @@ class MidiNoteEditorDialog(QDialog):
             invalid_ids = cached_flags[1]
             duplicate_ids = cached_flags[2]
         else:
-            invalid_values: set[str] = set()
-            duplicate_values: set[str] = set()
-            notes_by_pitch: dict[
-                int,
-                tuple[list[float], list[Note]],
-            ] = {}
-            grouped_notes: dict[int, list[Note]] = defaultdict(list)
-            for note in self.canvas.notes:
-                grouped_notes[int(note.pitch)].append(note)
-            for pitch, notes in grouped_notes.items():
-                ordered = sorted(notes, key=lambda note: float(note.start))
-                notes_by_pitch[pitch] = (
-                    [float(note.start) for note in ordered],
-                    ordered,
-                )
-            for candidate in effective_candidates:
-                candidate_id = session.candidate_id(candidate)
-                if self._candidate_invalid_for_current_track(candidate):
-                    invalid_values.add(candidate_id)
-                    continue
-                starts, notes = notes_by_pitch.get(
-                    int(candidate.pitch),
-                    ([], []),
-                )
-                window_start, window_end = (
-                    CANDIDATE_NOTE_POLICY.match_window(
-                        candidate,
-                        offset_ms,
-                    )
-                )
-                first = bisect_left(starts, window_start)
-                last = bisect_right(starts, window_end)
-                if any(
-                    CANDIDATE_NOTE_POLICY.matches_note(
-                        candidate,
-                        note,
-                        offset_ms,
-                    )
-                    for note in notes[first:last]
-                ):
-                    duplicate_values.add(candidate_id)
-            invalid_ids = frozenset(invalid_values)
-            duplicate_ids = frozenset(duplicate_values)
+            invalid_ids, duplicate_ids = candidate_duplicate_flags(
+                self.canvas.notes,
+                effective_candidates,
+                reference_audio_offset_ms=offset_ms,
+                candidate_id_of=session.candidate_id,
+                is_invalid=self._candidate_invalid_for_current_track,
+            )
             self._transcription_candidate_flag_cache = (
                 flag_cache_key,
                 invalid_ids,
@@ -2970,36 +2941,20 @@ class MidiNoteEditorDialog(QDialog):
         self._eligible_candidate_cache = (cache_key, result)
         return result
 
-    def _cancel_transcription_analysis(self) -> None:
-        worker = getattr(
-            self.parent(),
-            "workspace_transcription_worker",
-            None,
-        )
-        if worker is None or not worker.isRunning():
-            return
-        cancel = getattr(worker, "cancel", None)
-        if callable(cancel):
-            cancel()
-        self.transcription_panel.set_status(tr("正在取消…"))
-        self.transcription_panel.set_analysis_busy(True)
-
     def _candidate_invalid_for_current_track(
         self,
         candidate: TranscriptionCandidate,
     ) -> bool:
         parent = self.parent()
-        if not CANDIDATE_NOTE_POLICY.project_timing_is_valid(
-            candidate,
-            float(getattr(parent, "reference_audio_offset_ms", 0.0)),
-        ):
-            return True
         supported = game_supported_pitches(
             int(self.track.bdo_instrument_id),
             self.track.marnian_synth_mode,
         )
-        return not CANDIDATE_NOTE_POLICY.pitch_is_valid_for_melodic_track(
-            candidate.pitch,
+        return candidate_is_invalid_for_track(
+            candidate,
+            reference_audio_offset_ms=float(
+                getattr(parent, "reference_audio_offset_ms", 0.0)
+            ),
             is_percussion=self.track.is_percussion,
             instrument_id=self.track.bdo_instrument_id,
             transpose=self.transpose,
@@ -3704,143 +3659,6 @@ class MidiNoteEditorDialog(QDialog):
             "B",
         )[int(root_pc) % 12]
 
-    def _edit_transcription_key(self, _current: object) -> None:
-        parent = self.parent()
-        harmony = getattr(parent, "harmony_analysis", None)
-        if harmony is None:
-            return
-        options: list[tuple[str, int, str]] = []
-        candidates = (
-            harmony.global_key,
-            *tuple(harmony.global_key.alternatives),
-        )
-        seen: set[tuple[int, str]] = set()
-        for item in candidates:
-            if item.root_pc is None or item.mode is None:
-                continue
-            identity = (int(item.root_pc), str(item.mode))
-            if identity in seen:
-                continue
-            seen.add(identity)
-            options.append(
-                (
-                    f"{self._pitch_class_label(identity[0])} {identity[1]}",
-                    identity[0],
-                    identity[1],
-                )
-            )
-        for mode in ("major", "minor"):
-            for root_pc in range(12):
-                identity = (root_pc, mode)
-                if identity not in seen:
-                    options.append(
-                        (
-                            f"{self._pitch_class_label(root_pc)} {mode}",
-                            root_pc,
-                            mode,
-                        )
-                    )
-        selected, accepted = QInputDialog.getItem(
-            self,
-            tr("编辑主调"),
-            tr("选择或输入主调："),
-            [item[0] for item in options],
-            0,
-            True,
-        )
-        if not accepted:
-            return
-        normalized = str(selected).strip().replace("#", "♯")
-        match = next(
-            (item for item in options if item[0] == normalized),
-            None,
-        )
-        if match is None:
-            parts = normalized.split()
-            roots = {
-                self._pitch_class_label(root_pc).casefold(): root_pc
-                for root_pc in range(12)
-            }
-            if len(parts) != 2 or parts[0].casefold() not in roots:
-                QMessageBox.warning(
-                    self,
-                    tr("无法识别主调"),
-                    tr("请输入例如 C major 或 A minor。"),
-                )
-                return
-            mode = parts[1].casefold()
-            if mode not in {"major", "minor"}:
-                QMessageBox.warning(
-                    self,
-                    tr("无法识别主调"),
-                    tr("仅支持 major 或 minor。"),
-                )
-                return
-            match = (normalized, roots[parts[0].casefold()], mode)
-        parent._set_assist_key_override(
-            match[1],
-            match[2],
-            manual=True,
-            locked=self.transcription_panel.assist_panel.harmony_summary.key_lock_checkbox.isChecked(),
-        )
-
-    def _lock_transcription_key(self, locked: bool) -> None:
-        parent = self.parent()
-        harmony = getattr(parent, "harmony_analysis", None)
-        if harmony is None or harmony.global_key.root_pc is None:
-            return
-        current_review = parent.transcription_assist_review.key_override
-        if not locked and (
-            current_review is None or not current_review.manual
-        ):
-            parent._clear_assist_key_override()
-            return
-        parent._set_assist_key_override(
-            harmony.global_key.root_pc,
-            harmony.global_key.mode,
-            manual=bool(
-                current_review is not None and current_review.manual
-            ),
-            locked=bool(locked),
-        )
-
-    def _harmony_segment(self, segment_id: str) -> ChordSegment | None:
-        harmony = getattr(self.parent(), "harmony_analysis", None)
-        if harmony is None:
-            return None
-        return next(
-            (
-                segment
-                for segment in harmony.chord_segments
-                if segment.segment_id == str(segment_id)
-            ),
-            None,
-        )
-
-    def _review_for_harmony_segment(
-        self, segment: ChordSegment
-    ) -> LockedChordReview | None:
-        return next(
-            (
-                item
-                for item in self.parent().transcription_assist_review.locked_chord_segments
-                if item.segment_id == segment.segment_id
-                or (
-                    math.isclose(
-                        item.start_audio_ms,
-                        segment.start_audio_ms,
-                        abs_tol=0.5,
-                    )
-                    and math.isclose(
-                        item.end_audio_ms,
-                        segment.end_audio_ms,
-                        abs_tol=0.5,
-                    )
-                )
-            ),
-            None,
-        )
-
     def _transcription_chord_segment_clicked(
         self, segment_id: str
     ) -> None:
@@ -3885,260 +3703,12 @@ class MidiNoteEditorDialog(QDialog):
         if callable(callback):
             callback(str(group_id), str(role))
 
-    def _edit_transcription_chord(self, segment_id: str) -> None:
-        segment = self._harmony_segment(segment_id)
-        if segment is None:
-            return
-        qualities = (
-            "major",
-            "minor",
-            "dim",
-            "sus2",
-            "sus4",
-            "maj7",
-            "7",
-            "min7",
-            "half_diminished7",
-        )
-        options = ["N"] + [
-            f"{self._pitch_class_label(root_pc)} {quality}"
-            for root_pc in range(12)
-            for quality in qualities
-        ]
-        current = (
-            "N"
-            if segment.quality == "N" or segment.root_pc is None
-            else (
-                f"{self._pitch_class_label(segment.root_pc)} "
-                f"{segment.quality}"
-            )
-        )
-        selected, accepted = QInputDialog.getItem(
-            self,
-            tr("编辑和弦段"),
-            tr("选择和弦；不会自动改动音符："),
-            options,
-            max(0, options.index(current) if current in options else 0),
-            False,
-        )
-        if not accepted:
-            return
-        if selected == "N":
-            root_pc, quality, bass_pc = None, "N", None
-        else:
-            root_label, quality = str(selected).split(" ", 1)
-            root_pc = next(
-                index
-                for index in range(12)
-                if self._pitch_class_label(index) == root_label
-            )
-            bass_labels = [
-                self._pitch_class_label(index) for index in range(12)
-            ]
-            bass_label, bass_ok = QInputDialog.getItem(
-                self,
-                tr("选择低音"),
-                tr("选择转位低音："),
-                bass_labels,
-                root_pc,
-                False,
-            )
-            if not bass_ok:
-                return
-            bass_pc = bass_labels.index(str(bass_label))
-        self.parent()._set_assist_chord_review(
-            segment,
-            root_pc=root_pc,
-            quality=quality,
-            bass_pc=bass_pc,
-            manual=True,
-            locked=self.transcription_panel.assist_panel.harmony_summary.chord_lock_checkbox.isChecked(),
-        )
-
-    def _lock_transcription_chord(
-        self, segment_id: str, locked: bool
-    ) -> None:
-        segment = self._harmony_segment(segment_id)
-        if segment is None:
-            return
-        current_review = self._review_for_harmony_segment(segment)
-        if not locked and (
-            current_review is None or not current_review.manual
-        ):
-            self.parent()._remove_assist_chord_review(segment.segment_id)
-            return
-        self.parent()._set_assist_chord_review(
-            segment,
-            manual=bool(
-                current_review is not None and current_review.manual
-            ),
-            locked=bool(locked),
-        )
-
-    def _split_transcription_chord(self, segment_id: str) -> None:
-        segment = self._harmony_segment(segment_id)
-        if segment is None:
-            return
-        callback = getattr(
-            self.parent(), "_split_transcription_chord_segment", None
-        )
-        if callable(callback):
-            callback(segment.segment_id, float(self.playhead_ms))
-
-    def _merge_transcription_chord_with_next(
-        self, segment_id: str
-    ) -> None:
-        harmony = getattr(self.parent(), "harmony_analysis", None)
-        if harmony is None:
-            return
-        segments = tuple(harmony.chord_segments)
-        index = next(
-            (
-                index
-                for index, segment in enumerate(segments)
-                if segment.segment_id == str(segment_id)
-            ),
-            -1,
-        )
-        if index < 0 or index + 1 >= len(segments):
-            return
-        first = segments[index]
-        second = segments[index + 1]
-
-        def label(segment: ChordSegment) -> str:
-            if segment.root_pc is None or segment.quality == "N":
-                return "N"
-            return (
-                f"{self._pitch_class_label(segment.root_pc)} "
-                f"{segment.quality}"
-            )
-
-        options = (
-            trf("保留当前段 · {chord}", chord=label(first)),
-            trf("保留下一段 · {chord}", chord=label(second)),
-        )
-        selected, accepted = QInputDialog.getItem(
-            self,
-            tr("合并和弦段"),
-            tr("选择合并后保留的和弦；不会自动改动音符："),
-            options,
-            0,
-            False,
-        )
-        if not accepted:
-            return
-        retained = first if str(selected) == options[0] else second
-        callback = getattr(
-            self.parent(), "_merge_transcription_chord_segments", None
-        )
-        if callable(callback):
-            callback(
-                first.segment_id,
-                second.segment_id,
-                retained.segment_id,
-            )
-
-    def _navigate_transcription_phrase(self, direction: int) -> None:
-        callback = getattr(self.parent(), "_navigate_voice_group", None)
-        if callable(callback):
-            callback(int(direction))
-
-    def _loop_transcription_phrase(self, enabled: bool) -> None:
-        callback = getattr(self.parent(), "_set_voice_group_loop", None)
-        if callable(callback):
-            callback(bool(enabled))
-
     def _open_transcription_review_queue(self) -> None:
         callback = getattr(
             self.parent(), "_open_transcription_review_queue", None
         )
         if callable(callback):
             callback()
-
-    def _confirm_transcription_instrument_match(
-        self, group_id: object, instrument_id: int
-    ) -> None:
-        callback = getattr(
-            self.parent(), "_confirm_assist_instrument_match", None
-        )
-        if callable(callback):
-            callback(str(group_id), int(instrument_id))
-
-    def _stage_transcription_group_to_existing_track(
-        self, group_id: object, instrument_id: int
-    ) -> None:
-        tracks = [
-            track
-            for track in getattr(self.parent(), "tracks", ())
-            if not track.is_percussion
-            and int(track.bdo_instrument_id) == int(instrument_id)
-        ]
-        if not tracks:
-            QMessageBox.information(
-                self,
-                tr("没有匹配的现有轨"),
-                tr("请使用“新建该乐器轨”，或先在主时间轴新建对应乐器。"),
-            )
-            return
-        labels = [
-            trf(
-                "{track} · {instrument}",
-                track=track.display_name,
-                instrument=trv(_ui_bdo_instrument_source(track.bdo_instrument_id)),
-            )
-            for track in tracks
-        ]
-        label, accepted = QInputDialog.getItem(
-            self,
-            tr("暂存到现有轨"),
-            tr("选择目标轨；Apply 前不会修改工程："),
-            labels,
-            0,
-            False,
-        )
-        if not accepted:
-            return
-        target = tracks[labels.index(str(label))]
-        self._stage_voice_group_routes(
-            str(group_id),
-            int(target.track_id),
-        )
-
-    def _stage_transcription_group_to_new_track(
-        self, group_id: object, instrument_id: int
-    ) -> None:
-        QMessageBox.information(
-            self,
-            tr("新建乐器轨"),
-            tr("该声部会在 Apply 时与音符一起原子新建轨道。"),
-        )
-        self._stage_new_voice_group_track(
-            str(group_id),
-            int(instrument_id),
-        )
-
-    def _set_transcription_audition_source(self, source: str) -> None:
-        previous_state = self.draft_playback_state
-        retained_playhead = float(self.playhead_ms)
-        self.transcription_audition_source = str(source)
-        if previous_state in {"playing", "paused", "loading"}:
-            self.stop_draft()
-            self.set_draft_playhead(retained_playhead, follow=True)
-            if previous_state in {"playing", "loading"}:
-                QTimer.singleShot(0, self.play_draft)
-        labels = {
-            "combined": "工程 + 原音",
-            "original": "原音",
-            "candidate_a": "游戏候选 A",
-            "candidate_b": "游戏候选 B",
-        }
-        source_key = labels.get(str(source))
-        self.transcription_panel.set_status(
-            trf(
-                "试听源：{source}；继续使用上方唯一播放控制。",
-                source=(trv(source_key) if source_key is not None else str(source)),
-            )
-        )
 
     def _redecode_transcription_range(self) -> None:
         if self._warn_staging_blocks_analysis():
