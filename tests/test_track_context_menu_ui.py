@@ -34,10 +34,11 @@ class TrackContextMenuUiTests(unittest.TestCase):
                 if not action.isSeparator()
             ]
             assert top == [
+                "重命名轨道…", "复制轨道", "轨道颜色…",
                 "更换游戏乐器", "编辑音符…", "音高与力度",
                 "优化此轨道", "轨道管理", "监听状态",
             ], top
-            assert len([a for a in menu.actions() if a.isSeparator()]) == 2
+            assert len([a for a in menu.actions() if a.isSeparator()]) == 3
             instrument = menu._instrument_menu
             assert instrument is not None
             instrument_text = [
@@ -56,6 +57,7 @@ class TrackContextMenuUiTests(unittest.TestCase):
                 "edit_notes", "effects", "pitch", "velocity", "optimize",
                 "create_track", "merge", "move_up", "move_down", "delete",
                 "unify_mixer", "clear_solo", "unmute_all",
+                "rename_track", "duplicate_track", "color_track",
             }
             canvas.close()
             app.processEvents()

@@ -98,6 +98,23 @@ class IntervalIndexTests(unittest.TestCase):
         self.assertIn(long_note, result.items)
         self.assertLessEqual(result.inspected_count, block_size * 3)
 
+    def test_intersection_probe_handles_partial_blocks_and_long_spans(self) -> None:
+        index = _build(
+            [
+                _Interval("long", 0.0, 1_000.0),
+                *[
+                    _Interval(str(number), float(number * 20), 5.0)
+                    for number in range(1, 40)
+                ],
+            ],
+            block_size=8,
+        )
+
+        self.assertTrue(index.intersects_closed(900.0, 910.0))
+        self.assertTrue(index.intersects_closed(20.0, 20.0))
+        self.assertFalse(index.intersects_closed(1_001.0, 1_010.0))
+        self.assertFalse(_build([]).intersects_closed(0.0, 1.0))
+
     def test_empty_index_has_explicit_immutable_fields(self) -> None:
         index = _build([])
 

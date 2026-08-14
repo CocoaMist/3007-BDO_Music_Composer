@@ -9,8 +9,12 @@ from pathlib import Path
 from typing import Protocol
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen, QPixmap
-from PySide6.QtWidgets import QApplication, QMenu, QScrollBar, QWidget
+from PySide6.QtGui import (
+    QAction, QColor, QKeySequence, QPainter, QPainterPath, QPen, QPixmap,
+)
+from PySide6.QtWidgets import (
+    QApplication, QMenu, QMessageBox, QScrollBar, QWidget,
+)
 
 from bdo_music_composer.editor.bdo_instrument_adaptation import instrument_editor_display_adaptations
 from bdo_music_composer.ui.editor.bdo_instrument_lane_art_qt import (
@@ -50,6 +54,12 @@ from bdo_music_composer.editor.arrangement_snap import (
     build_snap_index,
     snap_clip_start,
 )
+from bdo_music_composer.editor.arrangement_navigation import (
+    neighboring_boundary,
+    normalized_boundaries,
+    timeline_grid_step_ms,
+    viewport_for_range,
+)
 from bdo_music_composer.core.project_paths import ASSETS_DIR
 
 
@@ -83,6 +93,8 @@ class _ArrangementGroupView:
     members: tuple[TrackState, ...]
     instrument_id: int
     color: str
+    note_count: int
+    clip_count: int
 
     @property
     def count(self) -> int:
@@ -119,6 +131,7 @@ class TimelineClipSplitRequest:
 class TimelineClipsMoveRequest:
     selections: tuple[tuple[TrackState, str], ...]
     delta_ms: float
+    track_offset: int = 0
     primary_key: tuple[int, str] | None = None
 
 
@@ -160,6 +173,9 @@ class TimelineCanvas(QWidget):
     create_track_requested = Signal(int)
     move_track_requested = Signal(object, int)
     delete_track_requested = Signal(object)
+    duplicate_track_requested = Signal(object)
+    rename_track_requested = Signal(object)
+    color_track_requested = Signal(object)
     clear_solo_requested = Signal()
     unmute_all_requested = Signal()
     selected = Signal(object)
@@ -177,12 +193,20 @@ class TimelineCanvas(QWidget):
     clip_create_requested = Signal(object, float)
     clip_split_requested = Signal(object)
     clip_copy_requested = Signal(object, str)
+    clip_duplicate_requested = Signal(object, str)
+    clip_repeat_requested = Signal(object, str)
+    clip_crop_requested = Signal(object, str)
+    clips_consolidate_requested = Signal(object)
+    clip_rename_requested = Signal(object, str)
+    clip_color_requested = Signal(object, str)
     clip_paste_requested = Signal(object, float)
     clip_delete_requested = Signal(object, str)
     clips_delete_requested = Signal(object)
     clips_move_requested = Signal(object)
     marker_edit_requested = Signal(object)
     group_control_requested = Signal(object, str)
+    fit_width_requested = Signal()
+    layout_preferences_changed = Signal()
     TRACK_NOTE_QUERY_BLOCK_SIZE = 128
     TRACK_CLIP_QUERY_BLOCK_SIZE = 64
     GRID_MIN_TICK_SPACING_PX = 56.0
@@ -192,8 +216,8 @@ class TimelineCanvas(QWidget):
     NOTE_OVERVIEW_BUCKET_PX = 3.0
     NOTE_OVERVIEW_LEVELS = (256,)
     KEYBOARD_SHORTCUT_HINT = (
-        "上下键选择轨道；M 静音；S 独奏；F 打开效果；"
-        "Enter 编辑音符；左右键调整轨道音量（Shift 5）"
+        "F1 快捷键；W/H 适配视图；U 折叠/展开组；Ctrl+D 复制片段；"
+        "Ctrl+E 在播放头切分；Enter 编辑焦点；方向键导航"
     )
 
     def __init__(self) -> None:
@@ -204,6 +228,8 @@ class TimelineCanvas(QWidget):
         self._arrangement_group_counts: dict[str, int] = {}
         self._arrangement_groups: dict[str, _ArrangementGroupView] = {}
         self._arrangement_group_by_row: dict[int, _ArrangementGroupView] = {}
+        self._collapsed_arrangement_groups: set[str] = set()
+        self._visible_track_rows_cache: tuple[tuple[int, TrackState], ...] = ()
         self._selected_arrangement_group_id = ""
         self.timeline_markers: list[dict[str, object]] = []
         self._timeline_marker_times: tuple[float, ...] = ()
@@ -245,14 +271,26 @@ class TimelineCanvas(QWidget):
         self._clip_drag_end_ms = 0.0
         self._clip_drag_occupied_start_ms: float | None = None
         self._clip_drag_occupied_end_ms: float | None = None
+        self._clip_drag_min_start_ms = 0.0
+        self._clip_drag_max_end_ms = math.inf
         self._clip_drag_id = ""
         self._clip_group_drag_keys: tuple[tuple[int, str], ...] = ()
         self._clip_group_drag_origins: dict[
             tuple[int, str], tuple[float, float]
         ] = {}
+        self._clip_group_drag_track_offset = 0
         self._selected_clip_id = ""
         self._selected_clip_track_id: int | None = None
         self._selected_clip_keys: set[tuple[int, str]] = set()
+        self._focus_scope = "track"
+        self._viewport_history: list[tuple[float, float]] = []
+        self._header_width = 276
+        self._lane_height_px = 68
+        self._reference_lane_height_px = 68
+        self._layout_drag_mode = ""
+        self._layout_hover_handle = ""
+        self._layout_drag_origin = QPointF()
+        self._layout_drag_initial = 0
         self._marquee_press_pos: QPointF | None = None
         self._marquee_current_pos = QPointF()
         self._marquee_active = False
@@ -264,7 +302,7 @@ class TimelineCanvas(QWidget):
         self.snap_enabled = True
         self._clip_snap_targets = ArrangementSnapIndex((), ())
         self._clip_snap_result = ArrangementSnapResult(0.0)
-        self.arrangement_tool = "marquee"
+        self.arrangement_tool = "select"
         self._merge_overlap_track_id: int | None = None
         self._merge_overlap_regions: tuple[object, ...] = ()
         self.selected_track: TrackState | None = None
@@ -312,9 +350,9 @@ class TimelineCanvas(QWidget):
         self.setMinimumHeight(380)
 
     def set_arrangement_tool(self, tool: str) -> None:
-        normalized = str(tool or "marquee")
+        normalized = str(tool or "select")
         if normalized not in {"marquee", "select", "razor"}:
-            normalized = "marquee"
+            normalized = "select"
         self.arrangement_tool = normalized
         self.unsetCursor()
         self.update()
@@ -405,17 +443,112 @@ class TimelineCanvas(QWidget):
             view = _ArrangementGroupView(
                 group_id, rows[0], rows[-1], members,
                 int(members[0].bdo_instrument_id), str(members[0].color),
+                sum(len(member.notes) for member in members),
+                sum(len(track_clips(member)) for member in members),
             )
             groups[group_id] = view
             for row in rows:
                 by_row[row] = view
         self._arrangement_groups = groups
         self._arrangement_group_by_row = by_row
+        self._collapsed_arrangement_groups.intersection_update(groups)
+        self._visible_track_rows_cache = ()
         self._arrangement_group_counts = {
             group_id: view.count for group_id, view in groups.items()
         }
         if self._selected_arrangement_group_id not in groups:
             self._selected_arrangement_group_id = ""
+
+    def _visible_track_rows(self) -> tuple[tuple[int, TrackState], ...]:
+        """Return original row identities after presentation-only folding."""
+
+        if not self._visible_track_rows_cache and self.tracks:
+            self._visible_track_rows_cache = tuple(
+                (row, track)
+                for row, track in enumerate(self.tracks)
+                if (
+                    not (group_id := str(track.arrangement_group_id or ""))
+                    or group_id not in self._collapsed_arrangement_groups
+                    or row == self._arrangement_groups[group_id].first_row
+                )
+            )
+        return self._visible_track_rows_cache
+
+    def _visual_row_for_track(self, track: TrackState) -> int | None:
+        group_id = str(track.arrangement_group_id or "")
+        representative = (
+            self._arrangement_groups[group_id].members[0]
+            if group_id in self._collapsed_arrangement_groups
+            else track
+        )
+        return next(
+            (
+                visual_row
+                for visual_row, (_row, item) in enumerate(
+                    self._visible_track_rows()
+                )
+                if item is representative
+            ),
+            None,
+        )
+
+    def _set_group_collapsed(self, group_id: str, collapsed: bool) -> None:
+        group = self._arrangement_groups.get(str(group_id))
+        if group is None:
+            return
+        if collapsed:
+            self._collapsed_arrangement_groups.add(group.group_id)
+            if self.selected_track in group.members[1:]:
+                self._select_track(group.members[0], emit=True)
+        else:
+            self._collapsed_arrangement_groups.discard(group.group_id)
+        self._visible_track_rows_cache = ()
+        self._static_timeline_cache_key = None
+        self._update_track_scrollbar()
+        self.update()
+
+    def set_all_groups_collapsed(self, collapsed: bool) -> None:
+        """Fold or unfold every automatic Group without mutating Tracks."""
+
+        next_groups = set(self._arrangement_groups) if collapsed else set()
+        if next_groups == self._collapsed_arrangement_groups:
+            return
+        self._collapsed_arrangement_groups = next_groups
+        if collapsed and self.selected_track is not None:
+            group_id = str(self.selected_track.arrangement_group_id or "")
+            group = self._arrangement_groups.get(group_id)
+            if group is not None and self.selected_track in group.members[1:]:
+                self._select_track(group.members[0], emit=True)
+        self._visible_track_rows_cache = ()
+        self._static_timeline_cache_key = None
+        self._update_track_scrollbar()
+        self.update()
+
+    def fit_track_rows(self) -> None:
+        """Fit as many arrangement rows as possible into the current height."""
+
+        row_count = len(self._visible_track_rows())
+        if row_count <= 0:
+            return
+        area, _header_w, ruler_h, _lane_h = self._timeline_layout_metrics()
+        available = max(
+            44,
+            int(area.height() - ruler_h - self._reference_audio_lane_height()),
+        )
+        self.set_layout_metrics(
+            lane_height=max(44, min(104, available // row_count)),
+            notify=True,
+        )
+
+    def reset_layout_metrics(self) -> None:
+        """Restore the stable standard timeline density."""
+
+        self.set_layout_metrics(
+            header_width=276,
+            lane_height=68,
+            reference_lane_height=68,
+            notify=True,
+        )
 
     def set_timeline_markers(self, markers: object) -> None:
         self.timeline_markers = list(normalize_timeline_markers(markers))
@@ -488,25 +621,43 @@ class TimelineCanvas(QWidget):
                     self._clip_drag_origin_start_ms - earliest,
                 )
             target = self._track_at_position(pos)
-            if target is not None and not self._clip_group_drag_keys:
-                self._clip_drag_target = target
+            if target is not None:
+                if self._clip_group_drag_keys:
+                    rows_by_id = {
+                        int(track.track_id): row
+                        for row, track in enumerate(self.tracks)
+                    }
+                    anchor_row = rows_by_id.get(
+                        int(self._clip_drag_source.track_id)
+                        if self._clip_drag_source is not None else -1
+                    )
+                    target_row = rows_by_id.get(int(target.track_id))
+                    selected_rows = tuple(
+                        rows_by_id[key[0]]
+                        for key in self._clip_group_drag_keys
+                        if key[0] in rows_by_id
+                    )
+                    if (
+                        anchor_row is not None
+                        and target_row is not None
+                        and selected_rows
+                    ):
+                        proposed = target_row - anchor_row
+                        minimum = -min(selected_rows)
+                        maximum = len(self.tracks) - 1 - max(selected_rows)
+                        self._clip_group_drag_track_offset = max(
+                            minimum, min(maximum, proposed)
+                        )
+                        destination_row = anchor_row + self._clip_group_drag_track_offset
+                        self._clip_drag_target = self.tracks[destination_row]
+                else:
+                    self._clip_drag_target = target
             self._clip_drag_start_ms = start
             self._clip_drag_end_ms = start + duration
         elif self._clip_drag_mode == "resize_start":
-            start = self._snap_drag_time(
-                self._clip_drag_origin_start_ms + delta,
-                0.0,
-                modifiers,
-            )
-            self._clip_drag_start_ms = min(
-                self._clip_drag_origin_end_ms - MIN_CLIP_DURATION_MS,
-                (
-                    self._clip_drag_occupied_start_ms
-                    if self._clip_drag_occupied_start_ms is not None
-                    else math.inf
-                ),
-                start,
-            )
+            # The left edge is fixed; resizing changes only the empty region
+            # available at the right without transforming authored notes.
+            self._clip_drag_start_ms = self._clip_drag_origin_start_ms
             self._clip_drag_end_ms = self._clip_drag_origin_end_ms
         elif self._clip_drag_mode == "resize_end":
             end = self._snap_drag_time(
@@ -517,12 +668,11 @@ class TimelineCanvas(QWidget):
             self._clip_drag_start_ms = self._clip_drag_origin_start_ms
             self._clip_drag_end_ms = max(
                 self._clip_drag_origin_start_ms + MIN_CLIP_DURATION_MS,
-                (
-                    self._clip_drag_occupied_end_ms
-                    if self._clip_drag_occupied_end_ms is not None
-                    else -math.inf
-                ),
                 end,
+            )
+            self._clip_drag_end_ms = min(
+                self._clip_drag_max_end_ms,
+                self._clip_drag_end_ms,
             )
 
     def _build_clip_snap_targets(
@@ -729,7 +879,20 @@ class TimelineCanvas(QWidget):
         self,
         track: TrackState,
     ) -> _TimelineTrackNoteIndex:
-        notes = project_track_notes(track)
+        identity_clip = (
+            not getattr(track, "arrangement_clips", ())
+            and getattr(track, "clip_start_ms", None) is None
+            and getattr(track, "clip_end_ms", None) is None
+            and math.isclose(
+                float(getattr(track, "duration_scale", 1.0)),
+                1.0,
+                abs_tol=1e-12,
+            )
+        )
+        # Imported/default tracks without explicit Clip geometry already use
+        # timeline coordinates. Avoid allocating an equal projected Note tuple
+        # before the immutable interval index performs its own ordering pass.
+        notes = tuple(track.notes) if identity_clip else project_track_notes(track)
         intervals = IntervalIndex.build(
             notes,
             start_of=lambda note: float(note.start),
@@ -906,6 +1069,40 @@ class TimelineCanvas(QWidget):
             if value.end >= visible_start
         )
 
+    def _visible_group_summary_spans(
+        self,
+        track: TrackState,
+        visible_start: float,
+        visible_duration: float,
+        bucket_count: int,
+    ) -> tuple[tuple[float, float], ...]:
+        """Build one pixel-bounded folded-group summary without dense caches.
+
+        A folded group can expose many member tracks inside a single row.  The
+        normal per-track overview prepares several zoom levels, which is useful
+        while zooming one lane but wasteful when dozens of sub-bands are only a
+        few pixels high.  Query the visible intervals once and merge them into
+        the number of horizontal buckets the folded row can actually display.
+        """
+
+        index = self._track_note_indexes.get(id(track))
+        if index is None:
+            return ()
+        visible_end = visible_start + max(1.0, visible_duration)
+        bucket_count = max(1, int(bucket_count))
+        bucket_duration = max(1.0, visible_duration) / bucket_count
+        spans: list[tuple[float, float]] = []
+        for bucket in range(bucket_count):
+            start = visible_start + bucket * bucket_duration
+            end = (
+                visible_end
+                if bucket == bucket_count - 1
+                else start + bucket_duration
+            )
+            if index.intervals.intersects_closed(start, end):
+                spans.append((start, end))
+        return tuple(spans)
+
     def _visible_track_notes(self, track: TrackState, start: float, end: float) -> list:
         ordered, lo, hi = self._visible_track_note_window(track, start, end)
         if lo == 0 and hi == len(ordered):
@@ -972,6 +1169,8 @@ class TimelineCanvas(QWidget):
         self._selected_clip_keys.clear()
         self._selected_clip_id = ""
         self._selected_clip_track_id = None
+        if self._focus_scope == "clip":
+            self._focus_scope = "track"
         self._static_timeline_cache_key = None
 
     def _set_clip_selection(
@@ -1008,6 +1207,7 @@ class TimelineCanvas(QWidget):
         self._selected_clip_keys = normalized
         self._selected_clip_track_id = primary[0]
         self._selected_clip_id = primary[1]
+        self._focus_scope = "clip"
         self._static_timeline_cache_key = None
         self._select_track(
             track,
@@ -1098,6 +1298,8 @@ class TimelineCanvas(QWidget):
         ):
             self._selected_arrangement_group_id = ""
         self.selected_track = track
+        if not preserve_clip_selection:
+            self._focus_scope = "track"
         if not preserve_clip_selection and (
             track is None
             or self._selected_clip_track_id != int(track.track_id)
@@ -1121,7 +1323,15 @@ class TimelineCanvas(QWidget):
         )
 
     def _ensure_selected_track_visible(self) -> None:
-        index = self._selected_track_index()
+        visible_rows = self._visible_track_rows()
+        index = next(
+            (
+                visual_row
+                for visual_row, (_row, track) in enumerate(visible_rows)
+                if track is self.selected_track
+            ),
+            None,
+        )
         if index is None or not self.track_scroll.isVisible():
             return
         lane_height = self._lane_height()
@@ -1274,6 +1484,56 @@ class TimelineCanvas(QWidget):
         self._refresh_scaled_background()
         self._update_track_scrollbar()
 
+    @property
+    def header_width(self) -> int:
+        return int(self._header_width)
+
+    @property
+    def lane_height(self) -> int:
+        return int(self._lane_height_px)
+
+    @property
+    def reference_lane_height(self) -> int:
+        return int(self._reference_lane_height_px)
+
+    def set_layout_metrics(
+        self,
+        *,
+        header_width: int | None = None,
+        lane_height: int | None = None,
+        reference_lane_height: int | None = None,
+        notify: bool = False,
+    ) -> None:
+        """Apply bounded, UI-local timeline density preferences."""
+
+        values = (
+            max(220, min(420, int(
+                self._header_width if header_width is None else header_width
+            ))),
+            max(44, min(104, int(
+                self._lane_height_px if lane_height is None else lane_height
+            ))),
+            max(44, min(180, int(
+                self._reference_lane_height_px
+                if reference_lane_height is None
+                else reference_lane_height
+            ))),
+        )
+        previous = (
+            self._header_width,
+            self._lane_height_px,
+            self._reference_lane_height_px,
+        )
+        if values == previous:
+            return
+        self._header_width, self._lane_height_px, self._reference_lane_height_px = values
+        self._static_timeline_cache_key = None
+        self._update_track_scrollbar()
+        self._ensure_selected_track_visible()
+        self.update()
+        if notify:
+            self.layout_preferences_changed.emit()
+
     def _refresh_scaled_background(self) -> None:
         if self.background_pixmap.isNull() or self.size().isEmpty():
             self._scaled_background = QPixmap()
@@ -1287,14 +1547,14 @@ class TimelineCanvas(QWidget):
         self._scaled_background_size = self.size()
 
     def _lane_height(self) -> int:
-        return 68
+        return int(self._lane_height_px)
 
     def _visible_track_row_range(self, grid_height: float) -> tuple[int, int]:
         lane_height = self._lane_height()
         scroll_y = self.track_scroll.value() if self.track_scroll.isVisible() else 0
         first_row = max(0, int(scroll_y // lane_height))
         last_row = min(
-            len(self.tracks),
+            len(self._visible_track_rows()),
             int(math.ceil((scroll_y + grid_height) / lane_height)) + 1,
         )
         return first_row, last_row
@@ -1305,7 +1565,7 @@ class TimelineCanvas(QWidget):
         area = QRectF(self.rect())
         # Keep the left column compact; pitch-range detail belongs in the
         # inspector/conversion check rather than competing with row controls.
-        header_w = 296
+        header_w = int(self._header_width)
         ruler_h = 34
         lane_h = self._lane_height()
         return area, header_w, ruler_h, lane_h
@@ -1315,8 +1575,79 @@ class TimelineCanvas(QWidget):
         if controller is None:
             return 0
         if controller.audio_path or controller.waveform_loading:
-            return self._lane_height()
+            return int(self._reference_lane_height_px)
         return 34
+
+    def _layout_handle_at(self, position: QPointF) -> str:
+        """Resolve presentation splitters without adding nested Qt widgets."""
+
+        area, header_w, ruler_h, lane_h = self._timeline_layout_metrics()
+        if abs(position.x() - (area.left() + header_w)) <= 5.0:
+            return "header"
+        grid_top = area.top() + ruler_h
+        reference_h = self._reference_audio_lane_height()
+        if reference_h:
+            reference_top = area.bottom() - reference_h
+            if abs(position.y() - reference_top) <= 5.0:
+                return "reference"
+        if (
+            position.x() < area.left() + header_w
+            and position.y() > grid_top + 8.0
+            and self._visible_track_rows()
+        ):
+            scroll_y = (
+                self.track_scroll.value()
+                if self.track_scroll.isVisible()
+                else 0
+            )
+            relative = (position.y() - grid_top + scroll_y) % lane_h
+            if min(relative, lane_h - relative) <= 4.0:
+                return "lane"
+        return ""
+
+    def _paint_layout_handles(
+        self,
+        painter: QPainter,
+        area: QRectF,
+        header_w: int,
+        ruler_h: int,
+        lane_h: int,
+    ) -> None:
+        """Expose the three persistent density splitters without new widgets."""
+
+        grid_left = area.left() + header_w
+        hovered = self._layout_hover_handle or self._layout_drag_mode
+        painter.save()
+        painter.setPen(Qt.NoPen)
+        header_color = QColor(
+            "#d9b85f" if hovered == "header" else "#6f6657"
+        )
+        painter.fillRect(
+            QRectF(grid_left - 1.0, area.top(), 2.0, area.height()),
+            header_color,
+        )
+        painter.fillRect(
+            QRectF(grid_left - 3.0, area.top() + 7.0, 6.0, ruler_h - 14.0),
+            QColor("#f0d887" if hovered == "header" else "#8c7b5d"),
+        )
+
+        grip_left = area.left() + max(8.0, header_w / 2.0 - 13.0)
+        lane_y = area.top() + ruler_h + lane_h
+        if lane_y < area.bottom() - 8.0:
+            painter.fillRect(
+                QRectF(grip_left, lane_y - 1.5, 26.0, 3.0),
+                QColor("#f0d887" if hovered == "lane" else "#625b50"),
+            )
+        reference_h = self._reference_audio_lane_height()
+        if reference_h:
+            reference_y = area.bottom() - reference_h
+            painter.fillRect(
+                QRectF(grip_left, reference_y - 1.5, 26.0, 3.0),
+                QColor(
+                    "#55c4ba" if hovered == "reference" else "#536d68"
+                ),
+            )
+        painter.restore()
 
     def _update_track_scrollbar(self) -> None:
         if not hasattr(self, "track_scroll"):
@@ -1328,7 +1659,7 @@ class TimelineCanvas(QWidget):
             0,
             grid_h - self._reference_audio_lane_height(),
         )
-        content_h = lane_h * len(self.tracks)
+        content_h = lane_h * len(self._visible_track_rows())
         max_scroll = max(0, content_h - instrument_view_h)
         scrollbar_width = 12
         self.track_scroll.setGeometry(
@@ -1657,21 +1988,44 @@ class TimelineCanvas(QWidget):
         tint.setAlpha(22 if selected else 10)
         painter.fillRect(QRectF(left, y, grid_left - left, lane_h), tint)
         if row == group.first_row:
+            collapsed = group.group_id in self._collapsed_arrangement_groups
             painter.fillRect(
                 QRectF(left, y, grid_left + grid_w - left, 2.0 if selected else 1.0),
                 group_color,
             )
-            control = QRectF(left + 8.0, y + 36.0, 132.0, 24.0)
+            control_left = (
+                max(left + 8.0, grid_left - 140.0)
+                if collapsed
+                else left + 8.0
+            )
+            control = QRectF(
+                control_left,
+                y + max(4.0, lane_h - 28.0),
+                132.0,
+                24.0,
+            )
             control_fill = QColor(group.color)
             control_fill.setAlpha(70 if selected else 38)
             painter.setBrush(control_fill)
             painter.setPen(QPen(group_color, 1))
             painter.drawRoundedRect(control, 5.0, 5.0)
-            icon_left = control.left() + 7.0
-            for offset, width in ((0.0, 12.0), (4.0, 9.0), (8.0, 6.0)):
-                painter.fillRect(
-                    QRectF(icon_left, control.top() + 6.0 + offset, width, 2.0),
-                    QColor("#e8d7b6"),
+            fold_rect = QRectF(
+                control.left() + 4.0, control.top() + 2.0, 19.0, 20.0
+            )
+            painter.setPen(QPen(QColor("#e8d7b6"), 1.4))
+            center_y = fold_rect.center().y()
+            painter.drawLine(
+                fold_rect.left() + 4.0,
+                center_y,
+                fold_rect.right() - 4.0,
+                center_y,
+            )
+            if collapsed:
+                painter.drawLine(
+                    fold_rect.center().x(),
+                    fold_rect.top() + 5.0,
+                    fold_rect.center().x(),
+                    fold_rect.bottom() - 5.0,
                 )
             group_font = painter.font()
             group_font.setPointSize(max(7, group_font.pointSize() - 1))
@@ -1696,9 +2050,16 @@ class TimelineCanvas(QWidget):
                 painter.drawText(rect, Qt.AlignCenter, label)
                 self.hit_regions.append((rect, action, track))
             self.hit_regions.append((control.adjusted(0, 0, -44, 0), "group_select", track))
+            self.hit_regions.append((fold_rect, "group_fold", track))
         if selected:
             painter.fillRect(QRectF(left, y, 3.0, lane_h), group_color)
-        if row == group.last_row:
+        if (
+            row == group.last_row
+            or (
+                row == group.first_row
+                and group.group_id in self._collapsed_arrangement_groups
+            )
+        ):
             painter.fillRect(
                 QRectF(
                     left, y + lane_h - (2.0 if selected else 1.0),
@@ -1710,6 +2071,248 @@ class TimelineCanvas(QWidget):
     def _is_arrangement_group_start(self, row: int, track: TrackState) -> bool:
         group = self._arrangement_group_by_row.get(row)
         return group is not None and row == group.first_row
+
+    def _collapsed_group_for_row(
+        self, row: int
+    ) -> _ArrangementGroupView | None:
+        group = self._arrangement_group_by_row.get(row)
+        if (
+            group is None
+            or row != group.first_row
+            or group.group_id not in self._collapsed_arrangement_groups
+        ):
+            return None
+        return group
+
+    def _group_validation_notice(
+        self, group: _ArrangementGroupView
+    ) -> dict[str, tuple]:
+        """Keep hidden member warnings visible on the folded summary row."""
+
+        errors: list[object] = []
+        attentions: list[object] = []
+        for member in group.members:
+            notice = self._track_validation_notice(member)
+            errors.extend(notice["errors"])
+            attentions.extend(notice["attentions"])
+        return {"errors": tuple(errors), "attentions": tuple(attentions)}
+
+    def _paint_collapsed_group_summary(
+        self,
+        painter: QPainter,
+        group: _ArrangementGroupView,
+        region_rect: QRectF,
+        visible_start: float,
+        visible_duration: float,
+        *,
+        active: bool,
+    ) -> None:
+        """Paint a bounded, read-only overview of every member in one row."""
+
+        members = group.members
+        if not members or region_rect.isEmpty():
+            return
+        visible_end = visible_start + visible_duration
+        band_count = max(
+            1,
+            min(len(members), int(max(1.0, region_rect.height() - 4.0) // 6.0)),
+        )
+        band_height = max(3.0, (region_rect.height() - 4.0) / band_count)
+        painter.save()
+        painter.setClipRect(region_rect)
+        painter.setPen(Qt.NoPen)
+        member_count = max(1, len(members))
+        for member_index, member in enumerate(members):
+            band = min(
+                band_count - 1,
+                int(member_index * band_count / member_count),
+            )
+            band_top = region_rect.top() + 2.0 + band * band_height
+            band_rect = QRectF(
+                region_rect.left(),
+                band_top,
+                region_rect.width(),
+                max(2.0, band_height - 1.0),
+            )
+            identity = QColor(member.color)
+            if not identity.isValid():
+                identity = QColor(group.color)
+            rail = QColor(identity)
+            rail.setAlpha(190 if active else 92)
+            painter.fillRect(
+                QRectF(band_rect.left(), band_rect.top(), 3.0, band_rect.height()),
+                rail,
+            )
+
+            clips = self._visible_track_clips(member, visible_start, visible_end)
+            clip_budget = max(
+                16,
+                int(region_rect.width() / max(4.0, member_count * 3.0)),
+            )
+            clip_stride = max(1, math.ceil(len(clips) / clip_budget))
+            for clip in clips[::clip_stride]:
+                start = max(visible_start, float(clip.start_ms))
+                end = min(visible_end, float(clip.end_ms))
+                if end <= start:
+                    continue
+                x = region_rect.left() + (
+                    (start - visible_start) / visible_duration
+                ) * region_rect.width()
+                width = max(
+                    1.0,
+                    (end - start) / visible_duration * region_rect.width(),
+                )
+                clip_color = QColor(
+                    str(getattr(clip, "color", "") or member.color)
+                )
+                if not clip_color.isValid():
+                    clip_color = QColor(identity)
+                clip_color.setAlpha(72 if active else 34)
+                painter.fillRect(
+                    QRectF(x, band_rect.top(), width, band_rect.height()),
+                    clip_color,
+                )
+
+            note_budget = max(
+                8,
+                int(region_rect.width() / max(3.0, member_count * 2.0)),
+            )
+            overview = self._visible_group_summary_spans(
+                member,
+                visible_start,
+                visible_duration,
+                note_budget,
+            )
+            note_color = QColor(identity)
+            note_color.setAlpha(228 if active else 108)
+            painter.setBrush(note_color)
+            center_y = band_rect.center().y()
+            for start, end in overview:
+                x = region_rect.left() + (
+                    (start - visible_start) / visible_duration
+                ) * region_rect.width()
+                width = max(
+                    1.5,
+                    (end - start) / visible_duration * region_rect.width(),
+                )
+                painter.fillRect(QRectF(x, center_y - 1.0, width, 2.0), note_color)
+        painter.restore()
+        self.hit_regions.append((region_rect, "group_summary", members[0]))
+
+    def _paint_track_volume_control(
+        self,
+        painter: QPainter,
+        track: TrackState,
+        *,
+        left: float,
+        header_w: int,
+        y: float,
+        active: bool,
+        compact: bool,
+    ) -> QRectF:
+        """Paint the game Track-volume field and return its label bounds."""
+
+        volume_y = y + (28.0 if compact else 42.0)
+        volume_h = 12.0 if compact else 16.0
+        volume_rect = QRectF(left + header_w - 101, volume_y, 50, volume_h)
+        value_rect = QRectF(left + header_w - 48, volume_y, 26, volume_h)
+        label = tr("轨道音量")
+        label_width = self._volume_label_width(painter.fontMetrics(), label)
+        label_rect = QRectF(
+            volume_rect.left() - label_width - 4.0,
+            volume_y,
+            label_width,
+            volume_h,
+        )
+        painter.setPen(QColor("#a78e6a" if active else "#665e54"))
+        painter.drawText(label_rect, Qt.AlignCenter, label)
+        painter.fillRect(volume_rect, QColor("#1c1c1e"))
+        painter.setPen(QPen(QColor("#514a3e"), 1))
+        painter.drawRect(volume_rect)
+        raw_value = int(track.bdo_track_volume)
+        fill_width = (
+            (volume_rect.width() - 4.0)
+            * max(0, min(100, raw_value))
+            / 100.0
+        )
+        painter.fillRect(
+            QRectF(
+                volume_rect.left() + 2.0,
+                volume_rect.top() + 5.0,
+                fill_width,
+                6.0,
+            ),
+            QColor("#83a543" if active else "#556042"),
+        )
+        handle_x = volume_rect.left() + 2.0 + fill_width
+        painter.fillRect(
+            QRectF(handle_x - 1.0, volume_rect.top() + 3.0, 2.0, 10.0),
+            QColor("#d9c07a" if active else "#81735d"),
+        )
+        painter.setPen(QColor(
+            "#ef7772"
+            if not 0 <= raw_value <= 100
+            else ("#ffedd4" if active else "#77716a")
+        ))
+        painter.drawText(
+            value_rect, Qt.AlignRight | Qt.AlignVCenter, str(raw_value)
+        )
+        self.hit_regions.append((volume_rect, "track_volume", track))
+        return label_rect
+
+    def _paint_track_validation_state(
+        self,
+        painter: QPainter,
+        track: TrackState,
+        row: int,
+        left: float,
+        y: float,
+        header_w: int,
+        lane_h: int,
+        *,
+        active: bool,
+        errors: tuple,
+        attentions: tuple,
+    ) -> None:
+        """Paint the one winning validation severity in a track header."""
+
+        if errors:
+            painter.fillRect(
+                QRectF(left, y, header_w, lane_h),
+                QColor(164, 54, 48, 27),
+            )
+            painter.fillRect(QRectF(left, y, 5.0, lane_h), QColor("#d9635d"))
+        elif attentions:
+            attention_accent = self._track_attention_accent(row)
+            attention_tint = QColor(attention_accent)
+            attention_tint.setAlpha(24)
+            painter.fillRect(QRectF(left, y, header_w, lane_h), attention_tint)
+            attention_accent.setAlpha(255)
+            painter.fillRect(QRectF(left, y, 5.0, lane_h), attention_accent)
+        else:
+            identity_color = QColor(track.color if active else "#4a4743")
+            painter.fillRect(QRectF(left, y, 3.0, lane_h), identity_color)
+
+        if errors:
+            marker, accent = "!", QColor("#d9635d")
+        elif attentions:
+            marker, accent = "=", self._track_attention_accent(row)
+        else:
+            return
+        badge_rect = QRectF(left + 8.0, y + 7.0, 18.0, 18.0)
+        badge_fill = QColor(accent)
+        badge_fill.setAlpha(42)
+        painter.setBrush(badge_fill)
+        painter.setPen(QPen(accent, 1))
+        painter.drawRoundedRect(badge_rect, 4.0, 4.0)
+        badge_font = painter.font()
+        badge_font.setPointSize(max(7, badge_font.pointSize() - 1))
+        badge_font.setBold(True)
+        painter.save()
+        painter.setFont(badge_font)
+        painter.setPen(QColor("#fff1dc"))
+        painter.drawText(badge_rect, Qt.AlignCenter, marker)
+        painter.restore()
 
     def _paint_track_rows(
         self,
@@ -1738,19 +2341,36 @@ class TimelineCanvas(QWidget):
         first_row, last_row = self._visible_track_row_range(instrument_grid_h)
         painter.save()
         painter.setClipRect(QRectF(left, grid_top, header_w + grid_w, instrument_grid_h))
-        for row in range(first_row, last_row):
-            track = self.tracks[row]
-            y = grid_top + row * lane_h - scroll_y
+        visible_rows = self._visible_track_rows()
+        for visual_row in range(first_row, last_row):
+            row, track = visible_rows[visual_row]
+            y = grid_top + visual_row * lane_h - scroll_y
             group_start = self._is_arrangement_group_start(row, track)
-            active = not track.muted and (not any_solo or track.solo)
-            focused = track is self.selected_track
-            validation_notice = self._track_validation_notice(track)
+            collapsed_group = self._collapsed_group_for_row(row)
+            active = (
+                any(
+                    not member.muted and (not any_solo or member.solo)
+                    for member in collapsed_group.members
+                )
+                if collapsed_group is not None
+                else not track.muted and (not any_solo or track.solo)
+            )
+            focused = (
+                collapsed_group is not None
+                and collapsed_group.group_id
+                == self._selected_arrangement_group_id
+            ) or track is self.selected_track
+            validation_notice = (
+                self._group_validation_notice(collapsed_group)
+                if collapsed_group is not None
+                else self._track_validation_notice(track)
+            )
             validation_errors = validation_notice["errors"]
             validation_attentions = validation_notice["attentions"]
             has_validation_notice = bool(
                 validation_errors or validation_attentions
             )
-            lane_color = QColor(38, 38, 41, 188) if row % 2 else QColor(32, 32, 35, 184)
+            lane_color = QColor(38, 38, 41, 188) if visual_row % 2 else QColor(32, 32, 35, 184)
             if not active:
                 lane_color = QColor(27, 27, 29, 204)
             if focused:
@@ -1797,60 +2417,12 @@ class TimelineCanvas(QWidget):
 
             # One lane has one visible severity. Export blockers always win;
             # details remain available in the lane tooltip.
-            if validation_errors:
-                painter.fillRect(
-                    QRectF(left, y, header_w, lane_h),
-                    QColor(164, 54, 48, 27),
-                )
-                painter.fillRect(
-                    QRectF(left, y, 5.0, lane_h),
-                    QColor("#d9635d"),
-                )
-            elif validation_attentions:
-                attention_accent = self._track_attention_accent(row)
-                attention_tint = QColor(attention_accent)
-                attention_tint.setAlpha(24)
-                painter.fillRect(
-                    QRectF(left, y, header_w, lane_h),
-                    attention_tint,
-                )
-                attention_accent.setAlpha(255)
-                painter.fillRect(
-                    QRectF(left, y, 5.0, lane_h),
-                    attention_accent,
-                )
-            else:
-                track_identity_color = QColor(
-                    track.color if active else "#4a4743"
-                )
-                painter.fillRect(
-                    QRectF(left, y, 3.0, lane_h),
-                    track_identity_color,
-                )
-            validation_badges: list[tuple[str, QColor, float]] = []
-            if validation_errors:
-                validation_badges.append(
-                    ("!", QColor("#d9635d"), y + 7.0)
-                )
-            elif validation_attentions:
-                validation_badges.append(
-                    ("=", self._track_attention_accent(row), y + 7.0)
-                )
-            for marker, accent, badge_y in validation_badges:
-                badge_rect = QRectF(left + 8.0, badge_y, 18.0, 18.0)
-                badge_fill = QColor(accent)
-                badge_fill.setAlpha(42)
-                painter.setBrush(badge_fill)
-                painter.setPen(QPen(accent, 1))
-                painter.drawRoundedRect(badge_rect, 4.0, 4.0)
-                badge_font = painter.font()
-                badge_font.setPointSize(max(7, badge_font.pointSize() - 1))
-                badge_font.setBold(True)
-                painter.save()
-                painter.setFont(badge_font)
-                painter.setPen(QColor("#fff1dc"))
-                painter.drawText(badge_rect, Qt.AlignCenter, marker)
-                painter.restore()
+            self._paint_track_validation_state(
+                painter, track, row, left, y, header_w, lane_h,
+                active=active,
+                errors=validation_errors,
+                attentions=validation_attentions,
+            )
 
             controls = [
                 ("M", "mute", 26),
@@ -1861,77 +2433,40 @@ class TimelineCanvas(QWidget):
             controls_width = sum(width for _label, _action, width in controls)
             controls_width += control_gap * max(0, len(controls) - 1)
             control_x = left + header_w - 20.0 - controls_width
-            control_y = y + 8.0
-            for label, action, width in controls:
-                rect = QRectF(control_x, control_y, width, 24)
-                checked = (action == "mute" and track.muted) or (action == "solo" and track.solo)
-                painter.fillRect(rect, QColor("#5c4a28" if checked else "#242427"))
-                painter.setPen(QPen(QColor("#caa24f" if checked else "#4b4b50"), 1))
-                painter.drawRect(rect)
-                painter.setPen(QColor("#ffedd4" if active else "#837a6f"))
-                painter.drawText(rect, Qt.AlignCenter, label)
-                self.hit_regions.append((rect, action, track))
-                control_x += width + control_gap
+            compact_lane = lane_h < 58
+            control_y = y + (4.0 if compact_lane else 8.0)
+            if collapsed_group is None:
+                for label, action, width in controls:
+                    rect = QRectF(control_x, control_y, width, 24)
+                    checked = (action == "mute" and track.muted) or (action == "solo" and track.solo)
+                    painter.fillRect(rect, QColor("#5c4a28" if checked else "#242427"))
+                    painter.setPen(QPen(QColor("#caa24f" if checked else "#4b4b50"), 1))
+                    painter.drawRect(rect)
+                    painter.setPen(QColor("#ffedd4" if active else "#837a6f"))
+                    painter.drawText(rect, Qt.AlignCenter, label)
+                    self.hit_regions.append((rect, action, track))
+                    control_x += width + control_gap
 
             # This is the game's track-volume field, not the separate note-
             # velocity scale.  The official authoring UI clamps edits to
             # 0..100 (default 70), although imported score bytes may be above
             # 100.  Such raw values remain visible and untouched until the
             # user deliberately edits this slider.
-            volume_rect = QRectF(left + header_w - 101, y + 42, 50, 16)
-            volume_value_rect = QRectF(left + header_w - 48, y + 42, 26, 16)
-            volume_label = tr("轨道音量")
-            volume_label_width = self._volume_label_width(
-                painter.fontMetrics(),
-                volume_label,
-            )
-            volume_label_rect = QRectF(
-                volume_rect.left() - volume_label_width - 4.0,
-                y + 42,
-                volume_label_width,
-                16,
-            )
-            painter.setPen(QColor("#a78e6a" if active else "#665e54"))
-            painter.drawText(volume_label_rect, Qt.AlignCenter, volume_label)
-            painter.fillRect(volume_rect, QColor("#1c1c1e"))
-            painter.setPen(QPen(QColor("#514a3e"), 1))
-            painter.drawRect(volume_rect)
-            raw_track_volume = int(track.bdo_track_volume)
-            fill_width = max(
-                0.0,
-                (volume_rect.width() - 4.0)
-                * max(0, min(100, raw_track_volume))
-                / 100.0,
-            )
-            painter.fillRect(
-                QRectF(
-                    volume_rect.left() + 2.0,
-                    volume_rect.top() + 5.0,
-                    fill_width,
-                    6.0,
-                ),
-                QColor("#83a543" if active else "#556042"),
-            )
-            handle_x = volume_rect.left() + 2.0 + fill_width
-            painter.fillRect(
-                QRectF(handle_x - 1.0, volume_rect.top() + 3.0, 2.0, 10.0),
-                QColor("#d9c07a" if active else "#81735d"),
-            )
-            painter.setPen(
-                QColor(
-                    "#ef7772"
-                    if not 0 <= raw_track_volume <= 100
-                    else ("#ffedd4" if active else "#77716a")
+            volume_label_rect = (
+                QRectF(left + header_w - 146.0, y + 36.0, 1.0, 18.0)
+                if collapsed_group is not None
+                else self._paint_track_volume_control(
+                    painter,
+                    track,
+                    left=left,
+                    header_w=header_w,
+                    y=y,
+                    active=active,
+                    compact=compact_lane,
                 )
             )
-            painter.drawText(
-                volume_value_rect,
-                Qt.AlignRight | Qt.AlignVCenter,
-                str(raw_track_volume),
-            )
-            self.hit_regions.append((volume_rect, "track_volume", track))
 
-            if paint_meters:
+            if paint_meters and collapsed_group is None:
                 self._paint_track_meter(
                     painter,
                     track,
@@ -1954,18 +2489,28 @@ class TimelineCanvas(QWidget):
                 has_error=bool(validation_errors),
             )
 
-            self._paint_track_clip(
-                painter,
-                track,
-                region_rect,
-                visible_start,
-                visible_duration,
-                active=active,
-                focused=focused,
-                has_error=bool(validation_errors),
-            )
+            if collapsed_group is not None:
+                self._paint_collapsed_group_summary(
+                    painter,
+                    collapsed_group,
+                    region_rect,
+                    visible_start,
+                    visible_duration,
+                    active=active,
+                )
+            else:
+                self._paint_track_clip(
+                    painter,
+                    track,
+                    region_rect,
+                    visible_start,
+                    visible_duration,
+                    active=active,
+                    focused=focused,
+                    has_error=bool(validation_errors),
+                )
 
-            if track.notes:
+            if collapsed_group is None and track.notes:
                 pitch_min, pitch_max = self._track_pitch_bounds(track)
                 pitch_span = max(1, pitch_max - pitch_min)
                 painter.save()
@@ -2003,7 +2548,7 @@ class TimelineCanvas(QWidget):
                     painter.drawRects(invalid_rects)
                 painter.restore()
 
-            if not self._viewport_motion_active:
+            if collapsed_group is None and not self._viewport_motion_active:
                 self.velocity_curve_overlay.paint_velocity_trace(
                     painter,
                     track,
@@ -2012,7 +2557,11 @@ class TimelineCanvas(QWidget):
                     visible_duration,
                     active,
                 )
-            if focused and paint_selected_velocity:
+            if (
+                collapsed_group is None
+                and focused
+                and paint_selected_velocity
+            ):
                 self.velocity_curve_overlay.paint_selected_track(
                     painter,
                     track,
@@ -2023,31 +2572,51 @@ class TimelineCanvas(QWidget):
                 )
 
             title_left = left + (34.0 if has_validation_notice else 12.0)
-            title_right = left + header_w - 114.0
+            title_right = left + header_w - (
+                20.0 if collapsed_group is not None else 114.0
+            )
             title_width = max(0.0, title_right - title_left)
             painter.setPen(QColor("#ffedd4" if active else "#8a847d"))
+            title_text = (
+                trf(
+                    "乐器组 · {instrument}",
+                    instrument=_ui_bdo_instrument_name(
+                        collapsed_group.instrument_id
+                    ),
+                )
+                if collapsed_group is not None
+                else track.display_name
+            )
             painter.drawText(
                 QRectF(title_left, y + 8, title_width, 24),
                 Qt.AlignLeft | Qt.AlignVCenter,
                 painter.fontMetrics().elidedText(
-                    track.display_name,
+                    title_text,
                     Qt.ElideRight,
                     max(0, int(title_width - 6.0)),
                 ),
             )
             painter.setPen(QColor("#b8a487" if active else "#69645f"))
-            metadata = trf(
-                "{count} 音符 · {pitch_range}",
-                count=(
-                    len(index.intervals.items)
-                    if (index := self._track_note_indexes.get(id(track)))
-                    is not None else 0
-                ),
-                pitch_range=(
-                    f"{note_name(index.pitch_min)} - {note_name(index.pitch_max)}"
-                    if index is not None and index.intervals.items else "-"
-                ),
-            )
+            if collapsed_group is not None:
+                metadata = trf(
+                    "{tracks} 轨 · {clips} 音块 · {notes} 音符",
+                    tracks=collapsed_group.count,
+                    clips=collapsed_group.clip_count,
+                    notes=collapsed_group.note_count,
+                )
+            else:
+                metadata = trf(
+                    "{count} 音符 · {pitch_range}",
+                    count=(
+                        len(index.intervals.items)
+                        if (index := self._track_note_indexes.get(id(track)))
+                        is not None else 0
+                    ),
+                    pitch_range=(
+                        f"{note_name(index.pitch_min)} - {note_name(index.pitch_max)}"
+                        if index is not None and index.intervals.items else "-"
+                    ),
+                )
             metadata_font = painter.font()
             metadata_font.setPointSize(max(7, metadata_font.pointSize() - 1))
             painter.save()
@@ -2055,7 +2624,10 @@ class TimelineCanvas(QWidget):
             metadata_left = left + 12.0
             metadata_right = volume_label_rect.left() - 6.0
             metadata_width = max(0.0, metadata_right - metadata_left)
-            if not group_start:
+            if (
+                (collapsed_group is not None or not group_start)
+                and not compact_lane
+            ):
                 painter.drawText(
                     QRectF(metadata_left, y + 39, metadata_width, 20),
                     Qt.AlignLeft | Qt.AlignVCenter,
@@ -2138,7 +2710,10 @@ class TimelineCanvas(QWidget):
             ).intersected(region_rect)
             if clip_rect.isEmpty():
                 continue
-            clip_color = QColor("#8f2429" if has_error else track.color)
+            identity_color = QColor(str(getattr(clip, "color", "") or ""))
+            if not identity_color.isValid():
+                identity_color = QColor(track.color)
+            clip_color = QColor("#8f2429") if has_error else identity_color
             clip_color.setAlpha(
                 112 if has_error else (96 if selected else (54 if active else 30))
             )
@@ -2150,12 +2725,39 @@ class TimelineCanvas(QWidget):
                     else (
                         "#ffd766"
                         if selected
-                        else ("#a88e50" if focused else track.color)
+                        else ("#a88e50" if focused else identity_color)
                     )
                 ),
                 3 if selected else (2 if has_error else 1),
             ))
             painter.drawRoundedRect(clip_rect, 4.0, 4.0)
+            label = str(getattr(clip, "display_name", "") or "").strip()
+            if clip_rect.width() >= 54.0:
+                index = self._track_note_indexes.get(id(track))
+                note_count = 0
+                if index is not None:
+                    note_count = sum(
+                        1
+                        for note in index.intervals.query_closed(
+                            clip.start_ms, clip.end_ms
+                        ).items
+                        if clip.start_ms <= float(note.start) < clip.end_ms
+                    )
+                painter.setPen(QColor("#f0ebe1" if active else "#bcb7ae"))
+                text_rect = clip_rect.adjusted(7.0, 3.0, -9.0, -3.0)
+                painter.drawText(
+                    text_rect,
+                    Qt.AlignLeft | Qt.AlignTop,
+                    painter.fontMetrics().elidedText(
+                        trf(
+                            "{name} · {count} 音符",
+                            name=label or tr("音块"),
+                            count=note_count,
+                        ),
+                        Qt.ElideRight,
+                        max(1, round(text_rect.width())),
+                    ),
+                )
             if selected and clip_rect.width() > 8.0 and clip_rect.height() > 8.0:
                 painter.setBrush(Qt.NoBrush)
                 painter.setPen(QPen(QColor("#fff1ad"), 1))
@@ -2169,20 +2771,12 @@ class TimelineCanvas(QWidget):
             ))
             handle_width = min(7.0, clip_rect.width() / 2.0)
             if selected and self.arrangement_tool == "select":
-                for handle_x in (
-                    clip_rect.left() + 2.0,
+                painter.fillRect(QRectF(
                     clip_rect.right() - 5.0,
-                ):
-                    painter.fillRect(QRectF(
-                        handle_x,
-                        clip_rect.center().y() - 8.0,
-                        3.0,
-                        16.0,
-                    ), QColor("#f0d887"))
-            self.hit_regions.append((QRectF(
-                clip_rect.left(), clip_rect.top(),
-                handle_width, clip_rect.height(),
-            ), f"clip_start|{clip.clip_id}", track))
+                    clip_rect.center().y() - 8.0,
+                    3.0,
+                    16.0,
+                ), QColor("#f0d887"))
             self.hit_regions.append((QRectF(
                 clip_rect.right() - handle_width, clip_rect.top(),
                 handle_width, clip_rect.height(),
@@ -2575,6 +3169,20 @@ class TimelineCanvas(QWidget):
         meter_level = (
             self.track_levels.get(int(track.track_id), 0.0) if active else 0.0
         )
+        self._paint_meter_level(
+            painter, meter_left, row_y, lane_h, meter_level
+        )
+
+    @staticmethod
+    def _paint_meter_level(
+        painter: QPainter,
+        meter_left: float,
+        row_y: float,
+        lane_h: int,
+        meter_level: float,
+    ) -> None:
+        """Paint one bounded level meter for a Track or folded Group."""
+
         meter_rect = QRectF(meter_left, row_y + 8, 7, lane_h - 16)
         segment_count = 10
         segment_gap = 1.0
@@ -2652,9 +3260,36 @@ class TimelineCanvas(QWidget):
         )
         first_row, last_row = self._visible_track_row_range(instrument_grid_h)
         visible_tracks: list[tuple[object, ...]] = []
-        for track in self.tracks[first_row:last_row]:
+        for row, track in self._visible_track_rows()[first_row:last_row]:
             index = self._track_note_indexes.get(id(track))
-            notice = self._track_validation_notice(track)
+            collapsed_group = self._collapsed_group_for_row(row)
+            notice = (
+                self._group_validation_notice(collapsed_group)
+                if collapsed_group is not None
+                else self._track_validation_notice(track)
+            )
+            member_key = (
+                tuple(
+                    (
+                        id(member),
+                        id(member_index.intervals)
+                        if member_index is not None else 0,
+                        id(member_index.clips)
+                        if member_index is not None else 0,
+                        int(member.track_id),
+                        str(member.display_name),
+                        str(member.color),
+                        bool(member.muted),
+                        bool(member.solo),
+                    )
+                    for member in collapsed_group.members
+                    for member_index in (
+                        self._track_note_indexes.get(id(member)),
+                    )
+                )
+                if collapsed_group is not None
+                else ()
+            )
             visible_tracks.append(
                 (
                     id(track),
@@ -2673,6 +3308,7 @@ class TimelineCanvas(QWidget):
                     tuple(notice["errors"]),
                     tuple(notice["attentions"]),
                     _ui_bdo_instrument_name(track.bdo_instrument_id),
+                    member_key,
                 )
             )
         controller = self.reference_audio
@@ -2705,6 +3341,7 @@ class TimelineCanvas(QWidget):
             self._selected_clip_id,
             tuple(sorted(self._selected_clip_keys)),
             self._selected_arrangement_group_id,
+            tuple(sorted(self._collapsed_arrangement_groups)),
             bool(self.hasFocus()),
             self.arrangement_tool,
             self.pitch_transform_plan,
@@ -2827,19 +3464,42 @@ class TimelineCanvas(QWidget):
         painter.setClipRect(
             QRectF(left, grid_top, header_w + grid_w, instrument_grid_h)
         )
-        for row in range(first_row, last_row):
-            track = self.tracks[row]
-            y = grid_top + row * lane_h - scroll_y
-            active = not track.muted and (not any_solo or track.solo)
-            self._paint_track_meter(
-                painter,
-                track,
-                left + header_w - 14,
-                y,
-                lane_h,
-                active,
-            )
-            if track is self.selected_track:
+        visible_rows = self._visible_track_rows()
+        for visual_row in range(first_row, last_row):
+            row, track = visible_rows[visual_row]
+            y = grid_top + visual_row * lane_h - scroll_y
+            collapsed_group = self._collapsed_group_for_row(row)
+            if collapsed_group is not None:
+                active_members = tuple(
+                    member
+                    for member in collapsed_group.members
+                    if not member.muted and (not any_solo or member.solo)
+                )
+                group_level = max(
+                    (
+                        self.track_levels.get(int(member.track_id), 0.0)
+                        for member in active_members
+                    ),
+                    default=0.0,
+                )
+                self._paint_meter_level(
+                    painter,
+                    left + header_w - 14,
+                    y,
+                    lane_h,
+                    group_level,
+                )
+            else:
+                active = not track.muted and (not any_solo or track.solo)
+                self._paint_track_meter(
+                    painter,
+                    track,
+                    left + header_w - 14,
+                    y,
+                    lane_h,
+                    active,
+                )
+            if collapsed_group is None and track is self.selected_track:
                 region_rect = QRectF(
                     grid_left,
                     y + 9,
@@ -2928,8 +3588,8 @@ class TimelineCanvas(QWidget):
                 - self._clip_drag_origin_start_ms
             )
             rows_by_id = {
-                int(track.track_id): row
-                for row, track in enumerate(self.tracks)
+                int(track.track_id): self._visual_row_for_track(track)
+                for track in self.tracks
             }
             for key in self._clip_group_drag_keys:
                 row = rows_by_id.get(key[0])
@@ -2947,14 +3607,15 @@ class TimelineCanvas(QWidget):
                 )
                 painter.drawRoundedRect(QRectF(
                     x,
-                    grid_top + row * lane_h - scroll_y + 11.0,
+                    grid_top
+                    + (row + self._clip_group_drag_track_offset) * lane_h
+                    - scroll_y + 11.0,
                     width,
                     lane_h - 22.0,
                 ), 4.0, 4.0)
         else:
-            try:
-                row = self.tracks.index(target)
-            except ValueError:
+            row = self._visual_row_for_track(target)
+            if row is None:
                 painter.restore()
                 return
             x = grid_left + (
@@ -3022,6 +3683,14 @@ class TimelineCanvas(QWidget):
     def _clip_hit_at(
         self, position
     ) -> tuple[TrackState, str] | None:
+        action = self._clip_action_at(position)
+        return None if action is None else (action[0], action[1])
+
+    def _clip_action_at(
+        self, position
+    ) -> tuple[TrackState, str, str] | None:
+        """Resolve one Clip gesture, with visible handles above the body."""
+
         for rect, action, item in reversed(self.hit_regions):
             action_kind, _separator, clip_id = action.partition("|")
             if (
@@ -3029,8 +3698,44 @@ class TimelineCanvas(QWidget):
                 and isinstance(item, TrackState)
                 and rect.contains(position)
             ):
-                return item, str(clip_id)
+                key = (int(item.track_id), str(clip_id))
+                if (
+                    action_kind in {"clip_start", "clip_end"}
+                    and (
+                        self.arrangement_tool != "select"
+                        or key not in self._selected_clip_keys
+                    )
+                ):
+                    action_kind = "clip_body"
+                return item, str(clip_id), action_kind
         return None
+
+    def _restore_arrangement_cursor(self, position) -> bool:
+        """Restore the stable hover cursor after a completed gesture."""
+
+        layout_handle = self._layout_handle_at(position)
+        if layout_handle:
+            self.setCursor(
+                Qt.SizeHorCursor
+                if layout_handle == "header"
+                else Qt.SizeVerCursor
+            )
+            return True
+        clip_action = self._clip_action_at(position)
+        if self.arrangement_tool == "razor" and clip_action is not None:
+            self.setCursor(Qt.CrossCursor)
+            return True
+        if self.arrangement_tool == "marquee" and self.grid_rect.contains(position):
+            self.setCursor(Qt.CrossCursor)
+            return True
+        if clip_action is not None:
+            if clip_action[2] in {"clip_start", "clip_end"}:
+                self.setCursor(Qt.SizeHorCursor)
+            else:
+                self.setCursor(Qt.OpenHandCursor)
+            return True
+        self.unsetCursor()
+        return False
 
     def _marquee_rect(self) -> QRectF:
         if self._marquee_press_pos is None:
@@ -3140,6 +3845,9 @@ class TimelineCanvas(QWidget):
             visible_duration=visible_duration,
             visible_end=visible_end,
         )
+        self._paint_layout_handles(
+            painter, area, header_w, ruler_h, lane_h
+        )
         self._paint_clip_drag_preview(
             painter,
             grid_left=grid_left,
@@ -3244,29 +3952,108 @@ class TimelineCanvas(QWidget):
         elif delete_action is not None and selected is delete_action:
             self.marker_edit_requested.emit({"action": "delete", **marker})
 
-    def _build_clip_context_menu(self) -> tuple[QMenu, dict[str, QAction]]:
+    def _build_clip_context_menu(
+        self,
+        track: TrackState | None = None,
+        clip_id: str = "",
+    ) -> tuple[QMenu, dict[str, QAction]]:
         """Build the Clip menu separately so every destructive entry is testable."""
 
         menu = QMenu(self)
         actions = {
+            "open": menu.addAction(tr("打开音符编辑器")),
+            "duplicate": menu.addAction(tr("复制音块")),
+            "repeat": menu.addAction(tr("重复音块…")),
+            "split": menu.addAction(tr("在播放头切分")),
             "copy": menu.addAction(tr("复制片段")),
             "paste": menu.addAction(tr("在播放头粘贴片段")),
         }
+        actions["open"].setShortcut(QKeySequence("Enter"))
+        actions["duplicate"].setShortcut(QKeySequence("Ctrl+D"))
+        actions["repeat"].setShortcut(QKeySequence("Ctrl+L"))
+        actions["split"].setShortcut(QKeySequence("Ctrl+E"))
+        actions["copy"].setShortcut(QKeySequence.Copy)
+        actions["paste"].setShortcut(QKeySequence.Paste)
+        if track is not None and clip_id:
+            clip = clip_by_id(track, clip_id)
+            actions["split"].setEnabled(
+                clip.start_ms + MIN_CLIP_DURATION_MS
+                <= self.playhead_ms
+                <= clip.end_ms - MIN_CLIP_DURATION_MS
+            )
+        menu.addSeparator()
+        actions["crop"] = menu.addAction(tr("收紧右边界到最后音符"))
+        actions["consolidate"] = menu.addAction(tr("合并所选音块"))
+        actions["crop"].setShortcut(QKeySequence("Ctrl+Shift+J"))
+        actions["consolidate"].setShortcut(QKeySequence("Ctrl+J"))
+        selected_items = self.selected_clip_items()
+        actions["consolidate"].setEnabled(
+            len(selected_items) >= 2
+            and len({int(item.track_id) for item, _value in selected_items}) == 1
+        )
+        menu.addSeparator()
+        actions["rename"] = menu.addAction(tr("重命名音块…"))
+        actions["color"] = menu.addAction(tr("音块颜色…"))
         menu.addSeparator()
         actions["delete"] = menu.addAction(tr("删除片段"))
+        actions["delete"].setShortcut(QKeySequence.Delete)
         return menu, actions
+
+    def show_shortcut_help(self) -> None:
+        QMessageBox.information(
+            self,
+            tr("时间轴快捷键"),
+            tr(
+                "Ctrl+C 复制片段 · Ctrl+V 粘贴到播放头 · Ctrl+D 向后复制\n"
+                "Ctrl+E 在播放头切分 · Delete 删除 · Enter 打开编辑器\n"
+                "Ctrl+L 重复 · Ctrl+J 合并 · Ctrl+Shift+J 收紧右边界\n"
+                "F2 重命名 · Ctrl+Shift+D 复制轨道\n"
+                "↑/↓ 选择轨道 · Home/End 首尾轨道 · M 静音 · S 独奏\n"
+                "←/→ 移动播放头或音块 · Shift 扩展范围/粗调\n"
+                "Ctrl+←/→ 上/下一个音块或标记边界 · Alt+←/→ 调整音量\n"
+                "Z 缩放到范围/音块 · X 恢复视图 · F 轨道效果\n"
+                "W 适配整首宽度 · H 适配轨道高度 · U 折叠/展开当前组\n"
+                "Ctrl+滚轮缩放 · Shift+滚轮横向滚动 · Alt 临时取消吸附"
+            ),
+        )
+
+    def _begin_layout_drag(self, position: QPointF) -> bool:
+        handle = self._layout_handle_at(position)
+        if not handle:
+            return False
+        self._layout_drag_mode = handle
+        self._layout_drag_origin = QPointF(position)
+        self._layout_drag_initial = {
+            "header": self._header_width,
+            "lane": self._lane_height_px,
+            "reference": self._reference_lane_height_px,
+        }[handle]
+        self.setCursor(
+            Qt.SizeHorCursor if handle == "header" else Qt.SizeVerCursor
+        )
+        return True
+
+    def _delete_marker_at(self, position: QPointF) -> bool:
+        marker = next((
+            marker
+            for rect, marker in reversed(self._marker_delete_regions)
+            if rect.contains(position)
+        ), None)
+        if marker is None:
+            return False
+        self.marker_edit_requested.emit({"action": "delete", **marker})
+        return True
 
     def mousePressEvent(self, event) -> None:
         pos = event.position()
         self.setFocus(Qt.MouseFocusReason)
+        if event.button() == Qt.LeftButton and self._begin_layout_drag(pos):
+            event.accept()
+            return
         if self.velocity_curve_overlay.mouse_press(pos, event.button()):
             return
-        if event.button() == Qt.LeftButton:
-            for rect, marker in reversed(self._marker_delete_regions):
-                if rect.contains(pos):
-                    self.marker_edit_requested.emit({"action": "delete", **marker})
-                    event.accept()
-                    return
+        if event.button() == Qt.LeftButton and self._delete_marker_at(pos):
+            return
         if event.button() == Qt.RightButton:
             area, header_w, ruler_h, _lane_h = self._timeline_layout_metrics()
             ruler_rect = QRectF(area.left() + header_w, area.top(), max(0.0, area.width() - header_w), ruler_h)
@@ -3277,9 +4064,7 @@ class TimelineCanvas(QWidget):
                 if rect.contains(pos) and isinstance(track, TrackState):
                     if action.startswith("group_"):
                         self._select_arrangement_group(track)
-                        self._show_arrangement_group_menu(
-                            track, event.globalPosition().toPoint()
-                        )
+                        self._show_arrangement_group_menu(track, event.globalPosition().toPoint())
                         return
                     action_kind, _separator, clip_id = action.partition("|")
                     if action_kind in {"clip_body", "clip_start", "clip_end"}:
@@ -3293,12 +4078,36 @@ class TimelineCanvas(QWidget):
                             primary_key=key,
                             emit_track=True,
                         )
-                        menu, actions = self._build_clip_context_menu()
+                        menu, actions = self._build_clip_context_menu(
+                            track, clip_id
+                        )
                         selected = menu.exec(event.globalPosition().toPoint())
-                        if selected is actions["copy"]:
+                        if selected is actions["open"]:
+                            self.clip_note_editor_requested.emit(track, clip_id)
+                        elif selected is actions["duplicate"]:
+                            self.clip_duplicate_requested.emit(track, clip_id)
+                        elif selected is actions["repeat"]:
+                            self.clip_repeat_requested.emit(track, clip_id)
+                        elif selected is actions["split"]:
+                            self.clip_split_requested.emit(
+                                TimelineClipSplitRequest(
+                                    track, clip_id, self.playhead_ms
+                                )
+                            )
+                        elif selected is actions["copy"]:
                             self.clip_copy_requested.emit(track, clip_id)
                         elif selected is actions["paste"]:
                             self.clip_paste_requested.emit(track, self.playhead_ms)
+                        elif selected is actions["crop"]:
+                            self.clip_crop_requested.emit(track, clip_id)
+                        elif selected is actions["consolidate"]:
+                            self.clips_consolidate_requested.emit(
+                                self.selected_clip_items()
+                            )
+                        elif selected is actions["rename"]:
+                            self.clip_rename_requested.emit(track, clip_id)
+                        elif selected is actions["color"]:
+                            self.clip_color_requested.emit(track, clip_id)
                         elif selected is actions["delete"]:
                             items = self.selected_clip_items()
                             if len(items) > 1:
@@ -3326,7 +4135,11 @@ class TimelineCanvas(QWidget):
                 return
             self._show_create_track_menu(event.globalPosition().toPoint())
             return
-        clip_hit = self._clip_hit_at(pos)
+        clip_action = self._clip_action_at(pos)
+        clip_hit = (
+            (clip_action[0], clip_action[1])
+            if clip_action is not None else None
+        )
         clip_hit_key = (
             (int(clip_hit[0].track_id), str(clip_hit[1]))
             if clip_hit is not None
@@ -3334,8 +4147,10 @@ class TimelineCanvas(QWidget):
         )
         if (
             event.button() == Qt.LeftButton
-            and self.arrangement_tool == "marquee"
+            and self.arrangement_tool == "select"
             and clip_hit is not None
+            and clip_action is not None
+            and clip_action[2] == "clip_body"
             and clip_hit_key in self._selected_clip_keys
             and not event.modifiers()
         ):
@@ -3355,6 +4170,7 @@ class TimelineCanvas(QWidget):
                 return
             self._clip_group_drag_keys = tuple(origins)
             self._clip_group_drag_origins = origins
+            self._clip_group_drag_track_offset = 0
             self._clip_drag_source = track
             self._clip_drag_target = track
             self._clip_drag_id = str(clip_id)
@@ -3377,13 +4193,9 @@ class TimelineCanvas(QWidget):
             return
         if (
             event.button() == Qt.LeftButton
-            and self.arrangement_tool in {"marquee", "select"}
+            and self.arrangement_tool == "marquee"
             and self.grid_rect.contains(pos)
             and self._track_at_position(pos) is not None
-            and (
-                self.arrangement_tool == "marquee"
-                or clip_hit is None
-            )
         ):
             self._marquee_press_pos = QPointF(pos)
             self._marquee_current_pos = QPointF(pos)
@@ -3402,6 +4214,21 @@ class TimelineCanvas(QWidget):
             self._marquee_origin_clip = clip_hit
             event.accept()
             return
+        if (
+            event.button() == Qt.LeftButton
+            and self.arrangement_tool == "select"
+            and clip_hit is None
+            and self.grid_rect.contains(pos)
+        ):
+            lane_track = self._track_at_position(pos)
+            if lane_track is not None:
+                self._select_track(lane_track, emit=True)
+                self._clear_clip_selection()
+                self.set_playhead(self._time_at_x(pos.x()))
+                self.seek_requested.emit(self.playhead_ms)
+                self.update()
+                event.accept()
+                return
         for rect, action, track in reversed(self.hit_regions):
             if rect.contains(pos):
                 if track is self.reference_audio:
@@ -3430,8 +4257,15 @@ class TimelineCanvas(QWidget):
                     return
                 if not isinstance(track, TrackState):
                     continue
-                if action == "group_select":
+                if action in {"group_select", "group_summary"}:
                     self._select_arrangement_group(track)
+                    return
+                if action == "group_fold":
+                    group_id = str(track.arrangement_group_id or "")
+                    self._set_group_collapsed(
+                        group_id,
+                        group_id not in self._collapsed_arrangement_groups,
+                    )
                     return
                 if action in {"group_mute", "group_solo"}:
                     self._select_arrangement_group(track)
@@ -3442,6 +4276,10 @@ class TimelineCanvas(QWidget):
                     return
                 action_kind, _separator, clip_id = action.partition("|")
                 if action_kind in {"clip_body", "clip_start", "clip_end"}:
+                    resolved = self._clip_action_at(pos)
+                    if resolved is None:
+                        return
+                    track, clip_id, action_kind = resolved
                     try:
                         clip = clip_by_id(track, clip_id)
                     except ValueError:
@@ -3485,6 +4323,19 @@ class TimelineCanvas(QWidget):
                     self._clip_drag_occupied_end_ms = (
                         occupied.end_ms if occupied is not None else None
                     )
+                    siblings = tuple(
+                        value for value in track_clips(track)
+                        if value.clip_id != clip.clip_id
+                    )
+                    next_start = min(
+                        (
+                            value.start_ms for value in siblings
+                            if value.start_ms >= clip.end_ms - 1e-6
+                        ),
+                        default=math.inf,
+                    )
+                    self._clip_drag_min_start_ms = 0.0
+                    self._clip_drag_max_end_ms = next_start
                     self._clip_snap_targets = self._build_clip_snap_targets(
                         track, clip.clip_id
                     )
@@ -3600,11 +4451,33 @@ class TimelineCanvas(QWidget):
             if all(item.solo for item in group.members)
             else tr("整组独奏")
         )
+        menu.addSeparator()
+        fold_action = menu.addAction(
+            tr("展开乐器组")
+            if group_id in self._collapsed_arrangement_groups
+            else tr("折叠乐器组")
+        )
+        fold_all_action = menu.addAction(tr("折叠所有乐器组"))
+        expand_all_action = menu.addAction(tr("展开所有乐器组"))
+        fold_all_action.setEnabled(bool(
+            set(self._arrangement_groups)
+            - self._collapsed_arrangement_groups
+        ))
+        expand_all_action.setEnabled(bool(self._collapsed_arrangement_groups))
         selected = menu.exec(global_pos)
         if selected is mute_action:
             self.group_control_requested.emit(group_id, "mute")
         elif selected is solo_action:
             self.group_control_requested.emit(group_id, "solo")
+        elif selected is fold_action:
+            self._set_group_collapsed(
+                group_id,
+                group_id not in self._collapsed_arrangement_groups,
+            )
+        elif selected is fold_all_action:
+            self.set_all_groups_collapsed(True)
+        elif selected is expand_all_action:
+            self.set_all_groups_collapsed(False)
 
     def _show_instrument_menu(
         self,
@@ -3626,6 +4499,15 @@ class TimelineCanvas(QWidget):
             return
         if selected is actions["edit_notes"]:
             self.note_editor_requested.emit(track)
+            return
+        if selected is actions["rename_track"]:
+            self.rename_track_requested.emit(track)
+            return
+        if selected is actions["duplicate_track"]:
+            self.duplicate_track_requested.emit(track)
+            return
+        if selected is actions["color_track"]:
+            self.color_track_requested.emit(track)
             return
         if selected is actions["create_track"]:
             self._show_create_track_menu(global_pos)
@@ -3679,6 +4561,11 @@ class TimelineCanvas(QWidget):
             create_clip_action = menu.addAction(tr("在此处创建片段"))
             create_clip_action.setData(float(create_clip_at_ms))
             menu.addSeparator()
+        rename_track_action = menu.addAction(tr("重命名轨道…"))
+        duplicate_track_action = menu.addAction(tr("复制轨道"))
+        color_track_action = menu.addAction(tr("轨道颜色…"))
+        duplicate_track_action.setShortcut(QKeySequence("Ctrl+Shift+D"))
+        menu.addSeparator()
         instrument_menu = menu.addMenu(tr("更换游戏乐器"))
         menu._instrument_menu = instrument_menu
         add_instrument_submenus(
@@ -3730,6 +4617,9 @@ class TimelineCanvas(QWidget):
             "move_up": move_up_action,
             "move_down": move_down_action,
             "delete": delete_action,
+            "rename_track": rename_track_action,
+            "duplicate_track": duplicate_track_action,
+            "color_track": color_track_action,
             "unify_mixer": unify_mixer_action,
             "clear_solo": clear_solo_action,
             "unmute_all": unmute_all_action,
@@ -3801,12 +4691,17 @@ class TimelineCanvas(QWidget):
                 if (
                     isinstance(track, TrackState)
                     and (
-                        action in ("lane", "select")
+                        action in ("lane", "select", "group_summary")
                         or action.startswith(("clip_body|", "clip_start|", "clip_end|"))
                     )
                     and rect.contains(event.position())
                 ):
                     self.setFocus(Qt.MouseFocusReason)
+                    if action == "group_summary":
+                        group_id = str(track.arrangement_group_id or "")
+                        self._select_arrangement_group(track)
+                        self._set_group_collapsed(group_id, False)
+                        return
                     self._select_track(track, emit=True)
                     clip_id = (
                         action.split("|", 1)[1]
@@ -3827,6 +4722,25 @@ class TimelineCanvas(QWidget):
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
+        if self._layout_drag_mode:
+            delta_x = pos.x() - self._layout_drag_origin.x()
+            delta_y = pos.y() - self._layout_drag_origin.y()
+            if self._layout_drag_mode == "header":
+                self.set_layout_metrics(
+                    header_width=round(self._layout_drag_initial + delta_x)
+                )
+            elif self._layout_drag_mode == "lane":
+                self.set_layout_metrics(
+                    lane_height=round(self._layout_drag_initial + delta_y)
+                )
+            else:
+                self.set_layout_metrics(
+                    reference_lane_height=round(
+                        self._layout_drag_initial - delta_y
+                    )
+                )
+            event.accept()
+            return
         if self._marquee_press_pos is not None:
             self._marquee_current_pos = QPointF(pos)
             if (
@@ -3922,49 +4836,56 @@ class TimelineCanvas(QWidget):
                 else tr(self.KEYBOARD_SHORTCUT_HINT)
             )
         group_hover = next((
-            item for rect, action, item in reversed(self.hit_regions)
+            (item, action) for rect, action, item in reversed(self.hit_regions)
             if action.startswith("group_")
             and isinstance(item, TrackState)
             and rect.contains(pos)
         ), None)
         if group_hover is not None:
+            group_track, group_action = group_hover
             self.setToolTip(trf(
-                "乐器组 · {instrument} · {count} 轨；点击组名选择整组，M/S 控制整组",
-                instrument=_ui_bdo_instrument_name(group_hover.bdo_instrument_id),
+                (
+                    "组摘要 · {instrument} · {count} 轨；双击或 Enter 展开，U 折叠/展开，M/S 控制整组"
+                    if group_action == "group_summary"
+                    else "乐器组 · {instrument} · {count} 轨；点击组名选择整组，M/S 控制整组"
+                ),
+                instrument=_ui_bdo_instrument_name(group_track.bdo_instrument_id),
                 count=self._arrangement_group_counts.get(
-                    group_hover.arrangement_group_id, 0
+                    group_track.arrangement_group_id, 0
                 ),
             ))
-        clip_hover = next((
-            action
-            for rect, action, _item in reversed(self.hit_regions)
-            if rect.contains(pos) and action.startswith("clip_")
-        ), "")
-        clip_hover_kind = clip_hover.partition("|")[0]
-        if self.arrangement_tool == "razor" and clip_hover_kind.startswith("clip_"):
-            self.setCursor(Qt.CrossCursor)
-        elif (
-            self.arrangement_tool == "marquee"
-            and self.grid_rect.contains(pos)
-        ):
-            self.setCursor(Qt.CrossCursor)
-        elif clip_hover_kind in {"clip_start", "clip_end"}:
-            self.setCursor(Qt.SizeHorCursor)
-        elif clip_hover_kind == "clip_body":
-            self.setCursor(Qt.OpenHandCursor)
+        layout_handle = self._layout_handle_at(pos)
+        if layout_handle != self._layout_hover_handle:
+            self._layout_hover_handle = layout_handle
+            self.update()
+        if layout_handle:
+            self.setToolTip({
+                "header": tr("拖动调整轨道头宽度"),
+                "lane": tr("拖动调整轨道高度"),
+                "reference": tr("拖动调整参考音频高度"),
+            }[layout_handle])
+        if self._restore_arrangement_cursor(pos):
+            pass
         elif hover_on_badge or group_hover is not None:
             self.setCursor(Qt.PointingHandCursor)
-        else:
-            self.unsetCursor()
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event) -> None:
         self._validation_hover_track_id = None
+        self._layout_hover_handle = ""
         self.setToolTip(tr(self.KEYBOARD_SHORTCUT_HINT))
         self.unsetCursor()
         super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self._layout_drag_mode:
+            self._layout_drag_mode = ""
+            self._layout_drag_origin = QPointF()
+            self._layout_drag_initial = 0
+            self.layout_preferences_changed.emit()
+            self._restore_arrangement_cursor(event.position())
+            event.accept()
+            return
         if (
             event.button() == Qt.LeftButton
             and self._marquee_press_pos is not None
@@ -3988,7 +4909,7 @@ class TimelineCanvas(QWidget):
             self._marquee_preview_clip_keys.clear()
             self._marquee_origin_track = None
             self._marquee_origin_clip = None
-            self.unsetCursor()
+            self._restore_arrangement_cursor(event.position())
             if active:
                 self._set_clip_selection(
                     preview,
@@ -4061,18 +4982,21 @@ class TimelineCanvas(QWidget):
                 self._clip_drag_start_ms
                 - self._clip_drag_origin_start_ms
             )
+            group_track_offset = self._clip_group_drag_track_offset
             self._clip_drag_source = None
             self._clip_drag_target = None
             self._clip_drag_mode = ""
             self._clip_drag_id = ""
             self._clip_group_drag_keys = ()
             self._clip_group_drag_origins.clear()
+            self._clip_group_drag_track_offset = 0
             self._clip_drag_occupied_start_ms = None
             self._clip_drag_occupied_end_ms = None
+            self._clip_drag_min_start_ms = 0.0
+            self._clip_drag_max_end_ms = math.inf
             self._clip_drag_press_pos = QPointF()
             self._clip_snap_targets = ArrangementSnapIndex((), ())
             self._clip_snap_result = ArrangementSnapResult(0.0)
-            self.unsetCursor()
             changed = (
                 pointer_moved
                 and (
@@ -4095,6 +5019,7 @@ class TimelineCanvas(QWidget):
                         TimelineClipsMoveRequest(
                             group_selections,
                             group_delta,
+                            group_track_offset,
                             (
                                 self._selected_clip_track_id,
                                 self._selected_clip_id,
@@ -4103,6 +5028,12 @@ class TimelineCanvas(QWidget):
                     )
                 else:
                     self.clip_edit_requested.emit(request)
+            if not pointer_moved:
+                self._restore_arrangement_cursor(event.position())
+            elif request.mode in {"resize_start", "resize_end"}:
+                self.setCursor(Qt.SizeHorCursor)
+            else:
+                self.setCursor(Qt.OpenHandCursor)
             self.update()
             return
         if self._range_drag_anchor_ms is not None:
@@ -4142,11 +5073,152 @@ class TimelineCanvas(QWidget):
         self.update()
         self.changed.emit()
 
+    def _navigation_boundaries(self) -> tuple[float, ...]:
+        return normalized_boundaries(
+            (
+                0.0,
+                self._timeline_end_ms(),
+                *(float(marker["time_ms"]) for marker in self.timeline_markers),
+                *(
+                    value
+                    for track in self.tracks
+                    for clip in track_clips(track)
+                    for value in (clip.start_ms, clip.end_ms)
+                ),
+            )
+        )
+
+    def _move_playhead_by(self, delta_ms: float, *, extend: bool) -> None:
+        previous = self.playhead_ms
+        target = max(
+            0.0,
+            min(self._timeline_end_ms(), previous + float(delta_ms)),
+        )
+        if extend:
+            selected = self.time_range
+            anchor = previous if selected is None else selected[0]
+            self.set_time_range(anchor, target, notify=True)
+        self.set_playhead(target, follow=True)
+        self.seek_requested.emit(self.playhead_ms)
+
+    def _jump_playhead_boundary(self, direction: int, *, extend: bool) -> None:
+        previous = self.playhead_ms
+        target = neighboring_boundary(
+            self._navigation_boundaries(), previous, direction
+        )
+        if extend:
+            selected = self.time_range
+            anchor = previous if selected is None else selected[0]
+            self.set_time_range(anchor, target, notify=True)
+        self.set_playhead(target, follow=True)
+        self.seek_requested.emit(self.playhead_ms)
+
+    def _nudge_selected_clips(self, delta_ms: float) -> None:
+        selections = self.selected_clip_items()
+        if not selections:
+            return
+        primary = (
+            (self._selected_clip_track_id, self._selected_clip_id)
+            if self._selected_clip_track_id is not None
+            and self._selected_clip_id
+            else None
+        )
+        self.clips_move_requested.emit(TimelineClipsMoveRequest(
+            selections,
+            float(delta_ms),
+            0,
+            primary,
+        ))
+
+    def _focus_time_bounds(self) -> tuple[float, float] | None:
+        selected_range = self.time_range
+        if selected_range is not None and selected_range[1] > selected_range[0]:
+            return selected_range
+        clips = tuple(
+            clip_by_id(track, clip_id)
+            for track, clip_id in self.selected_clip_items()
+        )
+        if not clips and self.selected_track is not None:
+            clips = track_clips(self.selected_track)
+        if not clips:
+            return None
+        return (
+            min(float(clip.start_ms) for clip in clips),
+            max(float(clip.end_ms) for clip in clips),
+        )
+
+    def _zoom_to_focus(self) -> None:
+        bounds = self._focus_time_bounds()
+        if bounds is None:
+            return
+        viewport = viewport_for_range(
+            self._timeline_end_ms(), bounds[0], bounds[1]
+        )
+        self._viewport_history.append((self.zoom_factor, self.view_start_ms))
+        del self._viewport_history[:-8]
+        self.zoom_factor = viewport.zoom_factor
+        self.view_start_ms = viewport.start_ms
+        self._begin_viewport_motion()
+        self.update()
+        self.changed.emit()
+
+    def _restore_viewport(self) -> None:
+        if not self._viewport_history:
+            return
+        self.zoom_factor, self.view_start_ms = self._viewport_history.pop()
+        self._clamp_view()
+        self._begin_viewport_motion()
+        self.update()
+        self.changed.emit()
+
     def keyPressEvent(self, event) -> None:
         if self.velocity_curve_overlay.key_press(event):
             return
         key = event.key()
         modifiers = event.modifiers()
+        if key == Qt.Key_F1 and modifiers == Qt.NoModifier:
+            self.show_shortcut_help()
+            event.accept()
+            return
+        if key == Qt.Key_Z and modifiers == Qt.NoModifier:
+            self._zoom_to_focus()
+            event.accept()
+            return
+        if key == Qt.Key_X and modifiers == Qt.NoModifier:
+            self._restore_viewport()
+            event.accept()
+            return
+        if key == Qt.Key_W and modifiers == Qt.NoModifier:
+            self.fit_width_requested.emit()
+            event.accept()
+            return
+        if key == Qt.Key_H and modifiers == Qt.NoModifier:
+            self.fit_track_rows()
+            event.accept()
+            return
+        if key == Qt.Key_U and modifiers == Qt.NoModifier:
+            group_id = (
+                str(self.selected_track.arrangement_group_id or "")
+                if self.selected_track is not None else ""
+            )
+            if group_id in self._arrangement_groups:
+                self._set_group_collapsed(
+                    group_id,
+                    group_id not in self._collapsed_arrangement_groups,
+                )
+            event.accept()
+            return
+        if (
+            key in (Qt.Key_Left, Qt.Key_Right)
+            and modifiers & Qt.ControlModifier
+            and not modifiers & Qt.AltModifier
+        ):
+            self._jump_playhead_boundary(
+                -1 if key == Qt.Key_Left else 1,
+                extend=bool(modifiers & Qt.ShiftModifier),
+            )
+            event.accept()
+            return
         navigation_keys = {
             Qt.Key_Up,
             Qt.Key_Down,
@@ -4156,23 +5228,51 @@ class TimelineCanvas(QWidget):
         if key in navigation_keys and not (
             modifiers & (Qt.ControlModifier | Qt.AltModifier)
         ):
-            if not self.tracks:
+            visible_tracks = tuple(
+                track for _row, track in self._visible_track_rows()
+            )
+            if not visible_tracks:
                 event.accept()
                 return
-            current = self._selected_track_index()
+            current = next(
+                (
+                    index
+                    for index, track in enumerate(visible_tracks)
+                    if track is self.selected_track
+                ),
+                None,
+            )
             if key == Qt.Key_Home:
                 target_index = 0
             elif key == Qt.Key_End:
-                target_index = len(self.tracks) - 1
+                target_index = len(visible_tracks) - 1
             elif current is None:
                 target_index = 0
             else:
                 step = -1 if key == Qt.Key_Up else 1
                 target_index = max(
                     0,
-                    min(len(self.tracks) - 1, current + step),
+                    min(len(visible_tracks) - 1, current + step),
                 )
-            self._select_track(self.tracks[target_index], emit=True)
+            self._clear_clip_selection()
+            self._select_track(visible_tracks[target_index], emit=True)
+            event.accept()
+            return
+        if (
+            key in (Qt.Key_Left, Qt.Key_Right)
+            and not modifiers & (Qt.ControlModifier | Qt.AltModifier)
+            and not (
+                self._focus_scope == "clip" and self._selected_clip_keys
+            )
+        ):
+            direction = 1 if key == Qt.Key_Right else -1
+            self._move_playhead_by(
+                direction * timeline_grid_step_ms(
+                    self.bpm,
+                    coarse=bool(modifiers & Qt.ShiftModifier),
+                ),
+                extend=bool(modifiers & Qt.ShiftModifier),
+            )
             event.accept()
             return
 
@@ -4187,6 +5287,68 @@ class TimelineCanvas(QWidget):
             return
         if modifiers & Qt.ControlModifier and key == Qt.Key_V:
             self.clip_paste_requested.emit(track, self.playhead_ms)
+            event.accept()
+            return
+        if (
+            modifiers == (Qt.ControlModifier | Qt.ShiftModifier)
+            and key == Qt.Key_D
+        ):
+            self.duplicate_track_requested.emit(track)
+            event.accept()
+            return
+        if (
+            modifiers == Qt.ControlModifier
+            and key == Qt.Key_D
+            and self._selected_clip_id
+        ):
+            self.clip_duplicate_requested.emit(track, self._selected_clip_id)
+            event.accept()
+            return
+        if key == Qt.Key_F2 and modifiers == Qt.NoModifier:
+            if self._selected_clip_id:
+                self.clip_rename_requested.emit(track, self._selected_clip_id)
+            else:
+                self.rename_track_requested.emit(track)
+            event.accept()
+            return
+        if (
+            modifiers == Qt.ControlModifier
+            and key == Qt.Key_E
+            and self._selected_clip_id
+        ):
+            clip = clip_by_id(track, self._selected_clip_id)
+            if (
+                clip.start_ms + MIN_CLIP_DURATION_MS
+                <= self.playhead_ms
+                <= clip.end_ms - MIN_CLIP_DURATION_MS
+            ):
+                self.clip_split_requested.emit(TimelineClipSplitRequest(
+                    track, self._selected_clip_id, self.playhead_ms
+                ))
+            event.accept()
+            return
+        if (
+            modifiers == Qt.ControlModifier
+            and key == Qt.Key_L
+            and self._selected_clip_id
+        ):
+            self.clip_repeat_requested.emit(track, self._selected_clip_id)
+            event.accept()
+            return
+        if (
+            modifiers == Qt.ControlModifier
+            and key == Qt.Key_J
+            and len(self.selected_clip_items()) >= 2
+        ):
+            self.clips_consolidate_requested.emit(self.selected_clip_items())
+            event.accept()
+            return
+        if (
+            modifiers == (Qt.ControlModifier | Qt.ShiftModifier)
+            and key == Qt.Key_J
+            and self._selected_clip_id
+        ):
+            self.clip_crop_requested.emit(track, self._selected_clip_id)
             event.accept()
             return
         if (
@@ -4225,14 +5387,60 @@ class TimelineCanvas(QWidget):
             event.accept()
             return
         if plain_shortcut and key in (Qt.Key_Return, Qt.Key_Enter):
-            self.note_editor_requested.emit(track)
+            group_id = str(track.arrangement_group_id or "")
+            if group_id in self._collapsed_arrangement_groups:
+                self._set_group_collapsed(group_id, False)
+                event.accept()
+                return
+            if self._focus_scope == "clip" and self._selected_clip_id:
+                self.clip_note_editor_requested.emit(
+                    track, self._selected_clip_id
+                )
+            else:
+                self.note_editor_requested.emit(track)
+            event.accept()
+            return
+        if (
+            key in (Qt.Key_Left, Qt.Key_Right)
+            and modifiers & Qt.AltModifier
+            and not modifiers & Qt.ControlModifier
+        ):
+            volume_direction = 1 if key == Qt.Key_Right else -1
+            step = 5 if modifiers & Qt.ShiftModifier else 1
+            value = max(
+                0,
+                min(
+                    100,
+                    int(track.bdo_track_volume)
+                    + volume_direction * step,
+                ),
+            )
+            if value != int(track.bdo_track_volume):
+                previous_volume = int(track.bdo_track_volume)
+                track.bdo_track_volume = value
+                self._update_accessible_track_state()
+                self.game_volume_committed.emit(
+                    track, previous_volume, value
+                )
+                self.update()
+            event.accept()
+            return
+        if key in (Qt.Key_Left, Qt.Key_Right) and not (
+            modifiers & (Qt.ControlModifier | Qt.AltModifier)
+        ):
+            direction = 1 if key == Qt.Key_Right else -1
+            delta = direction * timeline_grid_step_ms(
+                self.bpm,
+                coarse=bool(modifiers & Qt.ShiftModifier),
+            )
+            self._nudge_selected_clips(delta)
             event.accept()
             return
         volume_direction = (
             1
-            if key in (Qt.Key_Right, Qt.Key_Plus, Qt.Key_Equal)
+            if key in (Qt.Key_Plus, Qt.Key_Equal)
             else -1
-            if key in (Qt.Key_Left, Qt.Key_Minus)
+            if key == Qt.Key_Minus
             else 0
         )
         if plain_shortcut and volume_direction:

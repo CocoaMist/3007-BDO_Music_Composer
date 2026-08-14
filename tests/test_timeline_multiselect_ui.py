@@ -55,14 +55,18 @@ class TimelineMultiselectUiTests(unittest.TestCase):
                     )
                 ],
             )
+            third = TrackState(
+                3, [], 0, False, "Third", 0x12,
+                arrangement_clips=[],
+            )
             canvas = TimelineCanvas()
             canvas.resize(1000, 360)
-            canvas.set_tracks([first, second])
+            canvas.set_tracks([first, second, third])
             canvas.show()
             app.processEvents()
             canvas.repaint()
             app.processEvents()
-            assert canvas.arrangement_tool == "marquee"
+            assert canvas.arrangement_tool == "select"
 
             def clip_regions():
                 return {
@@ -149,8 +153,33 @@ class TimelineMultiselectUiTests(unittest.TestCase):
                 (1, "one"), (2, "two")
             })
 
+            # A selected Clip edge is a single-Clip resize handle, never the
+            # overlapping body hit used for moving the whole selection.
+            canvas.set_arrangement_tool("select")
+            canvas.repaint()
+            app.processEvents()
+            one_end = next(
+                rect for rect, action, item in canvas.hit_regions
+                if item is first and action == "clip_end|one"
+            )
+            edge_point = QPoint(
+                int(one_end.center().x()), int(one_end.center().y())
+            )
+            edit_count = len(edits)
+            QTest.mousePress(canvas, Qt.LeftButton, pos=edge_point)
+            assert canvas._clip_drag_mode == "resize_end"
+            assert canvas._clip_group_drag_keys == ()
+            edge_target = QPoint(edge_point.x() + 18, edge_point.y())
+            QTest.mouseMove(canvas, pos=edge_target)
+            QTest.mouseRelease(canvas, Qt.LeftButton, pos=edge_target)
+            app.processEvents()
+            assert len(edits) == edit_count + 1
+            assert edits[-1].mode == "resize_end"
+            canvas.set_selected_clip_keys({(1, "one"), (2, "two")})
+
             group_moves = []
             canvas.clips_move_requested.connect(group_moves.append)
+            canvas.set_arrangement_tool("select")
             group_target = QPoint(one_point.x() + 42, one_point.y())
             QTest.mousePress(canvas, Qt.LeftButton, pos=one_point)
             QTest.mouseMove(canvas, pos=group_target)
@@ -162,11 +191,57 @@ class TimelineMultiselectUiTests(unittest.TestCase):
                 for track, clip_id in group_moves[0].selections
             ) == ((1, "one"), (2, "two"))
             assert group_moves[0].delta_ms > 0.0
+            assert group_moves[0].track_offset == 0
             assert group_moves[0].primary_key == (1, "one")
             assert canvas._marquee_press_pos is None
             assert canvas.selected_clip_keys == frozenset({
                 (1, "one"), (2, "two")
             })
+
+            lanes = {
+                int(item.track_id): rect
+                for rect, action, item in canvas.hit_regions
+                if action == "lane"
+            }
+            vertical_target = QPoint(
+                one_point.x() + 22,
+                int(lanes[2].center().y()),
+            )
+            QTest.mousePress(canvas, Qt.LeftButton, pos=one_point)
+            QTest.mouseMove(canvas, pos=vertical_target)
+            QTest.mouseRelease(canvas, Qt.LeftButton, pos=vertical_target)
+            app.processEvents()
+            assert len(group_moves) == 2
+            assert group_moves[1].track_offset == 1
+            assert group_moves[1].primary_key == (1, "one")
+
+            seeks = []
+            canvas.seek_requested.connect(seeks.append)
+            blank = QPoint(
+                int(canvas.grid_rect.right() - 12),
+                int(lanes[3].center().y()),
+            )
+            QTest.mousePress(canvas, Qt.LeftButton, pos=blank)
+            QTest.mouseMove(canvas, pos=QPoint(blank.x() - 30, blank.y()))
+            QTest.mouseRelease(
+                canvas, Qt.LeftButton,
+                pos=QPoint(blank.x() - 30, blank.y()),
+            )
+            app.processEvents()
+            assert canvas._marquee_press_pos is None
+            assert canvas.selected_clip_keys == frozenset()
+            assert len(seeks) == 1
+            canvas.set_selected_clip_keys({(1, "one"), (2, "two")})
+
+            # Marquee mode never steals a selected Clip drag for movement.
+            canvas.set_arrangement_tool("marquee")
+            move_count = len(group_moves)
+            QTest.mousePress(canvas, Qt.LeftButton, pos=one_point)
+            QTest.mouseMove(canvas, pos=group_target)
+            QTest.mouseRelease(canvas, Qt.LeftButton, pos=group_target)
+            app.processEvents()
+            assert len(group_moves) == move_count
+            canvas.set_selected_clip_keys({(1, "one"), (2, "two")})
 
             canvas.repaint()
             app.processEvents()
@@ -192,7 +267,7 @@ class TimelineMultiselectUiTests(unittest.TestCase):
             # A concurrent model refresh may remove only the primary Clip.
             # Reconciliation must retain every other still-valid selection.
             second.arrangement_clips.clear()
-            canvas.set_tracks([first, second])
+            canvas.set_tracks([first, second, third])
             app.processEvents()
             assert canvas.selected_clip_keys == frozenset({(1, "one")})
             assert canvas._selected_clip_track_id == 1

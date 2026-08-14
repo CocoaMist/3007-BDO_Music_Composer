@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QScrollBar,
     QSizePolicy,
     QSlider,
+    QSplitter,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -109,6 +110,11 @@ from bdo_music_composer.editor.editor_models import (
 )
 from bdo_music_composer.editor.editor_commands import (
     next_non_overlapping_paste_origin,
+)
+from bdo_music_composer.editor.note_clipboard import (
+    decode_note_clipboard,
+    encode_note_clipboard,
+    normalized_clipboard_notes,
 )
 from bdo_music_composer.editor.arrangement_clip import (
     MIN_CLIP_DURATION_MS,
@@ -392,13 +398,13 @@ class MidiNoteEditorDialog(QDialog):
         title_layout.setContentsMargins(0, 0, 0, 0)
         title_layout.setSpacing(0)
         instrument_name = _ui_bdo_instrument_name(track.bdo_instrument_id)
-        title = ElidedLabel(track.display_name, maximum_hint_width=180)
+        title = ElidedLabel(track.display_name, maximum_hint_width=280)
         title.setObjectName("EditorTrackTitle")
         title.setProperty("i18nSkipText", True)
         title.setToolTip(instrument_name)
         title.setAccessibleDescription(instrument_name)
         title_layout.addWidget(title)
-        self.track_meta = ElidedLabel(maximum_hint_width=210)
+        self.track_meta = ElidedLabel(maximum_hint_width=280)
         self.track_meta.setObjectName("EditorTrackMeta")
         title_layout.addWidget(self.track_meta)
         toolbar.addWidget(self.editor_title_block)
@@ -430,6 +436,19 @@ class MidiNoteEditorDialog(QDialog):
             clip_bounds_layout = QHBoxLayout(self.clip_bounds_frame)
             clip_bounds_layout.setContentsMargins(5, 1, 5, 1)
             clip_bounds_layout.setSpacing(4)
+            clip_bounds_title = QLabel(tr("音块编辑区域"))
+            clip_bounds_title.setObjectName("EditorClipBoundsTitle")
+            clip_bounds_layout.addWidget(clip_bounds_title)
+            self.clip_bounds_music_label = QLabel()
+            self.clip_bounds_music_label.setObjectName(
+                "EditorClipBoundsMusical"
+            )
+            self.clip_bounds_music_label.setToolTip(tr(
+                "小节与拍位置；左边界锁定，右边界只改变编辑区域"
+            ))
+            self.clip_bounds_music_label.setMinimumWidth(220)
+            clip_bounds_layout.addWidget(self.clip_bounds_music_label)
+            clip_bounds_layout.addSpacing(10)
             for label_text, attribute, mode, initial in (
                 (
                     "片段左边界",
@@ -468,7 +487,17 @@ class MidiNoteEditorDialog(QDialog):
                 )
                 setattr(self, attribute, spin)
                 clip_bounds_layout.addWidget(spin)
-            toolbar.addWidget(self.clip_bounds_frame)
+                if mode == "resize_start":
+                    spin.setEnabled(False)
+                    spin.setPrefix("L 🔒 ")
+                    spin.setToolTip(tr(
+                        "片段左边界固定；调整右边界只会扩展或收缩编辑区域，不会缩放音符。"
+                    ))
+                    # Keep the typed control for synchronization/tests, but
+                    # present the fixed edge as a compact musical-position
+                    # label instead of a disabled edit affordance.
+                    spin.hide()
+            clip_bounds_layout.addStretch(1)
         toolbar.addStretch(1)
         self.editor_toolbar_action_buttons: dict[str, PillButton] = {}
         for label, callback in (("撤销", self.undo), ("重做", self.redo)):
@@ -486,6 +515,12 @@ class MidiNoteEditorDialog(QDialog):
         self.shortcut_hud_button.setChecked(False)
         self.shortcut_hud_button.setToolTip(tr("在画布右上角显示当前操作提示"))
         toolbar.addWidget(self.shortcut_hud_button)
+        self.editor_windows_button = PillButton(tr("窗口"), "ghost")
+        self.editor_windows_button.setToolTip(tr("切换或平铺已打开的音块编辑器"))
+        self.editor_windows_button.clicked.connect(
+            self._show_editor_windows_menu
+        )
+        toolbar.addWidget(self.editor_windows_button)
         self.editor_optimize_button = PillButton(
             tr("优化此轨"),
             "secondary",
@@ -512,6 +547,9 @@ class MidiNoteEditorDialog(QDialog):
             )
             self.confirm_button.setAccessibleName(tr("完成并关闭"))
         add_inset(toolbar_frame, "EditorToolbarInset")
+        if self.clip_bounds_frame is not None:
+            self.clip_bounds_frame.setFixedHeight(32)
+            add_inset(self.clip_bounds_frame, "EditorClipBoundsInset")
 
         inspector = QFrame()
         inspector.setObjectName("NoteInspectorTop")
@@ -1230,6 +1268,11 @@ class MidiNoteEditorDialog(QDialog):
         workspace_layout = QVBoxLayout(workspace)
         workspace_layout.setContentsMargins(0, 0, 0, 0)
         workspace_layout.setSpacing(0)
+        roll_surface = QFrame(workspace)
+        roll_surface.setObjectName("EditorRollSurface")
+        roll_surface_layout = QVBoxLayout(roll_surface)
+        roll_surface_layout.setContentsMargins(0, 0, 0, 0)
+        roll_surface_layout.setSpacing(0)
         roll = QGridLayout()
         roll.setContentsMargins(0, 0, 0, 0)
         roll.setSpacing(0)
@@ -1310,13 +1353,13 @@ class MidiNoteEditorDialog(QDialog):
         self.time_scroll.valueChanged.connect(self.set_time_scroll)
         roll.addWidget(self.canvas, 0, 0)
         roll.addWidget(self.pitch_scroll, 0, 1)
-        workspace_layout.addLayout(roll, 1)
+        roll_surface_layout.addLayout(roll, 1)
         self.transcription_waveform = TranscriptionWaveformLane(
             self.canvas, workspace
         )
         self.transcription_waveform.setVisible(False)
         self.transcription_waveform.seek_requested.connect(self.seek_draft)
-        workspace_layout.addWidget(self.transcription_waveform)
+        roll_surface_layout.addWidget(self.transcription_waveform)
         self.velocity_panel = QFrame()
         self.velocity_panel.setObjectName("VelocityPanel")
         velocity_panel_layout = QVBoxLayout(self.velocity_panel)
@@ -1358,8 +1401,11 @@ class MidiNoteEditorDialog(QDialog):
         velocity_panel_layout.addWidget(velocity_header)
         self.velocity_lane = VelocityLaneCanvas(self)
         velocity_panel_layout.addWidget(self.velocity_lane)
-        self.velocity_panel.setVisible(False)
-        workspace_layout.addWidget(self.velocity_panel)
+        velocity_visible = bool(
+            transcription_ui_config.get("velocity_lane_visible", True)
+        )
+        self.velocity_toggle.setChecked(velocity_visible)
+        self.velocity_panel.setVisible(velocity_visible)
         scroll_row = QHBoxLayout()
         scroll_row.setContentsMargins(0, 0, 0, 0)
         scroll_row.setSpacing(0)
@@ -1368,7 +1414,16 @@ class MidiNoteEditorDialog(QDialog):
         scroll_corner.setObjectName("PianoScrollCorner")
         scroll_corner.setFixedSize(12, 12)
         scroll_row.addWidget(scroll_corner)
-        workspace_layout.addLayout(scroll_row)
+        roll_surface_layout.addLayout(scroll_row)
+        self.editor_splitter = QSplitter(Qt.Vertical, workspace)
+        self.editor_splitter.setObjectName("EditorRollSplitter")
+        self.editor_splitter.setChildrenCollapsible(False)
+        self.editor_splitter.addWidget(roll_surface)
+        self.editor_splitter.addWidget(self.velocity_panel)
+        self.editor_splitter.setStretchFactor(0, 1)
+        self.editor_splitter.setStretchFactor(1, 0)
+        self._preferred_velocity_panel_height = 180
+        workspace_layout.addWidget(self.editor_splitter, 1)
         editor_body = QFrame()
         editor_body.setObjectName("EditorBody")
         editor_body_layout = QHBoxLayout(editor_body)
@@ -1535,6 +1590,7 @@ class MidiNoteEditorDialog(QDialog):
         self._update_track_meta()
         self.refresh_fields()
         self._sync_clip_bounds_controls()
+        self.set_draft_playhead(self.draft_start_ms())
         self._apply_editor_responsive_density()
         QTimer.singleShot(0, self.update_scrollbars)
         if self.clip_scope is not None:
@@ -1586,7 +1642,7 @@ class MidiNoteEditorDialog(QDialog):
             return
         self._editor_controls_compact = compact
 
-        self.editor_title_block.setMaximumWidth(150 if compact else 16777215)
+        self.editor_title_block.setMaximumWidth(210 if compact else 16777215)
         self._set_editor_compact_button(
             self.draft_play_button,
             "播放",
@@ -1618,6 +1674,18 @@ class MidiNoteEditorDialog(QDialog):
             self.shortcut_help_button,
             "快捷键",
             "?",
+            compact,
+        )
+        self._set_editor_compact_button(
+            self.shortcut_hud_button,
+            "操作提示",
+            "i",
+            compact,
+        )
+        self._set_editor_compact_button(
+            self.editor_windows_button,
+            "窗口",
+            "▦",
             compact,
         )
         self._set_editor_compact_button(
@@ -1734,6 +1802,46 @@ class MidiNoteEditorDialog(QDialog):
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+
+    def _show_editor_windows_menu(self) -> None:
+        host = self.parent()
+        editors = tuple(
+            editor
+            for editor in getattr(host, "_note_editors", {}).values()
+            if editor.isVisible()
+        )
+        menu = QMenu(self)
+        title = menu.addAction(trf(
+            "已打开 {count} 个音块编辑器", count=len(editors)
+        ))
+        title.setEnabled(False)
+        menu.addSeparator()
+        for editor in editors:
+            action = menu.addAction(editor.windowTitle())
+            action.setCheckable(True)
+            action.setChecked(editor is self)
+            action.triggered.connect(
+                lambda _checked=False, target=editor: (
+                    target.showNormal(),
+                    target.raise_(),
+                    target.activateWindow(),
+                )
+            )
+        menu.addSeparator()
+        tile_action = menu.addAction(tr("平铺编辑器窗口"))
+        tile_action.setEnabled(len(editors) > 1)
+        tile_action.triggered.connect(
+            lambda: getattr(host, "_tile_note_editors", lambda: None)()
+        )
+        timeline_action = menu.addAction(tr("返回轨道时间轴"))
+        timeline_action.triggered.connect(
+            lambda: getattr(host, "_show_timeline_workspace", lambda: None)()
+        )
+        menu.exec(
+            self.editor_windows_button.mapToGlobal(
+                self.editor_windows_button.rect().bottomLeft()
+            )
+        )
 
     def _set_editor_music_volume(self, value: int) -> None:
         normalized = max(0, min(100, int(value)))
@@ -4306,10 +4414,50 @@ class MidiNoteEditorDialog(QDialog):
             context = EditorShortcutHud.SELECT_CONTEXT
         self.shortcut_hud.set_context(context)
 
+    def set_velocity_panel_height(self, height: int) -> None:
+        self._preferred_velocity_panel_height = max(
+            96, min(420, int(height))
+        )
+        if not self.velocity_panel.isVisible():
+            return
+        total = max(
+            self.editor_splitter.height(),
+            sum(self.editor_splitter.sizes()),
+            self._preferred_velocity_panel_height + 1,
+        )
+        self.editor_splitter.setSizes([
+            max(1, total - self._preferred_velocity_panel_height),
+            self._preferred_velocity_panel_height,
+        ])
+
+    def velocity_panel_height(self) -> int:
+        sizes = self.editor_splitter.sizes()
+        if self.velocity_panel.isVisible() and len(sizes) > 1 and sizes[1] > 0:
+            self._preferred_velocity_panel_height = max(
+                96, min(420, int(sizes[1]))
+            )
+        return int(self._preferred_velocity_panel_height)
+
     def _toggle_velocity_lane(self, visible: bool) -> None:
+        if not visible and self.velocity_panel.isVisible():
+            self.velocity_panel_height()
         self.velocity_panel.setVisible(visible)
+        parent = self.parent()
+        parent_config = getattr(parent, "config", None)
+        if isinstance(parent_config, dict):
+            ui_config = parent_config.setdefault("transcription_ui", {})
+            if isinstance(ui_config, dict):
+                ui_config["velocity_lane_visible"] = bool(visible)
+                if hasattr(self, "ui_preference_binding"):
+                    self._persist_parent_config()
         if visible:
             self._request_velocity_mapping_hint()
+            QTimer.singleShot(
+                0,
+                lambda: self.set_velocity_panel_height(
+                    self._preferred_velocity_panel_height
+                ),
+            )
         QTimer.singleShot(0, self.update_scrollbars)
 
     def _set_velocity_mode(self, mode: str) -> None:
@@ -4479,31 +4627,45 @@ class MidiNoteEditorDialog(QDialog):
             or self.clip_end_spin is None
         ):
             return
-        occupied_start = min(
-            (float(note.start) for note in self.canvas.notes),
-            default=self.clip_scope.timeline_end_ms - MIN_CLIP_DURATION_MS,
-        )
-        occupied_end = max(
-            (float(note.start + note.dur) for note in self.canvas.notes),
-            default=self.clip_scope.timeline_start_ms + MIN_CLIP_DURATION_MS,
-        )
         self.clip_start_spin.blockSignals(True)
         self.clip_end_spin.blockSignals(True)
-        self.clip_start_spin.setMaximum(min(
-            self.clip_scope.timeline_end_ms - MIN_CLIP_DURATION_MS,
-            occupied_start,
-        ))
-        self.clip_end_spin.setMinimum(max(
-            self.clip_scope.timeline_start_ms + MIN_CLIP_DURATION_MS,
-            occupied_end,
-        ))
+        self.clip_start_spin.setRange(
+            self.clip_scope.timeline_start_ms,
+            self.clip_scope.timeline_start_ms,
+        )
+        self.clip_end_spin.setMinimum(
+            self.clip_scope.timeline_start_ms + MIN_CLIP_DURATION_MS
+        )
+        self.clip_end_spin.setMaximum(
+            self.clip_scope.resize_end_limit_ms
+            if self.clip_scope.resize_end_limit_ms is not None
+            else 2_147_483_647.0
+        )
         self.clip_start_spin.setValue(self.clip_scope.timeline_start_ms)
         self.clip_end_spin.setValue(self.clip_scope.timeline_end_ms)
+        if hasattr(self, "clip_bounds_music_label"):
+            self.clip_bounds_music_label.setText(trf(
+                "🔒 {start} → {end}",
+                start=self.format_musical_position(
+                    self.clip_scope.timeline_start_ms
+                ),
+                end=self.format_musical_position(
+                    self.clip_scope.timeline_end_ms
+                ),
+            ))
+            self.clip_bounds_music_label.setToolTip(trf(
+                "左边界 {left:.1f} ms 已锁定；右边界 {right:.1f} ms 只改变编辑区域",
+                left=self.clip_scope.timeline_start_ms,
+                right=self.clip_scope.timeline_end_ms,
+            ))
         self.clip_start_spin.blockSignals(False)
         self.clip_end_spin.blockSignals(False)
 
     def _request_clip_resize(self, mode: str, value: float) -> None:
         if self.clip_scope is None or self._clip_sync_in_progress:
+            return
+        if mode == "resize_start":
+            self._sync_clip_bounds_controls()
             return
         current = (
             self.clip_scope.timeline_start_ms
@@ -4558,6 +4720,16 @@ class MidiNoteEditorDialog(QDialog):
         minutes, remainder = divmod(ms, 60000)
         seconds, millis = divmod(remainder, 1000)
         return f"{minutes}:{seconds:02d}.{millis:03d}"
+
+    def format_musical_position(self, ms: float) -> str:
+        beat = max(
+            0.0,
+            (float(ms) - float(self.beat_origin_ms))
+            / max(1.0, 60_000.0 / max(1, int(self.bpm))),
+        )
+        bar_index = int(beat // max(1, int(self.time_sig)))
+        beat_in_bar = beat - bar_index * max(1, int(self.time_sig))
+        return f"{bar_index + 1}:{beat_in_bar + 1:.2f}".rstrip("0").rstrip(".")
 
     def set_draft_playhead(self, ms: float, follow: bool = False) -> None:
         duration = self.draft_duration_ms()
@@ -5764,17 +5936,38 @@ class MidiNoteEditorDialog(QDialog):
     def copy_selected(self) -> None:
         chosen = [self.canvas.notes[i] for i in sorted(self.canvas.selected)]
         if chosen:
-            origin = min(n.start for n in chosen)
-            self.clipboard = [n._replace(start=n.start - origin) for n in chosen]
+            try:
+                normalized = normalized_clipboard_notes(chosen)
+                payload = encode_note_clipboard(chosen)
+            except ValueError:
+                show_global_toast(
+                    self, tr("无法复制音符：选择内容过大或包含无效音符。"),
+                    kind="warning",
+                )
+                return
+            self.clipboard = list(normalized)
+            app = QApplication.instance()
+            if app is not None:
+                app._bdo_note_clipboard_payload = payload
+
+    def _clipboard_notes(self) -> tuple[Note, ...]:
+        app = QApplication.instance()
+        payload = getattr(app, "_bdo_note_clipboard_payload", b"")
+        if payload:
+            try:
+                return decode_note_clipboard(payload)
+            except ValueError:
+                return ()
+        return tuple(self.clipboard)
 
     def paste_notes(self) -> None:
-        if not self.clipboard:
+        clipboard_notes = self._clipboard_notes()
+        if not clipboard_notes:
             return
-        self.push_snapshot()
         requested_origin = self.snap_time(self.canvas.edit_cursor_ms)
         origin = next_non_overlapping_paste_origin(
             self.canvas.notes,
-            self.clipboard,
+            clipboard_notes,
             requested_origin,
             grid_step_ms=(
                 self.quantize_ms()
@@ -5783,16 +5976,51 @@ class MidiNoteEditorDialog(QDialog):
             ),
             grid_origin_ms=self.beat_origin_ms,
         )
+        moved_for_overlap = not math.isclose(
+            origin, requested_origin, abs_tol=1e-6
+        )
+        pasted = [
+            note._replace(start=origin + float(note.start))
+            for note in clipboard_notes
+        ]
+        if self.clip_scope is not None and not self.notes_fit_clip_scope(pasted):
+            show_global_toast(
+                self,
+                tr("粘贴内容超出当前片段边界；请先扩展右侧编辑区域或移动编辑光标。"),
+                kind="warning",
+            )
+            return
+        self.push_snapshot()
         first = len(self.canvas.notes)
-        self.canvas.notes.extend(self.constrain_note_group_to_scope(
-            n._replace(start=origin + n.start) for n in self.clipboard
-        ))
+        self.canvas.notes.extend(pasted)
         self.canvas.selected = set(range(first, len(self.canvas.notes)))
         self.canvas.anchor_index = first
         self.canvas.set_edit_cursor(max(
             note.start + note.dur for note in self.canvas.notes[first:]
         ))
         self._notes_changed(); self.refresh_fields()
+        incompatible = any(
+            self.note_invalid(note.pitch)
+            or not articulation_supports_pitch(
+                self.track.bdo_instrument_id,
+                note.ntype,
+                note.pitch,
+            )
+            for note in pasted
+        )
+        if incompatible:
+            show_global_toast(
+                self,
+                tr(
+                    "已保留粘贴音符的原始音高与奏法；其中部分内容不适用于目标乐器，请检查红色提示后再导出。"
+                ),
+                kind="warning",
+            )
+        elif moved_for_overlap:
+            show_global_toast(
+                self,
+                tr("目标位置存在同音高重叠，已将整组音符移至右侧最近空位。"),
+            )
 
     def duplicate_selected(self) -> None:
         chosen = [self.canvas.notes[index] for index in sorted(self.canvas.selected)]

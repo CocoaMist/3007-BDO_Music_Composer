@@ -189,6 +189,7 @@ class FluentSymbol(str, Enum):
     ADD_TRACK = "add_track"
     DELETE = "delete"
     CURVE = "curve"
+    MARQUEE = "marquee"
     SELECT = "select"
     RAZOR = "razor"
     MAGNET = "magnet"
@@ -304,6 +305,14 @@ def _draw_fluent_symbol(symbol: FluentSymbol, color: str, size: int = 16) -> QPi
                 round(1.8 * scale),
                 round(1.8 * scale),
             )
+    elif symbol == FluentSymbol.MARQUEE:
+        dash_pen = QPen(QColor(color), 1.4 * scale, Qt.PenStyle.DashLine)
+        dash_pen.setCapStyle(Qt.PenCapStyle.SquareCap)
+        painter.setPen(dash_pen)
+        painter.drawRect(
+            round(2.5 * scale), round(3.0 * scale),
+            round(11.0 * scale), round(9.5 * scale),
+        )
     elif symbol == FluentSymbol.SELECT:
         painter.drawPolygon([
             _point(3.0, 2.5, scale),
@@ -421,6 +430,26 @@ FLUENT_COMPONENT_QSS = """
     QFrame#SettingsSection, QFrame#OptimizerOptions,
     QFrame#EditorToolbar, QFrame#EditorFooter, QFrame#NoteInspectorTop {
         border-radius: 9px;
+    }
+    QFrame#PerformanceStrip {
+        background: #1d1d1f;
+        border-top: 1px solid #3d3932;
+    }
+    QLabel#PerformanceCaption {
+        color: #f0c66f;
+        font-size: 12px;
+        font-weight: 700;
+    }
+    QLabel#PerformanceMetric, QLabel#EnsembleMetric,
+    QLabel#ProjectMusicStatus {
+        color: #d8d3cc;
+        font-size: 12px;
+    }
+    QLabel#ProjectMusicStatus { font-weight: 600; }
+    QLabel#EditorClipBoundsMusical {
+        color: #e4c17c;
+        font-size: 11px;
+        font-weight: 600;
     }
 """
 

@@ -25,6 +25,11 @@ from bdo_music_composer.editor.editor_import import (  # noqa: E402
     tracks_from_bdo_snapshot,
 )
 from bdo_music_composer.editor.pitch_transform import PitchTransformPlan  # noqa: E402
+from bdo_music_composer.editor.arrangement_clip import plan_clip_edit  # noqa: E402
+from bdo_music_composer.editor.editor_models import (  # noqa: E402
+    ArrangementClipState,
+    TrackState,
+)
 from bdo_music_composer.export.bdo_score import snapshot_from_bytes  # noqa: E402
 from bdo_music_composer.export.export_workflow import (  # noqa: E402
     ExportRequest,
@@ -35,6 +40,64 @@ from bdo_music_composer.ui.main_window import BDO_ARTICULATIONS, copy_export_to_
 
 
 class BdoExportRoundTripTests(unittest.TestCase):
+    def test_right_region_resize_reaches_game_wire_without_note_scaling(self) -> None:
+        track = TrackState(
+            1,
+            [Note(60, 77, 100.0, 100.0, 14)],
+            0,
+            False,
+            "Resized",
+            0x0A,
+            bdo_source_note_records=(
+                (60, 77, 100.0, 100.0, 14, 66),
+            ),
+            arrangement_clips=[ArrangementClipState(
+                "resized", 100.0, 300.0, 100.0, 300.0
+            )],
+        )
+        update = plan_clip_edit(
+            track,
+            clip_id="resized",
+            mode="resize_end",
+            new_start_ms=100.0,
+            new_end_ms=500.0,
+        ).updates[0]
+        track.notes = list(update.notes)
+        track.bdo_source_note_records = update.source_note_records
+        track.arrangement_clips = list(update.arrangement_clips)
+        frozen = freeze_export_tracks((track,))[0]
+
+        data, _summary = channel_groups_to_bdo(
+            120,
+            4,
+            [(frozen.notes, 0, False)],
+            instrument_map={0: 0x0A},
+            preserve_note_types=True,
+            velocity_b_maps={0: frozen.bdo_source_note_records},
+        )
+        document = decode_score(data)
+        note = next(
+            note
+            for physical in document.groups[0].tracks
+            for note in physical.notes
+        )
+
+        self.assertEqual(
+            (
+                note.pitch,
+                note.velocity_a,
+                note.velocity_b,
+                note.start_ms,
+                note.duration_ms,
+                note.ntype,
+            ),
+            (60, 77, 66, 100.0, 100.0, 14),
+        )
+        self.assertTrue(all(
+            track.instrument_id == 0x0A
+            for track in document.groups[0].tracks
+        ))
+
     def test_game_export_import_reexport_preserves_complete_wire_score(self) -> None:
         melodic = [
             Note(

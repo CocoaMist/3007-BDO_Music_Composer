@@ -7,12 +7,34 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+from bdo_music_composer.ui.editor_workspace_qt import EditorWorkspaceHostMixin
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class EditorWorkspaceUiTests(unittest.TestCase):
+    def test_empty_editor_history_falls_back_to_project_history(self) -> None:
+        host = EditorWorkspaceHostMixin()
+        editor = SimpleNamespace(
+            isVisible=lambda: True,
+            isActiveWindow=lambda: True,
+            undo_stack=[],
+            redo_stack=[],
+            undo=Mock(),
+            redo=Mock(),
+        )
+        host.active_transcription_editor = editor
+
+        self.assertFalse(host._route_focused_editor_history(redo=False))
+        editor.undo.assert_not_called()
+        editor.undo_stack.append(object())
+        self.assertTrue(host._route_focused_editor_history(redo=False))
+        editor.undo.assert_called_once_with()
+
     def test_multiple_editors_focus_playback_and_global_markers(self) -> None:
         with tempfile.TemporaryDirectory() as folder_name:
             environment = dict(os.environ)

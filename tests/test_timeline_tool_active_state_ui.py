@@ -29,6 +29,7 @@ class TimelineToolActiveStateUiTests(unittest.TestCase):
             window.show()
             app.processEvents()
 
+            marquee = window.timeline_marquee_tool
             select = window.timeline_select_tool
             razor = window.timeline_razor_tool
             active_color = "#61471d"
@@ -37,31 +38,36 @@ class TimelineToolActiveStateUiTests(unittest.TestCase):
                 image = button.grab().toImage()
                 return image.pixelColor(4, button.height() // 2).name()
 
+            assert marquee.objectName() == "TimelineToolButton"
             assert select.objectName() == "TimelineToolButton"
             assert razor.objectName() == "TimelineToolButton"
-            assert not select.isChecked()
-            assert not razor.isChecked()
-            assert window.timeline.arrangement_tool == "marquee"
-            assert presentation(select) != active_color
-            assert presentation(razor) != active_color
-
-            QTest.mouseClick(select, Qt.LeftButton)
-            app.processEvents()
+            assert not marquee.isChecked()
             assert select.isChecked()
             assert not razor.isChecked()
             assert window.timeline.arrangement_tool == "select"
-            assert presentation(select) == active_color, presentation(select)
+            assert presentation(marquee) != active_color
+            assert presentation(select) == active_color
+            assert presentation(razor) != active_color
 
-            QTest.mouseClick(select, Qt.LeftButton)
+            QTest.mouseClick(marquee, Qt.LeftButton)
             app.processEvents()
+            assert marquee.isChecked()
             assert not select.isChecked()
             assert not razor.isChecked()
             assert window.timeline.arrangement_tool == "marquee"
-            assert presentation(select) != active_color
+            assert presentation(marquee) == active_color
+
+            QTest.mouseClick(marquee, Qt.LeftButton)
+            app.processEvents()
+            assert not select.isChecked()
+            assert not razor.isChecked()
+            assert marquee.isChecked()
+            assert window.timeline.arrangement_tool == "marquee"
 
             QTest.mouseClick(razor, Qt.LeftButton)
             app.processEvents()
             assert not select.isChecked()
+            assert not marquee.isChecked()
             assert razor.isChecked()
             assert window.timeline.arrangement_tool == "razor"
             assert presentation(razor) == active_color, presentation(razor)
@@ -69,14 +75,16 @@ class TimelineToolActiveStateUiTests(unittest.TestCase):
             QTest.mouseClick(select, Qt.LeftButton)
             app.processEvents()
             assert select.isChecked()
+            assert not marquee.isChecked()
             assert not razor.isChecked()
             assert window.timeline.arrangement_tool == "select"
 
             QTest.mouseClick(select, Qt.LeftButton)
             app.processEvents()
-            assert not select.isChecked()
+            assert select.isChecked()
             assert not razor.isChecked()
-            assert window.timeline.arrangement_tool == "marquee"
+            assert not marquee.isChecked()
+            assert window.timeline.arrangement_tool == "select"
 
             window.close()
             window.deleteLater()

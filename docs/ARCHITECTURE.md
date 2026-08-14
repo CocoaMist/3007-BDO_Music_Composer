@@ -121,7 +121,13 @@ commits each gesture as one undoable edit. Clip instances use an immutable
 source-content window plus a timeline offset: razor splits duplicate the complete
 source reference and crop each side non-destructively, so resizing can reveal
 content again; copy/paste creates a detached content range and a new stable Clip
-ID. A note editor opened for one Clip receives one immutable
+ID. Project schema v16 adds presentation-only Clip names and colors; they never
+change MIDI/BDO projection. Duplicate, materialized repeat, right-edge crop,
+Razor split, and same-track consolidate all produce one `ClipEditPlan`, so
+project undo, autosave, preview, MIDI export, and BDO export observe the same
+result. Track rename/color and `editor/track_operations.py` duplication use the
+same project snapshot boundary and remap every copied Clip identity. A note
+editor opened for one Clip receives one immutable
 `ClipEditorScope`; its canvas, note commands, optimization preflight, preview,
 commit gate, and recovery overlay all use that exact timeline window. Every
 completed Clip-editor note transaction publishes immediately into the formal
@@ -146,9 +152,9 @@ undo/autosave transaction: exclusive notes/controls/source records are removed,
 content still owned by a sibling Clip survives, selection moves to a surviving
 Clip, and any editor whose Clip identity disappeared is closed rather than left
 writable and orphaned.
-Mixer edge drags and the editor's left/right boundary controls share one
-Qt-free occupied-note constraint: empty leading/trailing space may be resized,
-but an edge cannot cross a visible note. Any accepted mixer resize immediately
+Mixer edge drags and the editor's right-boundary control share one Qt-free
+occupied-note constraint: the left edge remains fixed, empty trailing space may
+be resized, and the right edge cannot cross a visible note. Any accepted resize immediately
 updates the open editor's scope, scroll domain, controls, and fingerprint. Track
 lane context menus can create a Clip at the clicked timeline position. Adding,
 moving, resizing, pasting, optimizing, undoing, or redoing a note in previously
@@ -162,7 +168,12 @@ crossing a trim edge use the same visible projection as the arrangement, while
 an unchanged boundary projection remains lossless. Stale, missing,
 invalid-timing, and out-of-scope drafts remain distinct failures. Editors use
 Track plus Clip identity, so sibling Clips on one Track can remain open without
-redirecting each other. `editor/track_group.py` separately keeps
+redirecting each other. Their selected-note clipboard is application-global and
+versioned: another open editor pastes the complete relative-time group at its
+own edit cursor without changing pitch, velocity, duration, or articulation.
+Paste fails visibly when the group cannot fit the target Clip; target-instrument
+incompatibilities remain unchanged and visible for review.
+`editor/track_group.py` separately keeps
 same-game-instrument lanes in a Group container without
 merging their notes or mixer state. Explicit A+B
 track merge still produces one ordinary lane, never a composite-track
@@ -206,9 +217,37 @@ Group presentation never consumes lane height: the first member owns a compact
 instrument-group control with an explicit count plus group Mute/Solo, while
 subtle shared boundaries and selection tint connect every member. Group views
 and row membership are built once during `set_tracks`; paint-time lookup is O(1).
+Groups fold to a read-only summary lane without changing `TrackState`. The
+summary keeps every member's visible Clip and note activity, aggregate
+Clip/note counts, validation severity, Mute/Solo state, and peak meter visible;
+it never merges member content or exposes an ambiguous hidden-Track edit target.
+Double-click/Enter expands the Group and `U` toggles it. The canvas caches the
+visible-row projection and keeps original row identities for project
+transactions. Folded note activity is reduced to the horizontal buckets the
+summary can actually display; each bucket uses the interval index's logarithmic
+closed-range intersection probe instead of preparing every member's multilevel
+zoom cache. Track header width, track height, and loaded reference-audio
+height use visible paint-surface split handles and bounded local preferences
+rather than project metadata. The View popup owns fit-width, fit-track-height,
+standard-density, and fold/expand-all commands.
+Identity Clip tracks bypass redundant note projection during interval-index
+construction, and decoded instrument-lane images are shared by stat-keyed,
+bounded process cache entries across the home page and timeline. Paint remains
+visible-range indexed and filesystem-free.
 Mute/Solo uses a track-metadata refresh plan, invalidating presentation and
 preview without rebuilding any note interval or overview index, and the whole
 group mutation remains one project-undo step.
+
+Timeline keyboard focus distinguishes Track and Clip scopes. Left/Right moves
+the playhead or nudges selected Clips on the musical grid, Ctrl+Left/Right jumps
+among marker and Clip boundaries, Alt+Left/Right owns Track volume, and Enter
+opens only the focused object (or expands a folded Group summary). `W` fits the
+full-song width, `H` fits visible Track rows, and `U` folds/unfolds the selected
+Group. `editor/arrangement_navigation.py` owns the pure grid, boundary, and
+range-fit calculations. Z fits the selected time range or Clip and X restores
+the prior viewport. The piano roll places Clip boundaries
+on their own command row, uses a persisted vertical splitter for velocity, and
+lets any open editor switch to or tile sibling editor windows.
 The bottom strip prioritizes musical/game capacity state while keeping process
 telemetry available but hidden from the default authoring hierarchy. Standard MIDI
 publication serializes the current editor model to memory before atomically
@@ -1240,7 +1279,8 @@ account limit; the native composition UI receives `noteCount` dynamically.
 - Timeline note rectangles are batched by articulation color.
 - Supported-pitch maps, track durations, and pitch bounds are cached.
 - `tools/benchmark_dense_ui.py` records reproducible offscreen 48k timeline,
-  12k + 8k piano-roll paint, and 12k/50k/100k visible-query distributions.
+  120-member folded-Group first/steady paint, 12k + 8k piano-roll paint, and
+  12k/50k/100k visible-query distributions.
   Correctness gates assert bounded inspections and cache identity; wall-clock
   results remain diagnostic because host scheduling can introduce outliers.
 - Audio decode is concurrent and deduplicated by Wwise source ID.

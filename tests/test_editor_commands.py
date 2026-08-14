@@ -20,6 +20,18 @@ class Track:
 
 
 class EditorCommandTests(unittest.TestCase):
+    def test_project_snapshot_detaches_arrangement_selection(self) -> None:
+        selection = [1, [(2, "clip")], (2, "clip")]
+        snapshot = ProjectSnapshot.capture(
+            [], 0, 0, None, arrangement_selection=selection
+        )
+        selection[1].clear()
+
+        self.assertEqual(
+            snapshot.restored_arrangement_selection(),
+            [1, [(2, "clip")], (2, "clip")],
+        )
+
     def test_paste_origin_skips_same_pitch_collisions_as_one_group(self) -> None:
         existing = (
             Note(60, 90, 0.0, 250.0, 0),

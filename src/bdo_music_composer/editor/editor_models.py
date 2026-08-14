@@ -159,7 +159,7 @@ def note_name(midi_note: int) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ArrangementClipState:
-    """One independently movable/trimmed module inside an arrangement track."""
+    """One independently movable/scalable module inside an arrangement track."""
 
     clip_id: str
     start_ms: float
@@ -167,6 +167,8 @@ class ArrangementClipState:
     content_start_ms: float
     content_end_ms: float
     time_offset_ms: float = 0.0
+    display_name: str = ""
+    color: str = ""
 
 
 @dataclass

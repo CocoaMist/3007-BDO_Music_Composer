@@ -80,7 +80,7 @@ try:
         QUrl,
         Signal,
     )
-    from PySide6.QtGui import QActionGroup, QDesktopServices, QIcon, QKeySequence, QPainterPath, QShortcut
+    from PySide6.QtGui import QActionGroup, QColor, QDesktopServices, QIcon, QKeySequence, QPainterPath, QShortcut
     from PySide6.QtMultimedia import QMediaPlayer
     from PySide6.QtWidgets import (
         QApplication,
@@ -295,6 +295,7 @@ from bdo_music_composer.ui.timeline_toolbar_qt import (  # noqa: E402
     bind_arrangement_tool_buttons,
     build_arrangement_tool_buttons,
     build_timeline_popup_buttons,
+    build_timeline_view_buttons,
 )
 from bdo_music_composer.ui.workspace_tempo_qt import WorkspaceTempoHostMixin  # noqa: E402
 from bdo_music_composer.ui.ui_controls import (  # noqa: E402
@@ -542,12 +543,7 @@ from bdo_music_composer.transcription.transcription_workspace_controller import 
     TranscriptionReviewController,
 )
 
-# Full translated command rails need these widths in the widest supported
-# locale.  Below them, icon/short-label controls retain every action and expose
-# the complete wording through tooltips and accessibility names.
-# Common 1600/1920-wide workspaces have enough room for command names. Keep
-# icon-only controls for genuinely compact windows instead of hiding meaning
-# across most desktop layouts.
+# Compact command rails retain every action through icons and accessible names.
 MAIN_VERBOSE_CONTROLS_MIN_WIDTH = 1560
 
 
@@ -1022,6 +1018,7 @@ class MidiToBdoWindow(
         self.setWindowTitle(f"{APP_NAME} v{APP_DISPLAY_VERSION}")
         self.resize(1360, 820)
         self.setMinimumSize(1160, 720)
+        self.setAcceptDrops(True)
 
         self.config = load_config()
         self.update_settings = update_preferences(self.config)
@@ -2016,7 +2013,7 @@ class MidiToBdoWindow(
         self.home_outer_layout.setContentsMargins(0, 0, 0, 0)
         self.home_shell_layout.setSpacing(0)
         width = self.width()
-        sidebar_width = 584 if width < 1360 else 632 if width < 1600 else 680
+        sidebar_width = max(560, min(760, round(width * 0.45)))
         self.home_sidebar.setFixedWidth(sidebar_width)
 
     @staticmethod
@@ -2063,7 +2060,7 @@ class MidiToBdoWindow(
         for button, source in (
             (self.pause_button, "暂停"),
             (self.stop_button, "停止"),
-            (self.timeline_fit_btn, "显示全部时间轴"),
+            (self.timeline_view_buttons.fit_width, "显示全部时间轴"),
         ):
             self._set_responsive_icon_button(button, source, compact)
         self.timeline_loop_box.setAccessibleName(tr("循环区间"))
@@ -2409,19 +2406,15 @@ class MidiToBdoWindow(
         header.setSpacing(8)
         (
             self.timeline_edit_tools,
-            self.timeline_select_tool,
-            self.timeline_razor_tool,
-            self.timeline_snap_tool,
+            self.timeline_marquee_tool, self.timeline_select_tool,
+            self.timeline_razor_tool, self.timeline_snap_tool,
             self.timeline_tool_group,
         ) = build_arrangement_tool_buttons(self)
         self.timeline_meta = ElidedLabel(
             tr("等待 MIDI"), maximum_hint_width=170
         )
         self.timeline_meta.setObjectName("TimelineMeta")
-        self.timeline_fit_btn = PillButton(tr("全览"), "ghost", FluentSymbol.FIT)
-        self.timeline_fit_btn.setToolTip(tr("显示全部时间轴"))
-        self.timeline_fit_btn.setAccessibleName(tr("显示全部时间轴"))
-        self.timeline_fit_btn.clicked.connect(self._fit_timeline)
+        self.timeline_view_buttons = build_timeline_view_buttons(self)
         self.timeline_zoom_label = QLabel(tr("缩放"))
         self.timeline_zoom_label.setObjectName("TimelineControlLabel")
         self.timeline_zoom = QSlider(Qt.Horizontal)
@@ -2468,7 +2461,7 @@ class MidiToBdoWindow(
                 self.timeline_zoom,
                 self.timeline_pan_label,
                 self.timeline_pan,
-                self.timeline_fit_btn,
+                *self.timeline_view_buttons,
             )
         )
         header.addWidget(transport_group)
@@ -2487,6 +2480,7 @@ class MidiToBdoWindow(
         self.timeline = TimelineCanvas()
         self.timeline.setObjectName("TimelineCanvas")
         self.timeline.set_instrument_art_dir(self.instrument_art_dir)
+        self.timeline.fit_width_requested.connect(self._fit_timeline)
         self.timeline.changed.connect(self._on_track_changed)
         self.timeline.track_state_changed.connect(self._on_track_filter_changed)
         self.timeline.game_volume_committed.connect(
@@ -2504,6 +2498,7 @@ class MidiToBdoWindow(
         self.timeline.delete_track_requested.connect(
             self._delete_requested_track
         )
+        self._connect_arrangement_action_signals()
         self.timeline.clear_solo_requested.connect(self._clear_solo)
         self.timeline.unmute_all_requested.connect(self._unmute_all)
         self.timeline.selected.connect(self._select_track)
@@ -2524,9 +2519,7 @@ class MidiToBdoWindow(
         self.timeline.clip_copy_requested.connect(self._copy_timeline_clip)
         self.timeline.clip_paste_requested.connect(self._paste_timeline_clip)
         self.timeline.clip_delete_requested.connect(self._delete_timeline_clip)
-        self.timeline.clips_delete_requested.connect(
-            self._delete_timeline_clips
-        )
+        self.timeline.clips_delete_requested.connect(self._delete_timeline_clips)
         self.timeline.clips_move_requested.connect(
             self._move_timeline_clips
         )
@@ -2535,7 +2528,8 @@ class MidiToBdoWindow(
         self.timeline_snap_tool.toggled.connect(self.timeline.set_snap_enabled)
         self.timeline.set_snap_enabled(self.timeline_snap_tool.isChecked())
         bind_arrangement_tool_buttons(
-            self.timeline, self.timeline_select_tool, self.timeline_razor_tool
+            self.timeline, self.timeline_marquee_tool,
+            self.timeline_select_tool, self.timeline_razor_tool,
         )
         self.timeline.seek_requested.connect(self._seek_preview)
         self.timeline.time_range_changed.connect(self._timeline_range_changed)
@@ -5888,14 +5882,14 @@ class MidiToBdoWindow(
             self.transcription_assist_review.to_payload(),
             self._conversion_settings,
             self._pitch_transform_plan,
-            self.lyric_events,
-            self.research_metadata.get("timeline_markers", ()),
+            self.lyric_events, self.research_metadata.get("timeline_markers", ()),
+            self._capture_arrangement_selection(),
         )
     def _push_project_snapshot(self) -> None:
         self.project_commands.push(self._project_snapshot())
 
     def _restore_project_snapshot(self, snapshot: ProjectSnapshot, action: str) -> None:
-        arrangement_selection = self._capture_arrangement_selection()
+        arrangement_selection = snapshot.restored_arrangement_selection() or self._capture_arrangement_selection()
         self._stop_preview(reset_playhead=False)
         tracks_changed = tuple(self.tracks) != snapshot.tracks
         if tracks_changed:
@@ -6277,27 +6271,27 @@ class MidiToBdoWindow(
             same_file = False
         return (None, None) if same_file else (midi_path, target)
 
-    def _autosave_project(self, reason: str, immediate: bool = False) -> None:
+    def _autosave_project(self, reason: str, immediate: bool = False) -> bool:
         if immediate:
             self.pending_autosave_reason = reason
             self.autosave_timer.stop()
-            self._flush_autosave()
-            return
+            return self._flush_autosave()
         self.pending_autosave_reason = reason
         self.autosave_timer.start(700)
+        return True
 
-    def _flush_autosave(self) -> None:
+    def _flush_autosave(self) -> bool:
         reason = self.pending_autosave_reason or "autosave"
         self.pending_autosave_reason = ""
         if (
             self.loading_project
             or not self.tracks
         ):
-            return
+            return False
         try:
             source_path, source_copy = self._ensure_autosave_project()
             if self.autosave_project_dir is None:
-                return
+                return False
             saved_at = time.strftime("%Y-%m-%d %H:%M:%S")
             source_reference = project_relative_file_reference(
                 self.autosave_project_dir,
@@ -6348,9 +6342,11 @@ class MidiToBdoWindow(
                 source_copy=source_copy,
             )
             self._queue_autosave_request(request)
+            return True
         except Exception as exc:
             append_crash_log("Autosave failed", traceback.format_exc())
             self.status_label.setText(trf("自动保存失败：{error}", error=exc))
+            return False
 
     def _queue_autosave_request(self, request: AutosaveRequest) -> None:
         worker = self.autosave_worker

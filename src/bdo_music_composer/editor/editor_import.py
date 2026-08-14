@@ -717,7 +717,13 @@ def _project_arrangement_clips(
             raise _import_error(
                 EditorImportErrorCode.INVALID_TRACK, clip_path, "invalid clip bounds"
             )
-        clips.append(ArrangementClipState(clip_id, *values, time_offset_ms))
+        clips.append(ArrangementClipState(
+            clip_id,
+            *values,
+            time_offset_ms,
+            str(raw.get("display_name") or ""),
+            str(raw.get("color") or ""),
+        ))
     return clips
 
 

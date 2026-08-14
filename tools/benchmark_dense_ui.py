@@ -115,6 +115,19 @@ def benchmark_dense_ui(
         timeline.show()
         app.processEvents()
         timeline_paint = _measure(timeline.grab, iterations)
+        for track in tracks:
+            track.arrangement_group_id = "dense-benchmark-group"
+        timeline.set_tracks(tracks)
+        collapsed_started = time.perf_counter()
+        timeline.set_all_groups_collapsed(True)
+        app.processEvents()
+        timeline.grab()
+        collapsed_first_paint_ms = (
+            time.perf_counter() - collapsed_started
+        ) * 1000.0
+        collapsed_group_paint = _measure(timeline.grab, iterations)
+        timeline.set_all_groups_collapsed(False)
+        app.processEvents()
 
         query_results: dict[str, Any] = {}
         for count in query_sizes:
@@ -208,6 +221,11 @@ def benchmark_dense_ui(
                 "single_track_update_ms": single_track_update_ms,
                 "single_track_rebuild_count": 1,
                 "paint": timeline_paint,
+                "collapsed_group": {
+                    "member_tracks": len(tracks),
+                    "first_paint_ms": collapsed_first_paint_ms,
+                    "steady_paint": collapsed_group_paint,
+                },
                 "last_note_query_inspections": (
                     timeline._last_track_note_query_inspections
                 ),

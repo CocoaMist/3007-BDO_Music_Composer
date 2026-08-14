@@ -57,7 +57,7 @@ class ArrangementClipUiTests(unittest.TestCase):
                 assert window.timeline.selected_clip_keys == frozenset({
                     (11, "track-11-main"), (12, "track-12-main")
                 })
-                assert window.timeline.arrangement_tool == "marquee"
+                assert window.timeline.arrangement_tool == "select"
                 assert window.selected_track is group_second
                 assert autosaves == [
                     ("move selected arrangement clips", True)
@@ -89,12 +89,52 @@ class ArrangementClipUiTests(unittest.TestCase):
                 assert window.timeline.selected_clip_keys == frozenset({
                     (11, "track-11-main"), (12, "track-12-main")
                 })
-                from bdo_music_composer.editor.arrangement_clip import plan_clip_edit
+                lower = track(13, [])
+                window.tracks.append(lower)
+                window._refresh_tracks()
+                autosave_count = len(autosaves)
+                window._move_timeline_clips(SimpleNamespace(
+                    selections=(
+                        (window.tracks[0], "track-11-main"),
+                        (window.tracks[1], "track-12-main"),
+                    ),
+                    delta_ms=0.0,
+                    track_offset=1,
+                    primary_key=(12, "track-12-main"),
+                ))
+                assert window.timeline.selected_clip_keys == frozenset({
+                    (12, "track-11-main"), (13, "track-12-main")
+                })
+                assert window.timeline._selected_clip_track_id == 13
+                assert len(autosaves) == autosave_count + 1
+                assert autosaves[-1] == (
+                    "move selected arrangement clips", True
+                )
+                from bdo_music_composer.editor.arrangement_clip import project_track_notes
+                assert window.tracks[0].notes == []
+                assert [note.pitch for note in project_track_notes(window.tracks[1])] == [60]
+                assert [note.pitch for note in project_track_notes(window.tracks[2])] == [64]
+                window._undo_project()
+                assert window.timeline.selected_clip_keys == frozenset({
+                    (11, "track-11-main"), (12, "track-12-main")
+                }), window.timeline.selected_clip_keys
+                assert [note.pitch for note in project_track_notes(window.tracks[0])] == [60]
+                assert [note.pitch for note in project_track_notes(window.tracks[1])] == [64]
+                window._redo_project()
+                assert window.timeline.selected_clip_keys == frozenset({
+                    (12, "track-11-main"), (13, "track-12-main")
+                })
+                window._undo_project()
+                assert window.timeline.selected_clip_keys == frozenset({
+                    (11, "track-11-main"), (12, "track-12-main")
+                })
+                from bdo_music_composer.editor.arrangement_clip import plan_clip_edit, track_clips
+                scale_start = track_clips(window.tracks[0])[0].start_ms
                 sync_plan = plan_clip_edit(
                     window.tracks[0],
                     mode="resize_end",
-                    new_start_ms=225.0,
-                    new_end_ms=350.0,
+                    new_start_ms=scale_start,
+                    new_end_ms=scale_start + 125.0,
                     clip_id="track-11-main",
                 )
                 window._publish_clip_plan(
@@ -131,7 +171,6 @@ class ArrangementClipUiTests(unittest.TestCase):
                     clip_id="track-1-main",
                 ))
                 assert source.notes == []
-                from bdo_music_composer.editor.arrangement_clip import project_track_notes
                 assert [note.start for note in project_track_notes(target)] == [50.0, 500.0]
                 assert len(window.project_commands._undo) == 1
                 window._undo_project()
@@ -164,9 +203,105 @@ class ArrangementClipUiTests(unittest.TestCase):
                 window.tracks.append(empty)
                 window._refresh_tracks()
                 window._open_note_editor = lambda _track: None
+                create_undo_count = len(window.project_commands._undo)
+                create_autosave_count = len(autosaves)
                 window._create_timeline_clip(empty, 900.0)
-                assert len(empty.notes) == 1
-                assert empty.notes[0].start == 900.0
+                assert empty.notes == []
+                created_clip = empty.arrangement_clips[0]
+                assert created_clip.start_ms == 900.0
+                assert created_clip.end_ms == 3900.0
+                assert len(window.project_commands._undo) == create_undo_count + 1
+                assert len(autosaves) == create_autosave_count + 1
+                assert autosaves[-1] == ("create arrangement clip", True)
+                window._undo_project()
+                empty = next(
+                    item for item in window.tracks if item.track_id == 3
+                )
+                assert empty.notes == []
+                assert empty.arrangement_clips == []
+                window._redo_project()
+                empty = next(
+                    item for item in window.tracks if item.track_id == 3
+                )
+                assert empty.notes == []
+                assert len(empty.arrangement_clips) == 1
+                assert empty.arrangement_clips[0].end_ms == 3900.0
+                resize_undo_count = len(window.project_commands._undo)
+                resize_autosave_count = len(autosaves)
+                window._commit_timeline_clip_edit(SimpleNamespace(
+                    source_track=empty,
+                    target_track=empty,
+                    mode="resize_end",
+                    new_start_ms=900.0,
+                    new_end_ms=2900.0,
+                    clip_id=empty.arrangement_clips[0].clip_id,
+                ))
+                assert empty.notes == []
+                assert empty.arrangement_clips[0].end_ms == 2900.0
+                assert len(window.project_commands._undo) == resize_undo_count + 1
+                assert len(autosaves) == resize_autosave_count + 1
+                assert autosaves[-1] == ("arrangement clip edit", True)
+                window._undo_project()
+                empty = next(
+                    item for item in window.tracks if item.track_id == 3
+                )
+                assert empty.arrangement_clips[0].end_ms == 3900.0
+                window._redo_project()
+                empty = next(
+                    item for item in window.tracks if item.track_id == 3
+                )
+                assert empty.arrangement_clips[0].end_ms == 2900.0
+
+                # Non-empty right-edge expansion is one command/autosave and
+                # undo/redo never rewrite note timing or track properties.
+                scaled_track = track(
+                    8, [Note(60, 77, 100.0, 100.0, 5)]
+                )
+                scaled_track.bdo_track_volume = 42
+                scaled_track.bdo_track_settings = (
+                    11, 22, 33, 44, 55, 66, 77, 88
+                )
+                window.tracks = [scaled_track]
+                window._refresh_tracks()
+                window.project_commands.clear()
+                scale_autosave_count = len(autosaves)
+                window._commit_timeline_clip_edit(SimpleNamespace(
+                    source_track=scaled_track,
+                    target_track=scaled_track,
+                    mode="resize_end",
+                    new_start_ms=100.0,
+                    new_end_ms=300.0,
+                    clip_id="track-8-main",
+                ))
+                assert project_track_notes(scaled_track) == (
+                    Note(60, 77, 100.0, 100.0, 5),
+                )
+                assert scaled_track.bdo_track_volume == 42
+                assert scaled_track.bdo_track_settings == (
+                    11, 22, 33, 44, 55, 66, 77, 88
+                )
+                assert len(window.project_commands._undo) == 1
+                assert len(autosaves) == scale_autosave_count + 1
+                assert autosaves[-1] == ("arrangement clip edit", True)
+                window._undo_project()
+                scaled_track = window.tracks[0]
+                assert project_track_notes(scaled_track) == (
+                    Note(60, 77, 100.0, 100.0, 5),
+                )
+                assert scaled_track.bdo_track_volume == 42
+                assert scaled_track.bdo_track_settings == (
+                    11, 22, 33, 44, 55, 66, 77, 88
+                )
+                window._redo_project()
+                scaled_track = window.tracks[0]
+                assert project_track_notes(scaled_track) == (
+                    Note(60, 77, 100.0, 100.0, 5),
+                )
+                assert scaled_track.bdo_track_volume == 42
+                assert scaled_track.bdo_track_settings == (
+                    11, 22, 33, 44, 55, 66, 77, 88
+                )
+
                 risky_source = track(4, [Note(100, 90, 100.0, 100.0, 0)])
                 risky_source.bdo_instrument_id = 0x11
                 risky_target = track(5, [])
