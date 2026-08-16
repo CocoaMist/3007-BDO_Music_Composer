@@ -1,7 +1,7 @@
-# Packaging
+# Packaging: build it, then prove it
 
-This directory owns reproducible release and developer-package workflows. Build
-outputs are local artifacts and never belong in Git.
+This directory owns the release and SDK build entry points. Build outputs stay
+local and never belong in Git.
 
 ## Windows application
 

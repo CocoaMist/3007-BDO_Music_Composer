@@ -1,10 +1,10 @@
-# Application artwork provenance
+# Artwork: what may live here
 
-Only reviewed application artwork belongs here. User-provided and cached
-content stays outside the repository.
+Only reviewed application artwork belongs here. User files and caches stay out.
 
-The files below are original, application-owned visual aids. They do not come
-from Black Desert Online or any other game archive.
+The files below belong to this application. None came from Black Desert Online
+or another game archive. Provenance is listed per file; do not guess missing
+details.
 
 ## `ui/home/home_aristocratic_salon_v2.png`
 

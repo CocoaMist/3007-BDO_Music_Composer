@@ -1,12 +1,9 @@
-# Conversion settings boundary
+# 转换设置：只有一份，不继承上一首歌
 
 ## Purpose
 
-Conversion settings used to be seven parallel mutable attributes owned by
-`MidiToBdoWindow`. Startup, blank-project creation, raw MIDI import, BDO import,
-project recovery, application preferences, autosave, and export each rebuilt a
-slightly different subset. The result was temporal coupling: a missing field
-could inherit the value of the score opened immediately before it.
+转换设置曾经散落在主窗口的七个可变属性里，不同入口各重建一部分，漏掉的字段甚至
+会继承上一首歌。现在 `ConversionSettings` 是唯一事实源。
 
 `src/bdo_music_composer/core/conversion_settings.py` is the Qt-free source of truth for conversion policy.
 Its immutable `ConversionSettings` value owns:

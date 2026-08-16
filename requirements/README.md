@@ -1,8 +1,7 @@
-# Dependency groups
+# Dependencies: pick the group you need
 
-This directory is the single index for development, desktop, transcription,
-build, and Windows qualification dependencies. Exact release inventory and
-third-party review remain governed by the packaging policy.
+This is the dependency index. Release inventory and third-party approval still
+follow the packaging policy; editing a list here does not approve a dependency.
 
 - `desktop.txt` — direct desktop development dependencies.
 - `transcription.txt` — optional local transcription group.

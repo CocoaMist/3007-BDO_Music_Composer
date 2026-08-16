@@ -12,14 +12,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class TrackVolumeUiTests(unittest.TestCase):
-    def test_track_context_velocity_base_changes_only_requested_track(self) -> None:
+    def test_clip_context_velocity_base_changes_only_requested_clip(self) -> None:
         script = textwrap.dedent(
             """
             from unittest.mock import patch
 
             from PySide6.QtWidgets import QApplication, QDialog, QMenu
 
-            from bdo_music_composer.ui.dialogs.track_settings_dialogs import TrackVelocityBaseDialog
+            from bdo_music_composer.editor.editor_models import ArrangementClipState
+            from bdo_music_composer.ui.dialogs.track_settings_dialogs import ClipVelocityBaseDialog
             from bdo_music_composer.ui.main_window import MidiToBdoWindow, Note, TrackState
 
             app = QApplication([])
@@ -33,6 +34,7 @@ class TrackVolumeUiTests(unittest.TestCase):
                     (62, 50, 100.0, 100.0, 0, 70),
                     (64, 80, 200.0, 100.0, 0, 80),
                 ),
+                arrangement_clips=[ArrangementClipState("clip-a", 0.0, 400.0, 0.0, 400.0)],
             )
             other = TrackState(
                 2, [Note(67, 30, 0.0, 100.0, 0), Note(69, 60, 100.0, 100.0, 0)],
@@ -42,33 +44,35 @@ class TrackVolumeUiTests(unittest.TestCase):
             window.timeline.set_tracks(window.tracks)
             window._autosave_project = lambda *args, **kwargs: None
 
-            dialog = TrackVelocityBaseDialog(window, target)
+            dialog = ClipVelocityBaseDialog(window, "clip-a", 1)
             assert dialog.velocity_base.minimum() == -127
             assert dialog.velocity_base.maximum() == 127
             dialog.close()
 
             requested = []
-            window.timeline.velocity_base_requested.disconnect(
-                window._show_track_velocity_base_dialog
+            window.timeline.clip_velocity_base_requested.disconnect(
+                window._show_clip_velocity_base_dialog
             )
-            window.timeline.velocity_base_requested.connect(requested.append)
-            menu = QMenu(window.timeline)
-            action = window.timeline._add_velocity_base_action(menu, target)
-            assert action.text() == "轨道力度基数…"
-            action.trigger()
-            assert requested == [target]
+            window.timeline.clip_velocity_base_requested.connect(requested.append)
+            window.timeline.set_selected_clip(target, "clip-a")
+            menu, actions = window.timeline._build_clip_context_menu(target, "clip-a")
+            assert actions["velocity_base"].text() == "Clip 力度基数…"
+            window.timeline.clip_velocity_base_requested.emit(
+                window.timeline.selected_clip_items()
+            )
+            assert requested == [((target, "clip-a"),)]
 
             class AcceptedDialog:
-                def __init__(self, _parent, _track): pass
+                def __init__(self, _parent, _name, _count): pass
                 def exec(self): return QDialog.Accepted
                 def selected_velocity_base(self): return 100
                 def equalize_enabled(self): return True
 
             with patch(
-                "bdo_music_composer.ui.global_velocity_gain_qt.TrackVelocityBaseDialog",
+                "bdo_music_composer.ui.global_velocity_gain_qt.ClipVelocityBaseDialog",
                 AcceptedDialog,
             ):
-                window._show_track_velocity_base_dialog(target)
+                window._show_clip_velocity_base_dialog(((target, "clip-a"),))
 
             assert [note.vel for note in target.notes] == [85, 106, 127]
             assert [record[5] for record in target.bdo_source_note_records] == [78, 120, 127]
@@ -228,7 +232,7 @@ class TrackVolumeUiTests(unittest.TestCase):
             assert window.toolbar_global_gain.value() == 0
             assert window.toolbar_global_gain_value.value() == 0
             assert 132 <= window.toolbar_global_gain.width() <= 220
-            assert window.toolbar_global_gain_label.text() == "全局力度基数"
+            assert window.toolbar_global_gain_label.text() == "全轨道分贝调整"
             window.toolbar_global_gain_equalize.setChecked(True)
 
             window._begin_toolbar_global_gain_drag()

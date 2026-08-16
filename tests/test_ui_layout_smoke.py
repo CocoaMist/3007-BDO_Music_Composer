@@ -69,10 +69,11 @@ class UiLayoutSmokeTests(unittest.TestCase):
             )
             assert timeline_controls is not None
             assert timeline_controls.height() == 42
-            assert window.timeline_meta.x() < window.timeline_edit_tools.x()
-            assert window.timeline_edit_tools.x() < window.timeline_mix_button.x()
-            assert window.timeline_mix_button.x() < window.timeline_snap_tool.x()
-            assert window.timeline_snap_tool.x() < window.timeline_view_button.x()
+            timeline_x = lambda widget: widget.mapTo(window, QPoint(0, 0)).x()
+            assert timeline_x(window.timeline_meta) < timeline_x(window.timeline_edit_tools)
+            assert timeline_x(window.timeline_edit_tools) < timeline_x(window.timeline_snap_tool)
+            assert timeline_x(window.timeline_snap_tool) < timeline_x(window.timeline_mix_button)
+            assert timeline_x(window.timeline_mix_button) < timeline_x(window.timeline_view_button)
             assert window.timeline_snap_tool.isChecked()
             assert window.timeline.snap_enabled
             assert "已激活" in window.timeline_snap_tool.toolTip()

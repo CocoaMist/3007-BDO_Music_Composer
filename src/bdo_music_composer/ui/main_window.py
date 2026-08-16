@@ -2441,6 +2441,9 @@ class MidiToBdoWindow(
         transport_layout.addWidget(self.timeline_loop_box)
         global_bpm_control = self._build_global_bpm_control()
         global_gain_control = self._build_global_velocity_gain_control()
+        selection_velocity_control = (
+            self._build_selection_velocity_percent_control()
+        )
 
         self.timeline_mix_button, self.timeline_view_button = (
             build_timeline_popup_buttons(
@@ -2462,9 +2465,8 @@ class MidiToBdoWindow(
         header.addWidget(separator)
         header.addWidget(self.timeline_edit_tools)
         header.addWidget(self.timeline_mix_button)
-        header.addWidget(self.timeline_snap_tool)
+        header.addWidget(selection_velocity_control, 1)
         header.addWidget(self.timeline_view_button)
-        header.addStretch(1)
         layout.addWidget(controls)
         self.timeline = TimelineCanvas()
         self.timeline.setObjectName("TimelineCanvas")
@@ -2491,11 +2493,14 @@ class MidiToBdoWindow(
         self.timeline.clear_solo_requested.connect(self._clear_solo)
         self.timeline.unmute_all_requested.connect(self._unmute_all)
         self.timeline.selected.connect(self._select_track)
+        self.timeline.selection_scope_changed.connect(
+            self._sync_selection_velocity_percent
+        )
         self.timeline.effects_requested.connect(self._show_effects_placeholder)
         self.timeline.pitch_requested.connect(self._show_track_pitch_dialog)
         self.timeline.midi_tools_requested.connect(self._open_midi_tool)
-        self.timeline.velocity_base_requested.connect(
-            self._show_track_velocity_base_dialog
+        self.timeline.clip_velocity_base_requested.connect(
+            self._show_clip_velocity_base_dialog
         )
         self.timeline.note_editor_requested.connect(self._open_note_editor)
         self.timeline.clip_note_editor_requested.connect(
@@ -6824,7 +6829,8 @@ class MidiToBdoWindow(
 
     def _select_track(self, track: TrackState) -> None:
         self.selected_track = track
-        self.timeline.set_selected_track(track)
+        if self.timeline.selected_track is not track:
+            self.timeline.set_selected_track(track)
         if hasattr(self, "project_note_status"):
             self.project_note_status.setText(trf(
                 "{track} · {count} 个音符",

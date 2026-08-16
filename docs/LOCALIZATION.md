@@ -1,7 +1,7 @@
-# Localization and regional terminology
+# 本地化：翻界面，不翻音乐数据
 
-The desktop UI has five maintained locales. Simplified Chinese is the exact-source
-catalog language; the other catalogs must keep the same key and placeholder set.
+桌面端维护五种语言。简体中文是源文案，其他目录必须保留完全相同的 key 和占位符。
+轨道名、文件名、音名等音乐数据不翻译。
 
 | Locale | Intended audience | Game terminology baseline |
 |---|---|---|

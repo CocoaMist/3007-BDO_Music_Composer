@@ -3120,6 +3120,31 @@ for _source, (
 del _source, _english, _japanese, _korean
 
 _TRACK_GLOBAL_GAIN_TRANSLATIONS = {
+    "全轨道分贝调整": ("All-track dB", "全トラックdB", "전체 트랙 dB"),
+    "抬高/降低": ("Raise/lower", "上げる／下げる", "올리기/내리기"),
+    "百分比": ("Percentage", "パーセント", "백분율"),
+    "Clip 力度基数…": ("Clip Velocity Base…", "Clipベロシティ基数…", "Clip 벨로시티 기준값…"),
+    "Clip 力度基数（分贝）": ("Clip Velocity Base (dB)", "Clipベロシティ基数（dB）", "Clip 벨로시티 기준값(dB)"),
+    "已选择 {count} 个Clip": ("{count} Clips selected", "{count}個のClipを選択", "Clip {count}개 선택"),
+    "修改所选Clip的可恢复力度基准，再重新应用各自的分贝比例；不会重置百分比或影响其他Clip。": (
+        "Change the recoverable velocity baseline of the selected Clips, then reapply each dB percentage without resetting it or affecting other Clips.",
+        "選択したClipの復元可能なベロシティ基準を変更し、各dB比率をリセットせず再適用します。他のClipには影響しません。",
+        "선택한 Clip의 복원 가능한 벨로시티 기준값을 변경한 뒤 각 dB 비율을 초기화하지 않고 다시 적용하며 다른 Clip에는 영향을 주지 않습니다.",
+    ),
+    "力度（分贝）": ("Velocity (dB)", "ベロシティ（dB）", "벨로시티(dB)"),
+    "请选择轨道或Clip": ("Select a track or Clip", "トラックまたはClipを選択", "트랙 또는 Clip을 선택하세요"),
+    "混合": ("Mixed", "混在", "혼합"),
+    "作用域：Clip · {name}": ("Scope: Clip · {name}", "範囲：Clip · {name}", "범위: Clip · {name}"),
+    "作用域：已选择 {count} 个Clip": ("Scope: {count} Clips selected", "範囲：{count}個のClipを選択", "범위: Clip {count}개 선택"),
+    "作用域：轨道 · {name}": ("Scope: Track · {name}", "範囲：トラック · {name}", "범위: 트랙 · {name}"),
+    "作用域：已选择 {count} 条轨道": ("Scope: {count} tracks selected", "範囲：{count}トラックを選択", "범위: 트랙 {count}개 선택"),
+    "{name} · {count} 音块 · {percent}%": ("{name} · {count} notes · {percent}%", "{name} · {count}ノート · {percent}%", "{name} · 음표 {count}개 · {percent}%"),
+    "{name} · {percent}%": ("{name} · {percent}%", "{name} · {percent}%", "{name} · {percent}%"),
+    "将所选轨道或Clip的分贝比例烘焙到每个音块；100%可按工程记录恢复。": (
+        "Bake the selected track or Clip dB percentage into every note; 100% restores from project history.",
+        "選択したトラックまたはClipのdB比率を各ノートへ反映し、100%でプロジェクト記録から復元します。",
+        "선택한 트랙 또는 Clip의 dB 비율을 각 음표에 반영하며 100%에서 프로젝트 기록으로 복원합니다.",
+    ),
     "轨道力度基数…": ("Track Velocity Base…", "トラックベロシティ基数…", "트랙 벨로시티 기준값…"),
     "轨道力度基数": ("Track Velocity Base", "トラックベロシティ基数", "트랙 벨로시티 기준값"),
     "力度基数": ("Velocity Base", "ベロシティ基数", "벨로시티 기준값"),

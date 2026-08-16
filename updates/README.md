@@ -1,7 +1,7 @@
-# Signed update channel
+# Signed updates: trust bytes, not hosts
 
-This directory contains public channel metadata only; it never stores signing
-secrets or downloaded application binaries.
+This directory stores public channel metadata only. Signing secrets and
+downloaded EXEs never belong here.
 
 `stable/update-manifest-v1.json` and its `.sig` companion are release-channel
 metadata, not build inputs. Generate them only after the exact public EXE has

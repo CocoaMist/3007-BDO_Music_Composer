@@ -1,10 +1,7 @@
-# BDO v9 lossless codec
+# BDO v9：无损读写，不猜格式
 
-`bdo_codec` is the project's independent reader/writer for Black Desert music
-score version 9. It owns the binary layout and ICE block transform. The
-independent `bdo_midi` package owns MIDI parsing and mappings, while
-`bdo_export` adapts editor tracks into codec documents. Binary-format logic
-belongs only in `bdo_codec`.
+`bdo_codec` 只管 Black Desert v9 曲谱的二进制布局和 ICE 变换。`bdo_midi` 管 MIDI，
+`bdo_export` 把编辑器轨道交给 codec。二进制规则只放在 `bdo_codec`，别复制。
 
 ## Public API
 

@@ -1,13 +1,10 @@
-# AI context and change map
+# 改动地图：要改哪里，先看这里
 
-This document helps an AI agent find the correct subsystem without scanning every research file.
+按任务找 owner，不要靠全仓库扫描猜答案。这里给入口、不能碰的事实源和最低验证；领域细节仍以对应文档和代码为准。
 
-Before using this routing map, read the repository rules in `AGENTS.md`, choose
-one complete localized README from the root language hub, and follow the
-handoff workflow in `docs/AGENT_HANDOFF.md`. Current structural and performance
-candidates are tracked in `docs/OPTIMIZATION_EXTENSION_ROADMAP.md`. Before
-moving behavior between modules, read `docs/AI_EDITING_GUIDE.md` for ownership,
-dependency direction, typed-boundary rules, and the staged decomposition plan.
+使用前读完 `AGENTS.md`、一份语言指南和 `docs/AGENT_HANDOFF.md`。结构与性能候选在
+`docs/OPTIMIZATION_EXTENSION_ROADMAP.md`；要搬代码所有权时，再读
+`docs/AI_EDITING_GUIDE.md`。文档口吻遵循 [`WRITING_STYLE.md`](WRITING_STYLE.md)。
 
 The package migration is complete for root Python owners. `main.py` is the only
 root module; application code is grouped by domain under
@@ -25,7 +22,7 @@ the canonical path directly, with no root compatibility shim.
 | Interface preference persistence | validated global UI schema, debounced Qt bindings, project/global ownership tests; timeline header/lane/reference heights and piano-roll velocity splitter height remain local UI preferences | `src/bdo_music_composer/app/ui_preferences.py`, `src/bdo_music_composer/ui/ui_preferences_qt.py`, `tests/test_ui_preferences.py` |
 | Config JSON / safe output names | atomic storage, corrupt backup, unknown-field preservation | `src/bdo_music_composer/app/application_config.py`; callers only provide path and mapping |
 | Track pitch / Aux / master-effect dialogs | structural track contract and raw-byte preservation | `src/bdo_music_composer/ui/dialogs/track_settings_dialogs.py`, `src/bdo_common/bdo_track_effects.py`, thin apply adapters in `src/bdo_music_composer/ui/main_window.py` |
-| Global/per-track velocity base controls | immutable source-note baseline, exact BDO secondary-velocity binding, compact toolbar behavior | `src/bdo_music_composer/editor/global_velocity_gain.py`, `src/bdo_music_composer/ui/global_velocity_gain_qt.py`, `tests/test_global_velocity_gain.py`, `tests/test_track_volume_ui.py` |
+| Global/Track/Clip velocity controls | score-wide offset/equalize/percentage transforms recoverable A/B baselines below the scoped percentage layer; full-sidecar global previews re-anchor after a committed scoped edit; Track/Clip percentages stay materialized, reversible, explicitly scoped, undoable, and autosaved; Clip-local base/equalize runs before percentage; metadata counts remain indexed | `src/bdo_music_composer/editor/global_velocity_gain.py`, `src/bdo_music_composer/editor/velocity_percentage.py`, `src/bdo_music_composer/ui/global_velocity_gain_qt.py`, `src/bdo_music_composer/ui/editor/timeline_clip_metadata_qt.py`, `tests/test_global_velocity_gain.py`, `tests/test_track_volume_ui.py`, `tests/test_velocity_percentage.py`, `tests/test_selection_velocity_percent_ui.py`, `tests/test_project_persistence.py`, `tests/test_bdo_export_roundtrip.py` |
 | Home page/unified projects | bounded scanners, safe project index, extracted presentation widgets | `src/bdo_music_composer/app/home_catalog.py`, `src/bdo_music_composer/ui/home_widgets.py`, `src/bdo_music_composer/project/project_persistence.py`, thin composition in `src/bdo_music_composer/ui/main_window.py`, `src/bdo_music_composer/ui/i18n.py` |
 | Dormant internal release notes / GitHub update check | optional machine-local catalog bounds, missing-record fallback, stable-only SemVer policy, no production UI route, Git-history/package exclusion, explicit network/privacy boundary | `src/bdo_music_composer/app/application_metadata.py`, `src/bdo_music_composer/app/release_notes.py`, `src/bdo_music_composer/app/update_check.py`, `src/bdo_music_composer/ui/update_check_qt.py`, `src/bdo_music_composer/ui/dialogs/release_notes_dialog.py`, optional Git-ignored `data/releases/release_notes.json` |
 | Frozen Windows self-update | exact signed manifest, GitHub/Gitee mirror failover, highest-version rollback prevention, bounded streaming download, localized non-modal release-notes/progress presentation, next-launch single-EXE handoff, health commit/rollback | `src/bdo_music_composer/update/manifest.py`, `src/bdo_music_composer/update/install.py`, `src/bdo_music_composer/update/preferences.py`, `src/bdo_music_composer/ui/self_update_qt.py`, `src/bdo_music_composer/ui/dialogs/self_update_dialog.py`, `main.py`, `scripts/generate_update_manifest.py` |
@@ -436,6 +433,10 @@ new production code imports the owner directly. See
 - Schema v11 materializes legacy velocity policy and `volume_scale` into
   `Note.vel`, then stores `velocity_mode=preserve` and `volume_scale=1.0`.
   Preview, autosave and export must not apply another hidden velocity transform.
+- Schema v17 may retain explicit Clip and loose-note percentage baselines only
+  for restoration and traceability. Percentage gestures still materialize both
+  game velocity bytes immediately; preview and export must not multiply them
+  again.
 - Transcription analysis streams decode/resampling through anonymous Local
   AppData workspaces. Mixed mode must keep HPSS intermediates block-bounded,
   fuse each original/harmonic window pair immediately, and publish only one

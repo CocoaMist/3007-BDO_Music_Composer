@@ -1,10 +1,8 @@
-# Marnian Muse optimizer-package boundary
+# Marnian Muse：只通过扩展包见面
 
-Marnian Muse is an independent headless engine distributed to Music Composer
-as a standard `.bdoopt` optimizer package. Music Composer owns only optimizer
-API v1, bundle discovery, validation, preview application, and BDO constraints.
-It does not own the Marnian algorithms, profile development, datasets, reports,
-audio references, or future model weights.
+Marnian Muse 是独立的无界面引擎，只以标准 `.bdoopt` 包接入。Music Composer 管
+API v1、发现、校验、预览应用和 BDO 约束；算法、数据、报告、音频参考和模型权重
+仍归独立项目。
 
 The standalone project builds the package with:
 

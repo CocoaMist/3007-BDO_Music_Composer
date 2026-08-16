@@ -71,12 +71,14 @@ class TimelineClipSelectionUiTests(unittest.TestCase):
             ] == [
                 "打开音符编辑器", "复制音块", "重复音块…",
                 "在播放头切分", "复制片段", "在播放头粘贴片段",
+                "Clip 力度基数…",
                 "收紧右边界到最后音符", "合并所选音块",
                 "重命名音块…", "音块颜色…", "删除片段",
             ]
             assert set(actions) == {
                 "open", "duplicate", "repeat", "split", "copy", "paste",
-                "crop", "consolidate", "rename", "color", "delete",
+                "velocity_base", "crop", "consolidate", "rename", "color",
+                "delete",
             }
 
             QTest.mouseClick(canvas, Qt.LeftButton, pos=point)

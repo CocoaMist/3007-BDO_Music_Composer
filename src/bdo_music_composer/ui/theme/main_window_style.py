@@ -15,7 +15,7 @@ class MainWindowStyleMixin:
             QDialog QLabel { color: #ddd7cf; }
             QDialog#SettingsDialog, QDialog#MasterEffectsDialog,
             QDialog#TrackFxDialog,
-            QDialog#TrackPitchDialog, QDialog#TrackVelocityBaseDialog,
+            QDialog#TrackPitchDialog, QDialog#ClipVelocityBaseDialog,
             QDialog#ConversionCheckDialog, QDialog#MidiOptimizeDialog,
             QDialog#ThanksDialog, QDialog#ReleaseNotesDialog,
             QDialog#SelfUpdateDialog, QDialog#MidiNoteEditorDialog {
@@ -676,6 +676,68 @@ class MainWindowStyleMixin:
                 background: #61471d;
                 border-color: #e2a83f;
                 color: #fff1cb;
+            }
+            QFrame#ToolbarSelectionVelocityGroup {
+                background: #222326;
+                border: 1px solid #4b4335;
+                border-radius: 6px;
+                min-height: 29px;
+                max-height: 29px;
+            }
+            QLabel#ToolbarSelectionVelocityTitle {
+                background: transparent;
+                border: 0;
+                color: #e0bf76;
+                font-size: 10px;
+                font-weight: 800;
+            }
+            QLabel#ToolbarSelectionVelocityScope {
+                background: transparent;
+                border: 0;
+                color: #b9a787;
+                font-size: 10px;
+                padding: 0 2px;
+            }
+            QSpinBox#ToolbarSelectionVelocityPercentValue {
+                background: #171819;
+                border: 1px solid #4b4130;
+                border-radius: 4px;
+                color: #f2d28d;
+                font-family: Consolas, monospace;
+                font-size: 10px;
+                font-weight: 900;
+                padding: 1px 4px;
+                selection-background-color: #9ebd50;
+                selection-color: #11130d;
+            }
+            QSpinBox#ToolbarSelectionVelocityPercentValue:disabled {
+                color: #756c5d;
+                border-color: #39362f;
+            }
+            QSlider#ToolbarSelectionVelocityPercent {
+                min-height: 24px;
+                max-height: 24px;
+            }
+            QSlider#ToolbarSelectionVelocityPercent::groove:horizontal {
+                height: 5px;
+                background: #151617;
+                border: 1px solid #49443a;
+                border-radius: 3px;
+            }
+            QSlider#ToolbarSelectionVelocityPercent::sub-page:horizontal {
+                background: #8f6a28;
+                border-radius: 3px;
+            }
+            QSlider#ToolbarSelectionVelocityPercent::handle:horizontal {
+                width: 13px;
+                margin: -5px 0;
+                background: #e5a52e;
+                border: 1px solid #ffd27a;
+                border-radius: 6px;
+            }
+            QSlider#ToolbarSelectionVelocityPercent:disabled::handle:horizontal {
+                background: #75623d;
+                border-color: #8a7959;
             }
             QFrame#ToolbarGlobalGainGroup {
                 background: #222326;
@@ -1437,13 +1499,13 @@ class MainWindowStyleMixin:
                 min-width: 150px;
             }
             QDialog#TrackPitchDialog QLabel#TrackTitle,
-            QDialog#TrackVelocityBaseDialog QLabel#TrackTitle {
+            QDialog#ClipVelocityBaseDialog QLabel#TrackTitle {
                 color: #f2d28d;
                 font-size: 17px;
                 font-weight: 900;
             }
             QDialog#TrackPitchDialog QDialogButtonBox,
-            QDialog#TrackVelocityBaseDialog QDialogButtonBox,
+            QDialog#ClipVelocityBaseDialog QDialogButtonBox,
             QDialog#ConversionCheckDialog QDialogButtonBox,
             QDialog#MidiOptimizeDialog QDialogButtonBox {
                 border-top: 1px solid #34312c;

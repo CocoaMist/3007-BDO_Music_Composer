@@ -1,8 +1,8 @@
-# Architecture
+# 架构：一份编辑状态，三条去路
 
 ## System overview
 
-BDO Music Composer is a desktop application with one mutable project model and three major consumers: the UI, the preview engine, and the BDO exporter.
+程序只有一份可编辑工程状态，界面、试听和 BDO 导出都消费它。只要某条路径绕回原始 MIDI，架构就已经错了。
 
 ```mermaid
 flowchart TD
@@ -122,7 +122,26 @@ source-content window plus a timeline offset: razor splits duplicate the complet
 source reference and crop each side non-destructively, so resizing can reveal
 content again; copy/paste creates a detached content range and a new stable Clip
 ID. Project schema v16 adds presentation-only Clip names and colors; they never
-change MIDI/BDO projection. Duplicate, materialized repeat, right-edge crop,
+change MIDI/BDO projection.
+Project schema v17 adds materialized, reversible per-Clip velocity percentages:
+each gesture immediately writes both canonical `Note.vel` and bound BDO
+velocity-B values, while Clip and loose-note baseline sidecars retain the
+source needed for another absolute percentage or an exact return to 100%.
+Preview and export consume only those already-materialized values and never
+apply a second hidden multiplier. Track-scope edits bulk-set every existing
+Clip plus uncontained notes, so Track and Clip multipliers cannot compound.
+Score-wide velocity offset/equalize/percentage transforms sit below that
+scoped percentage layer: they transform the recoverable A/B baselines first
+and then replay each Clip or loose-note percentage. Their interactive origin
+snapshots include the complete velocity sidecar state, and any committed
+Track/Clip edit re-anchors the score-wide control at its neutral value. This
+prevents an older global preview origin from overwriting a newer scoped edit.
+The Clip context menu owns the one-shot velocity-base/equalize operation. It
+updates each selected Clip's recoverable A/B baselines independently and then
+reapplies that Clip's existing percentage, rather than adding to an already
+baked value or resetting the percentage. Timeline metadata counts use the
+per-track interval index, and bulk Track/Clip edits share one ownership pass.
+Duplicate, materialized repeat, right-edge crop,
 Razor split, and same-track consolidate all produce one `ClipEditPlan`, so
 project undo, autosave, preview, MIDI export, and BDO export observe the same
 result. Track rename/color and `editor/track_operations.py` duplication use the

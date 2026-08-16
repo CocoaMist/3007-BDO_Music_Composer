@@ -144,6 +144,32 @@ class ProjectNoteSnapshot:
         ]
 
 
+def _capture_arrangement_clips(track: object, *, path: str) -> FrozenJsonArray:
+    return _frozen_array(
+        [
+            {
+                "clip_id": str(clip.clip_id),
+                "start_ms": float(clip.start_ms),
+                "end_ms": float(clip.end_ms),
+                "content_start_ms": float(clip.content_start_ms),
+                "content_end_ms": float(clip.content_end_ms),
+                "time_offset_ms": float(clip.time_offset_ms),
+                "display_name": str(getattr(clip, "display_name", "") or ""),
+                "color": str(getattr(clip, "color", "") or ""),
+                "velocity_percent": int(getattr(clip, "velocity_percent", 100)),
+                "velocity_baseline_a": list(
+                    getattr(clip, "velocity_baseline_a", ())
+                ),
+                "velocity_baseline_b": list(
+                    getattr(clip, "velocity_baseline_b", ())
+                ),
+            }
+            for clip in getattr(track, "arrangement_clips", ())
+        ],
+        path=f"{path}.arrangement_clips",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectTrackSnapshot:
     """Detached track state consumed only by the autosave writer."""
@@ -160,6 +186,9 @@ class ProjectTrackSnapshot:
     clip_end_ms: float | None
     arrangement_group_id: str
     arrangement_clips: FrozenJsonArray
+    loose_velocity_percent: int
+    loose_velocity_baseline_a: tuple[int, ...]
+    loose_velocity_baseline_b: tuple[int, ...]
     bdo_track_volume: int
     bdo_track_settings: tuple[int, ...]
     bdo_source_group_index: int | None
@@ -205,23 +234,19 @@ class ProjectTrackSnapshot:
             arrangement_group_id=str(
                 getattr(track, "arrangement_group_id", "") or ""
             ),
-            arrangement_clips=_frozen_array(
-                [
-                    {
-                        "clip_id": str(clip.clip_id),
-                        "start_ms": float(clip.start_ms),
-                        "end_ms": float(clip.end_ms),
-                        "content_start_ms": float(clip.content_start_ms),
-                        "content_end_ms": float(clip.content_end_ms),
-                        "time_offset_ms": float(clip.time_offset_ms),
-                        "display_name": str(
-                            getattr(clip, "display_name", "") or ""
-                        ),
-                        "color": str(getattr(clip, "color", "") or ""),
-                    }
-                    for clip in getattr(track, "arrangement_clips", ())
-                ],
-                path=f"{path}.arrangement_clips",
+            arrangement_clips=_capture_arrangement_clips(track, path=path),
+            loose_velocity_percent=int(
+                getattr(track, "loose_velocity_percent", 100)
+            ),
+            loose_velocity_baseline_a=tuple(
+                int(value) for value in getattr(
+                    track, "loose_velocity_baseline_a", ()
+                )
+            ),
+            loose_velocity_baseline_b=tuple(
+                int(value) for value in getattr(
+                    track, "loose_velocity_baseline_b", ()
+                )
             ),
             bdo_track_volume=int(
                 getattr(track, "bdo_track_volume", DEFAULT_TRACK_VOLUME)
@@ -272,6 +297,9 @@ class ProjectTrackSnapshot:
             "clip_end_ms": self.clip_end_ms,
             "arrangement_group_id": self.arrangement_group_id,
             "arrangement_clips": thaw_json_value(self.arrangement_clips),
+            "loose_velocity_percent": self.loose_velocity_percent,
+            "loose_velocity_baseline_a": list(self.loose_velocity_baseline_a),
+            "loose_velocity_baseline_b": list(self.loose_velocity_baseline_b),
             "bdo_track_volume": self.bdo_track_volume,
             "bdo_track_settings": list(self.bdo_track_settings),
             "bdo_source_group_index": self.bdo_source_group_index,

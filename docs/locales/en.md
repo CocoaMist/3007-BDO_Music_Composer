@@ -2,14 +2,14 @@
 
 [简体中文](zh-CN.md) · [English](en.md) · [日本語](ja.md) · [한국어](ko.md) · [Project home](../../README.md)
 
-BDO Music Composer is an unofficial desktop music editor for creating, reviewing, previewing, and exporting Black Desert scores locally. It is not a general-purpose DAW and is not affiliated with Pearl Abyss.
+BDO Music Composer is a local multitrack editor for Black Desert composers: import MIDI, arrange Clips, edit notes and velocity, then export a game-readable score. It is not a general-purpose DAW and is not affiliated with Pearl Abyss.
 
 > The tool does not acquire or distribute restricted content. Users are responsible for the source and permission of external content.
 
 <!-- section:status -->
-## Status
+## Is it ready to use?
 
-Editing, autosave, optimization, preview, transcription assistance, and score export have automated regression coverage. Compatibility can still vary by computer, audio device, and game version.
+Version 1.3.6 covers editing, autosave, optimization, preview, transcription assistance, and score export. If the game's score mechanics do not change, this will likely remain the temporary long-term stable release. Compatibility can still vary by computer, audio device, and game version.
 
 <!-- section:features -->
 ## Features

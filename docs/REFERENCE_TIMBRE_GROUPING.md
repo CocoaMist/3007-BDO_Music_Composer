@@ -1,15 +1,12 @@
-# Music-reference timbre grouping
+# 参考音频音色分组：只帮你看，不替你编曲
 
-Status: implemented, experimental, display-only.
+状态：已实现、实验性、只影响显示。
 
 ## Product boundary
 
-Music Reference can colour recognition candidates by anonymous timbre group.
-Analyzed Notes and the continuous Pitch Line are separate creative views with
-separate menus: notes support review and draft adoption, while the line exposes
-slides, vibrato, and intonation evidence. Neither view creates stems, adds
-tracks, chooses a BDO instrument, or changes a
-`TranscriptionCandidate`/`Note`.
+参考音频可以按匿名音色组给识别候选着色。Analyzed Notes 用来审阅和采纳草稿，
+Pitch Line 用来看滑音、颤音和音准；两者互不冒充。它们不会分离音轨、增加 Track、
+选择 BDO 乐器或修改 `TranscriptionCandidate` / `Note`。
 
 Two layers are available:
 

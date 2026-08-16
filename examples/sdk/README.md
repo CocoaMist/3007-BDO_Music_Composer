@@ -1,7 +1,6 @@
-# SDK examples
+# SDK examples: start small
 
-These examples are intentionally small and remain usable independently of the
-full desktop application.
+Each example does one job and can run without opening the full desktop app.
 
 Run these commands from an editable SDK checkout:
 

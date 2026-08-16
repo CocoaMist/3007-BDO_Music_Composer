@@ -52,9 +52,9 @@ class TrackContextMenuUiTests(unittest.TestCase):
             assert "转换检查" not in top + instrument_text
             sound = menu._sound_menu
             sound_text = [a.text() for a in sound.actions()]
-            assert sound_text == ["轨道 FX", "轨道移调…", "轨道力度基数…"]
+            assert sound_text == ["轨道 FX", "轨道移调…"]
             assert set(actions) == {
-                "edit_notes", "effects", "pitch", "velocity", "optimize",
+                "edit_notes", "effects", "pitch", "optimize",
                 "create_track", "merge", "move_up", "move_down", "delete",
                 "unify_mixer", "clear_solo", "unmute_all",
                 "rename_track", "duplicate_track", "color_track",

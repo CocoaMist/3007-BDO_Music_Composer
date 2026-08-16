@@ -1,7 +1,6 @@
-# Transcription fragment and timbre continuity plan
+# 扒谱连续性：少一点碎片，别伪造音符
 
-Status: implemented for display continuity and anonymous timbre grouping;
-candidate mutation remains evidence-gated and opt-in.
+状态：显示连续性和匿名音色分组已实现；修改候选仍需证据，并由用户主动开启。
 
 ## Problem
 

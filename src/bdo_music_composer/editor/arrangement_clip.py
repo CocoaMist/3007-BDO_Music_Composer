@@ -178,6 +178,9 @@ def plan_clip_paste(
         start - (source_window_start + source_shift),
         clipboard.clip.display_name,
         clipboard.clip.color,
+        clipboard.clip.velocity_percent,
+        tuple(clipboard.clip.velocity_baseline_a),
+        tuple(clipboard.clip.velocity_baseline_b),
     )
     notes = tuple(
         note._replace(start=float(note.start) + source_shift)
@@ -638,6 +641,58 @@ def clip_editor_notes(
 
     clip = clip_by_id(track, clip_id)
     return tuple(note for _index, note in _clip_editor_note_pairs(track, clip))
+
+
+def clip_authored_note_indices(
+    track: TrackState, clip_id: str
+) -> tuple[int, ...]:
+    """Return authored note indexes in the same stable order as Clip editing."""
+
+    clip = clip_by_id(track, clip_id)
+    return tuple(index for index, _note in _clip_editor_note_pairs(track, clip))
+
+
+def clip_authored_note_index_map(
+    track: TrackState, clip_ids: Sequence[str] | None = None
+) -> dict[str, tuple[int, ...]]:
+    """Resolve several Clip note-index sets with one shared ownership pass."""
+
+    clips = track_clips(track)
+    requested = None if clip_ids is None else {str(value) for value in clip_ids}
+    selected = tuple(
+        clip for clip in clips
+        if requested is None or str(clip.clip_id) in requested
+    )
+    pairs: dict[str, list[tuple[int, Note]]] = {
+        str(clip.clip_id): [] for clip in selected
+    }
+    for note_index, note in enumerate(track.notes):
+        for clip in selected:
+            if not _note_belongs_to_clip(track, note, clip, clips=clips):
+                continue
+            source_start, source_end = _clip_source_window(clip)
+            visible_start = max(float(note.start), source_start)
+            visible_end = min(_note_end(note), source_end)
+            if visible_end - visible_start < 1.0:
+                continue
+            projected = _note_with_times(
+                note,
+                start=visible_start + clip.time_offset_ms,
+                duration=visible_end - visible_start,
+            )
+            pairs[str(clip.clip_id)].append((note_index, projected))
+    return {
+        clip_id: tuple(
+            index for index, _note in sorted(
+                values,
+                key=lambda item: (
+                    item[1].start, item[1].pitch, item[1].dur,
+                    item[1].vel, item[1].ntype, item[0],
+                ),
+            )
+        )
+        for clip_id, values in pairs.items()
+    }
 
 
 def clip_projected_note_bounds(
@@ -2003,6 +2058,8 @@ __all__ = [
     "MIN_CLIP_DURATION_MS",
     "clip_by_id",
     "clip_editor_notes",
+    "clip_authored_note_indices",
+    "clip_authored_note_index_map",
     "clip_editor_scope",
     "clip_projected_note_bounds",
     "clip_edit_fingerprint",
