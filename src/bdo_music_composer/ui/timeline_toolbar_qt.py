@@ -105,6 +105,7 @@ def build_arrangement_tool_buttons(
     tool_layout.addWidget(marquee)
     tool_layout.addWidget(select)
     tool_layout.addWidget(razor)
+    tool_layout.addWidget(snap)
     return tool_panel, marquee, select, razor, snap, group
 
 
@@ -176,8 +177,8 @@ def build_timeline_popup_buttons(
 ) -> tuple[PillButton, PillButton]:
     """Move lower-frequency sliders into two keyboard-accessible popups."""
 
-    mix_button = PillButton(tr("力度"), "ghost")
-    mix_button.setToolTip(tr("全局力度基数"))
+    mix_button = PillButton(tr("全轨道分贝调整"), "ghost")
+    mix_button.setToolTip(tr("全轨道分贝调整"))
     mix_menu = QMenu(mix_button)
     mix_action = QWidgetAction(mix_menu)
     mix_action.setDefaultWidget(global_gain_control)

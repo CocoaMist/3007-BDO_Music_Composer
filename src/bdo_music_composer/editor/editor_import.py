@@ -723,8 +723,74 @@ def _project_arrangement_clips(
             time_offset_ms,
             str(raw.get("display_name") or ""),
             str(raw.get("color") or ""),
+            _integer(
+                raw.get("velocity_percent", 100),
+                path=f"{clip_path}.velocity_percent",
+                code=EditorImportErrorCode.INVALID_TRACK,
+                minimum=10,
+                maximum=200,
+            ),
+            tuple(
+                _integer(
+                    value,
+                    path=f"{clip_path}.velocity_baseline_a[{base_index}]",
+                    code=EditorImportErrorCode.INVALID_TRACK,
+                    minimum=0,
+                    maximum=127,
+                )
+                for base_index, value in enumerate(
+                    raw.get("velocity_baseline_a", ()) or ()
+                )
+            ),
+            tuple(
+                _integer(
+                    value,
+                    path=f"{clip_path}.velocity_baseline_b[{base_index}]",
+                    code=EditorImportErrorCode.INVALID_TRACK,
+                    minimum=0,
+                    maximum=127,
+                )
+                for base_index, value in enumerate(
+                    raw.get("velocity_baseline_b", ()) or ()
+                )
+            ),
         ))
     return clips
+
+
+def _project_velocity_sidecar(
+    item: Mapping[str, object], *, path: str
+) -> dict[str, object]:
+    def baselines(field: str) -> tuple[int, ...]:
+        raw = item.get(field, ()) or ()
+        if not isinstance(raw, (list, tuple)):
+            raise _import_error(
+                EditorImportErrorCode.INVALID_TRACK,
+                f"{path}.{field}",
+                "expected a list",
+            )
+        return tuple(
+            _integer(
+                value,
+                path=f"{path}.{field}[{index}]",
+                code=EditorImportErrorCode.INVALID_TRACK,
+                minimum=0,
+                maximum=127,
+            )
+            for index, value in enumerate(raw)
+        )
+
+    return {
+        "loose_velocity_percent": _integer(
+            item.get("loose_velocity_percent", 100),
+            path=f"{path}.loose_velocity_percent",
+            code=EditorImportErrorCode.INVALID_TRACK,
+            minimum=10,
+            maximum=200,
+        ),
+        "loose_velocity_baseline_a": baselines("loose_velocity_baseline_a"),
+        "loose_velocity_baseline_b": baselines("loose_velocity_baseline_b"),
+    }
 
 
 def _project_track_state(
@@ -773,6 +839,7 @@ def _project_track_state(
         clip_end_ms=clip_end_ms,
         arrangement_group_id=str(item.get("arrangement_group_id", "") or ""),
         arrangement_clips=_project_arrangement_clips(item, path=path),
+        **_project_velocity_sidecar(item, path=path),
         articulation_type=_optional_project_integer(
             item.get("articulation_type"),
             path=f"{path}.articulation_type",

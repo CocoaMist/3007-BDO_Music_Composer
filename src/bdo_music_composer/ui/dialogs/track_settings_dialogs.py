@@ -151,14 +151,14 @@ class TrackPitchDialog(QDialog):
         return int(self.semitone_offset.value())
 
 
-class TrackVelocityBaseDialog(QDialog):
-    """One-shot velocity-base mapping for a single logical track."""
+class ClipVelocityBaseDialog(QDialog):
+    """One-shot baseline mapping for one or more selected Clips."""
 
-    def __init__(self, parent: QWidget, track: TrackDialogState) -> None:
+    def __init__(self, parent: QWidget, display_name: str, count: int) -> None:
         super().__init__(parent)
-        self.setObjectName("TrackVelocityBaseDialog")
+        self.setObjectName("ClipVelocityBaseDialog")
         self.setProperty("uiSurface", "workflow")
-        self.setWindowTitle(tr("轨道力度基数"))
+        self.setWindowTitle(tr("Clip 力度基数（分贝）"))
         self.setModal(True)
         self.setMinimumWidth(380)
 
@@ -166,14 +166,18 @@ class TrackVelocityBaseDialog(QDialog):
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
-        title = QLabel(track.display_name)
+        title = QLabel(
+            display_name
+            if int(count) == 1
+            else trf("已选择 {count} 个Clip", count=int(count))
+        )
         title.setProperty("i18nSkip", True)
         title.setObjectName("TrackTitle")
         layout.addWidget(title)
 
         hint = QLabel(
             tr(
-                "只调整当前轨道；基数从该轨道现有的原始主、副力度重新计算，不影响其他轨道或轨道音量。"
+                "修改所选Clip的可恢复力度基准，再重新应用各自的分贝比例；不会重置百分比或影响其他Clip。"
             )
         )
         hint.setObjectName("Muted")
@@ -183,7 +187,7 @@ class TrackVelocityBaseDialog(QDialog):
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
         self.velocity_base = QSpinBox()
-        self.velocity_base.setObjectName("TrackVelocityBase")
+        self.velocity_base.setObjectName("ClipVelocityBase")
         self.velocity_base.setRange(-127, 127)
         self.velocity_base.setValue(0)
         form.addRow(tr("力度基数"), self.velocity_base)

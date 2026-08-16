@@ -169,6 +169,9 @@ class ArrangementClipState:
     time_offset_ms: float = 0.0
     display_name: str = ""
     color: str = ""
+    velocity_percent: int = 100
+    velocity_baseline_a: tuple[int, ...] = ()
+    velocity_baseline_b: tuple[int, ...] = ()
 
 
 @dataclass
@@ -197,6 +200,9 @@ class TrackState:
     clip_end_ms: float | None = None
     arrangement_group_id: str = ""
     arrangement_clips: list[ArrangementClipState] = field(default_factory=list)
+    loose_velocity_percent: int = 100
+    loose_velocity_baseline_a: tuple[int, ...] = ()
+    loose_velocity_baseline_b: tuple[int, ...] = ()
 
     @property
     def note_count(self) -> int:

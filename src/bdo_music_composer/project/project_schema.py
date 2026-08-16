@@ -18,7 +18,7 @@ from bdo_music_composer.editor.game_score_model import bake_game_velocity_transf
 from bdo_music_composer.editor.pitch_transform import PitchTransformPlan
 
 
-CURRENT_PROJECT_SCHEMA = 16
+CURRENT_PROJECT_SCHEMA = 17
 REFERENCE_LAYER_SETTINGS_VERSION = 10
 
 
@@ -401,6 +401,19 @@ def _migrate_arrangement_schema(
                     clip.setdefault("display_name", "")
                     clip.setdefault("color", "")
         result["schema_version"] = version = 16
+    if version == 16:
+        for track in result.get("tracks") or ():
+            if not isinstance(track, dict):
+                continue
+            track.setdefault("loose_velocity_percent", 100)
+            track.setdefault("loose_velocity_baseline_a", [])
+            track.setdefault("loose_velocity_baseline_b", [])
+            for clip in track.get("arrangement_clips") or ():
+                if isinstance(clip, dict):
+                    clip.setdefault("velocity_percent", 100)
+                    clip.setdefault("velocity_baseline_a", [])
+                    clip.setdefault("velocity_baseline_b", [])
+        result["schema_version"] = version = 17
     return version
 
 
@@ -470,6 +483,17 @@ def migrate_project(payload: Mapping[str, Any]) -> dict[str, Any]:
         result["schema_version"] = 11
         version = 11
     version = _migrate_arrangement_schema(result, version)
+    for track in result.get("tracks") or ():
+        if not isinstance(track, dict):
+            continue
+        track.setdefault("loose_velocity_percent", 100)
+        track.setdefault("loose_velocity_baseline_a", [])
+        track.setdefault("loose_velocity_baseline_b", [])
+        for clip in track.get("arrangement_clips") or ():
+            if isinstance(clip, dict):
+                clip.setdefault("velocity_percent", 100)
+                clip.setdefault("velocity_baseline_a", [])
+                clip.setdefault("velocity_baseline_b", [])
     # A hand-written current project can omit optional fields.  Keep migration
     # idempotent and give every current project the same safe defaults.
     result.setdefault("reference_audio_offset_ms", 0.0)

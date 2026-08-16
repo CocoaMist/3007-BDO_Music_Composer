@@ -1,106 +1,105 @@
-# BDO Music Composer
+# BDO Music Composer ♪
 
-Unofficial desktop music editor and Black Desert score workbench. Arrange
-multitrack clips, edit MIDI notes, preview locally, and export the current
-project state as a BDO v9 score.
+给《黑色沙漠》作曲玩家准备的本地多轨编辑器。导入 MIDI、拆分和排列 Clip、
+细修音符与力度，最后导出游戏可读的 BDO v9 曲谱。欢迎来写谱
+`(｡•̀ᴗ-)✧`
 
 [简体中文](docs/locales/zh-CN.md) · [English](docs/locales/en.md) ·
 [日本語](docs/locales/ja.md) · [한국어](docs/locales/ko.md)
 
-![BDO Music Composer v1.3.0 multitrack arrangement](docs/images/readme-timeline.png)
+[下载 Windows 版](https://github.com/CocoaMist/3007-BDO_Music_Composer/releases/latest) ·
+[查看更新记录](docs/releases/RELEASE_NOTES_V1.3.5.md) ·
+[报告问题](https://github.com/CocoaMist/3007-BDO_Music_Composer/issues)
 
-Screenshots use the English interface. Track and instrument names are project
-data and remain in their original language.
+![BDO Music Composer 多轨编排界面](docs/images/readme-timeline.png)
 
-## Highlights
+> **关于稳定版：** 如果游戏内部的曲谱机制没有变化，当前版本大概率会先作为
+> 暂时的长期稳定版维护。之后会优先处理兼容性和确实影响写谱的问题，不为了凑
+> 版本号频繁更新。能安稳写歌，比数字一直往上跳重要一点 `( •̀ ω •́ )✧`
 
-- Arrange and merge clips across a multitrack timeline with select, razor, and
-  stateful snapping tools. Snap priority is time marker, clips, then grid.
-- Edit notes, velocity, rhythm, articulations, and track instruments in the
-  piano roll while keeping operations undoable.
-- Open MIDI or existing BDO scores, autosave locally, preview the edited model,
-  and export that same current model without falling back to the original MIDI.
-- Use local optimization and transcription assistance as reviewable editing
-  aids rather than destructive one-click replacements.
+## 这是做什么的？
 
-## Get started
+BDO Music Composer 负责从“手里有一份 MIDI”到“游戏里能继续检查和演奏”之间
+最麻烦的那段工作。它有多轨时间轴、钢琴卷帘、Clip 编辑、自动保存、本地试听、
+优化与扒谱辅助，也能重新打开已有的 BDO 曲谱。
 
-Most users should download the Windows build from
-[GitHub Releases](https://github.com/CocoaMist/3007-BDO_Music_Composer/releases).
-Source development requires Python 3.12 and the environment described in
-[`CONTRIBUTING.md`](CONTRIBUTING.md). The application entry point is `main.py`.
+最重要的一点很朴素：你现在看见并改过的音符，就是保存、试听和导出的音符。
+程序不会在最后一步偷偷换回最初导入的 MIDI。
 
-1. Create a project, import MIDI, or open a BDO score.
-2. Arrange clips on the timeline and edit notes in the piano roll.
-3. Preview the result and review automatic export validation.
-4. Export with a valid Owner ID, then verify the score in game.
+它不是完整 DAW，也不会替你判断一首曲子最终该怎么写。自动功能给建议，决定权
+还是在你手里。
 
-## Note editor
+## 下载与上手
 
-![BDO Music Composer v1.3.0 piano-roll note editor](docs/images/readme-piano-roll.png)
+普通用户直接从 [GitHub Releases](https://github.com/CocoaMist/3007-BDO_Music_Composer/releases)
+下载 `BDO-Music-Composer.exe`。这是 Windows 单文件程序，不需要另外安装 Python。
 
-## Documentation
+1. 新建工程、导入 MIDI，或者打开一份已有 BDO 曲谱。
+2. 在时间轴上移动、裁切、复制和排列 Clip。
+3. 双击 Clip 进入音符编辑器，调整音高、时值、奏法和力度。
+4. 填写有效的 Owner ID，导出后进游戏复核。
 
-| Need | Start here |
+第一次使用不用把所有按钮都研究完。先导入、试听、改几颗音，再导出一份小曲子，
+很快就能摸清它的脾气啦 `ฅ^•ﻌ•^ฅ`
+
+## 写谱时能用到什么？
+
+- **多轨编排：** 框选或多选 Track/Clip，移动、切分、复制、重复、合并；吸附顺序
+  是时间标记、Clip、网格，按住 `Alt` 可以临时绕过吸附。
+- **音符编辑：** 在钢琴卷帘中处理音高、时值、力度、奏法、量化和复制粘贴，
+  普通编辑与 Clip 编辑都能撤销和恢复。
+- **力度控制：** 全局调整作用于整首曲子的力度基线；选择 Track 时批量调整该轨
+  所有 Clip；选择 Clip 时只改当前分块。百分比会写进实际音符，同时保留工程内
+  的还原基线，试听与导出不会再暗中乘一次。
+- **导入与导出：** 支持 MIDI 和 BDO v9。游戏要求的双力度、物理分轨、空尾轨、
+  乐器、Volume 与效果设置都会经过导出校验。
+- **本地试听：** 内置通用试听音色，也可选择合法来源的兼容音源包。试听只用来
+  辅助编辑，最终效果请以游戏内为准。
+- **辅助工具：** MIDI 优化和参考音频扒谱都在本机运行，结果先交给你审阅，不会
+  一键替换整份工程。
+
+## 音符编辑器
+
+![BDO Music Composer 音符编辑器](docs/images/readme-piano-roll.png)
+
+界面截图使用英文语言包；Track、乐器名和文件名属于工程数据，不会被翻译。
+
+## 用之前请知道
+
+- 这是社区项目，与 Pearl Abyss 没有隶属关系。
+- 工程、Owner ID、设置、缓存和参考音频留在本机；应用没有账户登录、遥测或文件
+  上传。
+- 程序不提供游戏客户端音频的提取、下载或传播功能。外部内容请自行确认来源和
+  授权，具体边界见[内容政策](docs/CONTENT_BOUNDARY.md)。
+- BDO 文件保存的是游戏最终曲谱，不保存 Clip 名字、颜色、选区和百分比基线。
+  想继续完整编辑，请把工程文件也留好。
+- 硬件、声卡驱动和未来游戏版本都可能带来差异。重要作品导出后请进游戏听一遍，
+  这一步不丢人，反而很专业。
+
+## 源码、文档与参与开发
+
+源码开发使用 Python 3.12，入口是 `main.py`。环境准备、测试和提交方式见
+[贡献指南](CONTRIBUTING.md)。
+
+| 想找什么 | 去哪里 |
 |---|---|
-| Use the application | [中文](docs/locales/zh-CN.md) · [English](docs/locales/en.md) · [日本語](docs/locales/ja.md) · [한국어](docs/locales/ko.md) |
-| Browse technical documentation | [Documentation index](docs/README.md) |
-| Understand architecture and data flow | [Architecture](docs/ARCHITECTURE.md) |
-| Contribute code | [Contributing guide](CONTRIBUTING.md) |
-| Continue work as an agent or maintainer | [`AGENTS.md`](AGENTS.md), then [Agent handoff](docs/AGENT_HANDOFF.md) |
-| Build a Windows release | [Windows packaging](docs/WINDOWS_PACKAGING.md) |
+| 中文完整说明 | [简体中文指南](docs/locales/zh-CN.md) |
+| English / 日本語 / 한국어 | [English](docs/locales/en.md) · [日本語](docs/locales/ja.md) · [한국어](docs/locales/ko.md) |
+| 文档总目录 | [docs/README.md](docs/README.md) |
+| 架构与数据流 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Windows 打包 | [docs/WINDOWS_PACKAGING.md](docs/WINDOWS_PACKAGING.md) |
+| Agent 或维护者接手 | [AGENTS.md](AGENTS.md) → [docs/AGENT_HANDOFF.md](docs/AGENT_HANDOFF.md) |
 
-## Local content and preview audio
+## 谢谢
 
-Projects, settings, Owner IDs, caches, and external content remain local. The
-application has no account login, telemetry, or file upload, and it does not
-acquire or distribute restricted content. See the governing
-[content boundary](docs/CONTENT_BOUNDARY.md).
+感谢 CN 服务器「彩虹乐队」玩家参与测试、录屏和反馈。很多看起来不起眼的小问题，
+都是大家真的拿去写歌以后才抓出来的。
 
-Releases may separately provide the optional
-`BDO-Approximate-CC0-Full-Coverage-v4-Compact.bdosamples` pack. It contains
-independently licensed CC0 material for approximate editing preview, not Black
-Desert client audio or game-original sound. Provenance, configuration, and the
-v1.2.1 pack checksum are documented in
-[Audio source strategy](docs/AUDIO_SOURCE_STRATEGY.md).
+项目使用 Python、Qt/PySide6、NumPy、SciPy、Mido、Basic Pitch、ONNX Runtime
+等开放项目，也参考了社区对 BDO 曲谱格式的研究。开发过程中使用过 ChatGPT
+协助代码和文档整理；应用本身不接入 OpenAI API，也不包含云端模型运行时。
+完整来源、许可和作者信息见[第三方声明](THIRD_PARTY_NOTICES.md)。
 
-## Thanks
+原创代码使用 [MIT License](LICENSE)。第三方组件继续遵循各自许可。
 
-BDO Music Composer is possible because many authors and maintainers publish
-their work openly. Thank you to every contributor behind these projects and
-communities.
-
-### 测试鸣谢 / Testing thanks
-
-感谢 CN 服务器「彩虹乐队」玩家参与测试并提供反馈。
-
-Thank you to the players of 彩虹乐队 on the CN server for testing and
-feedback.
-
-### Third-party support
-
-| Area | Projects and contributors |
-|---|---|
-| Application foundation | [Python / CPython](https://github.com/python/cpython), [PySide6 / Qt](https://github.com/qt), [NumPy](https://github.com/numpy/numpy), [SciPy](https://github.com/scipy/scipy), and [Mido](https://github.com/mido/mido) |
-| Transcription and music analysis | [Spotify Basic Pitch](https://github.com/spotify/basic-pitch), [Microsoft ONNX Runtime](https://github.com/microsoft/onnxruntime), [librosa](https://github.com/librosa/librosa), [scikit-learn](https://github.com/scikit-learn/scikit-learn), [Numba](https://github.com/numba/numba), [llvmlite](https://github.com/numba/llvmlite), [mir_eval](https://github.com/mir-evaluation/mir_eval), and [pretty_midi](https://github.com/craffel/pretty-midi) |
-| Audio and resampling | [SoundFile](https://github.com/bastibe/python-soundfile), [libsndfile](https://github.com/libsndfile/libsndfile), [python-soxr](https://github.com/dofuuz/python-soxr), [libsoxr](https://github.com/chirlu/soxr), and [resampy](https://github.com/bmcfee/resampy) |
-| Packaging and development | [PyInstaller](https://github.com/pyinstaller/pyinstaller), [Pillow](https://github.com/python-pillow/Pillow), [Setuptools](https://github.com/pypa/setuptools), and [typing_extensions](https://github.com/python/typing_extensions) |
-| Optional preview samples | The authors and contributors of [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE), [Versilian Community Sample Library](https://github.com/sgossner/VCSL), [FreePats](https://freepats.zenvoid.org/), and [Creative Commons](https://creativecommons.org/publicdomain/zero/1.0/) |
-| Format research and community knowledge | [Bishop-R](https://github.com/Bishop-R), [Skyro468](https://github.com/Skyro468), and [iDevelopThings / bdo-data-extractor](https://github.com/iDevelopThings/bdo-data-extractor) |
-| AI development collaboration | [OpenAI](https://openai.com/) and [ChatGPT](https://chatgpt.com/) for assistance during development and documentation. No OpenAI API or cloud-model runtime is embedded in the application. |
-
-This is a human-readable acknowledgement, not a replacement for license text.
-The complete release-relevant inventory, authorship context, licenses, model
-terms, and historical references are maintained in
-[Third-party notices](THIRD_PARTY_NOTICES.md).
-
-## Status and license
-
-Core editing, autosave, optimization, preview, transcription assistance, and
-score export have automated regression coverage. Hardware, audio-device, and
-game-version compatibility can still vary. This community project is not
-affiliated with Pearl Abyss.
-
-Original project code is available under the [MIT License](LICENSE).
-Third-party components and references retain their own terms; see
-[Third-party notices](THIRD_PARTY_NOTICES.md).
+写谱愉快，游戏里见 ♪
