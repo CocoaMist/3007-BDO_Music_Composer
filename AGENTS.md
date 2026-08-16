@@ -17,7 +17,8 @@ BDO Music Composer is an unofficial PySide6 MIDI editor and Black Desert music-s
 4. `docs/ARCHITECTURE.md` — components and end-to-end data flow.
 5. `docs/AI_CONTEXT.md` — change routing, invariants, and validation matrix.
 6. `docs/README.md` — status-labelled documentation and evidence index.
-7. Relevant domain reference under `docs/` only after the files above.
+7. `docs/WRITING_STYLE.md` — repository documentation voice and evidence tone.
+8. Relevant domain reference under `docs/` only after the files above.
 
 ## Commands
 

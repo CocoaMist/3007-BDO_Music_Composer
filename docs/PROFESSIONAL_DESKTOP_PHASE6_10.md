@@ -1,10 +1,7 @@
-# Professional desktop engineering: Phase 6–10
+# 桌面端 Phase 6–10：过门禁才算完成
 
-This document is the current contract for the professional-desktop work that
-follows the measured Phase 0–5 performance program. "Complete" means that the
-repository owns an executable gate and a regression test. It never means that
-an unavailable certificate, physical audio device, assistive-technology user,
-or game A/B session has been simulated.
+“完成”只表示仓库里有能执行的门禁和回归测试。证书、真实音频设备、辅助技术用户或
+游戏 A/B 没测到，就明确写没测到，不能拿模拟代替。
 
 ## Strategy: preserve the foundation, create the advantage
 

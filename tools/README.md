@@ -1,10 +1,7 @@
-# Developer tools
+# Developer tools: sharp objects live here
 
-Only developer diagnostics, benchmarks, and validators are indexed here.
-
-`tools/` contains developer-only audits, benchmarks, evidence validators, and
-one-off preparation utilities. The desktop application and packaged runtime
-must not depend on these entry points.
+These are developer-only audits, benchmarks, validators, and preparation
+utilities. The desktop app and packaged runtime must not depend on them.
 
 ## Temporary conversion
 

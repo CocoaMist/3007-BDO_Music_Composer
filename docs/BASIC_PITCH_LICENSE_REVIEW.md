@@ -1,7 +1,7 @@
-# Basic Pitch 0.4.0 license evidence
+# Basic Pitch 0.4.0：许可证据放在这里
 
-Reviewed on 2026-07-27 for the exact Basic Pitch release used by BDO Music
-Composer. This is an engineering redistribution record, not legal advice.
+复核日期：2026-07-27。这里只记录程序实际使用的 Basic Pitch 0.4.0 再分发证据，
+不是法律意见。
 
 ## Finding
 

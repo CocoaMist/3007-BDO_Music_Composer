@@ -1,8 +1,7 @@
-# Developer SDK
+# Developer SDK：只承诺这几个入口
 
-The Developer SDK is a source-level integration package for people extending
-BDO Music Composer or embedding its score pipeline. It deliberately exposes a
-small stable surface instead of treating every internal module as public API.
+SDK 给扩展作者和嵌入式调用者使用。只有列在这里的接口算稳定 API；能 import 到的
+内部模块不等于公开承诺。
 
 ## API layers
 

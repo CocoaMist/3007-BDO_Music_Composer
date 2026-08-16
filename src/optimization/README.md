@@ -1,7 +1,7 @@
-# Optimization subsystem
+# Optimization: preview first, write second
 
-This is the canonical extension contract for deterministic, reviewable score
-optimization.
+This is the optimizer extension contract. The same input must produce the same
+preview, and nothing touches the score until the user applies it.
 
 `builtin.py` owns the BDO-safe production optimizer. `plugin_api.py` defines
 optimizer API v1, `plugin_loader.py` discovers `.bdoopt` packages without

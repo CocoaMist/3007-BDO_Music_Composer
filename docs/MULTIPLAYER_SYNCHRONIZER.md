@@ -1,11 +1,9 @@
-# Multiplayer synchronizer boundary
+# 多人同步器：界面先占位，网络暂不开
 
 ## Product decision
 
-The workspace toolbar exposes a **Multiplayer Sync** network-room preview. The
-old local-metronome and hardware choices were removed: this product can only
-grow through a network room, and no transport is enabled until its protocol,
-security and latency evidence are implemented.
+工具栏只展示 **多人同步** 房间预览。协议、安全和延迟验证没完成前，不启用任何网络
+传输；旧的本地节拍器和硬件选项也不会回来冒充多人同步。
 
 The reserved room contains:
 

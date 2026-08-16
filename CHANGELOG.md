@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 1.3.6 - 2026-08-16
+
+- Bring back independent Track and Clip velocity adjustment, including Shift
+  multi-selection, undo/redo, autosave, preview, and BDO export.
+- Compose global, Track, and Clip velocity edits from recoverable baselines so
+  one scope no longer silently cancels another.
+- Add the Clip velocity base, compact Clip labels, and a cleaner transport bar.
+- Rewrite the documentation entry points around one direct, Chinese-first
+  voice and mark this release as the likely long-lived stable build while the
+  game's score format stays unchanged.
+
 ## 1.3.5 - 2026-08-14
 
 - Complete the multitrack Clip workflow with marquee and modifier selection,

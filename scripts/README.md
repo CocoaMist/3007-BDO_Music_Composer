@@ -1,11 +1,8 @@
-# Supported scripts
+# Scripts we actually support
 
-Only maintained user, operator, and release commands are indexed here.
-
-`scripts/` contains maintained command-line, release, and controlled validation
-entry points. Reusable application behavior must stay in its owning module;
-scripts should only parse arguments, call that owner, and publish an explicit
-result.
+If a command is not listed here, do not treat it as a supported workflow.
+Scripts parse arguments, call the real owner module, and report a result; they
+do not become a second home for application logic.
 
 ## User and operator entry points
 

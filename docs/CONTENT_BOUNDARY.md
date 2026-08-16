@@ -1,8 +1,7 @@
-# Content and audio boundary
+# 内容红线：不碰客户端音频
 
-Status: **current product contract**. This document is a conservative product
-boundary, not a legal opinion and not a claim that the application as a whole
-has been endorsed or authorized by Pearl Abyss.
+状态：**产品硬约束**。程序不列出、提取、转换、打包、下载或传播客户端音频。
+这不是法律意见，也不表示 Pearl Abyss 对本程序作出授权或背书。
 
 ## Decision source
 

@@ -1,9 +1,8 @@
-# Data directory
+# Data: small rules, no private content
 
-This README is the ownership and privacy contract for versioned application
-metadata.
-
-This directory contains derived metadata used to map application instruments and articulations to Black Desert Online-compatible identifiers.
+This directory stores small, versioned rules used to map instruments and
+articulations to Black Desert Online-compatible identifiers. It is not a place
+for user data or game assets.
 
 `profiles/` contains versioned game constraints with explicit `verified`,
 `inferred`, or `approximate` evidence. Profiles contain only portable rules and

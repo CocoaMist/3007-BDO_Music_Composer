@@ -1,8 +1,8 @@
-# Architecture
+# 架构：一份编辑状态，三条去路
 
 ## System overview
 
-BDO Music Composer is a desktop application with one mutable project model and three major consumers: the UI, the preview engine, and the BDO exporter.
+程序只有一份可编辑工程状态，界面、试听和 BDO 导出都消费它。只要某条路径绕回原始 MIDI，架构就已经错了。
 
 ```mermaid
 flowchart TD

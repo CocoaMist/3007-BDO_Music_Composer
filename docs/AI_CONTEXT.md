@@ -1,13 +1,10 @@
-# AI context and change map
+# 改动地图：要改哪里，先看这里
 
-This document helps an AI agent find the correct subsystem without scanning every research file.
+按任务找 owner，不要靠全仓库扫描猜答案。这里给入口、不能碰的事实源和最低验证；领域细节仍以对应文档和代码为准。
 
-Before using this routing map, read the repository rules in `AGENTS.md`, choose
-one complete localized README from the root language hub, and follow the
-handoff workflow in `docs/AGENT_HANDOFF.md`. Current structural and performance
-candidates are tracked in `docs/OPTIMIZATION_EXTENSION_ROADMAP.md`. Before
-moving behavior between modules, read `docs/AI_EDITING_GUIDE.md` for ownership,
-dependency direction, typed-boundary rules, and the staged decomposition plan.
+使用前读完 `AGENTS.md`、一份语言指南和 `docs/AGENT_HANDOFF.md`。结构与性能候选在
+`docs/OPTIMIZATION_EXTENSION_ROADMAP.md`；要搬代码所有权时，再读
+`docs/AI_EDITING_GUIDE.md`。文档口吻遵循 [`WRITING_STYLE.md`](WRITING_STYLE.md)。
 
 The package migration is complete for root Python owners. `main.py` is the only
 root module; application code is grouped by domain under

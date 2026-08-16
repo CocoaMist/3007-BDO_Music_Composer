@@ -1,9 +1,7 @@
-# Project structure
+# 目录怎么走：根目录只做入口
 
-The repository root is an entry and governance surface. `main.py` is the only
-root Python module; installable packages live under `src/`, dependency groups
-under `requirements/`, localized guides under `docs/locales/`, and operational
-commands under `scripts/` or `tools/`.
+根目录只放入口和仓库规则，唯一的根 Python 模块是 `main.py`。程序包去 `src/`，
+依赖去 `requirements/`，语言指南去 `docs/locales/`，命令去 `scripts/` 或 `tools/`。
 
 ## Dependency direction
 

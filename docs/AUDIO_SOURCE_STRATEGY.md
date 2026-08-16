@@ -1,4 +1,7 @@
-# Audio source strategy
+# 试听音源：内置兜底，外部包自选
+
+用户永远可以使用不读外部文件的内置试听；想换音色时，再选择一个自己有权使用的
+`.bdosamples` 包。程序不自动寻找、提取或下载游戏音频。
 
 ## Shipped source modes
 

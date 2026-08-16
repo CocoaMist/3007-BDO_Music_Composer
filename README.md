@@ -8,7 +8,7 @@
 [日本語](docs/locales/ja.md) · [한국어](docs/locales/ko.md)
 
 [下载 Windows 版](https://github.com/CocoaMist/3007-BDO_Music_Composer/releases/latest) ·
-[查看更新记录](docs/releases/RELEASE_NOTES_V1.3.5.md) ·
+[查看更新记录](docs/releases/RELEASE_NOTES_V1.3.6.md) ·
 [报告问题](https://github.com/CocoaMist/3007-BDO_Music_Composer/issues)
 
 ![BDO Music Composer 多轨编排界面](docs/images/readme-timeline.png)

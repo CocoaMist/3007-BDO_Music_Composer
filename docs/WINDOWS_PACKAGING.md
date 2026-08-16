@@ -1,6 +1,6 @@
-# Windows packaging
+# Windows 打包：只有一个正式 EXE
 
-BDO Music Composer has one Windows one-file package:
+Windows 只发布一个单文件包：
 `dist\BDO-Music-Composer.exe`. The package uses
 `packaging/windows/BDOMusicComposer.spec` and includes Basic Pitch `nmp.onnx`,
 ONNX Runtime CPU, SoundFile/libsndfile, soxr/libsoxr, and the scientific
@@ -8,10 +8,8 @@ dependencies required by the embedded transcription mode. There is no
 dependency-light edition, separately named transcription executable, or
 alternate build spec.
 
-The executable uses the same UI, project schema, editor model, export path, and
-user cache location as a source checkout. It never contains reference audio,
-extracted game audio, Owner IDs, autosaves, exported scores, or transcription
-evidence caches.
+EXE 与源码版使用相同的界面、工程 schema、编辑模型、导出路径和用户缓存位置。
+参考音频、游戏音频、Owner ID、自动保存、导出曲谱和扒谱证据缓存都不能打进去。
 
 A user can explicitly export a bounded, path-redacted local diagnostic bundle
 without opening a project:

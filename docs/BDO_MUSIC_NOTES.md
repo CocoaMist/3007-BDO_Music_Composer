@@ -1,6 +1,6 @@
-# Black Desert Music Conversion Notes
+# 曲谱转换：三层各管一件事
 
-Status checked: 2026-07-23.
+状态复核：2026-07-23。MIDI 解析、编辑器适配和 BDO v9 编解码不能混成一个模块。
 
 ## Local setup
 
